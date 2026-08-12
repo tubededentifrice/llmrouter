@@ -1,7 +1,7 @@
 # Reliability, deployment, and operations
 
-Status: Accepted sections only. Placement, recovery objectives, backup,
-restore, and capacity details remain open.
+Status: Accepted sections only. Placement, backup, restore, and capacity
+details remain open.
 
 ## Static node discovery
 
@@ -20,6 +20,48 @@ standby endpoints and for any required peers. A topology change MUST use a
 deployment configuration update and controlled reload or restart. Health and
 administration interfaces MUST show the configured order, current selection,
 last successful contact, and failure state without exposing credentials.
+
+## Provider health circuits
+
+Each data-plane node MUST make provider health-circuit decisions from its local
+attempt results. A circuit MUST have closed, open, and half-open states. It MUST
+separate at least provider instance, provider-model route, operation or required
+capability, and normalized failure class when those scopes differ. A failure in
+one credential or route MUST NOT open an unrelated route.
+
+Only a result that gives evidence about the selected provider scope MAY affect
+a health circuit. Provider timeout, transport failure, provider server failure,
+rate limit, invalid provider response, and provider credential failure MAY
+affect their narrow known scopes. A valid compatible provider response MUST be
+a success sample. Caller identity, request validation, router or service policy,
+privacy, owning budget, cancellation, and request-specific incompatibility
+results MUST NOT affect provider health. A provider policy refusal MUST remain
+an eligibility result, not a health sample.
+
+Window size, minimum sample count, failure threshold, open duration, probe
+limit, and maximum backoff MUST be editable within global safety limits. Half-
+open probes MUST use bounded concurrency and jitter. A probe MUST pass normal
+policy, budget, rate, and accounting checks. Health probing MUST NOT bypass a
+provider restriction or create unaccounted billable work.
+
+The control plane MUST aggregate node health and publish authenticated,
+expiring fleet hints. Each hint MUST bind to a provider instance and route
+generation, operation or capability, normalized failure class, source sample
+window, publication time, and expiry. The default lifetime MUST be 60 seconds
+and the configurable maximum MUST be 5 minutes.
+
+A fresh hint MAY open the matching local circuit or delay its half-open probe
+until the hint expires. Thus, a hint can only suppress a candidate. It MUST NOT
+close a local circuit, make a candidate eligible, change candidate order among
+healthy routes, or change a configured threshold. A node MUST combine a hint
+with local state by selecting the more restrictive open state and later probe
+time. It MUST continue with local circuits when hints are unavailable, invalid,
+for a different generation, or expired.
+
+Health and administration interfaces MUST show local circuit state, fleet hint
+state, scope, sample period, normalized reason, next probe time, and last state
+change. An authorized administrator MAY request a bounded probe or reset local
+history. A reset MUST be audited and MUST NOT override policy or eligibility.
 
 ## Local service and configuration outage
 
@@ -59,9 +101,38 @@ The ledger MUST ingest by immutable event identity and MUST make a repeated
 delivery idempotent. A node MUST keep an event until central ingest is
 confirmed or an approved repair procedure transfers responsibility.
 
-A bounded spool MUST apply backpressure before disk exhaustion. It MUST NOT
-silently discard canonical accounting or audit events. The exact admission
-behavior at each pressure level remains open.
+A bounded spool MUST use editable warning, shedding, and stop-admission
+thresholds below its reserved emergency capacity. Each admission MUST reserve
+enough spool bytes for the maximum bounded canonical event load of that request
+or run. The bound MUST derive from fixed event-size limits, permitted attempt
+and tool-step limits, and maximum admitted concurrency. The node MUST reject
+work when it cannot make this reservation. It MUST release reserved bytes only
+when ingest is confirmed or responsibility is safely transferred.
+
+At the warning threshold, the node MUST alert and increase delivery urgency. At
+the shedding threshold, it MUST stop optional diagnostic logs and set content
+capture off for each new request that it still admits. It MUST record the
+effective admission-time capture state and pressure reason on that request and
+write a pressure-policy audit event. It MUST NOT change the capture policy of a
+request that is already admitted. It MUST stop new background, batch,
+playground, and agent work before normal foreground work.
+
+At the stop-admission threshold, the node MUST reject all new work. It MUST
+preserve reserved capacity for already admitted work, cancellation,
+reconciliation, security operations, and delivery of canonical events. It MUST
+NOT silently discard or overwrite canonical accounting or audit events at any
+pressure level. Health and administration interfaces MUST show spool bytes,
+age of the oldest event, threshold state, shed classes, delivery error, and
+estimated remaining capacity.
+
+Admission MUST remain stopped until configured recovery hysteresis is met. If
+reserved emergency capacity is at risk, the node MUST stop optional work from
+already admitted runs and MUST NOT start another external effect from any run.
+The bounded reservation MUST remain available for the result of an external
+effect that is already in progress. The node MUST enter an operator-visible
+emergency state and MUST not report a durable success that lacks its required
+canonical event. An implementation MAY use an encrypted configured spill
+volume, but it MUST apply the same reservation, integrity, and recovery rules.
 
 ## Leased budget allowances
 
@@ -118,6 +189,41 @@ The system MUST expose replication lag, last confirmed replay position,
 promotion state, and possible data-loss window. Failback MUST be an explicit
 operator action after reconciliation. Backups and restore tests remain required
 and do not become optional because a warm standby exists.
+
+## Recovery objectives
+
+The high-availability profile MUST target a control-plane recovery time
+objective of 5 minutes from loss of the writable primary to fenced availability
+of the promoted control plane. It MUST target a recovery point objective of 30
+seconds for general asynchronously replicated control state.
+
+An acknowledged admission binding, request terminal or cancellation state,
+stream or external-effect commit boundary, fencing or ownership change, urgent
+security revocation, and canonical accounting or audit ingest MUST remain
+recoverable with zero acknowledged-event loss. The system MUST NOT acknowledge
+one of these operations until a standby or independent durable replay journal
+can recover it. This rule does not require synchronous replication for tokens,
+stream chunks, diagnostics, or normal telemetry.
+
+The project MUST run automated failover tests before each release and at least
+weekly in a high-availability test deployment. It MUST run an operator disaster-
+recovery exercise at least quarterly. Tests over a rolling year MUST include
+primary process loss, primary host loss, control-plane network isolation,
+standby restart and replay, and promotion with active requests.
+
+RTO measurement MUST start when the writable primary first cannot accept a
+valid control operation and MUST stop when a fenced promoted control plane
+accepts that operation and clients can recover status. The test passes RTO only
+at 5 minutes or less. RPO measurement MUST compare the recovered general state
+with every acknowledged primary commit time. The test passes RPO only when no
+missing general commit is older than 30 seconds before the failure. It passes
+the zero-loss rule only when every acknowledged critical event listed above is
+recoverable and no external effect repeats.
+
+Each exercise MUST record achieved RTO, achieved RPO, lost or uncertain
+operations, repeated effects, and manual actions. Administration MUST show the
+latest test and exercise results. A deployment that misses an objective MUST
+show a degraded high-availability state.
 
 ## S3-compatible content and archive storage
 

@@ -35,6 +35,9 @@ Accepted decisions:
 - [0031: Client-generated UUIDv7 request identity](0031-use-client-generated-uuidv7-request-identity.md)
 - [0032: 24-hour terminal request recovery](0032-retain-terminal-request-recovery-for-24-hours.md)
 - [0033: Best-effort cancellation states](0033-use-explicit-best-effort-cancellation-states.md)
+- [0034: Local health circuits with fleet hints](0034-use-local-health-circuits-with-fleet-hints.md)
+- [0035: Graduated spool-pressure shedding](0035-use-graduated-spool-pressure-shedding.md)
+- [0036: Five-minute RTO and 30-second RPO](0036-target-five-minute-rto-and-thirty-second-rpo.md)
 
 Add a numbered decision record only after the user accepts a material choice.
 Each record must state the context, the accepted choice, alternatives, good and

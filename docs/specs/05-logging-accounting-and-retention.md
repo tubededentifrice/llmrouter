@@ -31,6 +31,12 @@ override the inherited value within those limits. A configuration change MUST
 state when it becomes effective and MUST NOT change the content policy of a
 request or run that has already been admitted.
 
+Spool-pressure shedding is an admission-time safety exception for a new
+request. The router MUST show that capture was disabled by pressure before or
+in the admission result, store the effective state and reason, and audit the
+pressure-policy transition. It MUST NOT disable capture for work that is
+already admitted.
+
 Content capture MUST NOT store provider credentials, service bootstrap
 secrets, access tokens, session cookies, passkey enrollment secrets,
 authorization headers, private key material, or other control-plane secrets.

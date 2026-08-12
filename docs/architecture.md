@@ -70,6 +70,11 @@ move to an eligible candidate outside that scope. Caller identity, router-wide
 policy, owning-scope budget, cancellation, and commit-boundary failures stop
 the logical request.
 
+Provider health circuits are local to each data-plane node for fast routing.
+The control plane publishes authenticated, expiring fleet hints that reduce
+retry storms but do not control the request path. Circuits isolate route and
+failure scopes and use bounded half-open probes.
+
 Hard budgets form an inherited global, service, workspace, and assignment
 chain. One logical budget covers its fallback attempts. Admission reserves an
 estimate, and final provider usage reconciles that reservation. Data-plane
@@ -130,9 +135,13 @@ list. Router nodes use a static primary and standby control-plane list. The
 high-availability profile uses one writable control plane and an asynchronously
 replicated warm standby with fenced automatic promotion.
 
-The specification still needs to define timeout budgets, health probes, node
-draining, and recovery from an unconfirmed external effect. Eventual
-consistency is acceptable for fleet telemetry and most configuration
+The high-availability targets are a 5-minute control-plane RTO and a 30-second
+RPO for general replicated state. Acknowledged admission, fencing, urgent
+revocation, accounting, and audit events have a zero-loss recovery rule.
+
+The specification still needs to define timeout budgets, client endpoint
+health probes, node draining, and recovery from an unconfirmed external effect.
+Eventual consistency is acceptable for fleet telemetry and most configuration
 distribution. Credential revocation and security policy changes use a separate
 urgent distribution path.
 
@@ -162,6 +171,11 @@ sends them asynchronously to one logical central ledger with idempotent ingest.
 S3-compatible object storage holds encrypted content segments, retention
 exports, and archives. It is not the live request-status, idempotency, lease,
 or fencing store.
+
+Spool pressure uses graduated shedding. Nodes stop optional logs and capture,
+then background work, then all new admission before canonical events are at
+risk. Reserved capacity remains for admitted work, cancellation, security, and
+reconciliation.
 
 The shared model catalog is global. Provider instances and credentials have a
 global or service owner and can be inherited by eligible descendants. Pricing

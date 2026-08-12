@@ -718,7 +718,61 @@ stopped when it can still continue.
 
 Resolved: Use explicit best-effort cancellation states.
 
+## Round 8: health, pressure, and recovery targets
+
+### 35. Provider health circuits
+
+Accepted answer: Each data-plane node makes fast circuit decisions from local
+results. The control plane supplies authenticated, expiring fleet health hints
+as advisory input. Hints reduce retry storms but cannot force a route or become
+a normal-path dependency.
+
+Recommendation: Local circuits keep request latency and outage decisions local.
+Fleet hints reduce simultaneous probes from many nodes.
+
+- Local circuits plus hints: They balance local availability and fleet load.
+  Nodes can show different health briefly.
+- Central authority: It gives one state. Routing depends on central freshness.
+- Local only: It is small. Many nodes can overload one failing provider.
+
+Resolved: Use local health circuits with advisory fleet hints.
+
+### 36. Spool pressure
+
+Accepted answer: Use graduated shedding. Stop optional diagnostics and capture,
+then new background work, then all new admission before canonical accounting or
+audit events are at risk. Keep emergency capacity for safe completion and
+reconciliation.
+
+Recommendation: This preserves useful foreground availability without risking
+the records needed to explain and bill the work.
+
+- Graduated shedding: It preserves foreground work longest. Pressure behavior
+  has several visible states.
+- Immediate rejection: It protects storage early. It stops useful work sooner.
+- Drop diagnostics only: It is simple. A long outage can still exhaust storage.
+
+Resolved: Use graduated spool-pressure shedding.
+
+### 37. Recovery objectives
+
+Accepted answer: Target a 5-minute control-plane RTO and a 30-second RPO for
+general replicated control state. Keep acknowledged admission, fencing, urgent
+revocation, canonical accounting, and audit events recoverable with zero loss.
+
+Recommendation: These targets fit a warm standby without putting synchronous
+remote writes on token and stream paths.
+
+- Five minutes and 30 seconds: They give useful recovery with moderate
+  operation complexity.
+- Fifteen minutes and five minutes: They are easier to operate. Outage and loss
+  windows are larger.
+- One minute and zero loss for all state: They are strong. They need synchronous
+  quorum or equivalent infrastructure.
+
+Resolved: Target a 5-minute RTO and 30-second general-state RPO.
+
 ## Follow-up rounds
 
-The next interview covers health circuits, spool pressure, recovery objectives,
-administrator recovery, and provider timeout policy.
+The next interview covers administrator recovery, provider timeout policy,
+node draining, backup restoration, and compatibility endpoint coverage.
