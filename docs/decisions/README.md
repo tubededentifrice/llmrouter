@@ -11,6 +11,11 @@ Accepted decisions:
 - [0007: Router-owned retries and stream boundary](0007-router-owned-retries-and-stream-boundary.md)
 - [0008: Use normal configuration for up to 24 hours](0008-use-normal-configuration-for-up-to-24-hours.md)
 - [0009: Durable agent runs with asynchronous checkpoints](0009-durable-agent-runs-with-asynchronous-checkpoints.md)
+- [0010: Registered service tool gateway](0010-use-a-registered-service-tool-gateway.md)
+- [0011: Exchange service secrets for short-lived tokens](0011-exchange-service-secrets-for-short-lived-tokens.md)
+- [0012: Capture complete content for public data](0012-capture-complete-content-by-default-for-public-data.md)
+- [0013: Editable retention defaults](0013-use-editable-retention-defaults.md)
+- [0014: Local spools, central ledger, and object storage](0014-use-local-spools-a-central-ledger-and-object-storage.md)
 
 Add a numbered decision record only after the user accepts a material choice.
 Each record must state the context, the accepted choice, alternatives, good and

@@ -198,6 +198,11 @@ cost.
 
 ### 10. Business tool execution
 
+Accepted answer: Each service registers one fixed private tool-gateway
+endpoint. LLM Router sends a short-lived, run-scoped grant. The service checks
+the current user, workspace, approval, tool permission, and record state when
+the tool runs. A request cannot supply an arbitrary callback URL.
+
 Recommendation: A service registers one fixed tool-gateway endpoint. The
 router sends a short-lived, run-scoped grant. The service checks the current
 user, workspace, approval, and record state when each tool runs.
@@ -209,7 +214,7 @@ user, workspace, approval, and record state when each tool runs.
 - Service executes the full loop: It has the smallest trust boundary. It keeps
   duplicate loop and provider code.
 
-Question: Can each calling service expose one private tool-gateway endpoint?
+Resolved: Use one registered private tool gateway for each service.
 
 ### 11. Common external tools
 
@@ -254,6 +259,10 @@ Resolved: LLM Router owns passkey-only administrator identities.
 
 ### 13. Service authentication
 
+Accepted answer: An administrator creates a show-once bootstrap secret. A
+service exchanges it for short-lived, scoped access tokens. Mutual TLS is an
+optional additional control for deployments that need it.
+
 Recommendation: Support rotatable hashed service keys for simple deployment
 and mutual TLS for higher assurance. Bind each credential to one service,
 allowed routes, and optional source networks.
@@ -264,10 +273,15 @@ allowed routes, and optional source networks.
   more difficult.
 - Keys only: It is easy to deploy. Key copying and theft are larger risks.
 
-Question: Do the first three services need mutual TLS, or are scoped rotatable
-keys sufficient for the first release?
+Resolved: Use short-lived scoped tokens with optional mutual TLS.
 
 ### 14. Content logging
+
+Accepted answer: Capture complete prompt, response, search-query, and tool
+content by default for the current public-data services. The setting is easy to
+change by global, service, or workspace configuration. Continue to remove
+credentials, authorization values, enrollment secrets, session tokens, and
+other control-plane secrets before storage.
 
 Recommendation: Keep prompts, responses, search queries, and tool input or
 output off by default. Permit separate short-lived capture policies for a
@@ -279,9 +293,13 @@ service or workspace. Encrypt captured content and audit each read.
 - Full content by default: It gives the best debugging data. It has high
   privacy, security, and storage risk.
 
-Question: Which services need content capture, and who can enable or read it?
+Resolved: Full content capture is on by default for now and is configurable.
 
 ### 15. Retention targets
+
+Accepted answer: Use the recommended periods as editable defaults. A global
+administrator can set fleet defaults. A service and workspace can select an
+approved shorter or longer value within global limits.
 
 Recommendation for initial limits:
 
@@ -297,9 +315,15 @@ Short limits reduce storage and exposure. Long limits improve investigations,
 cost analysis, and compliance evidence. Legal and customer contracts can
 require different periods.
 
-Question: Do these initial periods match your operational and legal needs?
+Resolved: Use the recommended editable defaults.
 
 ### 16. Data placement and recovery
+
+Accepted answer: Each node uses an encrypted append-only local spool and sends
+immutable events asynchronously to a central ledger with idempotent ingest.
+S3-compatible storage is available for content segments, retention exports,
+and archives. Bucket durability can be deployment configuration. Object
+storage does not replace the live status, idempotency, lease, or fencing store.
 
 Recommendation: Each node writes an append-only local spool before it reports
 success. It sends immutable events to one control-plane ledger with idempotent
@@ -313,8 +337,8 @@ spool is not the only durable copy after acknowledgement.
 - Multi-primary databases: They support local writes. Conflict and operation
   cost are high for the expected scale.
 
-Question: Can all servers reach one control-plane ledger most of the time, and
-can they keep a local encrypted spool during an outage?
+Resolved: Use a local spool, central ledger, and S3-compatible object storage
+for suitable large or retained objects.
 
 ## Round 4: compatibility, operation, and open source
 

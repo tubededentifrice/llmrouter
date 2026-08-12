@@ -29,3 +29,30 @@ Normal token streaming MUST NOT depend on synchronous remote replication.
 Strong ownership coordination is limited to run admission, ownership transfer,
 and recovery actions that need fencing. The implementation MUST measure and
 publish the added latency from local durability, lease work, and checkpointing.
+
+## Local accounting spool and central ledger
+
+Each data-plane node MUST have an encrypted, append-only local event spool. It
+MUST write the applicable immutable accounting or audit event before it reports
+the related durable success state.
+
+The node MUST send spooled events asynchronously to one logical central ledger.
+The ledger MUST ingest by immutable event identity and MUST make a repeated
+delivery idempotent. A node MUST keep an event until central ingest is
+confirmed or an approved repair procedure transfers responsibility.
+
+A bounded spool MUST apply backpressure before disk exhaustion. It MUST NOT
+silently discard canonical accounting or audit events. The exact admission
+behavior at each pressure level remains open.
+
+## S3-compatible content and archive storage
+
+LLM Router MUST support S3-compatible object storage for encrypted content
+segments, retention exports, and archives. Each immutable object MUST have a
+checksum and manifest identity. Export or deletion work MUST be safe across
+retry and worker takeover.
+
+Bucket durability, replication, lifecycle, and placement are deployment
+configuration within accepted minimums. Object storage MUST NOT be the live
+source for request status, idempotency, active run ownership, leases, or
+fencing.

@@ -192,8 +192,11 @@ enforce route, cost, provider, privacy, and tool policies that Xbot supplies.
 5. Use stable request, attempt, run, and accounting event identities.
 6. Keep business tools and their authorization in calling services.
 7. Separate global administration from service-scoped administration.
-8. Keep content capture off by default and give each data class its own
-   retention policy.
+8. At the time of this review, the recommendation was to keep content capture
+   off by default and give each data class its own retention policy. Decision
+   0012 supersedes the first part for the current public-data profile: complete
+   content capture is on by default and remains configurable. Separate data
+   classes and retention policies still apply.
 9. Use one hosted React graph with a safe embed and a headless interface unless
    the interview selects a custom element.
 10. Add an OpenAI-compatible endpoint only as a migration interface. Use a

@@ -19,6 +19,11 @@ The calling service owns its business tools, domain authorization, user
 approval, and domain records. LLM Router MUST NOT make a business tool eligible
 only because the model requested it.
 
+A service that exposes business tools MUST use its one registered private tool
+gateway. LLM Router MUST NOT accept an arbitrary callback URL in a run request.
+Each tool call MUST use a short-lived, one-use, run-scoped grant. The service
+MUST perform current execution-time authorization.
+
 ## Durable run ownership
 
 One router node MUST own an active agent run through a fenced lease and owner

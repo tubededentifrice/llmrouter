@@ -7,6 +7,8 @@ the architecture interview continues.
 - [Configuration and inheritance](01-configuration-and-inheritance.md)
 - [Routing, failover, and request lifecycle](02-routing-failover-and-request-lifecycle.md)
 - [Agent harness and tools](03-agent-harness-and-tools.md)
+- [Identity, credentials, and tool gateway](04-identity-credentials-and-tool-gateway.md)
+- [Logging, accounting, and retention](05-logging-accounting-and-retention.md)
 - [Administration and shared interface](06-administration-and-shared-interface.md)
 - [Reliability, deployment, and operations](07-reliability-deployment-and-operations.md)
 

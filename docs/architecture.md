@@ -111,11 +111,24 @@ Do not use one retention rule for all data.
 - Accounting records: durable logical request and attempt totals.
 - Operational metrics: aggregated and suitable for a telemetry system.
 - Diagnostic logs: bounded, sampled, and short-lived.
-- Prompt, response, and tool content: disabled by default and separately
-  controlled when enabled.
+- Prompt, response, search-query, and tool content: enabled for the current
+  public-data profile, separately controlled, and short-lived.
 - Configuration snapshots: immutable revisions with bounded history.
 
-The storage products and exact retention periods need user review.
+The initial retention defaults are accepted and remain editable configuration.
+The live ledger and coordination storage products remain open. S3-compatible
+object storage is accepted for suitable content and archive objects.
+
+Complete content capture is enabled by default for the current public-data
+service profile. It is inherited configuration at global, service, and
+workspace levels. Credentials and control-plane secrets are always removed
+before storage. Content reads are permission-controlled and audited.
+
+Each node writes canonical events to an encrypted append-only local spool. It
+sends them asynchronously to one logical central ledger with idempotent ingest.
+S3-compatible object storage holds encrypted content segments, retention
+exports, and archives. It is not the live request-status, idempotency, lease,
+or fencing store.
 
 ## Public interfaces
 
