@@ -16,6 +16,11 @@ Accepted decisions:
 - [0012: Capture complete content for public data](0012-capture-complete-content-by-default-for-public-data.md)
 - [0013: Editable retention defaults](0013-use-editable-retention-defaults.md)
 - [0014: Local spools, central ledger, and object storage](0014-use-local-spools-a-central-ledger-and-object-storage.md)
+- [0015: Native API and OpenAI compatibility](0015-use-a-native-api-and-openai-compatibility.md)
+- [0016: Python and TypeScript clients](0016-publish-python-and-typescript-clients.md)
+- [0017: One image with runtime roles](0017-publish-one-image-with-runtime-roles.md)
+- [0018: Breaking changes before version 1](0018-permit-breaking-changes-before-version-1.md)
+- [0019: FSL 1.1 with an Apache 2.0 future license](0019-use-fsl-1-1-with-an-apache-2-0-future-license.md)
 
 Add a numbered decision record only after the user accepts a material choice.
 Each record must state the context, the accepted choice, alternatives, good and

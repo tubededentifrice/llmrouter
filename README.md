@@ -1,8 +1,9 @@
 # LLM Router
 
-LLM Router is a planned open source service for internal applications. It will
-give applications one shared interface for model routing, provider failover,
-agent execution, common tools, request accounting, and administration.
+LLM Router is a planned source-available service for internal applications. It
+will give applications one shared interface for model routing, provider
+failover, agent execution, common tools, request accounting, and
+administration.
 
 The first calling services are Crewday, FJ2, and Xbot. This repository does not
 change those services during the specification phase.
@@ -63,6 +64,10 @@ use.
 
 ## License
 
-The project is intended to be open source. The license is not selected. License
-selection changes how other parties can use and distribute the service, so it
-needs an explicit user decision.
+The selected license is the Functional Source License, Version 1.1, ALv2
+Future License (`FSL-1.1-ALv2`). Each software version becomes available under
+Apache License 2.0 on the second anniversary of the date that version is made
+available.
+
+The license file is pending the exact copyright and licensor name. Until that
+notice is added, this repository does not grant the selected license.

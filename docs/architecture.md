@@ -130,11 +130,16 @@ S3-compatible object storage holds encrypted content segments, retention
 exports, and archives. It is not the live request-status, idempotency, lease,
 or fencing store.
 
-## Public interfaces
+## Public interfaces and packaging
 
-The current recommendation is a native versioned HTTP interface with streaming
-support and a formal contract. A small client library can manage identity,
-timeouts, retries, local-first node selection, and stream handling. An optional
-OpenAI-compatible endpoint can help migration, but it should not become the only
-contract because it cannot express all assignment, agent, accounting, and
-administration behavior cleanly.
+The accepted design uses a native versioned HTTP and streaming API as the
+primary contract. A tested OpenAI-compatible interface supports accepted common
+operations and migration without bypassing assignment policy.
+
+Official Python and TypeScript clients manage token exchange, local-first node
+selection, request identity, safe admission retry, status recovery, and stream
+handling. Provider retry and fallback remain in the router.
+
+One immutable container image runs combined, control-plane, data-plane, or
+worker roles. Production Compose is the first stable deployment package.
+Kubernetes packaging follows after the first stable release.

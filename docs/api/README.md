@@ -1,7 +1,10 @@
 # API contracts
 
-No public API contract is accepted yet.
+The accepted public-interface direction is:
 
-Add versioned formal contracts here after the architecture interview defines
-the service boundary, identity model, request model, streaming behavior, and
-compatibility requirements.
+- a native versioned HTTP and streaming API as the primary contract;
+- an OpenAI-compatible interface for accepted common operations;
+- official Python and TypeScript clients.
+
+Exact operations and schemas remain open. Add versioned formal contracts here
+after the remaining operation, stream, error, and compatibility interview.

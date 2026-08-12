@@ -340,9 +340,14 @@ spool is not the only durable copy after acknowledgement.
 Resolved: Use a local spool, central ledger, and S3-compatible object storage
 for suitable large or retained objects.
 
-## Round 4: compatibility, operation, and open source
+## Round 4: compatibility, operation, and source licensing
 
 ### 17. Public API shape
+
+Accepted answer: Use a native versioned API as the primary contract. Also
+provide an OpenAI-compatible interface for common model calls and migration.
+The compatibility `model` value selects an assignment by default. Exact
+provider-model selection remains a controlled diagnostic operation.
 
 Recommendation: Make a native versioned API the primary contract. Add a small
 official client for Python first. Add an OpenAI-compatible endpoint only for
@@ -354,9 +359,22 @@ migration and simple callers.
   become headers and extensions with weak portability.
 - Native only: It is clean. Existing callers need more migration work.
 
-Question: Which client languages need official support in the first release?
+Resolved: Use a native primary API and an OpenAI-compatible interface.
+
+### 17A. Official clients
+
+Accepted answer: Provide official Python and TypeScript clients in the first
+release. They own token exchange, local-first node selection, request identity,
+safe retry, status recovery, streaming, and compatibility checks. Browser
+TypeScript does not receive a service credential.
+
+Resolved: Provide Python and TypeScript clients.
 
 ### 18. Deployment package
+
+Accepted answer: Ship one immutable image that can run combined,
+control-plane, data-plane, or worker roles. Provide production Compose first.
+Add Kubernetes manifests or a Helm chart after the first stable release.
 
 Recommendation: Ship one container image that can run control-plane, data-plane,
 worker, or combined roles. Provide Compose first and Kubernetes examples after
@@ -369,10 +387,16 @@ the first stable release.
 - One combined process only: It is easiest to start. It limits independent
   scaling and failure isolation.
 
-Question: Does the first release need Kubernetes support, or is production
-Compose support sufficient?
+Resolved: One image with roles, production Compose first, and Kubernetes after
+the first stable release.
 
 ### 19. License
+
+Accepted answer: Use the Functional Source License, Version 1.1, ALv2 Future
+License (`FSL-1.1-ALv2`) for LLM Router and Ontology. Each version becomes
+available under Apache License 2.0 on the second anniversary of the date that
+version is made available. The exact copyright and licensor notice is pending
+the user's legal-name confirmation.
 
 Recommendation: Apache License 2.0. It is permissive and includes an explicit
 patent grant. It is longer than MIT and can be less familiar to small users.
@@ -382,9 +406,15 @@ patent grant. It is longer than MIT and can be less familiar to small users.
 - AGPL-3.0: It requires network users to share modified service source. Some
   companies will not adopt it.
 
-Question: Which open source license do you want?
+Resolved choice: `FSL-1.1-ALv2`. License-file application is pending the exact
+licensor name.
 
 ### 20. Compatibility promise
+
+Accepted answer: Permit documented breaking changes before version 1.0. After
+version 1.0, keep public interfaces compatible within a major version and
+support the current and previous minor versions of the official clients during
+normal upgrades.
 
 Recommendation: Keep the native API stable within a major version. Permit
 database and internal configuration changes without compatibility guarantees.
@@ -395,10 +425,10 @@ Support the current and previous minor client versions during normal upgrades.
 - Best effort until version 1.0: It permits fast design changes. Migrations can
   disrupt early users.
 - Internal-only compatibility: It is easiest for development. It conflicts
-  with a useful open source project.
+  with a useful shared source-available project.
 
-Question: Do you want a stable public contract before version 1.0, or can the
-first releases make documented breaking changes?
+Resolved: Permit documented breaking changes before version 1.0, then use the
+accepted major-version compatibility policy.
 
 ## Follow-up rounds
 

@@ -11,6 +11,7 @@ the architecture interview continues.
 - [Logging, accounting, and retention](05-logging-accounting-and-retention.md)
 - [Administration and shared interface](06-administration-and-shared-interface.md)
 - [Reliability, deployment, and operations](07-reliability-deployment-and-operations.md)
+- [Public interfaces, clients, and packaging](08-public-interfaces-clients-and-packaging.md)
 
 Keep these rules:
 

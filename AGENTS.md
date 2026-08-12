@@ -4,7 +4,7 @@ These instructions apply to the complete repository.
 
 ## Mission
 
-Build and operate LLM Router. It is an open source control plane and data
+Build and operate LLM Router. It is a source-available control plane and data
 plane for model providers, models, assignments, fallbacks, agent runs, shared
 tools, request accounting, and administration.
 
@@ -80,8 +80,7 @@ days old. Use exact versions and immutable container references. Do not use
 `@latest`, floating tags, or unpinned remote install scripts. An exception
 needs a user decision and an architecture decision record.
 
-Do not make an API style primary before the user accepts the interface
-decision. Keep each proposed contract versioned and product-neutral.
+Keep each public contract versioned and product-neutral.
 Compatibility APIs, SDKs, hosted administration views, and headless interfaces
 must not weaken service or workspace isolation.
 
