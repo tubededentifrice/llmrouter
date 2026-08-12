@@ -119,9 +119,11 @@ Crewday and FJ2 the same experience without a React dependency in FJ2.
 The frame uses the same base security model as the planned Ontology explorer,
 but it has an independent protocol namespace and version.
 
-Global interactive administration uses passkeys only. A trusted server CLI
-creates a short-lived, one-use enrollment URL for initial access or recovery.
-There is no public sign-up or alternative interactive sign-in method.
+Global interactive administration uses the same shared Pocket ID deployment as
+Ontology. Pocket ID owns human accounts, passkeys, enrollment, and recovery.
+Each application is a separate OpenID Connect client and keeps its own
+administrator grants, server-side sessions, authorization, and audit. Public
+sign-up and non-passkey authentication are disabled.
 
 ## Availability model
 

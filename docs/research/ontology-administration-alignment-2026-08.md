@@ -2,7 +2,8 @@
 
 Date: 2026-08-12
 
-Status: Research and follow-up note. This document does not change Ontology.
+Status: Research and follow-up note. Decision 0037 supersedes the identity
+recommendation in this note.
 
 ## Hosted interface
 
@@ -21,6 +22,14 @@ Each service needs its own protocol namespace because the data and actions are
 different.
 
 ## Passkey administration
+
+The accepted follow-up uses one shared Pocket ID deployment for LLM Router and
+Ontology human accounts, passkeys, enrollment, and recovery. Each application
+keeps its own administrator grants, sessions, authorization checks, and audit
+records. See decision 0037 and the current administration specification.
+
+The earlier service-owned enrollment recommendation below is retained as
+research history and is not the current design.
 
 Ontology already requires passkey-only administration, no password, no email
 sign-in link, no social sign-in, and a one-use server-console recovery process

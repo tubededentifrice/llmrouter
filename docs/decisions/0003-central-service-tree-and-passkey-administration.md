@@ -1,6 +1,6 @@
 # Centralize the service tree and use passkey-only administration
 
-- Status: accepted
+- Status: accepted; the human identity part is superseded by decision 0037
 - Date: 2026-08-12
 - Decision owner: user
 

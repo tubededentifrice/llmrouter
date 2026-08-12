@@ -54,9 +54,10 @@ Accepted answer: Global administrators create services and parent links. A
 service administrator controls its own assignments and workspaces.
 
 Related accepted answer: Interactive global administration uses passkeys only.
-There is no public sign-up, password, email sign-in link, or social sign-in.
-An operator CLI creates a short-lived, one-use initial enrollment or recovery
-URL. This follows the Ontology administration security model.
+Decision 0037 supersedes the earlier service-owned identity detail. LLM Router
+and Ontology use one shared Pocket ID deployment for human accounts, passkeys,
+enrollment, and recovery. Each service keeps separate authorization, sessions,
+and audit records.
 
 Recommendation: Global administrators create services and parent links. A
 service administrator can change its own assignments and its workspaces, but
@@ -240,10 +241,9 @@ service endpoints.
 
 ### 12. Global administrator authentication
 
-Accepted answer: LLM Router owns passkey-only global administrator identities.
-There is no public sign-up or alternative interactive sign-in. A trusted
-server CLI creates a short-lived, one-use enrollment URL for initial access or
-recovery. Keep the operator flow aligned with Ontology.
+Accepted answer: Decision 0037 supersedes this answer. LLM Router and Ontology
+use one shared Pocket ID deployment for passkey-only human authentication.
+LLM Router remains the authority for its administrator grants and actions.
 
 Recommendation: Use a separate global-administrator origin and audience. Use
 passkeys, recent authentication for sensitive changes, and no normal service
@@ -255,7 +255,8 @@ credential on this plane.
   current staff lifecycle controls. It adds identity-provider integration.
 - Password and TOTP: It is familiar. It is weaker against phishing.
 
-Resolved: LLM Router owns passkey-only administrator identities.
+Superseded resolution: Decision 0037 delegates human authentication to the
+shared Pocket ID deployment.
 
 ### 13. Service authentication
 

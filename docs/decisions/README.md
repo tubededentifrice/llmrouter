@@ -38,6 +38,7 @@ Accepted decisions:
 - [0034: Local health circuits with fleet hints](0034-use-local-health-circuits-with-fleet-hints.md)
 - [0035: Graduated spool-pressure shedding](0035-use-graduated-spool-pressure-shedding.md)
 - [0036: Five-minute RTO and 30-second RPO](0036-target-five-minute-rto-and-thirty-second-rpo.md)
+- [0037: Use shared Pocket ID for human authentication](0037-use-shared-pocket-id-for-human-authentication.md)
 
 Add a numbered decision record only after the user accepts a material choice.
 Each record must state the context, the accepted choice, alternatives, good and

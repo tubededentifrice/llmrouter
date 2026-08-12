@@ -9,26 +9,72 @@ LLM Router MUST provide a separate global administration application. It MUST
 use a separate control-plane audience and authorization path. A service
 credential MUST NOT authenticate to global administration.
 
-Interactive global administrator authentication MUST use passkeys only. The
-service MUST NOT provide public sign-up, password sign-in, email sign-in links,
-social sign-in, or a permanent recovery secret.
+LLM Router and the Ontology service MUST use one shared external OpenID Connect
+identity service for interactive human authentication. The identity service
+MUST own human accounts, passkeys, passkey enrollment and revocation, account
+disablement, interactive authentication, and loss-of-passkey recovery. A
+person MUST be able to use one identity-service account and its registered
+passkeys to authenticate to both applications. The selected identity service
+is recorded in decision 0037.
 
-An operator MUST create initial administrator enrollment from a trusted server
-console with an LLM Router CLI command. The command MUST create a random,
-short-lived, one-use enrollment URL. The service MUST store only a verifier for
-the enrollment secret. The secret MUST NOT be in logs. The URL MUST be
-redeemable once into a short-lived server-side enrollment ceremony. The URL
-MUST be invalid after redemption or expiry. The ceremony can issue a new
-one-use WebAuthn challenge when a registration attempt needs a retry.
+The shared identity service MUST permit passkey authentication only. Public
+sign-up, passwords, email sign-in links, email one-time access, social sign-in,
+and permanent recovery secrets MUST be disabled. A central identity
+administrator MAY create an account or issue a short-lived, one-use invitation
+for the account's first passkey. Recovery MUST start from a trusted server
+console, MUST be one-use and time-limited, MUST revoke applicable identity
+sessions, and MUST require a new passkey before normal authentication resumes.
+The identity service MUST audit account, passkey, invitation, disablement, and
+recovery operations.
 
-The same CLI mechanism MUST support loss-of-passkey recovery. Recovery MUST be
-one-use, time-limited, and audited. It MUST revoke applicable administrator
-sessions and require new passkey enrollment before normal administration can
-continue.
+A person MUST be able to register more than one passkey, name each passkey, and
+revoke one passkey from the shared identity account page after recent
+authentication.
 
-The initial enrollment and recovery model SHOULD remain aligned with the
-Ontology service. Each service has its own relying-party identifier, origin,
-administrator records, sessions, and audit records.
+LLM Router MUST be a separate confidential OpenID Connect client with its own
+exact redirect URIs and token audience. It MUST use the authorization code flow
+with Proof Key for Code Exchange. It MUST validate the issuer, audience,
+signature, expiry, state, nonce, and exact redirect URI. It MUST identify a
+human by the immutable issuer and subject pair. It MUST NOT use an email
+address, display name, or group name as the stable identity.
+
+The shared identity service authenticates a human. It MUST NOT own the LLM
+Router service tree, workspaces, administrator grants, permissions, provider
+credentials, budgets, or application audit records. LLM Router MUST keep its
+own administrator record, authorization grants, server-side sessions, and
+audit records. A new shared account MUST have no LLM Router authority until an
+eligible LLM Router administrator grants it. An identity-service group MAY
+limit who can start LLM Router authentication, but it MUST NOT expand a local
+grant or workspace boundary.
+
+An operator MUST create the initial LLM Router administrator grant from a
+trusted LLM Router server console. The CLI command MUST create a random,
+short-lived, one-use grant URL and MUST store only its verifier. The person who
+redeems the URL MUST authenticate through the shared identity service. LLM
+Router MUST bind the returned issuer and subject pair to the local global-
+administrator grant. The same flow MAY recover local administration when no
+eligible LLM Router administrator remains. The URL MUST NOT create or recover
+an identity-service account or passkey. Creation, redemption, success, and
+failure MUST create LLM Router audit events.
+
+An administrator session MUST have an idle expiry of no more than 15 minutes
+and an absolute expiry of no more than 8 hours. A sensitive action MUST require
+an identity-service authentication no more than five minutes old. The service
+MUST validate the authentication time and current account state. Account
+disablement, passkey recovery, or central session revocation MUST make each
+applicable LLM Router administrator session unusable within five minutes and
+before its next sensitive action. If the identity service is unavailable, LLM
+Router MUST reject new administrator sessions and sensitive actions. An
+existing session MAY continue non-sensitive actions only while its last
+account-state check is no more than five minutes old. Local logout MUST revoke
+the local administrator session immediately. Account disablement, passkey
+revocation, and recovery MUST also revoke applicable identity-service sessions.
+
+The global administration application MUST provide a clear link to the shared
+identity account page for passkey and account management. It MUST NOT copy the
+identity service's account or passkey management functions into LLM Router.
+Service bootstrap credentials and short-lived service tokens remain under the
+rules in specification 04 and MUST NOT become human identity credentials.
 
 ## Hosted service interface
 
