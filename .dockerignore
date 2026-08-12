@@ -1,0 +1,13 @@
+.beads
+.git
+.github
+.agents
+.claude
+.codex
+coverage
+dist
+docs
+node_modules
+runtime-data
+scripts
+tmp

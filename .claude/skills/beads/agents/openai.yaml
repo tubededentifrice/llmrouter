@@ -1,0 +1,4 @@
+interface:
+  display_name: "Beads Planning Guard"
+  short_description: "Keep Beads planning disabled"
+  default_prompt: "Use $beads to inspect the inactive Beads state without creating tasks."

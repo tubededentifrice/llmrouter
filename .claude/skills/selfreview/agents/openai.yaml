@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review LLM Router Changes"
+  short_description: "Review LLM Router changes before delivery"
+  default_prompt: "Use $selfreview to review recent LLM Router changes before commit."

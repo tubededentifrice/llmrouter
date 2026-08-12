@@ -1,0 +1,4 @@
+interface:
+  display_name: "LLM Router Specifications"
+  short_description: "Write aligned LLM router specifications"
+  default_prompt: "Use $llmrouter-specs to update LLM Router contracts and keep client boundaries aligned."

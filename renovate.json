@@ -1,0 +1,6 @@
+{
+  "extends": ["config:recommended"],
+  "minimumReleaseAge": "14 days",
+  "rangeStrategy": "pin",
+  "schedule": ["before 06:00 on monday"]
+}
