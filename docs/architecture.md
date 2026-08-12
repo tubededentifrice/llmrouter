@@ -37,13 +37,18 @@ behavior.
 ## Request model
 
 A logical request has one stable request ID. It can contain multiple provider
-attempts because of retry, fallback, or hedging. The recommended ledger keeps
-the logical request separate from each attempt. This prevents duplicate
-accounting and makes failures clear.
+attempts because of retry, fallback, or hedging. The ledger keeps the logical
+request separate from each attempt. This prevents duplicate accounting and
+makes failures clear.
 
-The normal caller selects a named assignment. An explicit model request can be
-an administrator or diagnostic capability. The exact exception policy needs
-user review.
+The normal caller selects a named assignment. A playground or another approved
+diagnostic operation can select an exact provider-model through a short-lived
+permission. The router still applies isolation, policy, budgets, accounting,
+and audit.
+
+After admission, the router owns provider retries and fallback. A client uses
+the same request identity after an uncertain timeout. Automatic fallback stops
+after streamed output or an external effect becomes visible.
 
 ## Agent and tool boundary
 
@@ -59,6 +64,11 @@ harness, but each service can use router functions without the harness.
 The router also owns approved common external-tool adapters. A service can use
 them from the harness or through direct endpoints. Business tools and current
 domain authorization stay in the calling service.
+
+One node owns each agent run with a fenced lease and epoch. A new node can
+resume durable state after takeover. Remote replication, normal lease renewal,
+and token checkpoints stay asynchronous or batched. The token-stream path does
+not wait for remote consensus on each chunk.
 
 ## Administration surfaces
 
@@ -84,13 +94,14 @@ There is no public sign-up or alternative interactive sign-in method.
 
 Each application server can use a router node on localhost. The client can use
 an ordered set of remote nodes when the local node is not healthy. A node can
-continue with its last valid configuration for a bounded time.
+continue with its last valid normal configuration for up to 24 hours. Urgent
+credential and security revocations use a separate high-priority path.
 
-The specification needs to define duplicate suppression, retry ownership,
-timeout budgets, stream interruption behavior, health probes, node draining,
-and safe behavior when configuration is stale. Eventual consistency is
-acceptable for fleet telemetry and most configuration distribution. Credential
-revocation and security policy changes can need a stronger path.
+The specification still needs to define the admission receipt, idempotency
+retention, timeout budgets, health probes, node draining, and recovery from an
+unconfirmed external effect. Eventual consistency is acceptable for fleet
+telemetry and most configuration distribution. Credential revocation and
+security policy changes use a separate urgent distribution path.
 
 ## Data classes
 

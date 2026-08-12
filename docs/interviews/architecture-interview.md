@@ -72,6 +72,11 @@ Resolved: Global administrators.
 
 ### 4. Model selection escape hatch
 
+Accepted answer: Normal production requests use assignments. A playground or
+other approved diagnostic operation can select an exact provider-model through
+a short-lived diagnostic permission. The router audits and accounts for the
+request.
+
 Recommendation: Normal production calls select an assignment. Permit an exact
 provider-model only for a short-lived diagnostic permission and record it in
 the audit and accounting data.
@@ -83,7 +88,7 @@ the audit and accounting data.
 - Any caller can select a model: It is simple for callers. It removes much of
   the control-plane value.
 
-Question: Do service developers need direct model selection in production?
+Resolved: Permit controlled exact-model testing.
 
 ### 5. Shared administration interface
 
@@ -110,6 +115,11 @@ Resolved: Yes. Use the Ontology explorer base model.
 
 ### 6. Retry ownership
 
+Accepted answer: After admission, LLM Router owns provider retries and
+fallback. A calling service does not duplicate this logic. An uncertain client
+timeout uses the same logical request identity and can remain pending until the
+client obtains its state.
+
 Recommendation: The official client retries only connection failures that
 prove the router did not admit the request. After admission, the router owns
 provider retries and fallback. An uncertain client timeout returns or queries
@@ -122,10 +132,14 @@ the same request ID; it does not start a second request.
 - At-least-once blind retry: It has high availability. It can create duplicate
   side effects and charges.
 
-Question: Is it acceptable that an uncertain request can stay pending until
-the client obtains its final status?
+Resolved: The router owns retries after admission. A pending uncertain state is
+acceptable.
 
 ### 7. Streaming failover
+
+Accepted answer: Fallback stops after model output or a tool continuation
+becomes visible. The stream ends as interrupted and returns the stable request
+identity.
 
 Recommendation: Permit fallback only before the router releases model output
 or accepts a tool-call continuation. After visible output, return an interrupted
@@ -139,9 +153,13 @@ continue.
 - Buffer the complete response: It permits safe fallback. It removes useful
   streaming latency.
 
-Question: Which failure experience do you want after partial output?
+Resolved: Stop automatic fallback after visible output or effects.
 
 ### 8. Stale configuration
+
+Accepted answer: A node can use its last valid normal configuration for up to
+24 hours. Credential and security revocations use a separate urgent
+distribution path.
 
 Recommendation: A node can serve its last valid configuration during a control
 plane outage for a service-defined time. Expired security revocations use a
@@ -154,10 +172,15 @@ separate urgent channel and can stop affected calls.
 - Serve without a limit: It gives maximum availability. It can use revoked
   credentials or policy for too long.
 
-Question: What stale time is acceptable for normal configuration? Is a target
-such as 24 hours reasonable?
+Resolved: Use a 24-hour maximum.
 
 ### 9. Agent-run ownership
+
+Accepted answer: Use durable resumable runs with one fenced owner. Keep remote
+replication, lease renewal, and token checkpoint work asynchronous and off the
+normal token-stream path. Strong coordination is permitted for run admission
+and takeover. Local durability is permitted before an external effect that
+must not run twice.
 
 Recommendation: One node owns an agent run through a fenced lease and epoch. A
 new node can resume durable state only after it fences the old owner.
@@ -168,8 +191,8 @@ new node can resume durable state only after it fences the old owner.
 - Calling-service ownership: It keeps the router stateless. It leaves agent
   harness duplication in each service.
 
-Question: Does an agent run need to survive a router-node failure in the first
-release?
+Resolved: Runs survive node failure without a material steady-state latency
+cost.
 
 ## Round 3: tools, security, and data
 

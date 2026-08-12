@@ -5,8 +5,10 @@ the architecture interview continues.
 
 - [Product and boundaries](00-product-and-boundaries.md)
 - [Configuration and inheritance](01-configuration-and-inheritance.md)
+- [Routing, failover, and request lifecycle](02-routing-failover-and-request-lifecycle.md)
 - [Agent harness and tools](03-agent-harness-and-tools.md)
 - [Administration and shared interface](06-administration-and-shared-interface.md)
+- [Reliability, deployment, and operations](07-reliability-deployment-and-operations.md)
 
 Keep these rules:
 

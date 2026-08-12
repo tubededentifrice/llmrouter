@@ -1,7 +1,7 @@
 # Agent harness and tools
 
-Status: Accepted sections only. Run ownership, tool-call concurrency, and
-approval details remain open.
+Status: Accepted sections only. Tool-call concurrency and approval details
+remain open.
 
 ## Optional agent harness
 
@@ -18,6 +18,28 @@ and workspace isolation.
 The calling service owns its business tools, domain authorization, user
 approval, and domain records. LLM Router MUST NOT make a business tool eligible
 only because the model requested it.
+
+## Durable run ownership
+
+One router node MUST own an active agent run through a fenced lease and owner
+epoch. A different node MUST NOT resume the run until it has obtained a newer
+epoch that prevents the old owner from making more accepted changes.
+
+The router MUST store enough durable run state to resume after node failure. It
+MUST keep durable run state separate from the model conversation and from
+content that is visible only to a client stream.
+
+The steady-state run path MUST NOT wait for remote replication for each token
+or stream chunk. Lease renewal, remote replication, and ordinary checkpoints
+MUST run asynchronously or in batches. The router MUST be able to publish token
+chunks without a remote consensus operation for each chunk.
+
+Run admission and ownership takeover MAY use a strongly consistent fencing
+operation. Before a provider attempt, business tool call, or other external
+effect that must not run twice, the owner MUST record the applicable intent at
+a local durable boundary. Remote replication of that record MAY be
+asynchronous. The specification will define recovery behavior for an
+unconfirmed effect before implementation.
 
 ## Shared external tools
 
