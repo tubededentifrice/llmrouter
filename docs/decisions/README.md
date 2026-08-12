@@ -13,7 +13,7 @@ Accepted decisions:
 - [0009: Durable agent runs with asynchronous checkpoints](0009-durable-agent-runs-with-asynchronous-checkpoints.md)
 - [0010: Registered service tool gateway](0010-use-a-registered-service-tool-gateway.md)
 - [0011: Exchange service secrets for short-lived tokens](0011-exchange-service-secrets-for-short-lived-tokens.md)
-- [0012: Capture complete content for public data](0012-capture-complete-content-by-default-for-public-data.md)
+- [0012: Capture complete content by default](0012-capture-complete-content-by-default-for-public-data.md)
 - [0013: Editable retention defaults](0013-use-editable-retention-defaults.md)
 - [0014: Local spools, central ledger, and object storage](0014-use-local-spools-a-central-ledger-and-object-storage.md)
 - [0015: Native API and OpenAI compatibility](0015-use-a-native-api-and-openai-compatibility.md)
@@ -29,7 +29,7 @@ Accepted decisions:
 - [0025: Leased allowances for distributed budgets](0025-use-leased-allowances-for-distributed-budgets.md)
 - [0026: Static ordered node lists](0026-use-static-ordered-node-lists.md)
 - [0027: Warm control-plane standby](0027-use-a-warm-control-plane-standby.md)
-- [0028: Public-data profile only](0028-ship-only-the-public-data-profile.md)
+- [0028: Public-data profile only; superseded](0028-ship-only-the-public-data-profile.md)
 - [0029: Graph and inspector administration](0029-use-graph-and-inspector-administration.md)
 - [0030: Calling-service work stays in its repository](0030-keep-calling-service-work-in-its-repository.md)
 - [0031: Client-generated UUIDv7 request identity](0031-use-client-generated-uuidv7-request-identity.md)
@@ -39,6 +39,8 @@ Accepted decisions:
 - [0035: Graduated spool-pressure shedding](0035-use-graduated-spool-pressure-shedding.md)
 - [0036: Five-minute RTO and 30-second RPO](0036-target-five-minute-rto-and-thirty-second-rpo.md)
 - [0037: Use shared Pocket ID for human authentication](0037-use-shared-pocket-id-for-human-authentication.md)
+- [0038: Process authorized service data with normal capture](0038-process-authorized-service-data-with-normal-capture.md)
+- [0039: Let services manage their router workspace scopes](0039-let-services-manage-router-workspace-scopes.md)
 
 Add a numbered decision record only after the user accepts a material choice.
 Each record must state the context, the accepted choice, alternatives, good and

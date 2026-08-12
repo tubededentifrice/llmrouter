@@ -156,15 +156,15 @@ Do not use one retention rule for all data.
 - Operational metrics: aggregated and suitable for a telemetry system.
 - Diagnostic logs: bounded, sampled, and short-lived.
 - Prompt, response, search-query, and tool content: enabled for the current
-  public-data profile, separately controlled, and short-lived.
+  `service-data` profile, separately controlled, and short-lived.
 - Configuration snapshots: immutable revisions with bounded history.
 
 The initial retention defaults are accepted and remain editable configuration.
 The live ledger and coordination storage products remain open. S3-compatible
 object storage is accepted for suitable content and archive objects.
 
-Complete content capture is enabled by default for the current public-data
-service profile. It is inherited configuration at global, service, and
+Complete content capture is enabled by default for the current `service-data`
+profile. It is inherited configuration at global, service, and
 workspace levels. Credentials and control-plane secrets are always removed
 before storage. Content reads are permission-controlled and audited.
 
@@ -193,10 +193,13 @@ Each valid configuration save publishes one atomic immutable revision
 immediately. There is no draft, approval, canary, or promotion state. A restore
 publishes another revision with validated earlier content.
 
-The first release accepts only the versioned public-data request profile. It
-does not claim support for protected private data. The administration
-application uses the provider and assignment graph with side inspectors as its
-primary workflow and provides an accessible table alternative.
+The first release accepts only the versioned `service-data` request profile.
+It can process public or private content that the calling service is authorized
+to use. It excludes control secrets. Captured content is a router technical
+copy that expires under router retention and is not available in service-
+scoped administration. The administration application uses the provider and
+assignment graph with side inspectors as its primary workflow and provides an
+accessible table alternative.
 
 ## Public interfaces and packaging
 

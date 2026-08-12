@@ -17,15 +17,23 @@ person MUST be able to use one identity-service account and its registered
 passkeys to authenticate to both applications. The selected identity service
 is recorded in decision 0037.
 
-The shared identity service MUST permit passkey authentication only. Public
+The shared identity service MUST permit passkey authentication only. Open
 sign-up, passwords, email sign-in links, email one-time access, social sign-in,
-and permanent recovery secrets MUST be disabled. A central identity
-administrator MAY create an account or issue a short-lived, one-use invitation
-for the account's first passkey. Recovery MUST start from a trusted server
-console, MUST be one-use and time-limited, MUST revoke applicable identity
-sessions, and MUST require a new passkey before normal authentication resumes.
-The identity service MUST audit account, passkey, invitation, disablement, and
-recovery operations.
+and permanent recovery secrets MUST be disabled. Token-limited sign-up MUST
+remain enabled only for a short-lived invitation that an identity
+administrator issues for one account's first passkey. An identity
+administrator MAY instead create the account directly. Recovery MUST start
+from a trusted server console, MUST be one-use and time-limited, MUST revoke
+applicable identity sessions, and MUST require a new passkey before normal
+authentication resumes. The identity service MUST audit account, passkey,
+invitation, disablement, and recovery operations.
+
+The deployment MUST use an exact Pocket ID version and immutable image digest.
+The version MUST be at least 2.6.0, MUST be at least 14 complete days old when
+selected, and MUST contain all published critical and high-severity security
+fixes that apply to this configuration. An upgrade MUST pass the OpenID
+Connect, enrollment, recovery, revocation, and token-confusion conformance
+tests before production use.
 
 A person MUST be able to register more than one passkey, name each passkey, and
 revoke one passkey from the shared identity account page after recent
@@ -102,6 +110,32 @@ Ontology message types for different actions.
 The embedded service view MUST NOT expose global administration functions. The
 global administration application can use the same React codebase, but it MUST
 use the separate global administrator authority.
+
+The host service owns authentication and authorization for a person who opens
+its embedded service view. The person MUST NOT need a Pocket ID session only
+to use that host-authorized service view. The host backend MUST mint the embed
+session only after it checks the current host session and the separate router-
+administration permission. Pocket ID remains the authentication path for the
+global LLM Router application.
+
+For a host that uses one current workspace, the embed session MUST contain
+only that workspace. A host workspace switch MUST dispose of the current frame
+and session before it creates a session for the new workspace. A service-wide
+router administrator MAY receive a service-scoped session with no workspace
+data access for service-level configuration. The service view MUST show the
+current service and workspace scope on each page.
+
+The first-release service view MUST expose only effective configuration,
+assignments, provider and route status, budgets, accounting summaries,
+request status, and safe diagnostics that its grant permits. It MUST NOT expose
+captured request or tool content.
+
+A host can create a read-only embed session from its current authorized user
+session. A session with configuration-write, budget-write, or diagnostic-run
+permission MUST contain a host-asserted passkey authentication time that is no
+more than five minutes old. It MUST expire no later than five minutes after
+that authentication. The frame MUST NOT expand a read-only session after a
+browser-only action.
 
 ## Operational graph state
 

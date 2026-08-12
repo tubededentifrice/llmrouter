@@ -252,9 +252,9 @@ enforce route, cost, provider, privacy, and tool policies that Xbot supplies.
 7. Separate global administration from service-scoped administration.
 8. At the time of this review, the recommendation was to keep content capture
    off by default and give each data class its own retention policy. Decision
-   0012 supersedes the first part for the current public-data profile: complete
-   content capture is on by default and remains configurable. Separate data
-   classes and retention policies still apply.
+   Decision 0038 supersedes the profile scope. Decision 0012 keeps complete
+   content capture on by default and configurable for the `service-data`
+   profile. Separate data classes and retention policies still apply.
 9. Use one hosted React graph with a safe embed and a headless interface unless
    the interview selects a custom element.
 10. Provide an OpenAI-compatible migration interface and use the native

@@ -39,12 +39,24 @@ shared contracts are accepted.
 ## Initial data profile
 
 The first release MUST expose a versioned request data-profile field. Its only
-accepted value MUST be the named public-data profile. A caller MUST use this
-profile only for content that is public, intended for public release, or
-explicitly approved as public for the operation.
+accepted value MUST be the named `service-data` profile. A caller MAY use this
+profile for public, private, personal, or unpublished content that the caller
+is authorized to process for the exact request.
 
-The router MUST reject another profile or protected private content that it
-can identify. The calling service remains responsible for classifying its
-domain data before submission. A later private-data profile needs a separate
-accepted specification change. It MUST NOT silently change the meaning of the
-public-data profile.
+The calling service remains responsible for user authorization, workspace
+authorization, data minimization, and provider eligibility before submission.
+The router MUST apply the configured capture, retention, provider, and access
+rules to the complete request. The profile MUST NOT permit a provider route
+that the service or workspace policy excludes.
+
+The `service-data` profile MUST NOT contain a provider credential, service
+bootstrap secret, access token, session cookie, passkey material, private key,
+authorization header, or another control secret. The router MUST reject such
+content when it can identify it and MUST remove a control secret before data
+leaves the receiving process.
+
+Captured content is a retention-bound router technical record. It MUST NOT
+become the calling service's canonical domain store. Deletion of a source
+record in a calling service does not start capture deletion in the first
+release. The captured copy MUST expire under the router retention rule that
+applied at admission.

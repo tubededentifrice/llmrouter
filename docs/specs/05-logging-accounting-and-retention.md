@@ -21,7 +21,7 @@ One retention or access setting MUST NOT silently apply to all data classes.
 ## Content capture
 
 Complete content capture MUST be enabled by default for the current
-public-data service profile. It can include prompts, model responses, search
+`service-data` profile. It can include prompts, model responses, search
 queries, provider errors, external-tool input and output, and business-tool
 input and output.
 
@@ -51,6 +51,19 @@ and expiry.
 Before a service starts to process non-public or regulated data, its owner MUST
 review and set the applicable content-capture and retention policy. The router
 MUST permit capture to be disabled without disabling accounting or audit.
+
+The first-release service-scoped administration API and hosted service view
+MUST NOT expose captured prompt, response, search-query, provider-error, or
+tool content. A global administrator with the explicit content-read permission
+MAY read captured content. Each read MUST require recent authentication and
+MUST create an audit event. A service can inspect its request state,
+accounting, capture policy, and capture expiry without reading the captured
+content.
+
+A calling-service record deletion MUST NOT delete or shorten retained router
+capture in the first release. Router capture MUST expire under the effective
+retention rule recorded at request admission. A service-facing result MUST not
+claim that source deletion removed the router copy.
 
 ## Editable retention defaults
 

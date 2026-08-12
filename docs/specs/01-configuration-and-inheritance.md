@@ -34,6 +34,35 @@ or a parent link.
 
 Each global and service-scoped change MUST create an audit event.
 
+## Workspace life cycle
+
+A registered service MUST be able to create, read, disable, restore, and
+retire its router workspace scopes through service-management operations. A
+workspace-management operation MUST require a short-lived service token with
+the exact operation. It MUST NOT grant model, tool, content, accounting, or
+configuration access.
+
+Workspace creation MUST be idempotent. The caller MUST supply an idempotency
+key and an opaque caller reference. A repeated matching request MUST return the
+same router workspace identity. A request that reuses either value for
+different content MUST fail without creating another workspace.
+
+A new workspace MUST start as `active`. A disable operation MUST stop new
+workspace request admission and preserve configuration, accounting, audit,
+and retention state. Restore MUST return a disabled workspace to `active`
+after current service, policy, budget, and credential checks pass.
+
+Retirement MUST be a separate, confirmed operation. It MUST stop new request
+admission permanently. It MUST NOT delete or shorten the retention of router
+requests, captured content, accounting, or audit records. These records MUST
+expire through their applicable router retention rules. A retired workspace
+identity MUST NOT be reused.
+
+Each operation MUST return the router workspace identity, state, state
+revision, and stable operation receipt. Each change MUST create an audit event.
+The service-scoped interface MUST show a disabled or retired state without
+showing retained content.
+
 ## Shared catalog and scoped provider instances
 
 LLM Router MUST own one shared catalog of provider adapter types, canonical

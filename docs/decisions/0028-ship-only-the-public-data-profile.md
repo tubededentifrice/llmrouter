@@ -1,6 +1,6 @@
 # Ship only the public-data profile
 
-- Status: accepted
+- Status: superseded by decision 0038
 - Date: 2026-08-12
 - Decision owner: user
 

@@ -60,6 +60,11 @@ browser entry point MUST NOT accept a service bootstrap secret or unrestricted
 service token. Browser operations MUST use an eligible short-lived browser,
 embed, or administrator session.
 
+The server clients MUST support idempotent service-workspace create, read,
+disable, restore, and retire operations. They MUST preserve the caller
+reference and idempotency key across an uncertain retry. They MUST NOT treat a
+retire operation as deletion of retained router records.
+
 After version 1.0, a normal server release MUST support the current and
 previous minor versions of each official client. The repository MUST publish a
 compatibility table.

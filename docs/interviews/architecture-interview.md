@@ -610,6 +610,10 @@ Resolved: Use a warm fenced standby.
 
 ### 29. Initial privacy profile
 
+Superseded by accepted decision 0038. The first release now uses the
+`service-data` profile for authorized service content with normal capture and
+retention.
+
 Accepted answer: Expose a versioned data-profile field but accept only the
 public-data profile in the first release. Do not claim support for protected
 private data. Add another profile only after an accepted specification change.
@@ -623,7 +627,7 @@ creating unused private-data policy.
   and test paths now.
 - No profile: It is smaller today. A safe later change is more disruptive.
 
-Resolved: Ship only the public-data profile.
+Earlier resolution: Ship only the public-data profile.
 
 ### 30. Administration workflow
 

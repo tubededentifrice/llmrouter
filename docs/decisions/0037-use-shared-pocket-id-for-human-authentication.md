@@ -22,11 +22,12 @@ identity service for LLM Router and Ontology. Pocket ID owns human accounts,
 passkeys, initial passkey enrollment, passkey changes, account disablement,
 interactive authentication, and loss-of-passkey recovery.
 
-Disable public sign-up, passwords, email sign-in and one-time access, social
-sign-in, and permanent recovery secrets. A central identity administrator can
-create accounts and one-use invitations. Trusted server-console access starts
-recovery. A user manages all registered passkeys at the central Pocket ID
-account page.
+Disable open sign-up, passwords, email sign-in and one-time access, social
+sign-in, and permanent recovery secrets. Keep token-limited sign-up enabled
+only for a short-lived invitation that a central identity administrator issues
+for one account's first passkey. The administrator can instead create the
+account directly. Trusted server-console access starts recovery. A user
+manages all registered passkeys at the central Pocket ID account page.
 
 Configure LLM Router and Ontology as separate confidential OpenID Connect
 clients. Each client has exact redirect URIs and a separate audience. Each
@@ -70,8 +71,10 @@ not create or recover a Pocket ID account or passkey.
 - A Pocket ID compromise can affect authentication to both applications. Its
   administration, signing keys, backups, network policy, and recovery process
   need the same protection as the two control planes.
-- Implementation must select an exact Pocket ID version that is at least 14
-  complete days old and must use an immutable image reference.
+- Implementation must select an exact Pocket ID version that is at least 2.6.0
+  and at least 14 complete days old. The deployment must use an immutable image
+  digest and must include all applicable published critical and high-severity
+  security fixes.
 
 ## Migration effect
 
