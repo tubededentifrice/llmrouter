@@ -1,6 +1,7 @@
 # Architecture working model
 
-Status: Working model for discussion. No choice in this document is accepted.
+Status: Working model. Accepted choices link to decision records. Other choices
+remain proposals.
 
 ## Main split
 
@@ -26,9 +27,10 @@ The proposed effective configuration has these ordered layers:
 3. each child service in one parent chain;
 4. workspace overrides that the effective service controls.
 
-Each layer can replace an assignment. The current recommendation is to make
-providers and models reusable definitions, and to make assignments refer to an
-ordered policy of model candidates. The specification needs to define
+For one named assignment, the nearest layer replaces the complete inherited
+fallback chain. Partial chain edits are not in the first release. Providers
+and models are reusable definitions. Assignments refer to an ordered policy of
+model candidates. The specification needs to define
 deletion, disablement, conflict, version pinning, validation, and rollback
 behavior.
 
@@ -51,13 +53,17 @@ run mechanics, model calls, tool-call loops, budgets, cancellation, timeouts,
 and common tool adapters.
 
 This boundary keeps product logic close to the product. It can still remove
-duplicate execution and provider code. The interview will decide if the first
-release includes full agent loops or only model routing and tool execution.
+duplicate execution and provider code. The first release includes the complete
+harness, but each service can use router functions without the harness.
+
+The router also owns approved common external-tool adapters. A service can use
+them from the harness or through direct endpoints. Business tools and current
+domain authorization stay in the calling service.
 
 ## Administration surfaces
 
-The current recommendation is one hosted React administration application with
-two permission modes:
+The accepted design uses one hosted React administration application with two
+permission modes:
 
 - global administration for the full fleet;
 - service-scoped administration for one service and its workspaces.
@@ -66,6 +72,13 @@ A host application can embed the service-scoped view in an isolated frame with
 a short-lived, purpose-bound grant. A headless HTTP interface gives the same
 permitted functions to hosts that need a native interface. This approach gives
 Crewday and FJ2 the same experience without a React dependency in FJ2.
+
+The frame uses the same base security model as the planned Ontology explorer,
+but it has an independent protocol namespace and version.
+
+Global interactive administration uses passkeys only. A trusted server CLI
+creates a short-lived, one-use enrollment URL for initial access or recovery.
+There is no public sign-up or alternative interactive sign-in method.
 
 ## Availability model
 

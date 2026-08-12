@@ -1,6 +1,7 @@
 # Architecture interview
 
-Status: Open. No answer is accepted yet.
+Status: In progress. The accepted answers are recorded below. Unanswered items
+remain open.
 
 This interview covers choices that change visible behavior, operating risk,
 security, cost, or stored data. The recommended answer is first in each item.
@@ -8,6 +9,11 @@ security, cost, or stored data. The recommended answer is first in each item.
 ## Round 1: product boundary and visible behavior
 
 ### 1. First release boundary
+
+Accepted answer: Full platform. The first release includes the router, complete
+optional agent harness, streaming, provider failover, accounting, shared tools,
+global administration, and service-scoped administration. A service can use
+the router without using the harness.
 
 Recommendation: Include model routing, streaming, provider failover, usage
 accounting, common external tools, the global administration application, and
@@ -21,9 +27,13 @@ use one run protocol without moving their business tools.
 - Model router only: It is the smallest release. It does not meet the stated
   goal for shared search tools and an agent harness.
 
-Question: Which first-release boundary do you want?
+Resolved: Full platform with an optional harness.
 
 ### 2. Assignment override behavior
+
+Accepted answer: The nearest scope replaces the complete fallback chain for
+one named assignment. Partial inheritance-chain edits are not in the first
+release.
 
 Recommendation: The nearest scope replaces the complete fallback chain for one
 named assignment. Add an explicit `extend` operation later only if a real use
@@ -36,10 +46,17 @@ case needs it.
 - Support both now: It is flexible. It increases the contract and UI size at
   the start.
 
-Question: Does a child or workspace only replace a chain, or does it also need
-to be able to edit parts of an inherited chain?
+Resolved: Replace the complete chain.
 
 ### 3. Service tree control
+
+Accepted answer: Global administrators create services and parent links. A
+service administrator controls its own assignments and workspaces.
+
+Related accepted answer: Interactive global administration uses passkeys only.
+There is no public sign-up, password, email sign-in link, or social sign-in.
+An operator CLI creates a short-lived, one-use initial enrollment or recovery
+URL. This follows the Ontology administration security model.
 
 Recommendation: Global administrators create services and parent links. A
 service administrator can change its own assignments and its workspaces, but
@@ -51,7 +68,7 @@ cannot create a new child service unless global policy delegates that action.
   can create unexpected scope and cost.
 - Service-controlled tree: It is flexible. It weakens global governance.
 
-Question: Who can create child services and change parent links?
+Resolved: Global administrators.
 
 ### 4. Model selection escape hatch
 
@@ -70,6 +87,11 @@ Question: Do service developers need direct model selection in production?
 
 ### 5. Shared administration interface
 
+Accepted answer: Use the same base integration model as the planned Ontology
+explorer. LLM Router hosts one React application. A service embeds its scoped
+view in an isolated cross-origin frame through a one-use bootstrap handshake.
+A headless API provides the same permitted functions.
+
 Recommendation: Host one React application in LLM Router. Embed the
 service-scoped view in an isolated frame. Also provide a headless API. Use a
 short-lived grant and an exact origin allow-list.
@@ -82,7 +104,7 @@ short-lived grant and an exact origin allow-list.
 - Separate implementations: Each host has full control. The interfaces will
   drift and duplicate work.
 
-Question: Is an isolated embedded frame acceptable in Crewday and FJ2?
+Resolved: Yes. Use the Ontology explorer base model.
 
 ## Round 2: request and failure behavior
 
@@ -168,6 +190,11 @@ Question: Can each calling service expose one private tool-gateway endpoint?
 
 ### 11. Common external tools
 
+Accepted answer: LLM Router owns shared adapters and routing for Brave,
+ScrapingDog, Serper, SearXNG, and similar external tools. Services can use them
+through the agent harness or call direct tool endpoints. Both paths use the
+same routing, failover, authorization, budgets, and accounting.
+
 Recommendation: The router owns adapters for Brave, ScrapingDog, Serper,
 SearXNG, and similar external infrastructure tools. A service defines named
 tool assignments, permitted operations, budgets, privacy classes, and
@@ -180,10 +207,15 @@ workspace overrides.
 - A separate tool-router service: It gives a clean future boundary. It adds an
   extra service and operational path now.
 
-Question: Should these external tools be part of LLM Router, or should we plan
-them as a separate macro service?
+Resolved: Include shared external tools in LLM Router and provide direct
+service endpoints.
 
 ### 12. Global administrator authentication
+
+Accepted answer: LLM Router owns passkey-only global administrator identities.
+There is no public sign-up or alternative interactive sign-in. A trusted
+server CLI creates a short-lived, one-use enrollment URL for initial access or
+recovery. Keep the operator flow aligned with Ontology.
 
 Recommendation: Use a separate global-administrator origin and audience. Use
 passkeys, recent authentication for sensitive changes, and no normal service
@@ -195,8 +227,7 @@ credential on this plane.
   current staff lifecycle controls. It adds identity-provider integration.
 - Password and TOTP: It is familiar. It is weaker against phishing.
 
-Question: Is there an existing staff identity provider, or should the router
-own passkey-only administrator identities?
+Resolved: LLM Router owns passkey-only administrator identities.
 
 ### 13. Service authentication
 

@@ -11,15 +11,16 @@ change those services during the specification phase.
 
 This repository is in architecture discovery. It contains repository controls,
 research, and draft design boundaries. It does not contain a product
-implementation. No functional specification or architecture choice is
-accepted until the user reviews it.
+implementation. The first product-boundary, inheritance, administration,
+interface, and shared-tool decisions are accepted. Other behavior remains
+under review.
 
 Beads is initialized, but it has no work items. Beads planning stays disabled
 until the user approves the specifications and explicitly asks to enable it.
 
-## Proposed product boundary
+## Accepted product boundary
 
-The router can provide these shared functions:
+The first release provides these shared functions:
 
 - ordered service and workspace configuration;
 - provider, model, assignment, and fallback selection;
@@ -30,10 +31,13 @@ The router can provide these shared functions:
 - a global administrator application;
 - service-scoped administration views that work in React and non-React hosts.
 
-The calling service should continue to own its domain rules, prompts, workflows,
-user permissions, and the choice of which tools an agent can use.
+The agent harness is complete but optional for each service. A service can use
+routing, streaming, failover, accounting, and shared tools without using the
+harness.
 
-These boundaries are proposals. The architecture interview will decide them.
+The calling service continues to own its domain rules, prompts, workflows,
+user permissions, business tools, and the choice of which tools an agent can
+use.
 
 ## Repository map
 

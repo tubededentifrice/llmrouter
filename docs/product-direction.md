@@ -1,6 +1,7 @@
 # Product direction
 
-Status: Draft for user review.
+Status: Partially accepted. Open behavior remains in the architecture
+interview.
 
 ## Problem
 
@@ -44,17 +45,21 @@ The planned calling-service outcomes are:
 
 The router will not change these repositories during discovery.
 
-## Scope candidates
+## Accepted scope
 
-The shared service can own model routing, provider adapters, health and circuit
-state, request policy, common tool adapters, agent-run mechanics, accounting,
-retention, and administration surfaces.
+The shared service owns model routing, provider adapters, health and circuit
+state, request policy, common external-tool adapters, agent-run mechanics,
+accounting, retention, and administration surfaces.
+
+The complete agent harness is part of the first release, but a service can
+choose not to use it. Direct model and external-tool endpoints use the same
+routing, failover, policy, and accounting as harness requests.
 
 The calling service can own domain prompts, domain data, user approval,
 business workflow state, end-user permissions, and tool authorization for each
 agent or request.
 
-The architecture interview will resolve the exact boundary.
+The architecture interview will resolve the remaining boundary details.
 
 ## Quality goals
 

@@ -1,13 +1,14 @@
 # Product specifications
 
-No functional specification is accepted yet.
+Some specification sections are accepted. Other behavior remains open while
+the architecture interview continues.
 
-The architecture interview and source-service review must finish before this
-directory receives normative behavior. Until then, use
-`docs/product-direction.md`, `docs/architecture.md`, and `docs/research/` as
-draft discussion material only.
+- [Product and boundaries](00-product-and-boundaries.md)
+- [Configuration and inheritance](01-configuration-and-inheritance.md)
+- [Agent harness and tools](03-agent-harness-and-tools.md)
+- [Administration and shared interface](06-administration-and-shared-interface.md)
 
-When specification work starts, keep these rules:
+Keep these rules:
 
 - Put normative product behavior only in this directory.
 - Give each requirement one source location.

@@ -58,9 +58,10 @@ also have a workspace identity. A normal service must not read or change
 another service's configuration, credentials, requests, accounting data,
 agents, tools, or workspaces.
 
-Service configuration uses one ordered parent chain. A child can replace an
-assignment from its parent. A workspace can replace an assignment from its
-service chain. Exact merge behavior remains a specification decision.
+Service configuration uses one ordered parent chain. For one named assignment,
+the nearest service or workspace layer replaces the complete inherited
+fallback chain. Do not merge chains or add partial chain edits in the first
+release.
 
 Global administration uses a separate identity and permission path. Each
 global administration action must produce an audit event.
