@@ -66,6 +66,8 @@ required_files=(
   ".beads/metadata.json"
   ".claude/skills/beads/SKILL.md"
   ".claude/skills/llmrouter-specs/SKILL.md"
+  ".claude/skills/repository-tooling/SKILL.md"
+  ".claude/skills/repository-tooling/agents/openai.yaml"
   ".claude/skills/selfreview/SKILL.md"
   ".dockerignore"
   ".editorconfig"

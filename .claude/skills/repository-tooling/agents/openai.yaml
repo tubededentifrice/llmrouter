@@ -1,0 +1,4 @@
+interface:
+  display_name: "Repository Tooling"
+  short_description: "Turn repeatable friction into durable tools"
+  default_prompt: "Use $repository-tooling to remove repeatable repository friction and add the applicable quality gate."

@@ -35,6 +35,18 @@ runtime data, or unpublished third-party data in Git.
 9. After non-trivial edits, use the repository `selfreview` skill. Review all
    owned changes one more time, then run `./scripts/check-repository.sh`.
 
+## Tooling and durable guidance
+
+Use the `repository-tooling` skill when repeated work, test access, environment
+setup, or a missing quality check causes friction. Improve the repository tool,
+fixture, skill, or gate in the same change when it is safe and in scope. Do not
+leave a repeatable workaround only in chat or weaken authentication to make a
+test pass.
+
+Keep root instructions limited to durable policy. Put reusable workflows in a
+skill, deterministic operations in `scripts/`, and directory-only rules in a
+nested `AGENTS.md`.
+
 ## Specification and implementation
 
 Product behavior belongs in `docs/specs/`. Architecture choices belong in
@@ -79,6 +91,10 @@ Do not select or install a dependency version that is less than 14 complete
 days old. Use exact versions and immutable container references. Do not use
 `@latest`, floating tags, or unpinned remote install scripts. An exception
 needs a user decision and an architecture decision record.
+
+Use `uv` for all Python environments, dependency changes, locking, commands,
+and tools. Do not use `pip`, `pipx`, Poetry, or a manually created virtual
+environment.
 
 Keep each public contract versioned and product-neutral.
 Compatibility APIs, SDKs, hosted administration views, and headless interfaces
