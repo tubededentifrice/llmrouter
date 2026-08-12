@@ -43,8 +43,14 @@ state, or accounting.
 
 The first release MUST provide official Python and TypeScript clients. The
 clients MUST implement service-token exchange and renewal, local-first node
-selection, stable request identity, safe retry before and after admission,
-status recovery, streaming, cancellation, and protocol compatibility checks.
+selection, client-generated UUIDv7 request identity, admission-receipt
+handling, safe retry before and after admission, 24-hour terminal status
+recovery, streaming, best-effort cancellation states, and protocol
+compatibility checks.
+
+The clients MUST create the UUIDv7 when an intentional logical request is ready
+for its first submission. They MUST NOT reuse an expired identity. They MUST
+send the same provider-neutral request fields when they repeat a submission.
 
 The clients MUST NOT contain provider retry or fallback policy. LLM Router owns
 that behavior after admission.

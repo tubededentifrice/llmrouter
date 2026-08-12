@@ -32,6 +32,9 @@ Accepted decisions:
 - [0028: Public-data profile only](0028-ship-only-the-public-data-profile.md)
 - [0029: Graph and inspector administration](0029-use-graph-and-inspector-administration.md)
 - [0030: Calling-service work stays in its repository](0030-keep-calling-service-work-in-its-repository.md)
+- [0031: Client-generated UUIDv7 request identity](0031-use-client-generated-uuidv7-request-identity.md)
+- [0032: 24-hour terminal request recovery](0032-retain-terminal-request-recovery-for-24-hours.md)
+- [0033: Best-effort cancellation states](0033-use-explicit-best-effort-cancellation-states.md)
 
 Add a numbered decision record only after the user accepts a material choice.
 Each record must state the context, the accepted choice, alternatives, good and

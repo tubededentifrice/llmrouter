@@ -651,8 +651,74 @@ work.
 Resolved: Keep calling-service work in its repository and update Xbot
 specifications during shared-contract planning.
 
+## Round 7: request identity, recovery, and cancellation
+
+### 32. Admission identity
+
+Accepted answer: The official client creates one opaque UUIDv7 for each
+intentional logical request. Before external work, the router durably binds it
+to the authenticated service, optional workspace, and request fingerprint. A
+matching repeat returns the existing admission. A different fingerprint fails.
+
+Safety detail: The binding is one strongly serialized create-if-absent
+operation across eligible nodes. The fingerprint uses a versioned canonical
+encoding and SHA-256.
+
+Recommendation: A client-created identity permits safe recovery when the
+submission response is lost before the client receives a router response.
+
+- Client UUIDv7: It uses one identity and supports safe repeat submission. The
+  official clients must create and retain it correctly.
+- Client key plus router ID: It gives two clear roles. Every record and support
+  workflow must handle two identities.
+- Router ID only: It is small. It cannot safely identify a request after a
+  timeout before the caller receives the ID.
+
+Resolved: Use a client-generated UUIDv7 and a durable admission binding.
+
+### 33. Request recovery retention
+
+Accepted answer: Keep the binding and status until the request is terminal.
+Keep terminal status and its idempotency binding for 24 hours. Do not shorten
+the separate accounting, audit, or content retention.
+
+Safety detail: Reject an unknown UUIDv7 outside the configured first-submission
+age window. This prevents an expired identity from starting new work.
+
+Recommendation before the decision: Seven days gives more time for incident
+recovery with moderate operational storage.
+
+- Twenty-four hours: It supports immediate and next-day recovery. A later
+  automatic replay is not safe.
+- Seven days: It supports delayed incident recovery. It keeps operational
+  lookup records longer.
+- Ninety days: It can match accounting retention. It is excessive for the
+  idempotency path.
+
+Resolved: Retain terminal recovery records for 24 hours.
+
+### 34. Cancellation meaning
+
+Accepted answer: Use explicit best-effort states. Record `cancel_requested`,
+stop new work, and ask active adapters to stop. Report `cancelled` only after
+active work is confirmed stopped. Finish as `uncertain` when bounded
+reconciliation cannot confirm a provider or tool effect.
+
+Safety detail: Cancellation needs an explicit mutation permission, stops all
+new provider and tool effects, and writes an immutable audit event.
+
+Recommendation: These states do not tell an administrator that external work
+stopped when it can still continue.
+
+- Best-effort states: They are accurate. The request can finish as uncertain
+  after bounded reconciliation ends.
+- Immediate cancelled: It is fast. It can be false when an external system
+  continues work.
+- Detach only: It is simple. Work and spend can continue after the stop request.
+
+Resolved: Use explicit best-effort cancellation states.
+
 ## Follow-up rounds
 
-The next interview covers admission identity, idempotency retention,
-cancellation, health circuits, spool pressure, recovery objectives, and
-administrator recovery details.
+The next interview covers health circuits, spool pressure, recovery objectives,
+administrator recovery, and provider timeout policy.

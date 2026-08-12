@@ -36,10 +36,16 @@ behavior.
 
 ## Request model
 
-A logical request has one stable request ID. It can contain multiple provider
-attempts because of retry, fallback, or hedging. The ledger keeps the logical
-request separate from each attempt. This prevents duplicate accounting and
-makes failures clear.
+A logical request has one client-generated opaque UUIDv7. Before external work,
+the router durably binds it to the authenticated service, optional workspace,
+and request fingerprint. It can contain multiple provider attempts because of
+retry, fallback, or hedging. The ledger keeps the logical request separate from
+each attempt. This prevents duplicate accounting and makes failures clear.
+
+Admission uses one strongly serialized create-if-absent operation across the
+fleet. The router rejects a first submission whose UUIDv7 time is outside its
+configured initial-age window. This prevents reuse after the 24-hour binding
+expires without a long-lived idempotency tombstone.
 
 The normal caller selects a named assignment. A playground or another approved
 diagnostic operation can select an exact provider-model through a short-lived
@@ -47,8 +53,15 @@ permission. The router still applies isolation, policy, budgets, accounting,
 and audit.
 
 After admission, the router owns provider retries and fallback. A client uses
-the same request identity after an uncertain timeout. Automatic fallback stops
+the same request identity after an uncertain timeout. Terminal status and its
+idempotency binding remain available for 24 hours. Automatic fallback stops
 after streamed output or an external effect becomes visible.
+
+Cancellation first records a request and stops new work. It reports cancelled
+only after active work is confirmed stopped. It reports uncertain when a
+provider or tool effect cannot be confirmed. Cancellation does not undo output
+or an external effect that is already visible. Cancellation needs a mutation
+permission and writes an immutable audit event.
 
 Provider adapters normalize failures and record the smallest known affected
 scope. Before the visible-output boundary, provider credential, provider
@@ -117,11 +130,11 @@ list. Router nodes use a static primary and standby control-plane list. The
 high-availability profile uses one writable control plane and an asynchronously
 replicated warm standby with fenced automatic promotion.
 
-The specification still needs to define the admission receipt, idempotency
-retention, timeout budgets, health probes, node draining, and recovery from an
-unconfirmed external effect. Eventual consistency is acceptable for fleet
-telemetry and most configuration distribution. Credential revocation and
-security policy changes use a separate urgent distribution path.
+The specification still needs to define timeout budgets, health probes, node
+draining, and recovery from an unconfirmed external effect. Eventual
+consistency is acceptable for fleet telemetry and most configuration
+distribution. Credential revocation and security policy changes use a separate
+urgent distribution path.
 
 ## Data classes
 
