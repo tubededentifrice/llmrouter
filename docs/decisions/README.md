@@ -26,6 +26,12 @@ Accepted decisions:
 - [0022: Hierarchical budgets with synchronized prices](0022-use-hierarchical-budgets-with-synchronized-prices.md)
 - [0023: Built-in encrypted credential storage](0023-use-built-in-encrypted-credential-storage.md)
 - [0024: Immediate publication after validation](0024-publish-valid-configuration-saves-immediately.md)
+- [0025: Leased allowances for distributed budgets](0025-use-leased-allowances-for-distributed-budgets.md)
+- [0026: Static ordered node lists](0026-use-static-ordered-node-lists.md)
+- [0027: Warm control-plane standby](0027-use-a-warm-control-plane-standby.md)
+- [0028: Public-data profile only](0028-ship-only-the-public-data-profile.md)
+- [0029: Graph and inspector administration](0029-use-graph-and-inspector-administration.md)
+- [0030: Calling-service work stays in its repository](0030-keep-calling-service-work-in-its-repository.md)
 
 Add a numbered decision record only after the user accepts a material choice.
 Each record must state the context, the accepted choice, alternatives, good and

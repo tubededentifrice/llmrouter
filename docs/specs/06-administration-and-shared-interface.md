@@ -59,10 +59,18 @@ use the separate global administrator authority.
 
 ## Operational graph state
 
-The provider and assignment graph MUST show effective inherited state without
+The provider and assignment graph MUST be the primary provider, model,
+provider-model route, and assignment administration workflow. It MUST use
+searchable graph navigation with a side inspector for view and edit actions.
+It MUST show effective inherited state without
 requiring an administrator to reconstruct it from parent scopes. For each
 eligible provider, provider-model route, and assignment, it MUST show current
 availability and normalized recent failure indicators when data is available.
+
+The interface MUST also provide an accessible table representation with the
+same permitted records, status, and actions. The table MUST support keyboard
+navigation, narrow screens, sorting, filtering, and bulk inspection. A graph
+layout MUST NOT be the only way to find or change an item.
 
 Authentication, policy, budget, rate-limit, availability, and request-
 compatibility failures MUST have different visible states. A detail view MUST

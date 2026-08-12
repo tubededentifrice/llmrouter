@@ -1,7 +1,25 @@
 # Reliability, deployment, and operations
 
-Status: Accepted sections only. Discovery, placement, backup, restore, and
-capacity details remain open.
+Status: Accepted sections only. Placement, recovery objectives, backup,
+restore, and capacity details remain open.
+
+## Static node discovery
+
+The official client MUST use an explicit ordered list of data-plane endpoints
+from deployment configuration. It SHOULD place an eligible loopback endpoint
+first. It MUST NOT require DNS service discovery or a control-plane node
+registry.
+
+The client MUST validate each endpoint identity, health-check endpoints, use
+the first healthy eligible endpoint, and fail over in configured order. It
+MUST apply bounded connection and health timeouts and MUST NOT send a request
+to an endpoint whose identity does not match its configured trust policy.
+
+Router nodes MUST use explicit configured lists for control-plane primary and
+standby endpoints and for any required peers. A topology change MUST use a
+deployment configuration update and controlled reload or restart. Health and
+administration interfaces MUST show the configured order, current selection,
+last successful contact, and failure state without exposing credentials.
 
 ## Local service and configuration outage
 
@@ -44,6 +62,62 @@ confirmed or an approved repair procedure transfers responsibility.
 A bounded spool MUST apply backpressure before disk exhaustion. It MUST NOT
 silently discard canonical accounting or audit events. The exact admission
 behavior at each pressure level remains open.
+
+## Leased budget allowances
+
+The central budget authority MUST allocate bounded, expiring allowance leases
+to data-plane nodes for each applicable hard-budget scope. A node MUST consume
+all applicable global, service, workspace, and assignment allowances
+atomically in its local admission path. Normal admission MUST NOT wait for a
+central reservation when sufficient valid local allowance exists.
+
+A node SHOULD renew allowance asynchronously before it is low or near expiry.
+During a control-plane outage, it MAY continue within its unexpired allowance.
+It MUST stop affected new admissions when an applicable allowance is empty or
+expired. It MUST NOT borrow from another scope or issue its own allowance.
+
+The budget authority MUST fence lease generations, bound the total outstanding
+allowance, and reclaim an expired lease only after its safety window. Issued
+allowance plus centrally reserved and used budget MUST NOT exceed the available
+admission budget for a hard-limit scope. Node failure and retry MUST NOT make
+the same allowance valid on two owners.
+
+A request that fits its conservative reservation can later cost more than the
+reservation. This usage correction is the only permitted hard-limit overage.
+The configured reservation margin, allowance size, and expiry MUST give a
+documented maximum correction risk for each scope. Accounting reconciliation
+MUST correct used and returned allowance without changing completed request
+results.
+
+## Warm control-plane standby
+
+The first release MUST use one writable control plane and at least one warm
+standby in the high-availability profile. The primary MUST asynchronously
+replicate configuration, identity, credential ciphertext, budget authority,
+request status, run ownership, ledger, and audit state needed for recovery.
+
+Automatic promotion MUST require a fencing mechanism that prevents the old
+primary and promoted standby from accepting writes at the same time. A standby
+MUST NOT promote only because it cannot reach the primary. After promotion,
+data-plane nodes MUST select the promoted endpoint from their configured static
+control-plane list.
+
+Promotion MUST establish a new authoritative control epoch that fences every
+earlier run-owner epoch. The promoted standby MUST NOT take over a run until it
+has reconciled the last durable ownership checkpoint and each recorded external
+effect intent. An effect with no confirmed result MUST stay uncertain and MUST
+NOT run again automatically.
+
+A primary MUST NOT confirm central ingest of a canonical accounting or audit
+event until a standby or an independent durable replay journal can recover that
+event. This confirmation can use batches and MUST NOT add a remote write to the
+model token or stream-chunk path. A data-plane node MUST retain an unconfirmed
+event in its spool.
+
+The system MUST expose replication lag, last confirmed replay position,
+promotion state, and possible data-loss window. Failback MUST be an explicit
+operator action after reconciliation. Backups and restore tests remain required
+and do not become optional because a warm standby exists.
 
 ## S3-compatible content and archive storage
 

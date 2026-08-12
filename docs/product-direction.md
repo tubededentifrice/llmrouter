@@ -43,7 +43,10 @@ The planned calling-service outcomes are:
   the host application.
 - Xbot provides additional agent and tool integration cases.
 
-The router will not change these repositories during discovery.
+The router repository will not contain calling-service implementation or
+migration tasks. Xbot specification alignment is part of shared-contract
+planning. Crewday code alignment and FJ2 code and data migration are separate
+work in their own repositories.
 
 ## Accepted scope
 
@@ -69,7 +72,7 @@ The architecture interview will resolve the remaining boundary details.
   audit record.
 - Give a request a stable identity across retries and fallback attempts.
 - Do not count one logical request more than once in accounting.
-- Keep sensitive content out of logs by default.
+- Remove secrets before logs or captured content leave the receiving process.
 - Use different retention for diagnostic logs, audit records, accounting
   records, and optional request content.
 - Keep service and workspace data isolated in APIs, storage, logs, and
@@ -79,7 +82,8 @@ The architecture interview will resolve the remaining boundary details.
 
 ## Out of scope until review
 
-- changes to Crewday, FJ2, or Xbot;
+- Crewday or FJ2 implementation and migration work;
+- Xbot implementation work beyond specification alignment;
 - a final implementation language or storage product;
 - an accepted wire protocol;
 - end-user chat or prompt-management product features;

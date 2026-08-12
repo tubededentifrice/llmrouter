@@ -550,8 +550,109 @@ several states and actions.
 Resolved: Publish each valid save immediately and keep immutable revision
 history.
 
+## Round 6: distributed operation, privacy, interface, and integration
+
+### 26. Cross-node budget enforcement
+
+Accepted answer: Give each data-plane node a bounded, expiring allowance lease
+for every applicable hard-budget scope. Admit from local allowance and renew
+asynchronously. Stop affected admissions when allowance is empty or expired.
+
+Recommendation: Leased allowances keep the normal path local. The authority
+keeps issued allowance inside the admission budget. A conservative reservation
+gives a documented bound for a later provider usage correction.
+
+- Leased allowances: They keep request latency low. They reserve part of the
+  budget on each node until use, return, or safe expiry.
+- Central reservation for each request: It gives strict totals. It adds network
+  latency and a central outage dependency.
+- Eventual counters: They maximize availability. Overshoot is not tightly
+  bounded.
+
+Resolved: Use leased budget allowances.
+
+### 27. Node discovery
+
+Accepted answer: Official clients and router nodes use ordered static endpoint
+lists from deployment configuration. Clients health-check the list, prefer an
+eligible loopback node, and fail over in order.
+
+Recommendation before the decision: Use a signed control-plane node registry
+with static bootstrap seeds. It permits central topology updates but adds a
+registry lifecycle.
+
+- Static lists: They are simple and deterministic. A topology change needs a
+  deployment configuration update.
+- Signed registry: It supports dynamic fleets. It needs authenticated
+  publication, expiry, and health behavior.
+- DNS: It is familiar. Cache behavior makes urgent removal less exact.
+
+Resolved: Use static ordered endpoint lists.
+
+### 28. Control-plane disaster recovery
+
+Accepted answer: Use one writable control plane and an asynchronously
+replicated warm standby. Permit automatic promotion only with fencing that
+prevents two writers. Use explicit operator reconciliation for failback and
+keep tested backups.
+
+Recommendation: A warm standby gives faster recovery than backup restore
+without multi-primary conflict handling.
+
+- Warm standby: It gives moderate recovery time. Recent writes can be inside a
+  visible replication-lag window.
+- Backup restore: It is operationally small. Recovery takes longer.
+- Multi-primary: It gives fast regional write failover. Conflict and operation
+  complexity are high.
+
+Resolved: Use a warm fenced standby.
+
+### 29. Initial privacy profile
+
+Accepted answer: Expose a versioned data-profile field but accept only the
+public-data profile in the first release. Do not claim support for protected
+private data. Add another profile only after an accepted specification change.
+
+Recommendation: This keeps the current public-data use explicit without
+creating unused private-data policy.
+
+- Public profile only: It is small and explicit. Private content cannot use
+  the router yet.
+- Three enforced profiles: They prepare for future use. They add unused policy
+  and test paths now.
+- No profile: It is smaller today. A safe later change is more disruptive.
+
+Resolved: Ship only the public-data profile.
+
+### 30. Administration workflow
+
+Accepted answer: Use the Crewday-style searchable graph with side inspectors
+as the primary provider, model, route, and assignment workflow. Provide an
+accessible table with the same status and actions.
+
+Recommendation: The graph makes inheritance and fallback visible. The table
+keeps keyboard, narrow-screen, and bulk work complete.
+
+- Graph and inspector: They give the clearest relationship view. Layout and
+  accessibility need strong tests.
+- Tables first: They make bulk work direct. Relationships are less visible.
+- Separate pages: They are simple. Administrators must reconstruct the graph.
+
+Resolved: Use graph and inspector administration with a table alternative.
+
+### 31. Calling-service integration ownership
+
+Accepted answer: Crewday and Xbot have no production data migration. FJ2 is
+the only eventual existing-data migration. Do not put Crewday or FJ2 code,
+migration specifications, or tasks in LLM Router. Align Xbot specifications
+with LLM Router now. Each calling repository owns its later code and migration
+work.
+
+Resolved: Keep calling-service work in its repository and update Xbot
+specifications during shared-contract planning.
+
 ## Follow-up rounds
 
-The next interview covers cross-node budget enforcement, node discovery,
-disaster recovery, privacy labels, UI workflows, and migration order for
-Crewday, FJ2, and Xbot.
+The next interview covers admission identity, idempotency retention,
+cancellation, health circuits, spool pressure, recovery objectives, and
+administrator recovery details.

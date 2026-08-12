@@ -59,8 +59,11 @@ the logical request.
 
 Hard budgets form an inherited global, service, workspace, and assignment
 chain. One logical budget covers its fallback attempts. Admission reserves an
-estimate, and final provider usage reconciles that reservation. Exact
-cross-node reservation behavior remains open.
+estimate, and final provider usage reconciles that reservation. Data-plane
+nodes consume bounded, expiring allowance leases locally and renew them
+asynchronously. Total issued allowance stays inside the available admission
+budget. Only a provider usage correction above its conservative reservation
+can put a hard-limit scope over its limit.
 
 ## Agent and tool boundary
 
@@ -109,6 +112,11 @@ an ordered set of remote nodes when the local node is not healthy. A node can
 continue with its last valid normal configuration for up to 24 hours. Urgent
 credential and security revocations use a separate high-priority path.
 
+Official clients discover data-plane nodes from an ordered static endpoint
+list. Router nodes use a static primary and standby control-plane list. The
+high-availability profile uses one writable control plane and an asynchronously
+replicated warm standby with fenced automatic promotion.
+
 The specification still needs to define the admission receipt, idempotency
 retention, timeout budgets, health probes, node draining, and recovery from an
 unconfirmed external effect. Eventual consistency is acceptable for fleet
@@ -155,6 +163,11 @@ references are not in the first release.
 Each valid configuration save publishes one atomic immutable revision
 immediately. There is no draft, approval, canary, or promotion state. A restore
 publishes another revision with validated earlier content.
+
+The first release accepts only the versioned public-data request profile. It
+does not claim support for protected private data. The administration
+application uses the provider and assignment graph with side inspectors as its
+primary workflow and provides an accessible table alternative.
 
 ## Public interfaces and packaging
 
