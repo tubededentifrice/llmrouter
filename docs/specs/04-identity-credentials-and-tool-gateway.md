@@ -1,7 +1,7 @@
 # Identity, credentials, and tool gateway
 
-Status: Accepted sections only. Token formats, lifetimes, and mutual TLS
-deployment profiles remain open.
+Status: Accepted sections only. Token formats, lifetimes, key custody, and
+mutual TLS deployment profiles remain open.
 
 ## Service bootstrap and access
 
@@ -28,6 +28,32 @@ LLM Router MUST support mutual TLS as an optional additional machine control.
 A deployment MAY require mutual TLS for selected services or routes. A mutual
 TLS identity MUST be bound to the same service identity and MUST NOT expand the
 token scope.
+
+## Built-in provider credential store
+
+LLM Router MUST provide one built-in encrypted store for provider and shared
+external-tool credentials. The first release MUST NOT support references to an
+external credential manager. A provider instance MUST refer to a credential
+record by stable identity and MUST NOT contain plaintext credential material.
+
+The store MUST use envelope encryption. The wrapping key MUST come from a
+deployment secret that is outside the database and repository. The system
+MUST support wrapping-key rotation and credential rotation without exposing a
+stored plaintext value. A backup without the applicable wrapping key MUST NOT
+be sufficient to decrypt credentials.
+
+Only an eligible control-plane operation MAY create, replace, disable, or
+retire a credential. Secret input MUST be write-only. The interface MUST NOT
+echo the submitted value or show stored credential material. It MAY show safe
+metadata, such as owner, provider, creation time, rotation state, and a short
+fingerprint. Each change MUST require recent administrator authentication and
+create an audit event.
+
+A data-plane node MUST receive only credentials needed for its active routes.
+It MAY keep decrypted material in process memory for a bounded time. It MUST
+NOT write plaintext credentials to its spool, logs, diagnostics, configuration
+snapshot, or object storage. Rotation, disablement, and revocation MUST use the
+urgent distribution path and invalidate applicable cached material.
 
 ## Registered business-tool gateway
 

@@ -21,6 +21,11 @@ Accepted decisions:
 - [0017: One image with runtime roles](0017-publish-one-image-with-runtime-roles.md)
 - [0018: Breaking changes before version 1](0018-permit-breaking-changes-before-version-1.md)
 - [0019: FSL 1.1 with an Apache 2.0 future license](0019-use-fsl-1-1-with-an-apache-2-0-future-license.md)
+- [0020: Shared catalog with scoped provider instances](0020-use-a-shared-catalog-with-scoped-provider-instances.md)
+- [0021: Fallback after candidate-scoped failures](0021-fallback-after-candidate-scoped-failures.md)
+- [0022: Hierarchical budgets with synchronized prices](0022-use-hierarchical-budgets-with-synchronized-prices.md)
+- [0023: Built-in encrypted credential storage](0023-use-built-in-encrypted-credential-storage.md)
+- [0024: Immediate publication after validation](0024-publish-valid-configuration-saves-immediately.md)
 
 Add a numbered decision record only after the user accepts a material choice.
 Each record must state the context, the accepted choice, alternatives, good and

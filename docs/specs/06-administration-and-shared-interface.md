@@ -56,3 +56,27 @@ Ontology message types for different actions.
 The embedded service view MUST NOT expose global administration functions. The
 global administration application can use the same React codebase, but it MUST
 use the separate global administrator authority.
+
+## Operational graph state
+
+The provider and assignment graph MUST show effective inherited state without
+requiring an administrator to reconstruct it from parent scopes. For each
+eligible provider, provider-model route, and assignment, it MUST show current
+availability and normalized recent failure indicators when data is available.
+
+Authentication, policy, budget, rate-limit, availability, and request-
+compatibility failures MUST have different visible states. A detail view MUST
+show whether the router retried, used the next fallback, or stopped the logical
+request. It MUST show the affected service, workspace when permitted,
+assignment, provider-model route, configuration revision, count, last event,
+and a redacted diagnostic summary.
+
+Persistent provider authentication failures and repeated assignment-wide
+failures MUST produce an administrator alert. Provider-specific errors MUST
+NOT make a healthy fallback appear unhealthy. A service administrator MUST
+see only its service, descendants it can administer, and eligible workspaces.
+
+Configuration forms MUST publish each valid save immediately. The interface
+MUST show validation errors before it reports success and MUST show the new
+active revision and distribution state after success. It MUST NOT require a
+draft, approval, canary, or promotion workflow.

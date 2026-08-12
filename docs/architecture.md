@@ -50,6 +50,18 @@ After admission, the router owns provider retries and fallback. A client uses
 the same request identity after an uncertain timeout. Automatic fallback stops
 after streamed output or an external effect becomes visible.
 
+Provider adapters normalize failures and record the smallest known affected
+scope. Before the visible-output boundary, provider credential, provider
+policy, candidate budget, compatibility, rate, and availability failures can
+move to an eligible candidate outside that scope. Caller identity, router-wide
+policy, owning-scope budget, cancellation, and commit-boundary failures stop
+the logical request.
+
+Hard budgets form an inherited global, service, workspace, and assignment
+chain. One logical budget covers its fallback attempts. Admission reserves an
+estimate, and final provider usage reconciles that reservation. Exact
+cross-node reservation behavior remains open.
+
 ## Agent and tool boundary
 
 The calling service should own domain prompts, workflow decisions, user
@@ -129,6 +141,20 @@ sends them asynchronously to one logical central ledger with idempotent ingest.
 S3-compatible object storage holds encrypted content segments, retention
 exports, and archives. It is not the live request-status, idempotency, lease,
 or fencing store.
+
+The shared model catalog is global. Provider instances and credentials have a
+global or service owner and can be inherited by eligible descendants. Pricing
+is explicit on each provider-model route. A scheduled or manual refresh uses
+one immutable source snapshot, updates only price state, and does not rewrite
+past accounting.
+
+Provider and shared-tool credentials use the built-in envelope-encrypted
+store. A wrapping key stays outside the database. External credential-manager
+references are not in the first release.
+
+Each valid configuration save publishes one atomic immutable revision
+immediately. There is no draft, approval, canary, or promotion state. A restore
+publishes another revision with validated earlier content.
 
 ## Public interfaces and packaging
 

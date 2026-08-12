@@ -45,8 +45,11 @@ Keep these rules:
 - A child direct assignment chain replaces its inherited capability chain.
 - Validate an inherited model against the requested child capability.
 - Keep assignment order as policy and health as temporary eligibility.
-- Retry temporary provider errors and stop for budget or invalid-request
-  errors.
+- Keep assignment order separate from health and error eligibility.
+
+Crewday stops for budget and invalid-request errors. Decision 0021 supersedes
+that broad rule: the shared router falls back when the error affects only one
+candidate or provider scope, and stops when it affects the complete request.
 
 Do not copy the live adapter path. `app/api/factory.py` selects one provider
 adapter at process start. `app/domain/llm/client.py` sends all resolved rungs
@@ -95,6 +98,61 @@ Correct these issues in the shared design:
 - support late invoice or provider-usage correction;
 - publish configuration changes after commit through one revisioned stream;
 - do not append old rows to one local gzip file from many replicas.
+
+### Price synchronization
+
+Crewday and FJ2 both keep price-source settings on model or provider-model
+records and support a manual pin. Both specify a weekly OpenRouter refresh and
+provide an administrator-triggered refresh. FJ2 has the complete scheduled
+task in `apps/llm_providers/tasks.py`, the Sunday schedule in
+`config/settings/base.py`, a command in
+`apps/llm_providers/management/commands/sync_llm_prices.py`, and the main
+batch logic in `apps/llm_providers/price_sync.py`.
+
+FJ2 fetches one catalog for each source and reuses it for all applicable rows.
+This is the correct batch shape. It also supports dry runs and source filters.
+Its optional fixed or image price fields stay unchanged when a new source row
+omits them. The shared design must distinguish an explicit zero from an
+omitted or invalid value, so an old component does not remain by accident.
+
+Crewday has stronger normalization and administration behavior in
+`app/adapters/llm/openrouter.py` and `app/api/admin/llm.py`. It normalizes
+token, fixed-call, and audio-duration units. Its bulk and single-row endpoints
+return per-row deltas. The React administration interface shows manual and
+stale states and can synchronize after a relevant edit.
+
+Crewday's bulk endpoint fetches the OpenRouter catalog separately for each
+row. The shared design uses FJ2's one-fetch batch shape. Crewday's specification
+says a lookup miss keeps an edited row, while its implementation and tests
+roll back the create or edit. The shared design publishes the valid save and
+runs the selected-source refresh asynchronously, with an explicit pending,
+missing, stale, or failed price state.
+
+The Crewday specification requires a weekly `sync_llm_pricing` job, but
+`app/worker/scheduler.py` does not register it. Normal Crewday runtime creation
+also does not load the synchronized database prices into its pricing table:
+`app/domain/llm/budget.py` returns an empty default, and production client
+construction does not supply another table. The administration price and the
+runtime cost can therefore differ.
+
+Both services can apply an OpenRouter model price to a different provider's
+route through model-level inheritance or sibling lookup. Neither service
+stores provider charge corrections, source price revisions, or invoice
+reconciliation. Crewday forces failed calls to zero cost, while FJ2 can retain
+an estimate for a failed call. A provider can bill failed or refused attempts.
+
+Adapt these rules:
+
+- make price authority and lookup identity explicit on each provider-model
+  route;
+- fetch one immutable source snapshot for each synchronization run;
+- keep the model catalog curated and separate from price refresh;
+- preserve precise quantity facts, source values, and price versions;
+- use the exact route price in runtime admission and accounting;
+- record billable usage for failed or refused attempts;
+- append provider-charge and invoice corrections without rewriting the
+  original event;
+- expose dry-run deltas, partial errors, manual pins, and stale state.
 
 ## FJ2
 
@@ -199,5 +257,5 @@ enforce route, cost, provider, privacy, and tool policies that Xbot supplies.
    classes and retention policies still apply.
 9. Use one hosted React graph with a safe embed and a headless interface unless
    the interview selects a custom element.
-10. Add an OpenAI-compatible endpoint only as a migration interface. Use a
-    native versioned API for the complete service.
+10. Provide an OpenAI-compatible migration interface and use the native
+    versioned API for the complete service.

@@ -430,9 +430,128 @@ Support the current and previous minor client versions during normal upgrades.
 Resolved: Permit documented breaking changes before version 1.0, then use the
 accepted major-version compatibility policy.
 
+## Round 5: catalog, failures, budgets, credentials, and publication
+
+### 21. Provider catalog ownership
+
+Accepted answer: Use one shared provider-adapter and model catalog. Let global
+or service scopes own provider instances, credentials, endpoints, and limits.
+Eligible children inherit these items and can disable them without editing
+their owner. Workspaces select eligible provider-model routes through
+assignments.
+
+Recommendation: Use the shared catalog with scoped provider instances. It
+keeps common metadata dry and keeps provider-account ownership explicit.
+
+- Shared catalog with scoped instances: It centralizes adapter and model
+  updates. A faulty catalog change can affect many services.
+- Service-owned catalogs: They give strong autonomy. They duplicate adapter,
+  capability, and model metadata.
+- Global instances only: They are lean. They cannot isolate provider accounts
+  or commercial terms by service.
+
+Resolved: Use a shared catalog with global and service provider instances.
+
+### 22. Fallback error policy
+
+Accepted answer: Normalize each failure and record its smallest known affected
+scope. Before visible output or an external effect, provider credential,
+provider-specific policy, candidate budget, compatibility, rate, and
+availability failures use the next eligible fallback outside that scope.
+Caller identity, router-wide policy, owning-scope hard budget, validation,
+cancellation, and commit-boundary failures stop the logical request.
+
+The router records the smallest known affected scope. A provider credential
+failure skips later candidates that use the same credential but does not stop
+an unrelated provider instance.
+
+The administration graph shows separate authentication, policy, budget, rate,
+availability, and request-compatibility indicators for a provider-model route
+and assignment when the router knows those scopes. It also shows whether the
+router retried, fell back, or stopped.
+
+Recommendation: Use normalized defaults with assignment restrictions. This
+keeps a provider-specific defect from stopping a healthy fallback without
+letting fallback bypass a request-wide control.
+
+- Candidate-scoped fallback: It improves availability. Error normalization and
+  adapter tests become critical.
+- Stop for all authentication, policy, and budget errors: It is simple. One
+  broken candidate can stop the complete assignment.
+- Try every candidate for every error: It maximizes attempts. It can evade
+  policy, hide defects, and increase cost.
+
+Resolved: Fall back for candidate-scoped authentication, policy, and budget
+failures, with clear administration indicators. Stop for request-wide
+failures.
+
+### 23. Budgets and pricing
+
+Accepted answer: Use inherited hard limits and warnings at global, service,
+workspace, and assignment scopes. One logical request shares one budget across
+all fallback attempts. Reserve an estimate before an attempt and reconcile it
+with provider-reported usage and later corrections.
+
+The FJ2 and Crewday review adds these price rules: price authority is explicit
+for each provider-model route; manual prices can be pinned; scheduled and
+on-demand refresh use one source snapshot; failures keep the last price;
+administration shows per-row deltas and stale state; and each attempt stores an
+immutable price version.
+
+Recommendation: Use hierarchical limits and reservations. They prevent one
+workspace or fallback chain from consuming an uncontrolled amount. The exact
+cross-node reservation design needs a separate availability choice.
+
+- Hierarchical hard limits: They give control at each ownership level. They
+  need reservation and reconciliation.
+- Alerts only: They are easy to operate. They do not stop uncontrolled spend.
+- Service limits only: They are smaller. One workspace or assignment can
+  consume the complete service allowance.
+
+Resolved: Use hierarchical budgets and synchronized provider-model prices.
+
+### 24. Credential storage
+
+Accepted answer: Support only the built-in encrypted provider and shared-tool
+credential store in the first release. Use envelope encryption and keep the
+wrapping key outside the database and repository. Do not add external
+credential-manager references.
+
+Recommendation: A built-in store gives small deployments complete
+administration. External references add a second custody and failure model.
+
+- Built-in store only: It gives one workflow. The project owns encryption,
+  wrapping-key rotation, backup, and recovery safety.
+- Built-in and external stores: They support more operators. They increase the
+  contract and test matrix.
+- Deployment secrets only: They are simple. They do not support scoped central
+  administration well.
+
+Resolved: Use only the encrypted built-in store.
+
+### 25. Configuration publication
+
+Accepted answer: Validate and immediately publish each successful save as one
+atomic immutable revision. Reject stale concurrent edits. Do not use drafts,
+approvals, canaries, or promotion. Restore an earlier state by publishing a new
+validated revision.
+
+Recommendation before the decision: Use draft, validation, atomic publication,
+staged rollout, and rollback. This reduces fleet-wide change risk but adds
+several states and actions.
+
+- Immediate validated publication: It takes one save. A valid but incorrect
+  change can reach all eligible nodes.
+- Staged publication: It supports canaries and approval. It makes normal
+  administration more complex.
+- Git-only publication: It gives review history. It weakens direct
+  administration and slows urgent changes.
+
+Resolved: Publish each valid save immediately and keep immutable revision
+history.
+
 ## Follow-up rounds
 
-After these answers, the next interview will cover provider catalog ownership,
-fallback error classes, budgets, privacy labels, secret stores, configuration
-publication, node discovery, disaster recovery, UI workflows, and migration
-order for Crewday, FJ2, and Xbot.
+The next interview covers cross-node budget enforcement, node discovery,
+disaster recovery, privacy labels, UI workflows, and migration order for
+Crewday, FJ2, and Xbot.

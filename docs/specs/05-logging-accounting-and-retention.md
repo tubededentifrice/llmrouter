@@ -81,3 +81,61 @@ the original event.
 
 Accounting aggregates MUST be reproducible from retained canonical accounting
 events for the period in which those events remain available.
+
+## Provider-model pricing
+
+Price authority MUST be explicit for each provider-model route. A route MUST
+select a named source and lookup identifier or pin its prices to manual values.
+A model-level source MAY prefill an administration form, but it MUST NOT
+silently become the effective price authority for another provider's route. A
+manual pin MUST prevent scheduled synchronization until an administrator
+removes the pin.
+
+The price model MUST support typed components and units. It MUST NOT assume
+that all providers charge only for input and output tokens. It MUST be able to
+represent applicable token, cached-token, request, image, audio-duration,
+search, tool, and other provider units without changing past accounting.
+Stored prices MUST use fixed decimal precision that preserves sub-cent and
+low-unit rates. The ledger MUST NOT use binary floating point or whole cents as
+its accounting source of truth.
+
+The initial automatic schedule MUST run weekly and MUST be editable. A global
+administrator MUST be able to synchronize all or selected provider-model
+routes on demand and preview a dry run. A service administrator MUST have the
+same operations only for routes owned by that service. A relevant provider-
+model create or price-source edit SHOULD start an asynchronous single-route
+synchronization.
+One upstream fetch SHOULD serve all applicable rows in one synchronization run
+when the source supports a catalog response. The run MUST use one immutable
+source snapshot and record its fetch time, source revision or content hash,
+and HTTP validator when available.
+
+A synchronization MUST update only price components, source metadata, price
+version, and synchronization state. It MUST NOT import a new model, change
+capabilities, change provider routing, or change an assignment. A missing row,
+invalid value, or source failure MUST keep the last accepted price. It MUST
+record an error and stale state; it MUST NOT replace an existing price with
+zero. Source data MUST distinguish an explicit zero or not-applicable value
+from an omitted, unknown, or invalid value. The normalizer MUST reject
+non-finite, negative, excessive, malformed, or unsupported prices and units.
+Each accepted price version MUST preserve the raw source strings used for its
+normalized components.
+
+Each result MUST identify the provider-model route, source, lookup identifier,
+old and new typed prices, status, error class, and synchronization time. The
+administration interface MUST show manual, current, stale, missing, and failed
+states. The initial stale threshold is 14 days and MUST be editable.
+
+A multi-route synchronization MAY have updated, unchanged, skipped, missing,
+and failed rows in one result. It MUST commit accepted row changes atomically
+and publish one immediate configuration revision after the transaction
+commits. A row failure MUST NOT hide successful or failed results for another
+row.
+
+Each provider attempt MUST snapshot the price version and typed prices that
+were used for admission and initial accounting. A later price synchronization
+MUST NOT rewrite that snapshot or the original cost event. Provider usage or
+invoice reconciliation MAY append a correction with its source, time, reason,
+and delta. Runtime pricing MUST resolve from the exact immutable provider-model
+route. It MUST NOT use only a wire model name or an unrelated process-wide
+price map.
