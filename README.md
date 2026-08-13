@@ -52,9 +52,15 @@ use.
 
 ## Work process
 
-1. Use Beads to select ready implementation work.
-2. Resolve each blocker decision before dependent implementation starts.
-3. Implement the service in small, verified changes.
+1. Use the repository `director` skill to complete one ready Beads task.
+2. Split work that has independent acceptance results or rollback boundaries.
+3. Resolve each blocker decision before dependent implementation starts.
+4. Let workers edit and verify only their assigned files.
+5. Use focused checks during edits and one final affected broad-suite run.
+6. Let only the Director close tasks, commit exact files, and push to
+   `origin/main`.
+7. Complete and push a main task and its independent self-review before the
+   next main task starts.
 
 ## License
 

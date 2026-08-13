@@ -101,6 +101,8 @@ required_files=(
   ".beads/config.yaml"
   ".beads/metadata.json"
   ".claude/skills/beads/SKILL.md"
+  ".claude/skills/director/SKILL.md"
+  ".claude/skills/director/agents/openai.yaml"
   ".claude/skills/llmrouter-specs/SKILL.md"
   ".claude/skills/repository-tooling/SKILL.md"
   ".claude/skills/repository-tooling/agents/openai.yaml"
@@ -124,6 +126,7 @@ required_files=(
   "packages/backend-role/src/llmrouter_backend/database/migrations/0001_control_foundation.down.sql"
   "packages/backend-role/src/llmrouter_backend/database/migrations/0002_runtime_ledger.up.sql"
   "packages/backend-role/src/llmrouter_backend/database/migrations/0002_runtime_ledger.down.sql"
+  "scripts/agent-next-task.sh"
   "scripts/check-database.sh"
   "scripts/check-client-packages.sh"
   "scripts/check-contract-models.sh"
@@ -136,6 +139,46 @@ for required_file in "${required_files[@]}"; do
     exit 1
   fi
 done
+
+uv run --with 'ruamel.yaml==0.18.15' python - "${repository_root}" <<'PY'
+import sys
+from pathlib import Path
+
+from ruamel.yaml import YAML
+
+repository_root = Path(sys.argv[1])
+yaml = YAML(typ="safe")
+yaml.allow_duplicate_keys = False
+
+for skill_path in sorted((repository_root / ".claude/skills").glob("*/SKILL.md")):
+    text = skill_path.read_text(encoding="utf-8")
+    parts = text.split("---", 2)
+    if len(parts) != 3 or parts[0].strip() or not parts[2].strip():
+        relative_path = skill_path.relative_to(repository_root)
+        raise SystemExit(f"Invalid skill front matter: {relative_path}")
+
+    metadata = yaml.load(parts[1])
+    expected_name = skill_path.parent.name
+    if not isinstance(metadata, dict) or metadata.get("name") != expected_name:
+        relative_path = skill_path.relative_to(repository_root)
+        raise SystemExit(f"Invalid skill name: {relative_path}")
+    description = metadata.get("description")
+    if not isinstance(description, str) or not description.strip():
+        relative_path = skill_path.relative_to(repository_root)
+        raise SystemExit(f"Invalid skill description: {relative_path}")
+
+    agent_path = skill_path.parent / "agents/openai.yaml"
+    if agent_path.is_file():
+        agent = yaml.load(agent_path.read_text(encoding="utf-8"))
+        interface = agent.get("interface") if isinstance(agent, dict) else None
+        interface_keys = ("display_name", "short_description", "default_prompt")
+        if not isinstance(interface, dict) or any(
+            not isinstance(interface.get(key), str) or not interface[key].strip()
+            for key in interface_keys
+        ):
+            relative_path = agent_path.relative_to(repository_root)
+            raise SystemExit(f"Invalid skill agent metadata: {relative_path}")
+PY
 
 if [[ -e "${repository_root}/runtime-data" ]] ||
   [[ -L "${repository_root}/runtime-data" ]]; then

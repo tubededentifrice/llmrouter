@@ -1,0 +1,4 @@
+interface:
+  display_name: "Director"
+  short_description: "Coordinate verified Beads delivery"
+  default_prompt: "Use $director to complete ready Beads tasks one at a time with independent review, staged checks, and focused commits."

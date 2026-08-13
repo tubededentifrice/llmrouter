@@ -34,6 +34,10 @@ runtime data, or unpublished third-party data in Git.
    review comments, documentation, and agent-created content.
 9. After non-trivial edits, use the repository `selfreview` skill. Review all
    owned changes one more time, then run `./scripts/check-repository.sh`.
+10. Use the repository `director` skill for autonomous Beads execution. The
+    main Director agent is the only operator for task selection, Beads, Git,
+    and pushes. Delegated workers edit and verify only their assigned files,
+    report their results, and stop.
 
 ## Tooling and durable guidance
 
@@ -111,8 +115,11 @@ Other agents can change repositories at the same time.
 - Split concurrent work by file or component.
 - Reconcile new `origin/main` changes before integration.
 - Use focused commits. State why a change exists.
-- After each task is complete and all checks pass, commit only the files that
-  you own and push the commit directly to `origin/main`.
+- Outside a Director workflow, after each task is complete and all checks
+  pass, commit only the files that you own and push the commit directly to
+  `origin/main`.
+- In a Director workflow, only the Director commits the exact task files and
+  pushes the commit directly to `origin/main`.
 - Do not leave completed work only in the worktree or in a local commit.
 - Never force-push or rewrite shared history.
 - If a service or permission failure prevents a push, report it clearly.

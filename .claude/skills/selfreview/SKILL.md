@@ -52,10 +52,21 @@ not invent findings.
 In autofix mode, fix all `BUGS`, `MISSING`, and `RISKY` findings. Fix a
 `NITPICK` only when the edit is small and safe.
 
-Run LSP diagnostics and narrow tests for code edits. Then run:
+Run LSP diagnostics and narrow tests after the last related fix. During a set
+of related fixes, run the smallest direct regression check when it gives useful
+early evidence. In a Director workflow, leave broad-suite execution to the
+Director unless it assigns one suite to the reviewer. Outside a Director
+workflow, run each affected broad suite once after the last material edit. Do
+not rerun a passed check when no relevant file changed.
+
+Then run this command once for the final state:
 
 ```bash
 ./scripts/check-repository.sh
 ```
 
 Return findings, fixes, checks, and any verification limit.
+
+When a Director assigned the review, edit only the assigned paths and report
+immediately after the final check. Do not select another task, change the
+Beads graph, commit, or push.
