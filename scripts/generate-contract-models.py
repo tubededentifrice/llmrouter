@@ -26,6 +26,7 @@ CONTRACT_ARTIFACT_FILES = (
     "docs/api/business-tool-gateway.md",
     "docs/api/cross-service-conformance.md",
     "docs/api/embed-protocol.md",
+    "docs/api/embedding-protocol.md",
     "docs/api/errors.md",
     "docs/api/openapi.yaml",
     "docs/api/request-fingerprint.md",
@@ -105,9 +106,15 @@ def typescript_type(schema: dict[str, Any]) -> str:
     if "enum" in schema:
         return " | ".join(literal(value, typescript=True) for value in schema["enum"])
     alternatives = schema.get("oneOf") or schema.get("anyOf")
+    if alternatives and (schema.get("type") == "object" or "properties" in schema):
+        return " | ".join(
+            typescript_type(merge_object_variant(schema, item)) for item in alternatives
+        )
     if alternatives:
         return " | ".join(typescript_type(item) for item in alternatives)
-    if "allOf" in schema:
+    if "allOf" in schema and not (
+        schema.get("type") == "object" or "properties" in schema
+    ):
         return " & ".join(typescript_type(item) for item in schema["allOf"])
     schema_type = schema.get("type")
     if isinstance(schema_type, list):
@@ -136,6 +143,32 @@ def typescript_type(schema: dict[str, Any]) -> str:
             fields.append("readonly [key: string]: JsonValue;")
         return "{ " + " ".join(fields) + " }"
     return "JsonValue"
+
+
+def merge_object_variant(
+    schema: dict[str, Any], variant: dict[str, Any]
+) -> dict[str, Any]:
+    """Merge one object variant with its common fields."""
+    properties = copy.deepcopy(schema.get("properties", {}))
+    for name, override in variant.get("properties", {}).items():
+        if override:
+            properties[name] = copy.deepcopy(override)
+
+    forbidden = set(variant.get("not", {}).get("required", []))
+    for denied in variant.get("not", {}).get("anyOf", []):
+        forbidden.update(denied.get("required", []))
+    for name in forbidden:
+        properties.pop(name, None)
+
+    return {
+        "type": "object",
+        "additionalProperties": schema.get("additionalProperties", False),
+        "required": sorted(
+            (set(schema.get("required", [])) | set(variant.get("required", [])))
+            - forbidden
+        ),
+        "properties": properties,
+    }
 
 
 def pascal_name(value: str) -> str:
@@ -348,6 +381,32 @@ def self_test(root: Path) -> None:
         raise RuntimeError(
             "An OpenAPI schema mutation did not change generated output."
         )
+    object_union = typescript_type(
+        {
+            "type": "object",
+            "required": ["identity"],
+            "properties": {
+                "identity": {"type": "string"},
+                "state": {"type": "string"},
+                "result": {"type": "string"},
+            },
+            "oneOf": [
+                {
+                    "required": ["result"],
+                    "properties": {"state": {"const": "done"}},
+                },
+                {
+                    "properties": {"state": {"const": "pending"}},
+                    "not": {"required": ["result"]},
+                },
+            ],
+        }
+    )
+    if (
+        "readonly identity: string" not in object_union
+        or object_union.count("readonly result: string") != 1
+    ):
+        raise RuntimeError("A TypeScript object union lost common or variant fields.")
 
 
 def main() -> int:

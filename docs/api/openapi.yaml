@@ -20,6 +20,8 @@ tags:
     description: Calling-service workspace scope management.
   - name: Requests
     description: Provider-neutral model requests and compatibility operations.
+  - name: Embeddings
+    description: Atomic workspace-scoped embedding batches.
   - name: Attachments
     description: Scoped immutable request content.
   - name: Runs
@@ -330,6 +332,47 @@ paths:
             text/event-stream:
               schema: {type: string}
         '409': {$ref: '#/components/responses/Conflict'}
+  /v1/services/{service_id}/workspaces/{workspace_id}/embedding-requests:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+      - $ref: '#/components/parameters/WorkspaceId'
+    post:
+      tags: [Embeddings]
+      operationId: createEmbeddingRequest
+      summary: Admit one atomic workspace-scoped embedding batch.
+      parameters:
+        - $ref: '#/components/parameters/LogicalRequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/EmbeddingRequest'}
+      responses:
+        '200': {$ref: '#/components/responses/EmbeddingAdmissionReplay'}
+        '201': {$ref: '#/components/responses/EmbeddingAdmissionCreated'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '410': {$ref: '#/components/responses/Gone'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+        '429': {$ref: '#/components/responses/Retryable'}
+        '503': {$ref: '#/components/responses/Retryable'}
+  /v1/services/{service_id}/workspaces/{workspace_id}/embedding-requests/{request_id}:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+      - $ref: '#/components/parameters/WorkspaceId'
+      - $ref: '#/components/parameters/RequestId'
+    get:
+      tags: [Embeddings]
+      operationId: getEmbeddingRequest
+      summary: Get one scoped embedding batch status and its atomic result.
+      responses:
+        '200': {$ref: '#/components/responses/EmbeddingStatus'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
   /v1/agent-runs:
     get:
       tags: [Runs]
@@ -1850,6 +1893,15 @@ components:
     RequestStatusPage:
       description: Bounded logical request status page.
       content: {application/json: {schema: {$ref: '#/components/schemas/RequestStatusPage'}}}
+    EmbeddingAdmissionCreated:
+      description: Atomic embedding batch admitted.
+      content: {application/json: {schema: {$ref: '#/components/schemas/EmbeddingAdmissionReceipt'}}}
+    EmbeddingAdmissionReplay:
+      description: Identical replay returned the existing embedding admission.
+      content: {application/json: {schema: {$ref: '#/components/schemas/EmbeddingAdmissionReceipt'}}}
+    EmbeddingStatus:
+      description: Current or terminal atomic embedding batch status.
+      content: {application/json: {schema: {$ref: '#/components/schemas/EmbeddingRequestStatus'}}}
     ConfigurationPage:
       description: Bounded configuration page.
       content: {application/json: {schema: {$ref: '#/components/schemas/ConfigurationPage'}}}
@@ -1887,7 +1939,7 @@ components:
           uniqueItems: true
           items:
             type: string
-            enum: [model_requests, agent_runs, shared_tools, attachments, request_status, request_discovery, cancellation, sse_stream_v1, workspace_lifecycle, host_budget_ceiling, effective_configuration, assignment_configuration, provider_instance_configuration, provider_model_route_configuration, price_synchronization, budget_management, retention_management, configuration_revisions, business_tool_gateway, diagnostic_routing, administration_authentication, service_administration, catalog_administration, credential_administration, administrator_grants, operational_administration, audit_discovery, captured_content, protected_exports, accounting_summary, detailed_health, openai_chat_completions, openai_responses]
+            enum: [model_requests, embedding_requests_v1, agent_runs, shared_tools, attachments, request_status, request_discovery, cancellation, sse_stream_v1, workspace_lifecycle, host_budget_ceiling, effective_configuration, assignment_configuration, provider_instance_configuration, provider_model_route_configuration, price_synchronization, budget_management, retention_management, configuration_revisions, business_tool_gateway, diagnostic_routing, administration_authentication, service_administration, catalog_administration, credential_administration, administrator_grants, operational_administration, audit_discovery, captured_content, protected_exports, accounting_summary, detailed_health, openai_chat_completions, openai_responses]
         artifacts:
           type: array
           items: {$ref: '#/components/schemas/ContractArtifact'}
@@ -1896,7 +1948,7 @@ components:
       additionalProperties: false
       required: [name, version, major_version, sha256]
       properties:
-        name: {type: string, enum: [openapi, stream_protocol, error_catalog, service_management, embed_protocol, business_tool_gateway, request_fingerprint, cross_service_conformance]}
+        name: {type: string, enum: [openapi, stream_protocol, error_catalog, service_management, embed_protocol, embedding_protocol, business_tool_gateway, request_fingerprint, cross_service_conformance]}
         version: {type: string, pattern: '^[1-9][0-9]*\.[0-9]+\.[0-9]+$'}
         major_version: {type: integer, minimum: 1}
         sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
@@ -1919,7 +1971,7 @@ components:
           uniqueItems: true
           items:
             type: string
-            enum: [model.create, model.read, model.cancel, run.create, run.read, run.cancel, tool.create, tool.read, tool.cancel, attachment.create, attachment.read, workspace.create, workspace.read, workspace.disable, workspace.restore, workspace.retire, admin_embed.create, accounting.read, configuration.read, configuration.write, diagnostic.grant.create, retention.read, retention.preview, retention.write, budget.read, budget.write, budget_ceiling.read, budget_ceiling.write]
+            enum: [model.create, model.read, model.cancel, embedding.create, embedding.read, run.create, run.read, run.cancel, tool.create, tool.read, tool.cancel, attachment.create, attachment.read, workspace.create, workspace.read, workspace.disable, workspace.restore, workspace.retire, admin_embed.create, accounting.read, configuration.read, configuration.write, diagnostic.grant.create, retention.read, retention.preview, retention.write, budget.read, budget.write, budget_ceiling.read, budget_ceiling.write]
     ServiceToken:
       type: object
       additionalProperties: false
@@ -2100,6 +2152,37 @@ components:
         limits: {$ref: '#/components/schemas/RequestLimits', x-router-fingerprint: true}
         output: {$ref: '#/components/schemas/OutputControls', x-router-fingerprint: true}
         trace_context: {$ref: '#/components/schemas/TraceContext', x-router-fingerprint: false}
+    EmbeddingRequest:
+      type: object
+      additionalProperties: false
+      description: The complete batch can contain no more than 262144 UTF-8 input bytes.
+      required: [api_version, data_profile, assignment, input_policy_id, model_space_id, dimensions, inputs, timeout_ms]
+      properties:
+        api_version: {type: string, const: '1', x-router-fingerprint: true}
+        data_profile: {type: string, const: service-data, x-router-fingerprint: true}
+        assignment: {$ref: '#/components/schemas/AssignmentName', x-router-fingerprint: true}
+        input_policy_id: {$ref: '#/components/schemas/OpaqueId', x-router-fingerprint: true}
+        model_space_id: {$ref: '#/components/schemas/OpaqueId', x-router-fingerprint: true}
+        dimensions: {type: integer, minimum: 1, maximum: 4096, x-router-fingerprint: true}
+        inputs:
+          type: array
+          minItems: 1
+          maxItems: 32
+          x-max-total-utf8-bytes: 262144
+          x-unique-property: input_id
+          items: {$ref: '#/components/schemas/EmbeddingInput'}
+          x-router-fingerprint: true
+        timeout_ms: {type: integer, const: 120000, x-router-fingerprint: true}
+        max_cost: {$ref: '#/components/schemas/Money', x-router-fingerprint: true}
+        trace_context: {$ref: '#/components/schemas/TraceContext', x-router-fingerprint: false}
+    EmbeddingInput:
+      type: object
+      additionalProperties: false
+      required: [input_id, sha256, text]
+      properties:
+        input_id: {$ref: '#/components/schemas/OpaqueId'}
+        sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+        text: {type: string, minLength: 1, maxLength: 32768, x-max-utf8-bytes: 32768}
     AgentRunRequest:
       type: object
       additionalProperties: false
@@ -2514,6 +2597,88 @@ components:
       properties:
         items: {type: array, maxItems: 1000, items: {$ref: '#/components/schemas/RequestStatus'}}
         next_cursor: {type: [string, 'null']}
+    EmbeddingRequestState:
+      type: string
+      enum: [admitted, running, succeeded, failed]
+    EmbeddingAdmissionReceipt:
+      type: object
+      additionalProperties: false
+      required: [request_id, admitted_at, state, state_revision, status_url, fingerprint_version, capture_enabled, capture_reason, capture_expires_at]
+      properties:
+        request_id: {$ref: '#/components/schemas/UuidV7'}
+        admitted_at: {$ref: '#/components/schemas/Timestamp'}
+        state: {$ref: '#/components/schemas/EmbeddingRequestState'}
+        state_revision: {type: integer, minimum: 1}
+        status_url: {type: string, format: uri}
+        fingerprint_version: {type: string, const: rfc8785-sha256-v1}
+        capture_enabled: {type: boolean}
+        capture_reason: {type: string, enum: [configured, spool_pressure]}
+        capture_expires_at: {$ref: '#/components/schemas/Timestamp'}
+    EmbeddingRequestStatus:
+      type: object
+      additionalProperties: false
+      description: The uncompressed JSON response contains no more than 8388608 bytes.
+      required: [request_id, service_id, workspace_id, state, state_revision, admitted_at, last_transition_at, assignment, input_policy_id, model_space_id, dimensions, admission, accounting]
+      oneOf:
+        - required: [terminal_at, result]
+          properties:
+            state: {const: succeeded}
+          not:
+            required: [error]
+        - required: [terminal_at, error]
+          properties:
+            state: {const: failed}
+          not:
+            required: [result]
+        - properties:
+            state: {enum: [admitted, running]}
+          not:
+            anyOf:
+              - required: [terminal_at]
+              - required: [result]
+              - required: [error]
+      properties:
+        request_id: {$ref: '#/components/schemas/UuidV7'}
+        service_id: {$ref: '#/components/schemas/OpaqueId'}
+        workspace_id: {$ref: '#/components/schemas/OpaqueId'}
+        state: {$ref: '#/components/schemas/EmbeddingRequestState'}
+        state_revision: {type: integer, minimum: 1}
+        admitted_at: {$ref: '#/components/schemas/Timestamp'}
+        last_transition_at: {$ref: '#/components/schemas/Timestamp'}
+        terminal_at: {$ref: '#/components/schemas/Timestamp'}
+        assignment: {$ref: '#/components/schemas/AssignmentName'}
+        input_policy_id: {$ref: '#/components/schemas/OpaqueId'}
+        model_space_id: {$ref: '#/components/schemas/OpaqueId'}
+        dimensions: {type: integer, minimum: 1, maximum: 4096}
+        admission: {$ref: '#/components/schemas/EmbeddingAdmissionReceipt'}
+        result:
+          type: array
+          minItems: 1
+          maxItems: 32
+          items: {$ref: '#/components/schemas/EmbeddingVector'}
+        error: {$ref: '#/components/schemas/TerminalError'}
+        accounting: {$ref: '#/components/schemas/EmbeddingAccounting'}
+    EmbeddingVector:
+      type: object
+      additionalProperties: false
+      required: [input_id, vector]
+      properties:
+        input_id: {$ref: '#/components/schemas/OpaqueId'}
+        vector:
+          type: array
+          minItems: 1
+          maxItems: 4096
+          items: {type: number, format: double, x-finite: true}
+    EmbeddingAccounting:
+      type: object
+      additionalProperties: false
+      required: [input_count, input_utf8_bytes, provider_attempts, usage, cost]
+      properties:
+        input_count: {type: integer, minimum: 1, maximum: 32}
+        input_utf8_bytes: {type: integer, minimum: 1, maximum: 262144}
+        provider_attempts: {type: integer, minimum: 0, maximum: 4}
+        usage: {type: array, items: {$ref: '#/components/schemas/UsageComponent'}}
+        cost: {$ref: '#/components/schemas/RequestAccounting'}
     TerminalError:
       type: object
       additionalProperties: false
@@ -2692,11 +2857,20 @@ components:
       type: object
       additionalProperties: false
       required: [provider_instance_id, canonical_model_id, wire_model, capabilities, price_authority, prices, state, expected_revision]
+      allOf:
+        - if:
+            properties:
+              capabilities: {contains: {const: embedding}}
+            required: [capabilities]
+          then:
+            required: [embedding_model_space_id, embedding_dimensions]
       properties:
         provider_instance_id: {$ref: '#/components/schemas/OpaqueId'}
         canonical_model_id: {$ref: '#/components/schemas/OpaqueId'}
         wire_model: {type: string, minLength: 1, maxLength: 500}
         capabilities: {type: array, uniqueItems: true, items: {type: string}}
+        embedding_model_space_id: {$ref: '#/components/schemas/OpaqueId'}
+        embedding_dimensions: {type: integer, minimum: 1, maximum: 4096}
         price_authority: {$ref: '#/components/schemas/PriceAuthority'}
         prices: {type: array, items: {$ref: '#/components/schemas/PriceComponent'}}
         state: {type: string, enum: [active, disabled, retired]}
@@ -2705,6 +2879,13 @@ components:
       type: object
       additionalProperties: false
       required: [provider_model_route_id, owner_scope, provider_instance_id, canonical_model_id, wire_model, capabilities, price_authority, prices, price_version, synchronization_state, state, active_revision, inherited]
+      allOf:
+        - if:
+            properties:
+              capabilities: {contains: {const: embedding}}
+            required: [capabilities]
+          then:
+            required: [embedding_model_space_id, embedding_dimensions]
       properties:
         provider_model_route_id: {$ref: '#/components/schemas/OpaqueId'}
         owner_scope: {$ref: '#/components/schemas/OpaqueId'}
@@ -2712,6 +2893,8 @@ components:
         canonical_model_id: {$ref: '#/components/schemas/OpaqueId'}
         wire_model: {type: string, minLength: 1, maxLength: 500}
         capabilities: {type: array, uniqueItems: true, items: {type: string}}
+        embedding_model_space_id: {$ref: '#/components/schemas/OpaqueId'}
+        embedding_dimensions: {type: integer, minimum: 1, maximum: 4096}
         price_authority: {$ref: '#/components/schemas/PriceAuthority'}
         prices: {type: array, items: {$ref: '#/components/schemas/PriceComponent'}}
         price_version: {$ref: '#/components/schemas/OpaqueId'}
@@ -3420,7 +3603,7 @@ components:
           properties:
             code:
               type: string
-              enum: [invalid_request, unsupported_contract, unsupported_capability, invalid_token, recent_auth_required, insufficient_scope, service_scope_mismatch, workspace_scope_mismatch, policy_denied, diagnostic_permission_required, not_found, request_not_found, workspace_not_found, attachment_not_found, idempotency_conflict, state_revision_conflict, configuration_revision_conflict, request_identity_conflict, stream_replay_unavailable, terminal_state, budget_ceiling_conflict, attachment_already_complete, request_identity_expired, workspace_retired, assignment_unavailable, workspace_unavailable, capability_mismatch, budget_exhausted, secret_detected, attachment_invalid, rate_limited, temporarily_unavailable, stale_configuration, spool_capacity_exhausted, allowance_unavailable, internal_error]
+              enum: [invalid_request, unsupported_contract, unsupported_capability, invalid_token, recent_auth_required, insufficient_scope, service_scope_mismatch, workspace_scope_mismatch, policy_denied, diagnostic_permission_required, not_found, request_not_found, workspace_not_found, attachment_not_found, idempotency_conflict, state_revision_conflict, configuration_revision_conflict, request_identity_conflict, stream_replay_unavailable, terminal_state, budget_ceiling_conflict, attachment_already_complete, request_identity_expired, workspace_retired, assignment_unavailable, workspace_unavailable, capability_mismatch, embedding_space_mismatch, budget_exhausted, secret_detected, attachment_invalid, rate_limited, temporarily_unavailable, stale_configuration, spool_capacity_exhausted, allowance_unavailable, internal_error]
             message: {type: string, maxLength: 1000}
             retryable: {type: boolean}
             request_id: {$ref: '#/components/schemas/OpaqueId'}

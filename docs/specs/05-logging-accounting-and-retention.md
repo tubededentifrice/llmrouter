@@ -64,6 +64,13 @@ capture in the first release. Router capture MUST expire under the effective
 retention rule recorded at request admission. A service-facing result MUST not
 claim that source deletion removed the router copy.
 
+An embedding input is captured content under the normal `service-data` rule.
+The router MUST set its capture state and expiry at embedding admission. A
+later source change or deletion in Ontology or another calling service MUST NOT
+delete or shorten that Router capture. The Router copy MUST expire only under
+the admission-time retention rule. Input text, input digests, and vectors MUST
+NOT enter logs, metrics, accounting, audit details, or safe errors.
+
 A captured-content export is a captured-content read. It MUST require the
 explicit global content-read permission and Pocket ID authentication no more
 than five minutes old. Creating the export, reading its status, and issuing or

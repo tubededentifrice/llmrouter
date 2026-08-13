@@ -86,6 +86,18 @@ OutputResultOutputsItemOption3 = TypedDict('OutputResultOutputsItemOption3', {
     'attachment_id': 'OpaqueId',
 })
 
+EmbeddingRequestStatusOption1 = TypedDict('EmbeddingRequestStatusOption1', {
+    'state': 'NotRequired[Literal["succeeded"]]',
+})
+
+EmbeddingRequestStatusOption2 = TypedDict('EmbeddingRequestStatusOption2', {
+    'state': 'NotRequired[Literal["failed"]]',
+})
+
+EmbeddingRequestStatusOption3 = TypedDict('EmbeddingRequestStatusOption3', {
+    'state': 'NotRequired[Literal["admitted", "running"]]',
+})
+
 PutAssignmentCandidatesItem = TypedDict('PutAssignmentCandidatesItem', {
     'provider_model_route_id': 'OpaqueId',
     'attempt_timeout_ms': 'NotRequired[int]',
@@ -203,7 +215,7 @@ HealthRecovery = TypedDict('HealthRecovery', {
 })
 
 ErrorEnvelopeError = TypedDict('ErrorEnvelopeError', {
-    'code': 'Literal["invalid_request", "unsupported_contract", "unsupported_capability", "invalid_token", "recent_auth_required", "insufficient_scope", "service_scope_mismatch", "workspace_scope_mismatch", "policy_denied", "diagnostic_permission_required", "not_found", "request_not_found", "workspace_not_found", "attachment_not_found", "idempotency_conflict", "state_revision_conflict", "configuration_revision_conflict", "request_identity_conflict", "stream_replay_unavailable", "terminal_state", "budget_ceiling_conflict", "attachment_already_complete", "request_identity_expired", "workspace_retired", "assignment_unavailable", "workspace_unavailable", "capability_mismatch", "budget_exhausted", "secret_detected", "attachment_invalid", "rate_limited", "temporarily_unavailable", "stale_configuration", "spool_capacity_exhausted", "allowance_unavailable", "internal_error"]',
+    'code': 'Literal["invalid_request", "unsupported_contract", "unsupported_capability", "invalid_token", "recent_auth_required", "insufficient_scope", "service_scope_mismatch", "workspace_scope_mismatch", "policy_denied", "diagnostic_permission_required", "not_found", "request_not_found", "workspace_not_found", "attachment_not_found", "idempotency_conflict", "state_revision_conflict", "configuration_revision_conflict", "request_identity_conflict", "stream_replay_unavailable", "terminal_state", "budget_ceiling_conflict", "attachment_already_complete", "request_identity_expired", "workspace_retired", "assignment_unavailable", "workspace_unavailable", "capability_mismatch", "embedding_space_mismatch", "budget_exhausted", "secret_detected", "attachment_invalid", "rate_limited", "temporarily_unavailable", "stale_configuration", "spool_capacity_exhausted", "allowance_unavailable", "internal_error"]',
     'message': 'str',
     'retryable': 'bool',
     'request_id': 'OpaqueId',
@@ -225,12 +237,12 @@ ContractManifest = TypedDict('ContractManifest', {
     'contract_set': 'Literal["llmrouter-v1"]',
     'version': 'str',
     'generated_at': 'Timestamp',
-    'capabilities': 'list[Literal["model_requests", "agent_runs", "shared_tools", "attachments", "request_status", "request_discovery", "cancellation", "sse_stream_v1", "workspace_lifecycle", "host_budget_ceiling", "effective_configuration", "assignment_configuration", "provider_instance_configuration", "provider_model_route_configuration", "price_synchronization", "budget_management", "retention_management", "configuration_revisions", "business_tool_gateway", "diagnostic_routing", "administration_authentication", "service_administration", "catalog_administration", "credential_administration", "administrator_grants", "operational_administration", "audit_discovery", "captured_content", "protected_exports", "accounting_summary", "detailed_health", "openai_chat_completions", "openai_responses"]]',
+    'capabilities': 'list[Literal["model_requests", "embedding_requests_v1", "agent_runs", "shared_tools", "attachments", "request_status", "request_discovery", "cancellation", "sse_stream_v1", "workspace_lifecycle", "host_budget_ceiling", "effective_configuration", "assignment_configuration", "provider_instance_configuration", "provider_model_route_configuration", "price_synchronization", "budget_management", "retention_management", "configuration_revisions", "business_tool_gateway", "diagnostic_routing", "administration_authentication", "service_administration", "catalog_administration", "credential_administration", "administrator_grants", "operational_administration", "audit_discovery", "captured_content", "protected_exports", "accounting_summary", "detailed_health", "openai_chat_completions", "openai_responses"]]',
     'artifacts': 'list[ContractArtifact]',
 })
 
 ContractArtifact = TypedDict('ContractArtifact', {
-    'name': 'Literal["openapi", "stream_protocol", "error_catalog", "service_management", "embed_protocol", "business_tool_gateway", "request_fingerprint", "cross_service_conformance"]',
+    'name': 'Literal["openapi", "stream_protocol", "error_catalog", "service_management", "embed_protocol", "embedding_protocol", "business_tool_gateway", "request_fingerprint", "cross_service_conformance"]',
     'version': 'str',
     'major_version': 'int',
     'sha256': 'str',
@@ -241,7 +253,7 @@ ServiceTokenExchange = TypedDict('ServiceTokenExchange', {
     'bootstrap_secret': 'str',
     'audience': 'Literal["data_plane", "service_management", "host_backend", "accounting", "configuration", "budget_authority"]',
     'workspace_ids': 'NotRequired[list[OpaqueId]]',
-    'operations': 'list[Literal["model.create", "model.read", "model.cancel", "run.create", "run.read", "run.cancel", "tool.create", "tool.read", "tool.cancel", "attachment.create", "attachment.read", "workspace.create", "workspace.read", "workspace.disable", "workspace.restore", "workspace.retire", "admin_embed.create", "accounting.read", "configuration.read", "configuration.write", "diagnostic.grant.create", "retention.read", "retention.preview", "retention.write", "budget.read", "budget.write", "budget_ceiling.read", "budget_ceiling.write"]]',
+    'operations': 'list[Literal["model.create", "model.read", "model.cancel", "embedding.create", "embedding.read", "run.create", "run.read", "run.cancel", "tool.create", "tool.read", "tool.cancel", "attachment.create", "attachment.read", "workspace.create", "workspace.read", "workspace.disable", "workspace.restore", "workspace.retire", "admin_embed.create", "accounting.read", "configuration.read", "configuration.write", "diagnostic.grant.create", "retention.read", "retention.preview", "retention.write", "budget.read", "budget.write", "budget_ceiling.read", "budget_ceiling.write"]]',
 })
 
 ServiceToken = TypedDict('ServiceToken', {
@@ -337,6 +349,25 @@ ModelRequest = TypedDict('ModelRequest', {
     'limits': 'RequestLimits',
     'output': 'OutputControls',
     'trace_context': 'NotRequired[TraceContext]',
+})
+
+EmbeddingRequest = TypedDict('EmbeddingRequest', {
+    'api_version': 'Literal["1"]',
+    'data_profile': 'Literal["service-data"]',
+    'assignment': 'AssignmentName',
+    'input_policy_id': 'OpaqueId',
+    'model_space_id': 'OpaqueId',
+    'dimensions': 'int',
+    'inputs': 'list[EmbeddingInput]',
+    'timeout_ms': 'Literal[120000]',
+    'max_cost': 'NotRequired[Money]',
+    'trace_context': 'NotRequired[TraceContext]',
+})
+
+EmbeddingInput = TypedDict('EmbeddingInput', {
+    'input_id': 'OpaqueId',
+    'sha256': 'str',
+    'text': 'str',
 })
 
 AgentRunRequest = TypedDict('AgentRunRequest', {
@@ -580,6 +611,52 @@ RequestStatusPage = TypedDict('RequestStatusPage', {
     'next_cursor': 'NotRequired[str | None]',
 })
 
+EmbeddingRequestState: TypeAlias = Literal["admitted", "running", "succeeded", "failed"]
+
+EmbeddingAdmissionReceipt = TypedDict('EmbeddingAdmissionReceipt', {
+    'request_id': 'UuidV7',
+    'admitted_at': 'Timestamp',
+    'state': 'EmbeddingRequestState',
+    'state_revision': 'int',
+    'status_url': 'str',
+    'fingerprint_version': 'Literal["rfc8785-sha256-v1"]',
+    'capture_enabled': 'bool',
+    'capture_reason': 'Literal["configured", "spool_pressure"]',
+    'capture_expires_at': 'Timestamp',
+})
+
+EmbeddingRequestStatus = TypedDict('EmbeddingRequestStatus', {
+    'request_id': 'UuidV7',
+    'service_id': 'OpaqueId',
+    'workspace_id': 'OpaqueId',
+    'state': 'EmbeddingRequestState',
+    'state_revision': 'int',
+    'admitted_at': 'Timestamp',
+    'last_transition_at': 'Timestamp',
+    'terminal_at': 'NotRequired[Timestamp]',
+    'assignment': 'AssignmentName',
+    'input_policy_id': 'OpaqueId',
+    'model_space_id': 'OpaqueId',
+    'dimensions': 'int',
+    'admission': 'EmbeddingAdmissionReceipt',
+    'result': 'NotRequired[list[EmbeddingVector]]',
+    'error': 'NotRequired[TerminalError]',
+    'accounting': 'EmbeddingAccounting',
+})
+
+EmbeddingVector = TypedDict('EmbeddingVector', {
+    'input_id': 'OpaqueId',
+    'vector': 'list[float]',
+})
+
+EmbeddingAccounting = TypedDict('EmbeddingAccounting', {
+    'input_count': 'int',
+    'input_utf8_bytes': 'int',
+    'provider_attempts': 'int',
+    'usage': 'list[UsageComponent]',
+    'cost': 'RequestAccounting',
+})
+
 TerminalError = TypedDict('TerminalError', {
     'class': 'Literal["authentication", "policy", "budget", "rate_limit", "timeout", "transport", "provider_unavailable", "invalid_provider_response", "incompatible_request", "cancelled", "uncertain_effect", "router_internal"]',
     'affected_scope': 'Literal["attempt", "provider_model_route", "provider_instance", "credential", "assignment_candidate", "logical_request"]',
@@ -708,6 +785,8 @@ PutProviderModelRoute = TypedDict('PutProviderModelRoute', {
     'canonical_model_id': 'OpaqueId',
     'wire_model': 'str',
     'capabilities': 'list[str]',
+    'embedding_model_space_id': 'NotRequired[OpaqueId]',
+    'embedding_dimensions': 'NotRequired[int]',
     'price_authority': 'PriceAuthority',
     'prices': 'list[PriceComponent]',
     'state': 'Literal["active", "disabled", "retired"]',
@@ -721,6 +800,8 @@ ProviderModelRoute = TypedDict('ProviderModelRoute', {
     'canonical_model_id': 'OpaqueId',
     'wire_model': 'str',
     'capabilities': 'list[str]',
+    'embedding_model_space_id': 'NotRequired[OpaqueId]',
+    'embedding_dimensions': 'NotRequired[int]',
     'price_authority': 'PriceAuthority',
     'prices': 'list[PriceComponent]',
     'price_version': 'OpaqueId',
@@ -3088,6 +3169,7 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
           "error_catalog",
           "service_management",
           "embed_protocol",
+          "embedding_protocol",
           "business_tool_gateway",
           "request_fingerprint",
           "cross_service_conformance"
@@ -3124,6 +3206,7 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
         "items": {
           "enum": [
             "model_requests",
+            "embedding_requests_v1",
             "agent_runs",
             "shared_tools",
             "attachments",
@@ -3741,6 +3824,360 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
     ],
     "type": "object"
   },
+  "EmbeddingAccounting": {
+    "additionalProperties": false,
+    "properties": {
+      "cost": {
+        "$ref": "#/components/schemas/RequestAccounting"
+      },
+      "input_count": {
+        "maximum": 32,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "input_utf8_bytes": {
+        "maximum": 262144,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "provider_attempts": {
+        "maximum": 4,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "usage": {
+        "items": {
+          "$ref": "#/components/schemas/UsageComponent"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "input_count",
+      "input_utf8_bytes",
+      "provider_attempts",
+      "usage",
+      "cost"
+    ],
+    "type": "object"
+  },
+  "EmbeddingAdmissionReceipt": {
+    "additionalProperties": false,
+    "properties": {
+      "admitted_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "capture_enabled": {
+        "type": "boolean"
+      },
+      "capture_expires_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "capture_reason": {
+        "enum": [
+          "configured",
+          "spool_pressure"
+        ],
+        "type": "string"
+      },
+      "fingerprint_version": {
+        "const": "rfc8785-sha256-v1",
+        "type": "string"
+      },
+      "request_id": {
+        "$ref": "#/components/schemas/UuidV7"
+      },
+      "state": {
+        "$ref": "#/components/schemas/EmbeddingRequestState"
+      },
+      "state_revision": {
+        "minimum": 1,
+        "type": "integer"
+      },
+      "status_url": {
+        "format": "uri",
+        "type": "string"
+      }
+    },
+    "required": [
+      "request_id",
+      "admitted_at",
+      "state",
+      "state_revision",
+      "status_url",
+      "fingerprint_version",
+      "capture_enabled",
+      "capture_reason",
+      "capture_expires_at"
+    ],
+    "type": "object"
+  },
+  "EmbeddingInput": {
+    "additionalProperties": false,
+    "properties": {
+      "input_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "sha256": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "text": {
+        "maxLength": 32768,
+        "minLength": 1,
+        "type": "string",
+        "x-max-utf8-bytes": 32768
+      }
+    },
+    "required": [
+      "input_id",
+      "sha256",
+      "text"
+    ],
+    "type": "object"
+  },
+  "EmbeddingRequest": {
+    "additionalProperties": false,
+    "description": "The complete batch can contain no more than 262144 UTF-8 input bytes.",
+    "properties": {
+      "api_version": {
+        "const": "1",
+        "type": "string",
+        "x-router-fingerprint": true
+      },
+      "assignment": {
+        "$ref": "#/components/schemas/AssignmentName",
+        "x-router-fingerprint": true
+      },
+      "data_profile": {
+        "const": "service-data",
+        "type": "string",
+        "x-router-fingerprint": true
+      },
+      "dimensions": {
+        "maximum": 4096,
+        "minimum": 1,
+        "type": "integer",
+        "x-router-fingerprint": true
+      },
+      "input_policy_id": {
+        "$ref": "#/components/schemas/OpaqueId",
+        "x-router-fingerprint": true
+      },
+      "inputs": {
+        "items": {
+          "$ref": "#/components/schemas/EmbeddingInput"
+        },
+        "maxItems": 32,
+        "minItems": 1,
+        "type": "array",
+        "x-max-total-utf8-bytes": 262144,
+        "x-router-fingerprint": true,
+        "x-unique-property": "input_id"
+      },
+      "max_cost": {
+        "$ref": "#/components/schemas/Money",
+        "x-router-fingerprint": true
+      },
+      "model_space_id": {
+        "$ref": "#/components/schemas/OpaqueId",
+        "x-router-fingerprint": true
+      },
+      "timeout_ms": {
+        "const": 120000,
+        "type": "integer",
+        "x-router-fingerprint": true
+      },
+      "trace_context": {
+        "$ref": "#/components/schemas/TraceContext",
+        "x-router-fingerprint": false
+      }
+    },
+    "required": [
+      "api_version",
+      "data_profile",
+      "assignment",
+      "input_policy_id",
+      "model_space_id",
+      "dimensions",
+      "inputs",
+      "timeout_ms"
+    ],
+    "type": "object"
+  },
+  "EmbeddingRequestState": {
+    "enum": [
+      "admitted",
+      "running",
+      "succeeded",
+      "failed"
+    ],
+    "type": "string"
+  },
+  "EmbeddingRequestStatus": {
+    "additionalProperties": false,
+    "description": "The uncompressed JSON response contains no more than 8388608 bytes.",
+    "oneOf": [
+      {
+        "not": {
+          "required": [
+            "error"
+          ]
+        },
+        "properties": {
+          "state": {
+            "const": "succeeded"
+          }
+        },
+        "required": [
+          "terminal_at",
+          "result"
+        ]
+      },
+      {
+        "not": {
+          "required": [
+            "result"
+          ]
+        },
+        "properties": {
+          "state": {
+            "const": "failed"
+          }
+        },
+        "required": [
+          "terminal_at",
+          "error"
+        ]
+      },
+      {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "terminal_at"
+              ]
+            },
+            {
+              "required": [
+                "result"
+              ]
+            },
+            {
+              "required": [
+                "error"
+              ]
+            }
+          ]
+        },
+        "properties": {
+          "state": {
+            "enum": [
+              "admitted",
+              "running"
+            ]
+          }
+        }
+      }
+    ],
+    "properties": {
+      "accounting": {
+        "$ref": "#/components/schemas/EmbeddingAccounting"
+      },
+      "admission": {
+        "$ref": "#/components/schemas/EmbeddingAdmissionReceipt"
+      },
+      "admitted_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "assignment": {
+        "$ref": "#/components/schemas/AssignmentName"
+      },
+      "dimensions": {
+        "maximum": 4096,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "error": {
+        "$ref": "#/components/schemas/TerminalError"
+      },
+      "input_policy_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "last_transition_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "model_space_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "request_id": {
+        "$ref": "#/components/schemas/UuidV7"
+      },
+      "result": {
+        "items": {
+          "$ref": "#/components/schemas/EmbeddingVector"
+        },
+        "maxItems": 32,
+        "minItems": 1,
+        "type": "array"
+      },
+      "service_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "state": {
+        "$ref": "#/components/schemas/EmbeddingRequestState"
+      },
+      "state_revision": {
+        "minimum": 1,
+        "type": "integer"
+      },
+      "terminal_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "workspace_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      }
+    },
+    "required": [
+      "request_id",
+      "service_id",
+      "workspace_id",
+      "state",
+      "state_revision",
+      "admitted_at",
+      "last_transition_at",
+      "assignment",
+      "input_policy_id",
+      "model_space_id",
+      "dimensions",
+      "admission",
+      "accounting"
+    ],
+    "type": "object"
+  },
+  "EmbeddingVector": {
+    "additionalProperties": false,
+    "properties": {
+      "input_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "vector": {
+        "items": {
+          "format": "double",
+          "type": "number",
+          "x-finite": true
+        },
+        "maxItems": 4096,
+        "minItems": 1,
+        "type": "array"
+      }
+    },
+    "required": [
+      "input_id",
+      "vector"
+    ],
+    "type": "object"
+  },
   "ErrorEnvelope": {
     "additionalProperties": false,
     "properties": {
@@ -3776,6 +4213,7 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
               "assignment_unavailable",
               "workspace_unavailable",
               "capability_mismatch",
+              "embedding_space_mismatch",
               "budget_exhausted",
               "secret_detected",
               "attachment_invalid",
@@ -4871,6 +5309,28 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
   },
   "ProviderModelRoute": {
     "additionalProperties": false,
+    "allOf": [
+      {
+        "if": {
+          "properties": {
+            "capabilities": {
+              "contains": {
+                "const": "embedding"
+              }
+            }
+          },
+          "required": [
+            "capabilities"
+          ]
+        },
+        "then": {
+          "required": [
+            "embedding_model_space_id",
+            "embedding_dimensions"
+          ]
+        }
+      }
+    ],
     "properties": {
       "active_revision": {
         "$ref": "#/components/schemas/OpaqueId"
@@ -4884,6 +5344,14 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
         },
         "type": "array",
         "uniqueItems": true
+      },
+      "embedding_dimensions": {
+        "maximum": 4096,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "embedding_model_space_id": {
+        "$ref": "#/components/schemas/OpaqueId"
       },
       "inherited": {
         "type": "boolean"
@@ -5267,6 +5735,28 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
   },
   "PutProviderModelRoute": {
     "additionalProperties": false,
+    "allOf": [
+      {
+        "if": {
+          "properties": {
+            "capabilities": {
+              "contains": {
+                "const": "embedding"
+              }
+            }
+          },
+          "required": [
+            "capabilities"
+          ]
+        },
+        "then": {
+          "required": [
+            "embedding_model_space_id",
+            "embedding_dimensions"
+          ]
+        }
+      }
+    ],
     "properties": {
       "canonical_model_id": {
         "$ref": "#/components/schemas/OpaqueId"
@@ -5277,6 +5767,14 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
         },
         "type": "array",
         "uniqueItems": true
+      },
+      "embedding_dimensions": {
+        "maximum": 4096,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "embedding_model_space_id": {
+        "$ref": "#/components/schemas/OpaqueId"
       },
       "expected_revision": {
         "oneOf": [
@@ -6083,6 +6581,8 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
             "model.create",
             "model.read",
             "model.cancel",
+            "embedding.create",
+            "embedding.read",
             "run.create",
             "run.read",
             "run.cancel",

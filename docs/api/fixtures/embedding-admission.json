@@ -1,0 +1,11 @@
+{
+  "request_id": "018f22b2-7e58-7cc2-8000-000000000001",
+  "admitted_at": "2026-08-13T09:00:00Z",
+  "state": "admitted",
+  "state_revision": 1,
+  "status_url": "https://router.invalid/v1/services/service-test/workspaces/workspace-test/embedding-requests/018f22b2-7e58-7cc2-8000-000000000001",
+  "fingerprint_version": "rfc8785-sha256-v1",
+  "capture_enabled": true,
+  "capture_reason": "configured",
+  "capture_expires_at": "2026-09-12T09:00:00Z"
+}

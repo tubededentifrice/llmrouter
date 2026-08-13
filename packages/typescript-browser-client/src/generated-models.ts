@@ -14,11 +14,11 @@ export type Decimal = string;
 
 export type NonNegativeDecimal = string;
 
-export type ContractManifest = { readonly contract_set: "llmrouter-v1"; readonly version: string; readonly generated_at: Timestamp; readonly capabilities: ReadonlyArray<"model_requests" | "agent_runs" | "shared_tools" | "attachments" | "request_status" | "request_discovery" | "cancellation" | "sse_stream_v1" | "workspace_lifecycle" | "host_budget_ceiling" | "effective_configuration" | "assignment_configuration" | "provider_instance_configuration" | "provider_model_route_configuration" | "price_synchronization" | "budget_management" | "retention_management" | "configuration_revisions" | "business_tool_gateway" | "diagnostic_routing" | "administration_authentication" | "service_administration" | "catalog_administration" | "credential_administration" | "administrator_grants" | "operational_administration" | "audit_discovery" | "captured_content" | "protected_exports" | "accounting_summary" | "detailed_health" | "openai_chat_completions" | "openai_responses">; readonly artifacts: ReadonlyArray<ContractArtifact>; };
+export type ContractManifest = { readonly contract_set: "llmrouter-v1"; readonly version: string; readonly generated_at: Timestamp; readonly capabilities: ReadonlyArray<"model_requests" | "embedding_requests_v1" | "agent_runs" | "shared_tools" | "attachments" | "request_status" | "request_discovery" | "cancellation" | "sse_stream_v1" | "workspace_lifecycle" | "host_budget_ceiling" | "effective_configuration" | "assignment_configuration" | "provider_instance_configuration" | "provider_model_route_configuration" | "price_synchronization" | "budget_management" | "retention_management" | "configuration_revisions" | "business_tool_gateway" | "diagnostic_routing" | "administration_authentication" | "service_administration" | "catalog_administration" | "credential_administration" | "administrator_grants" | "operational_administration" | "audit_discovery" | "captured_content" | "protected_exports" | "accounting_summary" | "detailed_health" | "openai_chat_completions" | "openai_responses">; readonly artifacts: ReadonlyArray<ContractArtifact>; };
 
-export type ContractArtifact = { readonly name: "openapi" | "stream_protocol" | "error_catalog" | "service_management" | "embed_protocol" | "business_tool_gateway" | "request_fingerprint" | "cross_service_conformance"; readonly version: string; readonly major_version: number; readonly sha256: string; };
+export type ContractArtifact = { readonly name: "openapi" | "stream_protocol" | "error_catalog" | "service_management" | "embed_protocol" | "embedding_protocol" | "business_tool_gateway" | "request_fingerprint" | "cross_service_conformance"; readonly version: string; readonly major_version: number; readonly sha256: string; };
 
-export type ServiceTokenExchange = { readonly service_id: OpaqueId; readonly bootstrap_secret: string; readonly audience: "data_plane" | "service_management" | "host_backend" | "accounting" | "configuration" | "budget_authority"; readonly workspace_ids?: ReadonlyArray<OpaqueId>; readonly operations: ReadonlyArray<"model.create" | "model.read" | "model.cancel" | "run.create" | "run.read" | "run.cancel" | "tool.create" | "tool.read" | "tool.cancel" | "attachment.create" | "attachment.read" | "workspace.create" | "workspace.read" | "workspace.disable" | "workspace.restore" | "workspace.retire" | "admin_embed.create" | "accounting.read" | "configuration.read" | "configuration.write" | "diagnostic.grant.create" | "retention.read" | "retention.preview" | "retention.write" | "budget.read" | "budget.write" | "budget_ceiling.read" | "budget_ceiling.write">; };
+export type ServiceTokenExchange = { readonly service_id: OpaqueId; readonly bootstrap_secret: string; readonly audience: "data_plane" | "service_management" | "host_backend" | "accounting" | "configuration" | "budget_authority"; readonly workspace_ids?: ReadonlyArray<OpaqueId>; readonly operations: ReadonlyArray<"model.create" | "model.read" | "model.cancel" | "embedding.create" | "embedding.read" | "run.create" | "run.read" | "run.cancel" | "tool.create" | "tool.read" | "tool.cancel" | "attachment.create" | "attachment.read" | "workspace.create" | "workspace.read" | "workspace.disable" | "workspace.restore" | "workspace.retire" | "admin_embed.create" | "accounting.read" | "configuration.read" | "configuration.write" | "diagnostic.grant.create" | "retention.read" | "retention.preview" | "retention.write" | "budget.read" | "budget.write" | "budget_ceiling.read" | "budget_ceiling.write">; };
 
 export type ServiceToken = { readonly access_token: string; readonly token_type: "Bearer"; readonly expires_in: 300; readonly service_id: OpaqueId; readonly workspace_ids?: ReadonlyArray<OpaqueId>; readonly audience: string; readonly operations: ReadonlyArray<string>; readonly credential_generation: number; };
 
@@ -46,15 +46,19 @@ export type RequestLimits = { readonly attempt_timeout_ms: number; readonly max_
 
 export type OutputControls = { readonly format?: "text" | "json"; readonly json_schema_name?: string; readonly json_schema_major_version?: number; readonly temperature?: number; };
 
-export type ModelRequest = JsonValue | JsonValue;
+export type ModelRequest = { readonly api_version: "1"; readonly data_profile: DataProfile; readonly workspace_id?: OpaqueId; readonly assignment: AssignmentName; readonly messages: ReadonlyArray<Message>; readonly tools?: ReadonlyArray<ToolDefinition>; readonly tool_allow_list?: ReadonlyArray<string>; readonly limits: RequestLimits; readonly output: OutputControls; readonly trace_context?: TraceContext; } | { readonly api_version: "1"; readonly data_profile: DataProfile; readonly workspace_id?: OpaqueId; readonly exact_route: OpaqueId; readonly exact_route_grant: string; readonly messages: ReadonlyArray<Message>; readonly tools?: ReadonlyArray<ToolDefinition>; readonly tool_allow_list?: ReadonlyArray<string>; readonly limits: RequestLimits; readonly output: OutputControls; readonly trace_context?: TraceContext; };
 
-export type AgentRunRequest = JsonValue | JsonValue;
+export type EmbeddingRequest = { readonly api_version: "1"; readonly data_profile: "service-data"; readonly assignment: AssignmentName; readonly input_policy_id: OpaqueId; readonly model_space_id: OpaqueId; readonly dimensions: number; readonly inputs: ReadonlyArray<EmbeddingInput>; readonly timeout_ms: 120000; readonly max_cost?: Money; readonly trace_context?: TraceContext; };
+
+export type EmbeddingInput = { readonly input_id: OpaqueId; readonly sha256: string; readonly text: string; };
+
+export type AgentRunRequest = { readonly api_version: "1"; readonly data_profile: DataProfile; readonly workspace_id?: OpaqueId; readonly assignment: AssignmentName; readonly messages: ReadonlyArray<Message>; readonly tools?: ReadonlyArray<ToolDefinition>; readonly tool_allow_list?: ReadonlyArray<string>; readonly limits: RequestLimits; readonly output: OutputControls; readonly agent: { readonly max_steps: number; readonly max_tool_concurrency: number; readonly business_tool_names?: ReadonlyArray<string>; }; readonly trace_context?: TraceContext; } | { readonly api_version: "1"; readonly data_profile: DataProfile; readonly workspace_id?: OpaqueId; readonly exact_route: OpaqueId; readonly exact_route_grant: string; readonly messages: ReadonlyArray<Message>; readonly tools?: ReadonlyArray<ToolDefinition>; readonly tool_allow_list?: ReadonlyArray<string>; readonly limits: RequestLimits; readonly output: OutputControls; readonly agent: { readonly max_steps: number; readonly max_tool_concurrency: number; readonly business_tool_names?: ReadonlyArray<string>; }; readonly trace_context?: TraceContext; };
 
 export type SharedToolRequest = { readonly api_version: "1"; readonly data_profile: DataProfile; readonly workspace_id?: OpaqueId; readonly assignment: AssignmentName; readonly tool: "search" | "extract" | "scrape" | "screenshot"; readonly input: RegisteredDocument; readonly limits: RequestLimits; readonly trace_context?: TraceContext; };
 
-export type CompatibleChatRequest = JsonValue | JsonValue;
+export type CompatibleChatRequest = { readonly model: AssignmentName; readonly messages: ReadonlyArray<Message>; readonly tools?: ReadonlyArray<ToolDefinition>; readonly tool_choice?: CompatibilityToolChoice; readonly response_format?: CompatibilityResponseFormat; readonly temperature?: number; readonly max_completion_tokens?: number; readonly stream?: boolean; readonly metadata?: MetadataEntries; readonly user?: string; readonly x_llmrouter_workspace_id?: OpaqueId; readonly x_llmrouter_data_profile?: DataProfile; readonly x_llmrouter_max_cost?: Money; } | { readonly model: AssignmentName; readonly messages: ReadonlyArray<Message>; readonly tools?: ReadonlyArray<ToolDefinition>; readonly tool_choice?: CompatibilityToolChoice; readonly response_format?: CompatibilityResponseFormat; readonly temperature?: number; readonly max_completion_tokens?: number; readonly stream?: boolean; readonly metadata?: MetadataEntries; readonly user?: string; readonly x_llmrouter_workspace_id?: OpaqueId; readonly x_llmrouter_data_profile?: DataProfile; readonly x_llmrouter_max_cost?: Money; readonly x_llmrouter_exact_route: OpaqueId; readonly x_llmrouter_exact_route_grant: string; };
 
-export type CompatibleResponsesRequest = JsonValue | JsonValue;
+export type CompatibleResponsesRequest = { readonly model: AssignmentName; readonly input: string | ReadonlyArray<Message>; readonly instructions?: string; readonly tools?: ReadonlyArray<ToolDefinition>; readonly tool_choice?: CompatibilityToolChoice; readonly text?: CompatibilityResponseFormat; readonly temperature?: number; readonly max_output_tokens?: number; readonly stream?: boolean; readonly metadata?: MetadataEntries; readonly user?: string; readonly x_llmrouter_workspace_id?: OpaqueId; readonly x_llmrouter_data_profile?: DataProfile; readonly x_llmrouter_max_cost?: Money; } | { readonly model: AssignmentName; readonly input: string | ReadonlyArray<Message>; readonly instructions?: string; readonly tools?: ReadonlyArray<ToolDefinition>; readonly tool_choice?: CompatibilityToolChoice; readonly text?: CompatibilityResponseFormat; readonly temperature?: number; readonly max_output_tokens?: number; readonly stream?: boolean; readonly metadata?: MetadataEntries; readonly user?: string; readonly x_llmrouter_workspace_id?: OpaqueId; readonly x_llmrouter_data_profile?: DataProfile; readonly x_llmrouter_max_cost?: Money; readonly x_llmrouter_exact_route: OpaqueId; readonly x_llmrouter_exact_route_grant: string; };
 
 export type RegisteredDocument = { readonly schema_name: string; readonly major_version: number; readonly document: {  }; };
 
@@ -70,7 +74,7 @@ export type PutBusinessToolGateway = { readonly origin: string; readonly contrac
 
 export type BusinessToolCall = { readonly contract_version: 1; readonly operation_id: OpaqueId; readonly service_id: OpaqueId; readonly workspace_id?: OpaqueId; readonly run_id: UuidV7; readonly owner_epoch: number; readonly tool_name: string; readonly permitted_operation: string; readonly input: RegisteredDocument; readonly deadline: Timestamp; readonly tool_grant: string; };
 
-export type BusinessToolResult = JsonValue | JsonValue;
+export type BusinessToolResult = { readonly contract_version: 1; readonly operation_id: OpaqueId; readonly state: "succeeded" | "failed" | "uncertain"; readonly effect_state: "none" | "committed" | "unknown"; readonly result: RegisteredDocument; } | { readonly contract_version: 1; readonly operation_id: OpaqueId; readonly state: "succeeded" | "failed" | "uncertain"; readonly effect_state: "none" | "committed" | "unknown"; readonly safe_error: TerminalError; };
 
 export type BusinessToolReconciliationRequest = { readonly contract_version: 1; readonly operation_id: OpaqueId; readonly service_id: OpaqueId; readonly workspace_id?: OpaqueId; readonly run_id: UuidV7; readonly owner_epoch: number; readonly reconciliation_grant: string; };
 
@@ -90,7 +94,7 @@ export type AdmissionReceipt = { readonly request_id: UuidV7; readonly run_id?: 
 
 export type CancelRequest = { readonly reason: string; };
 
-export type RequestStatus = { readonly assignment: JsonValue; readonly exact_route?: JsonValue; } | { readonly assignment?: JsonValue; readonly exact_route: JsonValue; };
+export type RequestStatus = { readonly request_id: UuidV7; readonly run_id?: OpaqueId; readonly state: RequestState; readonly state_revision: number; readonly admitted_at: Timestamp; readonly last_transition_at: Timestamp; readonly terminal_at?: Timestamp; readonly partial_output: boolean; readonly committed_effects: boolean; readonly configuration_revision: OpaqueId; readonly assignment: AssignmentName; readonly admission: AdmissionReceipt; readonly owner_epoch?: number; readonly attempts: ReadonlyArray<AttemptStatus>; readonly tool_calls: ReadonlyArray<ToolCallStatus>; readonly result?: OutputResult; readonly error?: TerminalError; readonly accounting: RequestAccounting; } | { readonly request_id: UuidV7; readonly run_id?: OpaqueId; readonly state: RequestState; readonly state_revision: number; readonly admitted_at: Timestamp; readonly last_transition_at: Timestamp; readonly terminal_at?: Timestamp; readonly partial_output: boolean; readonly committed_effects: boolean; readonly configuration_revision: OpaqueId; readonly exact_route: OpaqueId; readonly admission: AdmissionReceipt; readonly owner_epoch?: number; readonly attempts: ReadonlyArray<AttemptStatus>; readonly tool_calls: ReadonlyArray<ToolCallStatus>; readonly result?: OutputResult; readonly error?: TerminalError; readonly accounting: RequestAccounting; };
 
 export type AttemptStatus = { readonly attempt_id: OpaqueId; readonly provider_model_route_id: OpaqueId; readonly state: "running" | "succeeded" | "failed" | "cancelled" | "uncertain"; readonly started_at: Timestamp; readonly ended_at?: Timestamp; readonly assignment_revision: OpaqueId; readonly error?: TerminalError; readonly usage?: ReadonlyArray<UsageComponent>; readonly price_version?: OpaqueId; };
 
@@ -99,6 +103,16 @@ export type ToolCallStatus = { readonly tool_call_id: OpaqueId; readonly tool_na
 export type OutputResult = { readonly outputs: ReadonlyArray<{ readonly type: "text"; readonly text: string; } | { readonly type: "json" | "tool_result"; readonly document: RegisteredDocument; } | { readonly type: "image" | "audio"; readonly attachment_id: OpaqueId; }>; };
 
 export type RequestStatusPage = { readonly items: ReadonlyArray<RequestStatus>; readonly next_cursor?: string | null; };
+
+export type EmbeddingRequestState = "admitted" | "running" | "succeeded" | "failed";
+
+export type EmbeddingAdmissionReceipt = { readonly request_id: UuidV7; readonly admitted_at: Timestamp; readonly state: EmbeddingRequestState; readonly state_revision: number; readonly status_url: string; readonly fingerprint_version: "rfc8785-sha256-v1"; readonly capture_enabled: boolean; readonly capture_reason: "configured" | "spool_pressure"; readonly capture_expires_at: Timestamp; };
+
+export type EmbeddingRequestStatus = { readonly request_id: UuidV7; readonly service_id: OpaqueId; readonly workspace_id: OpaqueId; readonly state: "succeeded"; readonly state_revision: number; readonly admitted_at: Timestamp; readonly last_transition_at: Timestamp; readonly terminal_at: Timestamp; readonly assignment: AssignmentName; readonly input_policy_id: OpaqueId; readonly model_space_id: OpaqueId; readonly dimensions: number; readonly admission: EmbeddingAdmissionReceipt; readonly result: ReadonlyArray<EmbeddingVector>; readonly accounting: EmbeddingAccounting; } | { readonly request_id: UuidV7; readonly service_id: OpaqueId; readonly workspace_id: OpaqueId; readonly state: "failed"; readonly state_revision: number; readonly admitted_at: Timestamp; readonly last_transition_at: Timestamp; readonly terminal_at: Timestamp; readonly assignment: AssignmentName; readonly input_policy_id: OpaqueId; readonly model_space_id: OpaqueId; readonly dimensions: number; readonly admission: EmbeddingAdmissionReceipt; readonly error: TerminalError; readonly accounting: EmbeddingAccounting; } | { readonly request_id: UuidV7; readonly service_id: OpaqueId; readonly workspace_id: OpaqueId; readonly state: "admitted" | "running"; readonly state_revision: number; readonly admitted_at: Timestamp; readonly last_transition_at: Timestamp; readonly assignment: AssignmentName; readonly input_policy_id: OpaqueId; readonly model_space_id: OpaqueId; readonly dimensions: number; readonly admission: EmbeddingAdmissionReceipt; readonly accounting: EmbeddingAccounting; };
+
+export type EmbeddingVector = { readonly input_id: OpaqueId; readonly vector: ReadonlyArray<number>; };
+
+export type EmbeddingAccounting = { readonly input_count: number; readonly input_utf8_bytes: number; readonly provider_attempts: number; readonly usage: ReadonlyArray<UsageComponent>; readonly cost: RequestAccounting; };
 
 export type TerminalError = { readonly class: "authentication" | "policy" | "budget" | "rate_limit" | "timeout" | "transport" | "provider_unavailable" | "invalid_provider_response" | "incompatible_request" | "cancelled" | "uncertain_effect" | "router_internal"; readonly affected_scope: "attempt" | "provider_model_route" | "provider_instance" | "credential" | "assignment_candidate" | "logical_request"; readonly message: string; readonly safe_provider_code?: string; };
 
@@ -130,15 +144,15 @@ export type ProviderInstance = { readonly provider_instance_id: OpaqueId; readon
 
 export type ProviderInstancePage = { readonly items: ReadonlyArray<ProviderInstance>; readonly next_cursor?: string | null; };
 
-export type PutProviderModelRoute = { readonly provider_instance_id: OpaqueId; readonly canonical_model_id: OpaqueId; readonly wire_model: string; readonly capabilities: ReadonlyArray<string>; readonly price_authority: PriceAuthority; readonly prices: ReadonlyArray<PriceComponent>; readonly state: "active" | "disabled" | "retired"; readonly expected_revision: OpaqueId | null; };
+export type PutProviderModelRoute = { readonly provider_instance_id: OpaqueId; readonly canonical_model_id: OpaqueId; readonly wire_model: string; readonly capabilities: ReadonlyArray<string>; readonly embedding_model_space_id?: OpaqueId; readonly embedding_dimensions?: number; readonly price_authority: PriceAuthority; readonly prices: ReadonlyArray<PriceComponent>; readonly state: "active" | "disabled" | "retired"; readonly expected_revision: OpaqueId | null; };
 
-export type ProviderModelRoute = { readonly provider_model_route_id: OpaqueId; readonly owner_scope: OpaqueId; readonly provider_instance_id: OpaqueId; readonly canonical_model_id: OpaqueId; readonly wire_model: string; readonly capabilities: ReadonlyArray<string>; readonly price_authority: PriceAuthority; readonly prices: ReadonlyArray<PriceComponent>; readonly price_version: OpaqueId; readonly synchronization_state: "manual" | "current" | "stale" | "missing" | "failed"; readonly state: "active" | "disabled" | "retired"; readonly active_revision: OpaqueId; readonly inherited: boolean; };
+export type ProviderModelRoute = { readonly provider_model_route_id: OpaqueId; readonly owner_scope: OpaqueId; readonly provider_instance_id: OpaqueId; readonly canonical_model_id: OpaqueId; readonly wire_model: string; readonly capabilities: ReadonlyArray<string>; readonly embedding_model_space_id?: OpaqueId; readonly embedding_dimensions?: number; readonly price_authority: PriceAuthority; readonly prices: ReadonlyArray<PriceComponent>; readonly price_version: OpaqueId; readonly synchronization_state: "manual" | "current" | "stale" | "missing" | "failed"; readonly state: "active" | "disabled" | "retired"; readonly active_revision: OpaqueId; readonly inherited: boolean; };
 
 export type ProviderModelRoutePage = { readonly items: ReadonlyArray<ProviderModelRoute>; readonly next_cursor?: string | null; };
 
 export type PriceComponent = { readonly unit: "input_token" | "output_token" | "cached_token" | "request" | "image" | "audio_second" | "search" | "tool_unit"; readonly price: NonNegativeDecimal; readonly currency: string; readonly raw_source_value: string; };
 
-export type PriceAuthority = { readonly mode?: "manual"; } | { readonly mode?: "source"; };
+export type PriceAuthority = { readonly mode: "manual"; } | { readonly mode: "source"; readonly source_name: string; readonly lookup_identifier: string; };
 
 export type PriceSynchronizationRequest = { readonly dry_run: boolean; readonly provider_model_route_ids?: ReadonlyArray<OpaqueId>; };
 
@@ -200,11 +214,11 @@ export type ServiceAdministrationRecord = { readonly service_id: OpaqueId; reado
 
 export type ServiceAdministrationPage = { readonly items: ReadonlyArray<ServiceAdministrationRecord>; readonly next_cursor?: string | null; };
 
-export type RetentionValue = { readonly data_class?: "configuration_revisions"; } | { readonly data_class?: "diagnostic_logs" | "captured_content" | "raw_accounting" | "agent_tool_audit" | "daily_accounting" | "security_audit"; };
+export type RetentionValue = { readonly data_class: "configuration_revisions"; readonly days: number; readonly minimum_days: number; readonly maximum_days: number; readonly minimum_count: number; readonly allowed_minimum_count: number; readonly allowed_maximum_count: number; } | { readonly data_class: "diagnostic_logs" | "captured_content" | "raw_accounting" | "agent_tool_audit" | "daily_accounting" | "security_audit"; readonly days: number; readonly minimum_days: number; readonly maximum_days: number; };
 
 export type RetentionConfiguration = { readonly revision: OpaqueId; readonly scope?: "global" | "service" | "workspace"; readonly service_id?: OpaqueId; readonly workspace_id?: OpaqueId; readonly source_layer?: OpaqueId; readonly values: ReadonlyArray<RetentionValue>; readonly revision_retention_evidence: { readonly oldest_retained_revision: OpaqueId; readonly retained_by: "minimum_count" | "minimum_age" | "both"; readonly minimum_count_boundary?: OpaqueId; readonly minimum_age_boundary?: Timestamp; }; };
 
-export type RetentionSelection = { readonly data_class?: "configuration_revisions"; } | { readonly data_class?: "diagnostic_logs" | "captured_content" | "raw_accounting" | "agent_tool_audit" | "daily_accounting" | "security_audit"; };
+export type RetentionSelection = { readonly data_class: "configuration_revisions"; readonly days: number; readonly minimum_count: number; } | { readonly data_class: "diagnostic_logs" | "captured_content" | "raw_accounting" | "agent_tool_audit" | "daily_accounting" | "security_audit"; readonly days: number; };
 
 export type PutRetentionConfiguration = { readonly expected_revision: OpaqueId; readonly values: ReadonlyArray<RetentionSelection>; readonly confirmed_preview_id: OpaqueId; };
 
@@ -242,7 +256,7 @@ export type Health = { readonly status: "ready" | "degraded" | "not_ready"; read
 
 export type FieldError = { readonly path: string; readonly code: string; readonly message: string; };
 
-export type ErrorEnvelope = { readonly error: { readonly code: "invalid_request" | "unsupported_contract" | "unsupported_capability" | "invalid_token" | "recent_auth_required" | "insufficient_scope" | "service_scope_mismatch" | "workspace_scope_mismatch" | "policy_denied" | "diagnostic_permission_required" | "not_found" | "request_not_found" | "workspace_not_found" | "attachment_not_found" | "idempotency_conflict" | "state_revision_conflict" | "configuration_revision_conflict" | "request_identity_conflict" | "stream_replay_unavailable" | "terminal_state" | "budget_ceiling_conflict" | "attachment_already_complete" | "request_identity_expired" | "workspace_retired" | "assignment_unavailable" | "workspace_unavailable" | "capability_mismatch" | "budget_exhausted" | "secret_detected" | "attachment_invalid" | "rate_limited" | "temporarily_unavailable" | "stale_configuration" | "spool_capacity_exhausted" | "allowance_unavailable" | "internal_error"; readonly message: string; readonly retryable: boolean; readonly request_id: OpaqueId; readonly retry_after_ms?: number | null; readonly field_errors?: ReadonlyArray<FieldError>; }; };
+export type ErrorEnvelope = { readonly error: { readonly code: "invalid_request" | "unsupported_contract" | "unsupported_capability" | "invalid_token" | "recent_auth_required" | "insufficient_scope" | "service_scope_mismatch" | "workspace_scope_mismatch" | "policy_denied" | "diagnostic_permission_required" | "not_found" | "request_not_found" | "workspace_not_found" | "attachment_not_found" | "idempotency_conflict" | "state_revision_conflict" | "configuration_revision_conflict" | "request_identity_conflict" | "stream_replay_unavailable" | "terminal_state" | "budget_ceiling_conflict" | "attachment_already_complete" | "request_identity_expired" | "workspace_retired" | "assignment_unavailable" | "workspace_unavailable" | "capability_mismatch" | "embedding_space_mismatch" | "budget_exhausted" | "secret_detected" | "attachment_invalid" | "rate_limited" | "temporarily_unavailable" | "stale_configuration" | "spool_capacity_exhausted" | "allowance_unavailable" | "internal_error"; readonly message: string; readonly retryable: boolean; readonly request_id: OpaqueId; readonly retry_after_ms?: number | null; readonly field_errors?: ReadonlyArray<FieldError>; }; };
 
 export const contractSchemas = {
   "AccountingSummary": {
@@ -2182,6 +2196,7 @@ export const contractSchemas = {
           "error_catalog",
           "service_management",
           "embed_protocol",
+          "embedding_protocol",
           "business_tool_gateway",
           "request_fingerprint",
           "cross_service_conformance"
@@ -2218,6 +2233,7 @@ export const contractSchemas = {
         "items": {
           "enum": [
             "model_requests",
+            "embedding_requests_v1",
             "agent_runs",
             "shared_tools",
             "attachments",
@@ -2835,6 +2851,360 @@ export const contractSchemas = {
     ],
     "type": "object"
   },
+  "EmbeddingAccounting": {
+    "additionalProperties": false,
+    "properties": {
+      "cost": {
+        "$ref": "#/components/schemas/RequestAccounting"
+      },
+      "input_count": {
+        "maximum": 32,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "input_utf8_bytes": {
+        "maximum": 262144,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "provider_attempts": {
+        "maximum": 4,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "usage": {
+        "items": {
+          "$ref": "#/components/schemas/UsageComponent"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "input_count",
+      "input_utf8_bytes",
+      "provider_attempts",
+      "usage",
+      "cost"
+    ],
+    "type": "object"
+  },
+  "EmbeddingAdmissionReceipt": {
+    "additionalProperties": false,
+    "properties": {
+      "admitted_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "capture_enabled": {
+        "type": "boolean"
+      },
+      "capture_expires_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "capture_reason": {
+        "enum": [
+          "configured",
+          "spool_pressure"
+        ],
+        "type": "string"
+      },
+      "fingerprint_version": {
+        "const": "rfc8785-sha256-v1",
+        "type": "string"
+      },
+      "request_id": {
+        "$ref": "#/components/schemas/UuidV7"
+      },
+      "state": {
+        "$ref": "#/components/schemas/EmbeddingRequestState"
+      },
+      "state_revision": {
+        "minimum": 1,
+        "type": "integer"
+      },
+      "status_url": {
+        "format": "uri",
+        "type": "string"
+      }
+    },
+    "required": [
+      "request_id",
+      "admitted_at",
+      "state",
+      "state_revision",
+      "status_url",
+      "fingerprint_version",
+      "capture_enabled",
+      "capture_reason",
+      "capture_expires_at"
+    ],
+    "type": "object"
+  },
+  "EmbeddingInput": {
+    "additionalProperties": false,
+    "properties": {
+      "input_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "sha256": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "text": {
+        "maxLength": 32768,
+        "minLength": 1,
+        "type": "string",
+        "x-max-utf8-bytes": 32768
+      }
+    },
+    "required": [
+      "input_id",
+      "sha256",
+      "text"
+    ],
+    "type": "object"
+  },
+  "EmbeddingRequest": {
+    "additionalProperties": false,
+    "description": "The complete batch can contain no more than 262144 UTF-8 input bytes.",
+    "properties": {
+      "api_version": {
+        "const": "1",
+        "type": "string",
+        "x-router-fingerprint": true
+      },
+      "assignment": {
+        "$ref": "#/components/schemas/AssignmentName",
+        "x-router-fingerprint": true
+      },
+      "data_profile": {
+        "const": "service-data",
+        "type": "string",
+        "x-router-fingerprint": true
+      },
+      "dimensions": {
+        "maximum": 4096,
+        "minimum": 1,
+        "type": "integer",
+        "x-router-fingerprint": true
+      },
+      "input_policy_id": {
+        "$ref": "#/components/schemas/OpaqueId",
+        "x-router-fingerprint": true
+      },
+      "inputs": {
+        "items": {
+          "$ref": "#/components/schemas/EmbeddingInput"
+        },
+        "maxItems": 32,
+        "minItems": 1,
+        "type": "array",
+        "x-max-total-utf8-bytes": 262144,
+        "x-router-fingerprint": true,
+        "x-unique-property": "input_id"
+      },
+      "max_cost": {
+        "$ref": "#/components/schemas/Money",
+        "x-router-fingerprint": true
+      },
+      "model_space_id": {
+        "$ref": "#/components/schemas/OpaqueId",
+        "x-router-fingerprint": true
+      },
+      "timeout_ms": {
+        "const": 120000,
+        "type": "integer",
+        "x-router-fingerprint": true
+      },
+      "trace_context": {
+        "$ref": "#/components/schemas/TraceContext",
+        "x-router-fingerprint": false
+      }
+    },
+    "required": [
+      "api_version",
+      "data_profile",
+      "assignment",
+      "input_policy_id",
+      "model_space_id",
+      "dimensions",
+      "inputs",
+      "timeout_ms"
+    ],
+    "type": "object"
+  },
+  "EmbeddingRequestState": {
+    "enum": [
+      "admitted",
+      "running",
+      "succeeded",
+      "failed"
+    ],
+    "type": "string"
+  },
+  "EmbeddingRequestStatus": {
+    "additionalProperties": false,
+    "description": "The uncompressed JSON response contains no more than 8388608 bytes.",
+    "oneOf": [
+      {
+        "not": {
+          "required": [
+            "error"
+          ]
+        },
+        "properties": {
+          "state": {
+            "const": "succeeded"
+          }
+        },
+        "required": [
+          "terminal_at",
+          "result"
+        ]
+      },
+      {
+        "not": {
+          "required": [
+            "result"
+          ]
+        },
+        "properties": {
+          "state": {
+            "const": "failed"
+          }
+        },
+        "required": [
+          "terminal_at",
+          "error"
+        ]
+      },
+      {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "terminal_at"
+              ]
+            },
+            {
+              "required": [
+                "result"
+              ]
+            },
+            {
+              "required": [
+                "error"
+              ]
+            }
+          ]
+        },
+        "properties": {
+          "state": {
+            "enum": [
+              "admitted",
+              "running"
+            ]
+          }
+        }
+      }
+    ],
+    "properties": {
+      "accounting": {
+        "$ref": "#/components/schemas/EmbeddingAccounting"
+      },
+      "admission": {
+        "$ref": "#/components/schemas/EmbeddingAdmissionReceipt"
+      },
+      "admitted_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "assignment": {
+        "$ref": "#/components/schemas/AssignmentName"
+      },
+      "dimensions": {
+        "maximum": 4096,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "error": {
+        "$ref": "#/components/schemas/TerminalError"
+      },
+      "input_policy_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "last_transition_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "model_space_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "request_id": {
+        "$ref": "#/components/schemas/UuidV7"
+      },
+      "result": {
+        "items": {
+          "$ref": "#/components/schemas/EmbeddingVector"
+        },
+        "maxItems": 32,
+        "minItems": 1,
+        "type": "array"
+      },
+      "service_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "state": {
+        "$ref": "#/components/schemas/EmbeddingRequestState"
+      },
+      "state_revision": {
+        "minimum": 1,
+        "type": "integer"
+      },
+      "terminal_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "workspace_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      }
+    },
+    "required": [
+      "request_id",
+      "service_id",
+      "workspace_id",
+      "state",
+      "state_revision",
+      "admitted_at",
+      "last_transition_at",
+      "assignment",
+      "input_policy_id",
+      "model_space_id",
+      "dimensions",
+      "admission",
+      "accounting"
+    ],
+    "type": "object"
+  },
+  "EmbeddingVector": {
+    "additionalProperties": false,
+    "properties": {
+      "input_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "vector": {
+        "items": {
+          "format": "double",
+          "type": "number",
+          "x-finite": true
+        },
+        "maxItems": 4096,
+        "minItems": 1,
+        "type": "array"
+      }
+    },
+    "required": [
+      "input_id",
+      "vector"
+    ],
+    "type": "object"
+  },
   "ErrorEnvelope": {
     "additionalProperties": false,
     "properties": {
@@ -2870,6 +3240,7 @@ export const contractSchemas = {
               "assignment_unavailable",
               "workspace_unavailable",
               "capability_mismatch",
+              "embedding_space_mismatch",
               "budget_exhausted",
               "secret_detected",
               "attachment_invalid",
@@ -3965,6 +4336,28 @@ export const contractSchemas = {
   },
   "ProviderModelRoute": {
     "additionalProperties": false,
+    "allOf": [
+      {
+        "if": {
+          "properties": {
+            "capabilities": {
+              "contains": {
+                "const": "embedding"
+              }
+            }
+          },
+          "required": [
+            "capabilities"
+          ]
+        },
+        "then": {
+          "required": [
+            "embedding_model_space_id",
+            "embedding_dimensions"
+          ]
+        }
+      }
+    ],
     "properties": {
       "active_revision": {
         "$ref": "#/components/schemas/OpaqueId"
@@ -3978,6 +4371,14 @@ export const contractSchemas = {
         },
         "type": "array",
         "uniqueItems": true
+      },
+      "embedding_dimensions": {
+        "maximum": 4096,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "embedding_model_space_id": {
+        "$ref": "#/components/schemas/OpaqueId"
       },
       "inherited": {
         "type": "boolean"
@@ -4361,6 +4762,28 @@ export const contractSchemas = {
   },
   "PutProviderModelRoute": {
     "additionalProperties": false,
+    "allOf": [
+      {
+        "if": {
+          "properties": {
+            "capabilities": {
+              "contains": {
+                "const": "embedding"
+              }
+            }
+          },
+          "required": [
+            "capabilities"
+          ]
+        },
+        "then": {
+          "required": [
+            "embedding_model_space_id",
+            "embedding_dimensions"
+          ]
+        }
+      }
+    ],
     "properties": {
       "canonical_model_id": {
         "$ref": "#/components/schemas/OpaqueId"
@@ -4371,6 +4794,14 @@ export const contractSchemas = {
         },
         "type": "array",
         "uniqueItems": true
+      },
+      "embedding_dimensions": {
+        "maximum": 4096,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "embedding_model_space_id": {
+        "$ref": "#/components/schemas/OpaqueId"
       },
       "expected_revision": {
         "oneOf": [
@@ -5177,6 +5608,8 @@ export const contractSchemas = {
             "model.create",
             "model.read",
             "model.cancel",
+            "embedding.create",
+            "embedding.read",
             "run.create",
             "run.read",
             "run.cancel",

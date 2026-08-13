@@ -224,6 +224,71 @@ commit boundary MAY use the normal fallback rules. A timeout after a commit
 boundary MUST NOT repeat visible output or an external effect.
 These limits follow [decision 0050](../decisions/0050-use-bounded-attempt-timeouts-and-node-draining.md).
 
+## Embedding requests
+
+LLM Router MUST provide one asynchronous embedding operation for an
+authenticated service and one explicit workspace. The operation MUST use a
+named assignment. It MUST NOT accept an exact provider route, provider name,
+provider model name, or provider credential.
+
+Each embedding assignment candidate MUST declare the `embedding` capability,
+one provider-neutral opaque model-space identity, and one vector dimension. A
+configuration author MUST use a new identity after a change to model weights,
+preprocessing, dimension, or vector meaning. The identity MUST NOT be reused.
+The router MUST reject publication of an embedding assignment when any fallback
+candidate has a different model-space identity or dimension. At admission, the
+requested model-space identity and dimension MUST exactly match the complete
+effective fallback chain. A fallback MUST NOT change either value.
+
+One request MUST contain from 1 through 32 input items. Each item MUST have one
+caller-issued opaque input identity, one lowercase SHA-256 digest of its exact
+UTF-8 text bytes, and from 1 through 32768 UTF-8 bytes of text. The router MUST
+verify each digest before admission. The complete batch MUST contain no more
+than 262144 UTF-8 input bytes.
+The requested and returned dimension MUST be from 1 through 4096. The complete
+logical request MUST become terminal no later than 120 seconds after admission.
+The uncompressed JSON status response MUST contain no more than 8388608 bytes.
+A deployment MAY lower the batch, input, or dimension limits. It MUST NOT raise
+them. One provider attempt MUST stop after 30 seconds. One logical batch MUST
+have no more than four provider attempts inside the 120-second logical limit.
+
+The batch MUST be atomic at the Router contract. A successful status MUST
+return one vector for each input identity, in request order, and all vectors
+MUST have the exact requested dimension and model-space identity. The router
+MUST return no vector when one item fails. It MAY make more than one provider
+attempt, but fallback MUST repeat the complete batch and MUST follow the normal
+candidate failure rules.
+
+The caller MUST create one UUIDv7 for the complete batch. The router MUST use
+the normal durable fingerprint binding before provider work starts. An
+identical repeat MUST return the existing admission. A repeat with changed
+assignment, input policy, model space, dimension, input identity, input order,
+digest, text, or optional maximum cost in the same scope MUST return
+`request_identity_conflict`. The request identity is scoped by service and
+workspace. Use of the same UUIDv7 in a different scope MUST NOT find or
+disclose the first binding. The status operation MUST require the same service
+and workspace scope as admission.
+
+Every embedding request MUST have an effective hard budget for the exact
+workspace. The Router MUST reject admission when that budget is absent,
+exhausted, or cannot reserve the conservative batch estimate. A per-request
+`max_cost` is optional. When it is present, all attempts MUST also fit that
+value. Fallback MUST NOT reset either budget. Accounting
+MUST record the logical batch, each provider attempt, input count, input bytes,
+provider-reported units, price version, reservation, final cost, correction,
+and released amount. Billable work from a failed or repeated provider attempt
+MUST stay in accounting.
+
+The result MUST contain only the request state, input identities, opaque model-
+space identity, dimension, vectors, safe failure data, capture state, and
+bounded accounting. It MUST NOT expose a provider, provider model, provider
+route, credential, or fallback path. Logs, metrics, accounting, audit, and safe
+errors MUST NOT contain input text, an input digest, or a vector.
+The Router MUST reject a non-finite vector value or a vector with a wrong
+dimension, count, input identity, or order as an invalid provider response. It
+MUST return no vector for that batch.
+This operation follows [decision 0054](../decisions/0054-add-a-bounded-workspace-scoped-embedding-operation.md).
+
 ## Immutable attachments
 
 A service MAY upload an attachment only through an authenticated, versioned

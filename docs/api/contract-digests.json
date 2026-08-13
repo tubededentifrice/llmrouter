@@ -2,7 +2,7 @@
   "artifacts": [
     {
       "path": "docs/api/README.md",
-      "sha256": "8bf645e0a4f1bcb98e3e8b30e33d421ecaec1a511e3eb532a10c5980c0bd4433"
+      "sha256": "66bbe674dd11683474140f54e1e51ce1a2fac649ee3b8ba84deed195b78f89d4"
     },
     {
       "path": "docs/api/business-tool-gateway.md",
@@ -10,23 +10,27 @@
     },
     {
       "path": "docs/api/cross-service-conformance.md",
-      "sha256": "3d135d560d5a90b94f1193b823ee17b9a009171efa78990c69e3721de043e26a"
+      "sha256": "350f8eb8e79cf4dee699d0bc948f1aaeabda722ca48d47c691f8e3684598ea82"
     },
     {
       "path": "docs/api/embed-protocol.md",
       "sha256": "7b01be032006ef40a369501a03b1630db511bbc5912a3b61bab197267fc6bc21"
     },
     {
+      "path": "docs/api/embedding-protocol.md",
+      "sha256": "3dcf022e4663c7adace7e6b533e0e0770cc1420fbba39987ac0a330dbe008a18"
+    },
+    {
       "path": "docs/api/errors.md",
-      "sha256": "6161588a55edaa06b87e662aee1828f89bcbbc7c59ac58cefac15b4a2d1191e8"
+      "sha256": "0b25b51de943f8419d3f53985b9877dc05fcd97dd191fc3cf687845219b7ab1f"
     },
     {
       "path": "docs/api/openapi.yaml",
-      "sha256": "7f953cd862595af40af74c2bb438de00a5b8bd711df583031717825dfdac54e5"
+      "sha256": "8f2f5a46a77cacda2ee887cbb4884428c75d9a9f2fa66bb81d1b398d889eef9b"
     },
     {
       "path": "docs/api/request-fingerprint.md",
-      "sha256": "4af9756953f91e24c0c3a8e9fdddfabc4413ede8cee00656fe60ea3c3ea6f764"
+      "sha256": "ce37b2d9a12e0ef15c065a0e73f2107ac5c4dc446e09ead82c4b205cd7da587f"
     },
     {
       "path": "docs/api/service-management.md",
@@ -80,8 +84,8 @@
     "ConfigurationPage": "47a245112a08439393f4c0dad1f73dceff6f360a6a1efbf010802810944892e4",
     "ConfigurationWriteResult": "c5ef92807821ad564650ca7ca727493ef23e2b36342b5b1631613d2520e00c5c",
     "ContentPart": "20f568a228861f0a824f47225677f2e676b09decabfd91e16f471c82586b8e10",
-    "ContractArtifact": "5b252e68bdd2d201b9dc8f980ffe01da565fca26939a9e2cc3c2f6474277a903",
-    "ContractManifest": "2846ad3745078da818cdb9f2423cd72f8f2e4d14814a63c25ea835e33dd8a0d6",
+    "ContractArtifact": "10b32cdab0798472c4c64587eb9fe519acd9ea8d7055e810f8bd81417ff38e5d",
+    "ContractManifest": "55024d1e86bc054d726840d9819beb40b2e95f54246b45050005edd59967a1fa",
     "CreateAttachment": "727ef68974e8dad088ef4d88f920ca821b2c6d3c226fd0c087945701b7da0ec1",
     "CreateCredential": "36a343787f3ac2dba4faa42636530856ddd817ed4d477d43de195158b837d6fc",
     "CreateDiagnosticGrant": "acaac924aefe69149cdd94154e07c7e04d7a8ca45e5f40ecbd7651593e5f571f",
@@ -99,7 +103,14 @@
     "EffectiveItem": "84eb5fc14227b73241580285fe5ba2b504827db8798c9560d58f3fb77f974c61",
     "EmbedSession": "4b2d8b056e156cc2323aa2f38659627320c10c6ff898b9b513bc0a1b0900fc37",
     "EmbedSessionRequest": "d257910b89e78a918f1db9a8e9a31b018c66f520a33de1b04c419f6f82053173",
-    "ErrorEnvelope": "555b5913ada0e47b67eadec7478dc134b2819c8bba2e00a34b6c4c18aff3dbda",
+    "EmbeddingAccounting": "0fc839055750986f76007bb7bdb224e7b5208cc30e95e8844e79d301f32b0ac4",
+    "EmbeddingAdmissionReceipt": "0b4dd09e180e85eb6862522a567064578ef8316daf8da93e440d691e0e019f75",
+    "EmbeddingInput": "2804fafc872e0c2e8f1d639cd7d2b6fc30baeee48aae7bfdebad67b3398babb6",
+    "EmbeddingRequest": "0941134678c235826dafec31e126770a87e7fe13c7652b6c2197f5300e9c7109",
+    "EmbeddingRequestState": "48d30b0d9d53b4e9e8502f88f4e565f9c14912beac8757e779c0057b1ff54fde",
+    "EmbeddingRequestStatus": "a948db537cb241c85379f8be20c5abff4f3fbee1a4a79d875a38a01525fe7e4f",
+    "EmbeddingVector": "2d3a494400762ff77d96d422b8d608bf2769739dddf620eacf1de4da221ba526",
+    "ErrorEnvelope": "a5914024ad173e84ca22053059845eda3a030cea887df7dd5879236f95cf62f2",
     "ExportOperation": "638d870fd1f7cda351fc88a697b6466a47112cc388aabfc25dd218fafd5b0e62",
     "FieldError": "158c71f05bf9fa18d795d26f16ec9c263394b32988ebcf87052306e287f457cb",
     "Health": "8ca064eface8d1099772eb9b9e7de6b1b64a5e61d5994458156a433f72268303",
@@ -121,7 +132,7 @@
     "PriceSynchronizationRequest": "456a6e1b02bf4c349b0c52321c59bbc256cf40b44c993cbfdc415634a1d794b4",
     "ProviderInstance": "480314268f2252e7f2958fdc254fb5c7da296fa45f2bfcf6e6410d542a184472",
     "ProviderInstancePage": "30e9a7bdb2512a7d62cb7bcfb372105d455153cf437fc77303e279beee557db6",
-    "ProviderModelRoute": "3a45de8f36f6201c0a1ebe42d34bb996bb271ccb805199972ae8d9a54095406a",
+    "ProviderModelRoute": "f3eadde9ea18de69a8e699cbad028a330c10dea4abaa7c483577a9b0c03e7b8c",
     "ProviderModelRoutePage": "7739cc081960fde9e3a88effd88da8bc143b7d5511d411d9c8ff8a951466681b",
     "PutAdministratorGrant": "c46e511a7794057eac7fdb0f7d04429ee12f52be0663783b9c2a75427cb57657",
     "PutAssignment": "e65936c53137da58688344455c8b121d1982d325722663d4a9f6a90cf0723414",
@@ -129,7 +140,7 @@
     "PutBudgetLimit": "482011b8229684352b802a3819d897a6496311b695fe6cad249b88e8edfb5b9c",
     "PutBusinessToolGateway": "2169e0a375f680b95b559ae68c720131ceace0f8895a96735d3e5a4557da3f60",
     "PutProviderInstance": "087edc1dbd9e7f26c74bd7c70542728a9119f527dbace9ba0f1338cddebf6913",
-    "PutProviderModelRoute": "a58049a69e97c601558e8e06aecd78df27fb16cbb1092b597c8b6666ee12578b",
+    "PutProviderModelRoute": "09223f2a308f35215cb74e37690d049ad0df2983963aebc583181a68b2aad492",
     "PutRetentionConfiguration": "faddb9cc88484ac2096a14633c3d05169c0202eb702aee0c868686b5920147df",
     "RedeemExport": "ad029e382999a74d060916818500a1ec50cc9ce0882b939d0fd88751cc7bed86",
     "RegisteredDocument": "ed5cd615b410d048692a50a35ca7aef83e5fc0f3a1e520bd26ee53cd3a6e5334",
@@ -147,7 +158,7 @@
     "ServiceAdministrationRecord": "c37665af624f733c26f578bad182beb44d8f48b9fa6bd1ab60b012a9cc0950f6",
     "ServiceCreated": "d1bad5e3f9246f30154beec8e1d223a66a7e028f87bd49a7e15ef487233600bd",
     "ServiceToken": "a997941343029ef397543c1ba11507e555d33e3630ad01c43e5d929cad273aa2",
-    "ServiceTokenExchange": "c581f15592ba156ea708e7d432ce17422d3c928f0552c29797812798a8cddb41",
+    "ServiceTokenExchange": "5e3414b4bef1881d27cfb24aaf5ad53c6d489e109bb961fa2707506209695ca4",
     "SharedToolRequest": "e10559a5fae543faeb40464824916c19662baf1522b8fd08dfcb0d4f0dbeddcb",
     "TerminalError": "4465e9245c7858219f67a4e6f8481c2870cec578dedc0fc58025c153e6b69a1b",
     "Timestamp": "4f410cd74c87d8ddd21f20e835e06ed7445481c3aeae3c12085e82c54ea2fb7d",
@@ -161,6 +172,6 @@
   },
   "contract_set": "llmrouter-v1",
   "generator_version": 1,
-  "source_sha256": "7f953cd862595af40af74c2bb438de00a5b8bd711df583031717825dfdac54e5",
+  "source_sha256": "8f2f5a46a77cacda2ee887cbb4884428c75d9a9f2fa66bb81d1b398d889eef9b",
   "version": "1.0.0"
 }

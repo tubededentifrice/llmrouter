@@ -62,6 +62,7 @@ MUST use the longer wait if an invalid intermediary changes one value.
 | 422 | `assignment_unavailable` | No | Fix configuration or select another eligible assignment in a new request. |
 | 422 | `workspace_unavailable` | No | Restore the authorized disabled workspace before new work. |
 | 422 | `capability_mismatch` | No | The assignment cannot meet the required provider-neutral capability. |
+| 422 | `embedding_space_mismatch` | No | Use the exact model-space identity and dimension of one valid embedding assignment. |
 | 422 | `budget_exhausted` | No | Wait for an authorized budget reset or change. Do not retry automatically. |
 | 422 | `secret_detected` | No | Remove the control secret before submission. |
 | 422 | `attachment_invalid` | No | Fix the declared type, length, digest, count, total size, or content. |

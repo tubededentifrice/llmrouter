@@ -28,6 +28,7 @@ from ruamel.yaml import YAML
 
 HTTP_METHODS = {"get", "put", "post", "delete", "options", "head", "patch", "trace"}
 FINGERPRINT_SCHEMAS = {
+    "EmbeddingRequest",
     "ModelRequest",
     "AgentRunRequest",
     "SharedToolRequest",
@@ -47,6 +48,7 @@ CONTRACT_ARTIFACT_FILES = {
     "docs/api/business-tool-gateway.md",
     "docs/api/cross-service-conformance.md",
     "docs/api/embed-protocol.md",
+    "docs/api/embedding-protocol.md",
     "docs/api/errors.md",
     "docs/api/openapi.yaml",
     "docs/api/request-fingerprint.md",
@@ -81,8 +83,15 @@ def strict_json(text: str, source: str) -> Any:
             result[key] = value
         return result
 
+    def reject_constant(value: str) -> None:
+        raise ContractError(f"Non-finite JSON number {value!r} in {source}")
+
     try:
-        return json.loads(text, object_pairs_hook=object_from_pairs)
+        return json.loads(
+            text,
+            object_pairs_hook=object_from_pairs,
+            parse_constant=reject_constant,
+        )
     except ContractError:
         raise
     except json.JSONDecodeError as exc:
@@ -91,7 +100,9 @@ def strict_json(text: str, source: str) -> Any:
 
 def resolve_local_ref(spec: dict[str, Any], reference: str) -> Any:
     if not reference.startswith("#/"):
-        raise ContractError(f"Only local contract references are supported: {reference}")
+        raise ContractError(
+            f"Only local contract references are supported: {reference}"
+        )
     node: Any = spec
     for part in reference[2:].split("/"):
         node = node[part.replace("~1", "/").replace("~0", "~")]
@@ -109,13 +120,21 @@ def operations(spec: dict[str, Any]) -> dict[str, dict[str, Any]]:
                 raise ContractError(f"{method.upper()} {path} has no operationId")
             if operation_id in result:
                 raise ContractError(f"Duplicate operationId: {operation_id}")
-            result[operation_id] = {"path": path, "method": method, "operation": operation}
+            result[operation_id] = {
+                "path": path,
+                "method": method,
+                "operation": operation,
+            }
     return result
 
 
 def check_conditional_rule(
-    spec: dict[str, Any], operation_id: str, operation: dict[str, Any],
-    rule_name: str, rule: Any, value_type: type,
+    spec: dict[str, Any],
+    operation_id: str,
+    operation: dict[str, Any],
+    rule_name: str,
+    rule: Any,
+    value_type: type,
 ) -> None:
     if isinstance(rule, value_type):
         if value_type is str and not rule:
@@ -126,13 +145,23 @@ def check_conditional_rule(
     field = rule["field"]
     values = rule["values"]
     if not isinstance(field, str) or not isinstance(values, dict) or not values:
-        raise ContractError(f"{operation_id} has an invalid conditional {rule_name} rule")
-    if any(not isinstance(value, value_type) or (value_type is str and not value) for value in values.values()):
-        raise ContractError(f"{operation_id} has an invalid conditional {rule_name} value")
+        raise ContractError(
+            f"{operation_id} has an invalid conditional {rule_name} rule"
+        )
+    if any(
+        not isinstance(value, value_type) or (value_type is str and not value)
+        for value in values.values()
+    ):
+        raise ContractError(
+            f"{operation_id} has an invalid conditional {rule_name} value"
+        )
 
-    request_schema = operation.get("requestBody", {}).get("content", {}).get(
-        "application/json", {}
-    ).get("schema", {})
+    request_schema = (
+        operation.get("requestBody", {})
+        .get("content", {})
+        .get("application/json", {})
+        .get("schema", {})
+    )
     if "$ref" in request_schema:
         request_schema = resolve_local_ref(spec, request_schema["$ref"])
     field_schema = request_schema.get("properties", {}).get(field, {})
@@ -153,7 +182,9 @@ def parameter_references(operation: dict[str, Any]) -> set[str]:
 
 
 def check_operation_contracts(
-    spec: dict[str, Any], spec_operations: dict[str, dict[str, Any]], policy: dict[str, Any]
+    spec: dict[str, Any],
+    spec_operations: dict[str, dict[str, Any]],
+    policy: dict[str, Any],
 ) -> None:
     policy_operations = policy.get("operations", {})
     if set(spec_operations) != set(policy_operations):
@@ -164,28 +195,38 @@ def check_operation_contracts(
     fixture_cases = policy.get("conformance_cases", {})
     for operation_id, item in spec_operations.items():
         responses = item["operation"].get("responses", {})
-        if not any(str(status) == "default" or str(status)[0] in "45" for status in responses):
+        if not any(
+            str(status) == "default" or str(status)[0] in "45" for status in responses
+        ):
             raise ContractError(f"{operation_id} has no declared error response")
 
         operation_policy = policy_operations[operation_id]
         check_conditional_rule(
-            spec, operation_id, item["operation"], "permission",
-            operation_policy.get("permission"), str,
+            spec,
+            operation_id,
+            item["operation"],
+            "permission",
+            operation_policy.get("permission"),
+            str,
         )
         check_conditional_rule(
-            spec, operation_id, item["operation"], "recent-authentication",
-            operation_policy.get("recent_auth"), bool,
+            spec,
+            operation_id,
+            item["operation"],
+            "recent-authentication",
+            operation_policy.get("recent_auth"),
+            bool,
         )
         case = operation_policy.get("conformance_case")
         if case not in fixture_cases:
-            raise ContractError(f"{operation_id} names unknown conformance case {case!r}")
+            raise ContractError(
+                f"{operation_id} names unknown conformance case {case!r}"
+            )
 
         path = item["path"]
         method = item["method"]
         security = item["operation"].get("security", spec.get("security", []))
-        security_names = {
-            name for requirement in security for name in requirement
-        }
+        security_names = {name for requirement in security for name in requirement}
         if operation_id in PUBLIC_OPERATION_IDS:
             expected_security: set[str] = set()
         elif path.startswith("/v1/admin/"):
@@ -200,7 +241,11 @@ def check_operation_contracts(
         uses_administrator_session = any(
             "administratorSession" in requirement for requirement in security
         )
-        if path.startswith("/v1/admin/") and uses_administrator_session and method in ADMIN_WRITE_METHODS:
+        if (
+            path.startswith("/v1/admin/")
+            and uses_administrator_session
+            and method in ADMIN_WRITE_METHODS
+        ):
             parameters = parameter_references(item["operation"])
             required = {
                 "#/components/parameters/CsrfToken",
@@ -222,6 +267,59 @@ def check_fingerprints(spec: dict[str, Any]) -> None:
                 raise ContractError(
                     f"{schema_name}.{property_name} has no x-router-fingerprint annotation"
                 )
+
+
+def check_embedding_contract(root: Path, spec: dict[str, Any]) -> None:
+    schemas = spec["components"]["schemas"]
+    request = schemas["EmbeddingRequest"]
+    properties = request["properties"]
+    inputs = properties["inputs"]
+    text = schemas["EmbeddingInput"]["properties"]["text"]
+    vector_values = schemas["EmbeddingVector"]["properties"]["vector"]["items"]
+
+    expected_request_rules = {
+        "data_profile": {
+            "type": "string",
+            "const": "service-data",
+            "x-router-fingerprint": True,
+        },
+        "timeout_ms": {
+            "type": "integer",
+            "const": 120000,
+            "x-router-fingerprint": True,
+        },
+    }
+    for property_name, expected in expected_request_rules.items():
+        if properties.get(property_name) != expected:
+            raise ContractError(
+                f"EmbeddingRequest.{property_name} does not equal {expected}"
+            )
+    if (
+        inputs.get("minItems") != 1
+        or inputs.get("maxItems") != 32
+        or inputs.get("x-max-total-utf8-bytes") != 262144
+        or inputs.get("x-unique-property") != "input_id"
+    ):
+        raise ContractError("EmbeddingRequest.inputs lacks the fixed batch rules")
+    if text.get("x-max-utf8-bytes") != 32768:
+        raise ContractError("EmbeddingInput.text lacks the fixed UTF-8 byte limit")
+    if vector_values.get("x-finite") is not True:
+        raise ContractError("EmbeddingVector values do not require finite numbers")
+
+    manifest = strict_json(
+        (root / "docs/api/fixtures/contract-manifest.json").read_text(encoding="utf-8"),
+        "docs/api/fixtures/contract-manifest.json",
+    )
+    if "embedding_requests_v1" not in manifest.get("capabilities", []):
+        raise ContractError("Contract manifest lacks embedding_requests_v1")
+    majors = {
+        artifact.get("name"): artifact.get("major_version")
+        for artifact in manifest.get("artifacts", [])
+    }
+    if majors.get("embedding_protocol") != 1 or majors.get("openapi") != 1:
+        raise ContractError(
+            "Contract manifest does not publish embedding_protocol and openapi major 1"
+        )
 
 
 def walk_public_schemas(node: Any, location: str = "openapi") -> None:
@@ -249,8 +347,9 @@ def check_error_drift(spec: dict[str, Any], errors_path: Path) -> None:
         re.findall(r"^\|\s*\d{3}\s*\|\s*`([^`]+)`\s*\|", errors_path.read_text(), re.M)
     )
     openapi_codes = set(
-        spec["components"]["schemas"]["ErrorEnvelope"]["properties"]["error"]
-        ["properties"]["code"]["enum"]
+        spec["components"]["schemas"]["ErrorEnvelope"]["properties"]["error"][
+            "properties"
+        ]["code"]["enum"]
     )
     if markdown_codes != openapi_codes:
         raise ContractError(
@@ -260,7 +359,9 @@ def check_error_drift(spec: dict[str, Any], errors_path: Path) -> None:
         )
 
 
-def check_readable_contracts(root: Path, policy: dict[str, Any], spec_ops: dict[str, Any]) -> None:
+def check_readable_contracts(
+    root: Path, policy: dict[str, Any], spec_ops: dict[str, Any]
+) -> None:
     for relative_path, contract in policy.get("readable_contracts", {}).items():
         text = (root / relative_path).read_text(encoding="utf-8")
         for marker in contract.get("required_markers", []):
@@ -268,10 +369,14 @@ def check_readable_contracts(root: Path, policy: dict[str, Any], spec_ops: dict[
                 raise ContractError(f"{relative_path} lacks required marker {marker!r}")
         for operation_id in contract.get("operation_ids", []):
             if operation_id not in spec_ops:
-                raise ContractError(f"{relative_path} names unknown operation {operation_id}")
+                raise ContractError(
+                    f"{relative_path} names unknown operation {operation_id}"
+                )
             path = spec_ops[operation_id]["path"]
             if path not in text:
-                raise ContractError(f"{relative_path} does not name {path} for {operation_id}")
+                raise ContractError(
+                    f"{relative_path} does not name {path} for {operation_id}"
+                )
 
 
 def check_fixtures(root: Path, spec: dict[str, Any], policy: dict[str, Any]) -> None:
@@ -280,19 +385,27 @@ def check_fixtures(root: Path, spec: dict[str, Any], policy: dict[str, Any]) -> 
     for case_name, case in cases.items():
         fixture_path = root / case["fixture"]
         if not fixture_path.is_file():
-            raise ContractError(f"Fixture {case_name} does not exist: {case['fixture']}")
-        instance = strict_json(fixture_path.read_text(encoding="utf-8"), str(fixture_path))
+            raise ContractError(
+                f"Fixture {case_name} does not exist: {case['fixture']}"
+            )
+        instance = strict_json(
+            fixture_path.read_text(encoding="utf-8"), str(fixture_path)
+        )
         schema_name = case["schema"]
         schema = spec["components"]["schemas"].get(schema_name)
         if schema is None:
-            raise ContractError(f"Fixture {case_name} names unknown schema {schema_name}")
+            raise ContractError(
+                f"Fixture {case_name} names unknown schema {schema_name}"
+            )
         errors = sorted(
             Draft202012Validator(schema, resolver=resolver).iter_errors(instance),
             key=lambda error: list(error.path),
         )
         if errors:
             detail = "; ".join(error.message for error in errors[:5])
-            raise ContractError(f"Fixture {case_name} does not match {schema_name}: {detail}")
+            raise ContractError(
+                f"Fixture {case_name} does not match {schema_name}: {detail}"
+            )
 
 
 def check_artifact_digests(root: Path, policy: dict[str, Any]) -> None:
@@ -320,6 +433,7 @@ def run(root: Path) -> None:
     spec_operations = operations(spec)
     check_operation_contracts(spec, spec_operations, policy)
     check_fingerprints(spec)
+    check_embedding_contract(root, spec)
     walk_public_schemas(spec["components"]["schemas"], "components.schemas")
     check_error_drift(spec, root / "docs/api/errors.md")
     check_readable_contracts(root, policy, spec_operations)
@@ -357,7 +471,16 @@ def self_test() -> None:
         raise ContractError("Strict JSON duplicate-key self-test did not fail")
 
     try:
-        walk_public_schemas({"type": "object", "properties": {"value": {"type": "string"}}})
+        strict_json('{"a": NaN}', "non-finite-number self-test")
+    except ContractError:
+        pass
+    else:
+        raise ContractError("Strict JSON non-finite-number self-test did not fail")
+
+    try:
+        walk_public_schemas(
+            {"type": "object", "properties": {"value": {"type": "string"}}}
+        )
     except ContractError:
         pass
     else:

@@ -73,6 +73,54 @@ accepted.
    route encoded in `model`, a wrong grant, and a valid pair. Only the valid
    explicit pair can use the approved exact route.
 
+## Embedding tests
+
+1. Pin the `embedding_requests_v1` capability and major version 1 of the
+   `embedding_protocol` artifact. Remove the capability and change the major
+   version in turn. Ontology MUST stop embedding work and name the incompatible
+   pin.
+2. Submit 1 and 32 inputs, a 32768-byte input, and a 262144-byte batch. Exceed
+   each batch, item, total-input, dimension, 30-second attempt, four-attempt,
+   120-second logical, and 8388608-byte response limit in turn. The Router MUST
+   reject or fail the request without a partial vector result.
+3. Configure two fallback candidates with the same opaque model-space identity
+   and exact dimension. Fail the first candidate. The complete batch MUST use
+   the second candidate and return one ordered atomic result. Accounting MUST
+   include both attempts.
+4. Change one fallback candidate to a different model-space identity and then
+   to a different dimension. Assignment publication MUST fail. Submit a
+   request with the wrong model space and dimension. Each request MUST return
+   `embedding_space_mismatch` before provider work.
+5. Lose the create response before and after admission. Repeat the same UUIDv7
+   and body. The Router MUST create one logical batch. Change the assignment,
+   input policy, model space, dimension, input identity, input order, digest,
+   text, and optional `max_cost` in turn. Each change MUST return
+   `request_identity_conflict` without input or vector disclosure.
+6. Make one batch item fail after another item has a provider result. The
+   terminal status MUST contain no vector. Logs, metrics, accounting, audit,
+   and safe errors MUST contain no input text, input digest, or vector.
+7. Remove and then exhaust the exact workspace hard budget with no request
+   `max_cost`. Admission MUST fail before provider work in each case. Add a
+   lower `max_cost` and verify that it also limits all fallback attempts. A
+   failed billable attempt MUST remain in batch and workspace accounting.
+8. Delete the Ontology source after Router admission. The Ontology vector MUST
+   follow Ontology deletion rules. Router capture MUST stay until its recorded
+   admission-time expiry, and no result MUST claim that source deletion removed
+   the Router copy.
+9. Submit one input with a digest that does not match its exact UTF-8 text
+   bytes. The Router MUST reject the batch before admission. Use the same text
+   with a changed input-policy identity. The repeat MUST return
+   `request_identity_conflict`.
+10. Use the original token to read status through another service and another
+    workspace path. Then use tokens for those other scopes. Each wrong-scope
+    use MUST fail before record access and MUST NOT disclose the first binding.
+    The same UUIDv7 in another authorized scope is an independent scoped
+    identity and MUST NOT return an identity conflict caused by the first
+    scope.
+11. Return a non-finite value and then a wrong vector dimension, count, input
+    identity, and order from the provider adapter. Each batch MUST fail as an
+    invalid provider response and MUST return no vector.
+
 ## Authorization and administration tests
 
 1. Open each Ontology and Router frame from an allowed Xbot origin. Try a

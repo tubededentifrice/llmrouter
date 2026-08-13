@@ -55,6 +55,7 @@ Accepted decisions:
 - [0051: Use daily backups with point-in-time recovery](0051-use-daily-backups-with-point-in-time-recovery.md)
 - [0052: Use structured secret fields and standard endpoint trust](0052-use-structured-secret-fields-and-standard-endpoint-trust.md)
 - [0053: Allow two early security-fix pins](0053-allow-two-early-security-fix-pins.md)
+- [0054: Add a bounded workspace-scoped embedding operation](0054-add-a-bounded-workspace-scoped-embedding-operation.md)
 
 Add a numbered decision record only after the user accepts a material choice.
 Each record must state the context, the accepted choice, alternatives, good and

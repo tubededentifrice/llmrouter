@@ -14,6 +14,13 @@ requests, provider attempts, agent runs, tool calls, status recovery,
 cancellation, accounting, configuration revisions, and administration without
 requiring provider-specific fields.
 
+The native API MUST provide embedding create and status operations. A caller
+that needs embeddings MUST pin the `embedding_requests_v1` capability and major
+version 1 of the `embedding_protocol` artifact from the runtime contract
+manifest. It MUST stop embedding work when either pin is absent or
+incompatible. A compatible minor artifact change MUST NOT require a whole-file
+digest match at runtime.
+
 Before version 1.0, a release MAY make a documented breaking public-contract
 change. It MUST include migration notes. After version 1.0, a breaking public
 contract change MUST use a new major version.
@@ -77,6 +84,11 @@ The server clients MUST support idempotent service-workspace create, read,
 disable, restore, and retire operations. They MUST preserve the caller
 reference and idempotency key across an uncertain retry. They MUST NOT treat a
 retire operation as deletion of retained router records.
+
+The server clients MUST support embedding admission and status recovery. They
+MUST keep the batch UUIDv7 and complete fingerprinted request on an uncertain
+create result. They MUST NOT log embedding input text, input digests, or
+vectors.
 
 After version 1.0, a normal server release MUST support the current and
 previous minor versions of each official client. The repository MUST publish a

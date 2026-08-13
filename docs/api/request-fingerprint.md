@@ -22,6 +22,10 @@ The document contains:
 - for an agent run, maximum steps, maximum tool concurrency, and allowed
   business-tool names;
 - for a direct shared tool, tool kind and complete registered input document;
+- for an embedding batch, path service and workspace, assignment, input-policy
+  identity, opaque model-space identity, exact dimension, ordered input
+  identities, declared SHA-256 values and text, the fixed timeout, and optional
+  maximum cost;
 - for a compatibility request, every accepted field after its lossless native
   mapping, including sampling, tool choice, response format, metadata, and
   caller `user` value.
@@ -64,3 +68,11 @@ without earlier request content.
 Changing canonicalization, a field inclusion, or field meaning requires a new
 fingerprint version. A deployment MUST keep the version needed by every
 retained binding.
+
+An embedding repeat uses the same complete batch UUIDv7. A changed input
+identity, input order, input text, declared input SHA-256, input-policy identity,
+model-space identity, dimension, or `max_cost` in the same scope produces
+`request_identity_conflict`. The UUIDv7 is scoped by service and workspace. The
+same value in another scope does not find the first binding and MUST NOT
+disclose it. The stored fingerprint digest MUST NOT enter logs, metrics,
+accounting, audit details, or safe errors.

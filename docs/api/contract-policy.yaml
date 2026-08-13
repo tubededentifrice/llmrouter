@@ -10,6 +10,8 @@ profiles:
   model_read: &model_read {permission: model.read, recent_auth: false, conformance_case: model_request}
   model_create: &model_create {permission: model.create, recent_auth: false, conformance_case: model_request}
   model_cancel: &model_cancel {permission: model.cancel, recent_auth: false, conformance_case: model_request}
+  embedding_read: &embedding_read {permission: embedding.read, recent_auth: false, conformance_case: embedding_status}
+  embedding_create: &embedding_create {permission: embedding.create, recent_auth: false, conformance_case: embedding_request}
   run_read: &run_read {permission: run.read, recent_auth: false, conformance_case: model_request}
   run_create: &run_create {permission: run.create, recent_auth: false, conformance_case: model_request}
   run_cancel: &run_cancel {permission: run.cancel, recent_auth: false, conformance_case: model_request}
@@ -60,6 +62,8 @@ operations:
   getModelRequest: *model_read
   cancelModelRequest: *model_cancel
   streamModelRequest: *model_read
+  createEmbeddingRequest: *embedding_create
+  getEmbeddingRequest: *embedding_read
   listAgentRuns: *run_read
   createAgentRun: *run_create
   getAgentRun: *run_read
@@ -169,6 +173,9 @@ conformance_cases:
   workspace: {fixture: docs/api/fixtures/workspace.json, schema: Workspace}
   attachment: {fixture: docs/api/fixtures/attachment.json, schema: Attachment}
   model_request: {fixture: docs/api/fixtures/model-request.json, schema: ModelRequest}
+  embedding_request: {fixture: docs/api/fixtures/embedding-request.json, schema: EmbeddingRequest}
+  embedding_admission: {fixture: docs/api/fixtures/embedding-admission.json, schema: EmbeddingAdmissionReceipt}
+  embedding_status: {fixture: docs/api/fixtures/embedding-status.json, schema: EmbeddingRequestStatus}
   effective_configuration: {fixture: docs/api/fixtures/effective-configuration.json, schema: EffectiveConfiguration}
   administrator_grant: {fixture: docs/api/fixtures/administration-grant.json, schema: AdministratorGrant}
   health: {fixture: docs/api/fixtures/health.json, schema: Health}
@@ -176,21 +183,24 @@ conformance_cases:
 
 readable_contracts:
   docs/api/README.md:
-    required_markers: [/v1/contracts, /v1/model-requests, /v1/admin/captured-content]
+    required_markers: [/v1/contracts, /v1/model-requests, '/v1/services/{service_id}/workspaces/{workspace_id}/embedding-requests', /v1/admin/captured-content]
+  docs/api/embedding-protocol.md:
+    required_markers: ['/v1/services/{service_id}/workspaces/{workspace_id}/embedding-requests', embedding_requests_v1, input_policy_id, SHA-256]
   docs/api/business-tool-gateway.md:
     required_markers: [/llmrouter/business-tool-gateway/v1/calls, /llmrouter/business-tool-gateway/v1/reconciliations, BusinessToolCall, BusinessToolResult]
   docs/api/request-fingerprint.md:
-    required_markers: [x_llmrouter_exact_route, x_llmrouter_exact_route_grant, SHA-256]
+    required_markers: [x_llmrouter_exact_route, x_llmrouter_exact_route_grant, embedding batch, SHA-256]
   docs/api/cross-service-conformance.md:
-    required_markers: [attachment, exact route, grant, backup]
+    required_markers: [attachment, exact route, embedding_requests_v1, grant, backup]
 
 artifact_sha256:
-  docs/api/README.md: 8bf645e0a4f1bcb98e3e8b30e33d421ecaec1a511e3eb532a10c5980c0bd4433
+  docs/api/README.md: 66bbe674dd11683474140f54e1e51ce1a2fac649ee3b8ba84deed195b78f89d4
   docs/api/business-tool-gateway.md: 8622f79febd1e7499a38eec3d6735929555edb974321b6a792f1eb36f8fdca76
-  docs/api/cross-service-conformance.md: 3d135d560d5a90b94f1193b823ee17b9a009171efa78990c69e3721de043e26a
+  docs/api/cross-service-conformance.md: 350f8eb8e79cf4dee699d0bc948f1aaeabda722ca48d47c691f8e3684598ea82
   docs/api/embed-protocol.md: 7b01be032006ef40a369501a03b1630db511bbc5912a3b61bab197267fc6bc21
-  docs/api/errors.md: 6161588a55edaa06b87e662aee1828f89bcbbc7c59ac58cefac15b4a2d1191e8
-  docs/api/openapi.yaml: 7f953cd862595af40af74c2bb438de00a5b8bd711df583031717825dfdac54e5
-  docs/api/request-fingerprint.md: 4af9756953f91e24c0c3a8e9fdddfabc4413ede8cee00656fe60ea3c3ea6f764
+  docs/api/embedding-protocol.md: 3dcf022e4663c7adace7e6b533e0e0770cc1420fbba39987ac0a330dbe008a18
+  docs/api/errors.md: 0b25b51de943f8419d3f53985b9877dc05fcd97dd191fc3cf687845219b7ab1f
+  docs/api/openapi.yaml: 8f2f5a46a77cacda2ee887cbb4884428c75d9a9f2fa66bb81d1b398d889eef9b
+  docs/api/request-fingerprint.md: ce37b2d9a12e0ef15c065a0e73f2107ac5c4dc446e09ead82c4b205cd7da587f
   docs/api/service-management.md: 501f672274ecb9599ee005d66b33938ead8757693608c8d5e36d9e19c5a76215
   docs/api/stream-protocol.md: 3245e7315826449a1017af56f1cebbafad97dec4e0e9bb8c1592d34d121021a2

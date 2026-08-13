@@ -21,6 +21,8 @@ The accepted cross-service integration contracts are:
 - [Public errors](errors.md) for retry rules and normalized failure classes.
 - [Request fingerprint](request-fingerprint.md) for exact idempotency input and
   transient-field classification.
+- [Embedding protocol](embedding-protocol.md) for scoped atomic batches, model
+  spaces, bounds, retention, and result rules.
 - [Cross-service conformance](cross-service-conformance.md) for contract,
   identity, lifecycle, failure, recovery, deletion, and release tests.
 
@@ -41,6 +43,7 @@ another row MUST fail before record lookup.
 | Route group | Audience | Operation |
 | --- | --- | --- |
 | Model create, read or events, cancel | `data_plane` | `model.create`, `model.read`, `model.cancel` |
+| Embedding create or status | `data_plane` | `embedding.create` or `embedding.read` |
 | Agent-run create, read or events, cancel | `data_plane` | `run.create`, `run.read`, `run.cancel` |
 | Shared-tool create, read, cancel | `data_plane` | `tool.create`, `tool.read`, `tool.cancel` |
 | OpenAI-compatible model operation | `data_plane` | `model.create` |
@@ -86,6 +89,16 @@ Bounded status discovery uses `GET /v1/model-requests`,
 `GET /v1/agent-runs`, and `GET /v1/shared-tool-requests`. Protected content
 metadata discovery uses `GET /v1/admin/captured-content`; content values remain
 available only from the authorized per-record Router operation.
+
+`POST /v1/services/{service_id}/workspaces/{workspace_id}/embedding-requests`
+admits one atomic batch for one explicit workspace.
+`GET /v1/services/{service_id}/workspaces/{workspace_id}/embedding-requests/{request_id}`
+returns its bounded status and returns vectors only after the complete batch
+succeeds. The caller MUST pin the `embedding_requests_v1` capability and major
+version 1 of the `embedding_protocol` artifact. All fallback candidates MUST
+use the requested opaque model-space identity and exact dimension. The
+operation does not expose a provider, provider model, provider route,
+credential, or fallback path.
 
 An attachment upload can contain no more than 25 MiB. One logical request can
 reference no more than 20 attachments and no more than 100 MiB of attachment
