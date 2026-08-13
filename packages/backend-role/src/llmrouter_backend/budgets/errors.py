@@ -16,6 +16,9 @@ class BudgetErrorCode(StrEnum):
     BUDGET_REQUIRED = "budget_required"
     INSUFFICIENT_SCOPE = "insufficient_scope"
     INVALID_REQUEST = "invalid_request"
+    STALE_ALLOWANCE = "stale_allowance"
+    ALLOWANCE_EXPIRED = "allowance_expired"
+    ALLOWANCE_EXHAUSTED = "allowance_exhausted"
 
 
 class BudgetError(Exception):

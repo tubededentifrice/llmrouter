@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import uuid
+from decimal import Decimal
 
 import psycopg
 import pytest
@@ -261,7 +262,7 @@ def test_stale_run_owner_cannot_resolve_effect(database_url: str) -> None:
 
 
 def test_budget_allowances_are_bounded_and_fenced(database_url: str) -> None:
-    """Bound live allowance and reject stale consumption generations."""
+    """Preserve a legacy allowance and make its generation immutable."""
     with psycopg.connect(database_url, autocommit=True) as connection:
         migrate(connection, target=10)
         budget_id = "0198a080-0000-7000-8000-000000000070"
@@ -274,7 +275,6 @@ def test_budget_allowances_are_bounded_and_fenced(database_url: str) -> None:
             """,
             (budget_id,),
         )
-        migrate(connection)
         connection.execute(
             """
             INSERT INTO router.budget_allowance_leases (
@@ -289,36 +289,17 @@ def test_budget_allowances_are_bounded_and_fenced(database_url: str) -> None:
             """,
             (allowance_id, budget_id),
         )
-        with pytest.raises(psycopg.errors.CheckViolation):
-            connection.execute(
-                """
-                INSERT INTO router.budget_allowance_leases (
-                    id, budget_scope_id, currency, owner_node_id,
-                    lease_generation, issued_amount, expires_at, safety_until
-                ) VALUES (
-                    '0198a080-0000-7000-8000-000000000073', %s, 'USD',
-                    '0198a080-0000-7000-8000-000000000074', 1,
-                    5.000000000000000000,
-                    transaction_timestamp() + interval '1 minute',
-                    transaction_timestamp() + interval '2 minutes'
-                )
-                """,
-                (budget_id,),
-            )
-        connection.execute(
-            """
-            UPDATE router.budget_allowance_leases
-            SET consumed_amount = 2.000000000000000000, lease_generation = 2
-            WHERE id = %s
-            """,
+        migrate(connection)
+        assert connection.execute(
+            """SELECT batch_id = id, maximum_correction_risk
+               FROM router.budget_allowance_leases WHERE id = %s""",
             (allowance_id,),
-        )
-        with pytest.raises(psycopg.errors.SerializationFailure):
+        ).fetchone() == (True, Decimal(0))
+        with pytest.raises(psycopg.errors.ObjectNotInPrerequisiteState):
             connection.execute(
                 """
                 UPDATE router.budget_allowance_leases
-                SET consumed_amount = 1.000000000000000000, lease_generation = 3
-                WHERE id = %s
+                SET lease_generation = 2 WHERE id = %s
                 """,
                 (allowance_id,),
             )
