@@ -55,11 +55,24 @@ BEGIN
           AND (
               budget.scope_kind = 'global'
               OR (budget.scope_kind = 'service'
-                  AND budget.service_id = NEW.service_id)
+                  AND EXISTS (
+                      WITH RECURSIVE ancestors AS (
+                          SELECT id, parent_service_id
+                          FROM router.services WHERE id = NEW.service_id
+                        UNION ALL
+                          SELECT service.id, service.parent_service_id
+                          FROM router.services AS service
+                          JOIN ancestors
+                            ON ancestors.parent_service_id = service.id
+                      )
+                      SELECT 1 FROM ancestors
+                      WHERE ancestors.id = budget.service_id
+                  ))
               OR (budget.scope_kind IN ('workspace', 'host_ceiling')
                   AND budget.service_id = NEW.service_id
                   AND budget.workspace_id IS NOT DISTINCT FROM NEW.workspace_id)
               OR (budget.scope_kind = 'assignment'
+                  AND NEW.subject_kind = 'provider_attempt'
                   AND budget.service_id = NEW.service_id
                   AND NEW.assignment_id = budget.assignment_id
                   AND EXISTS (
@@ -67,7 +80,7 @@ BEGIN
                       WHERE request.row_id = NEW.request_row_id
                         AND request.assignment_id = budget.assignment_id
                   )
-                  AND (NEW.subject_kind <> 'provider_attempt' OR EXISTS (
+                  AND EXISTS (
                       SELECT 1 FROM router.provider_attempts AS attempt
                       JOIN router.assignment_candidates AS candidate
                         ON candidate.configuration_revision_id =
@@ -76,7 +89,7 @@ BEGIN
                            attempt.provider_model_route_id
                       WHERE attempt.id = NEW.subject_id
                         AND candidate.assignment_id = NEW.assignment_id
-                  )))
+                  ))
           )
     ) THEN
         RAISE EXCEPTION 'accounting budget scope does not apply to the event'
@@ -254,7 +267,9 @@ CREATE TABLE router.budget_limit_operations (
         REFERENCES router.audit_events (event_id) DEFERRABLE INITIALLY DEFERRED,
     effective_at timestamptz NOT NULL,
     CHECK (warning_threshold IS NULL OR warning_threshold BETWEEN 0 AND hard_limit),
-    UNIQUE (actor_id, idempotency_key)
+    CHECK (resulting_revision = expected_revision + 1),
+    UNIQUE (actor_id, idempotency_key),
+    UNIQUE (budget_scope_id, resulting_revision)
 );
 
 CREATE TRIGGER budget_limit_operations_append_only
@@ -368,6 +383,15 @@ DECLARE
     parent_limit numeric(38, 18);
     expected_parent uuid;
 BEGIN
+    IF TG_OP = 'UPDATE' AND (
+        NEW.scope_kind IS DISTINCT FROM OLD.scope_kind
+        OR NEW.service_id IS DISTINCT FROM OLD.service_id
+        OR NEW.workspace_id IS DISTINCT FROM OLD.workspace_id
+        OR NEW.assignment_id IS DISTINCT FROM OLD.assignment_id
+    ) THEN
+        RAISE EXCEPTION 'budget scope identity is immutable'
+            USING ERRCODE = '55000';
+    END IF;
     IF TG_OP = 'UPDATE' AND NEW.currency <> OLD.currency AND EXISTS (
         SELECT 1 FROM router.budget_ledger_entries
         WHERE budget_scope_id = NEW.id
@@ -390,6 +414,27 @@ BEGIN
                 USING ERRCODE = '23514';
         END IF;
         RETURN NULL;
+    END IF;
+    IF (
+        NEW.scope_kind = 'workspace'
+        AND EXISTS (
+            SELECT 1 FROM router.budget_scopes AS budget
+            WHERE budget.id <> NEW.id AND budget.scope_kind = 'assignment'
+              AND budget.service_id = NEW.service_id
+              AND budget.workspace_id IS NULL
+              AND budget.currency <> NEW.currency
+        )
+    ) OR (
+        NEW.scope_kind = 'assignment' AND NEW.workspace_id IS NULL
+        AND EXISTS (
+            SELECT 1 FROM router.budget_scopes AS budget
+            WHERE budget.id <> NEW.id AND budget.scope_kind = 'workspace'
+              AND budget.service_id = NEW.service_id
+              AND budget.currency <> NEW.currency
+        )
+    ) THEN
+        RAISE EXCEPTION 'co-applicable budget scopes must use one currency'
+            USING ERRCODE = '23514';
     END IF;
     IF NEW.parent_budget_scope_id IS NOT NULL THEN
         SELECT currency, hard_limit INTO parent_currency, parent_limit
@@ -628,6 +673,8 @@ CREATE TABLE router.budget_candidate_reservations (
     candidate_kind text NOT NULL CHECK (candidate_kind IN (
         'provider_route', 'external_tool', 'business_tool'
     )),
+    request_fingerprint bytea NOT NULL
+        CHECK (octet_length(request_fingerprint) = 32),
     estimated_amount numeric(38, 18) NOT NULL CHECK (estimated_amount >= 0),
     reserved_amount numeric(38, 18) NOT NULL
         CHECK (reserved_amount >= estimated_amount),

@@ -327,8 +327,11 @@ def _insert_direct_reservation(
         connection.execute(
             """INSERT INTO router.budget_candidate_reservations (
                    id, budget_set_id, reservation_key, candidate_id, candidate_kind,
-                   estimated_amount, reserved_amount, created_at
-               ) VALUES (%s, %s, %s, %s, 'provider_route', %s, %s, %s)""",
+                   request_fingerprint, estimated_amount, reserved_amount, created_at
+               ) VALUES (
+                   %s, %s, %s, %s, 'provider_route', decode(repeat('11', 32), 'hex'),
+                   %s, %s, %s
+               )""",
             (
                 reservation,
                 budget_set,
@@ -519,8 +522,7 @@ def test_hierarchy_reservation_warning_reconcile_and_late_correction(
             connection,
             amount=Decimal(40),
             occurred_at=NOW,
-            budget_scope_id=ASSIGNMENT_BUDGET,
-            assignment_id=FIXTURE_ASSIGNMENT_ID,
+            budget_scope_id=WORKSPACE_BUDGET,
         )
         _insert_accounting_correction(
             connection,
@@ -541,7 +543,7 @@ def test_hierarchy_reservation_warning_reconcile_and_late_correction(
         now=NOW,
     )
     assert reserved.state is ReservationState.RESERVED
-    assert reserved.accounting_scope_id == ASSIGNMENT_BUDGET
+    assert reserved.accounting_scope_id == WORKSPACE_BUDGET
     assert reserved.external_effects_permitted
     workspace = next(
         item
@@ -751,6 +753,8 @@ def test_provider_route_retries_use_distinct_reservation_keys(
 
     assert replay.replayed
     assert replay.reservation_id == first.reservation_id
+    assert first.accounting_scope_id == ASSIGNMENT_BUDGET
+    assert replay.accounting_scope_id == ASSIGNMENT_BUDGET
     assert second.reservation_id != first.reservation_id
     with pytest.raises(BudgetError) as conflict:
         repository.reserve_candidate(
@@ -765,6 +769,22 @@ def test_provider_route_retries_use_distinct_reservation_keys(
             now=NOW,
         )
     assert conflict.value.code is BudgetErrorCode.IDEMPOTENCY_CONFLICT
+    for embedding, more_candidates in ((True, True), (False, False)):
+        with pytest.raises(BudgetError) as policy_conflict:
+            repository.reserve_candidate(
+                _system("budget.reserve"),
+                request_row_id=REQUEST_ROW_ID,
+                candidate_id=CANDIDATE_ONE,
+                reservation_key="provider-attempt-1",
+                estimated_amount=Decimal(10),
+                reserved_amount=Decimal(10),
+                currency="USD",
+                maximum_cost=Decimal(30),
+                embedding=embedding,
+                more_candidates=more_candidates,
+                now=NOW,
+            )
+        assert policy_conflict.value.code is BudgetErrorCode.IDEMPOTENCY_CONFLICT
     with psycopg.connect(database_url) as connection:
         assert connection.execute(
             """SELECT count(*), sum(reserved_amount)
@@ -1200,6 +1220,60 @@ def test_reconciliation_uses_the_same_scope_lock_as_reservation(
             assert future.result(timeout=5) is False
         finally:
             blocker.rollback()
+            executor.shutdown(wait=True, cancel_futures=True)
+
+
+def test_limit_write_does_not_lock_ceiling_before_budget_scope(
+    database_url: str,
+) -> None:
+    with psycopg.connect(database_url) as connection:
+        migrate(connection)
+        _seed(connection)
+        _insert_hierarchy(connection)
+    repository = PostgresBudgetRepository(database_url)
+    repository.put_host_ceiling(
+        _ceiling("budget_ceiling.write", mutation=True),
+        service_id=SERVICE_ID,
+        workspace_id=WORKSPACE_ID,
+        amount=Decimal(60),
+        currency="USD",
+        expected_revision=None,
+        idempotency_key="ceiling-lock-order-key",
+        reason="Host allocation.",
+        now=NOW,
+    )
+    with psycopg.connect(database_url) as budget_blocker:
+        budget_blocker.execute(
+            "SELECT id FROM router.budget_scopes WHERE id = %s FOR UPDATE",
+            (WORKSPACE_BUDGET,),
+        )
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        try:
+            limit_write = executor.submit(
+                repository.put_limit,
+                _budget("budget.write", mutation=True),
+                BudgetTarget(BudgetScopeKind.WORKSPACE, SERVICE_ID, WORKSPACE_ID),
+                hard_limit=Decimal(55),
+                currency="USD",
+                warning_threshold=Decimal(40),
+                reset_period=ResetPeriod.NONE,
+                expected_revision="1",
+                idempotency_key="limit-lock-order-key",
+                now=NOW + timedelta(seconds=1),
+            )
+            with pytest.raises(concurrent.futures.TimeoutError):
+                limit_write.result(timeout=0.1)
+            with psycopg.connect(database_url) as observer:
+                observer.execute("SET LOCAL lock_timeout = '100ms'")
+                observer.execute(
+                    """SELECT revision FROM router.workspace_budget_ceilings
+                       WHERE service_id = %s AND workspace_id = %s FOR UPDATE""",
+                    (SERVICE_ID, WORKSPACE_ID),
+                )
+            budget_blocker.commit()
+            assert limit_write.result(timeout=5).hard_limit.amount == 55
+        finally:
+            budget_blocker.rollback()
             executor.shutdown(wait=True, cancel_futures=True)
 
 
@@ -1683,6 +1757,59 @@ def test_direct_sql_rejects_wrong_kind_and_sibling_budget_parent(
             )
 
 
+def test_direct_sql_cannot_move_a_budget_scope_or_reuse_its_revision(
+    database_url: str,
+) -> None:
+    second_workspace = "0198a080-0000-7000-8000-000000000234"
+    with psycopg.connect(database_url) as connection:
+        migrate(connection)
+        _seed(connection)
+        _insert_hierarchy(connection)
+        connection.execute(
+            """INSERT INTO router.workspaces (
+                   id, service_id, caller_reference, creation_idempotency_key,
+                   creation_fingerprint
+               ) VALUES (
+                   %s, %s, 'second', 'second-workspace',
+                   decode(repeat('55', 32), 'hex')
+               )""",
+            (second_workspace, SERVICE_ID),
+        )
+
+    with (
+        psycopg.connect(database_url) as connection,
+        pytest.raises(psycopg.Error, match="scope identity is immutable"),
+        connection.transaction(),
+    ):
+        connection.execute(
+            "UPDATE router.budget_scopes SET workspace_id = %s WHERE id = %s",
+            (second_workspace, WORKSPACE_BUDGET),
+        )
+
+    with (
+        psycopg.connect(database_url) as connection,
+        pytest.raises(psycopg.errors.CheckViolation),
+        connection.transaction(),
+    ):
+        connection.execute(
+            """INSERT INTO router.budget_limit_operations (
+                   operation_id, budget_scope_id, actor_id, idempotency_key,
+                   request_fingerprint, expected_revision, resulting_revision,
+                   hard_limit, warning_threshold, currency, reset_period,
+                   audit_event_id, effective_at
+               ) SELECT %s, id, 'direct-test', 'reuse-budget-revision',
+                        decode(repeat('66', 32), 'hex'), revision, revision,
+                        hard_limit, warning_threshold, currency, reset_period,
+                        %s, effective_at
+                 FROM router.budget_scopes WHERE id = %s""",
+            (
+                "0198a080-0000-7000-8000-000000000235",
+                "0198a080-0000-7000-8000-000000000235",
+                WORKSPACE_BUDGET,
+            ),
+        )
+
+
 def test_service_limit_insertion_reparents_existing_workspace_budget(
     database_url: str,
 ) -> None:
@@ -1817,7 +1944,7 @@ def test_service_reparent_rejects_incompatible_budget_chain(database_url: str) -
         ).fetchone() == (None,)
 
 
-def test_external_tool_accounting_uses_returned_assignment_scope(
+def test_external_tool_accounting_uses_returned_non_assignment_scope(
     database_url: str,
 ) -> None:
     with psycopg.connect(database_url) as connection:
@@ -1835,14 +1962,60 @@ def test_external_tool_accounting_uses_returned_assignment_scope(
         currency="USD",
         now=NOW,
     )
-    assert reservation.accounting_scope_id == ASSIGNMENT_BUDGET
+    assert reservation.accounting_scope_id == WORKSPACE_BUDGET
     with psycopg.connect(database_url) as connection:
         _insert_accounting_fact(
             connection,
             amount=Decimal(2),
             occurred_at=NOW,
             budget_scope_id=reservation.accounting_scope_id,
-            assignment_id=FIXTURE_ASSIGNMENT_ID,
+        )
+    assert not repository.reconcile(
+        _system("budget.reconcile"),
+        reservation.reservation_id or "",
+        accounting_event_id=ACCOUNTING_EVENT,
+        actual_amount=Decimal(2),
+        now=NOW,
+    )
+
+
+def test_inherited_service_budget_is_a_valid_accounting_scope(
+    database_url: str,
+) -> None:
+    with psycopg.connect(database_url) as connection:
+        migrate(connection)
+        _seed(connection)
+        connection.execute(
+            """UPDATE router.services
+               SET parent_service_id = %s, state_revision = state_revision + 1
+               WHERE id = %s""",
+            (OTHER_SERVICE_ID, SERVICE_ID),
+        )
+        connection.execute(
+            """INSERT INTO router.budget_scopes (
+                   id, scope_kind, service_id, currency, hard_limit
+               ) VALUES (%s, 'service', %s, 'USD', 50)""",
+            (OTHER_SERVICE_BUDGET, OTHER_SERVICE_ID),
+        )
+        _record_direct_budget_operations(connection)
+    repository = PostgresBudgetRepository(database_url)
+    reservation = repository.reserve_candidate(
+        _system("budget.reserve"),
+        request_row_id=REQUEST_ROW_ID,
+        candidate_id=CANDIDATE_ONE,
+        candidate_kind=BudgetCandidateKind.EXTERNAL_TOOL,
+        estimated_amount=Decimal(2),
+        reserved_amount=Decimal(2),
+        currency="USD",
+        now=NOW,
+    )
+    assert reservation.accounting_scope_id == OTHER_SERVICE_BUDGET
+    with psycopg.connect(database_url) as connection:
+        _insert_accounting_fact(
+            connection,
+            amount=Decimal(2),
+            occurred_at=NOW,
+            budget_scope_id=reservation.accounting_scope_id,
         )
     assert not repository.reconcile(
         _system("budget.reconcile"),
@@ -1933,6 +2106,56 @@ def test_workspace_ceiling_rejects_service_assignment_currency(
             now=NOW,
         )
     assert error.value.code is BudgetErrorCode.CURRENCY_MISMATCH
+
+
+def test_workspace_and_service_assignment_budgets_require_one_currency(
+    database_url: str,
+) -> None:
+    with psycopg.connect(database_url) as connection:
+        migrate(connection)
+        _seed(connection)
+    repository = PostgresBudgetRepository(database_url)
+    repository.put_limit(
+        _service_budget_write(),
+        BudgetTarget(
+            BudgetScopeKind.ASSIGNMENT,
+            SERVICE_ID,
+            assignment_id=FIXTURE_ASSIGNMENT_ID,
+        ),
+        hard_limit=Decimal(40),
+        currency="USD",
+        warning_threshold=None,
+        reset_period=ResetPeriod.NONE,
+        expected_revision="0",
+        idempotency_key="service-assignment-currency",
+        now=NOW,
+    )
+    target = BudgetTarget(BudgetScopeKind.WORKSPACE, SERVICE_ID, WORKSPACE_ID)
+    with pytest.raises(BudgetError) as repository_error:
+        repository.put_limit(
+            _budget("budget.write", mutation=True),
+            target,
+            hard_limit=Decimal(20),
+            currency="EUR",
+            warning_threshold=None,
+            reset_period=ResetPeriod.NONE,
+            expected_revision="0",
+            idempotency_key="workspace-currency-conflict",
+            now=NOW,
+        )
+    assert repository_error.value.code is BudgetErrorCode.CURRENCY_MISMATCH
+
+    with (
+        psycopg.connect(database_url) as connection,
+        pytest.raises(psycopg.Error, match="co-applicable budget scopes"),
+        connection.transaction(),
+    ):
+        connection.execute(
+            """INSERT INTO router.budget_scopes (
+                   id, scope_kind, service_id, workspace_id, currency, hard_limit
+               ) VALUES (%s, 'workspace', %s, %s, 'EUR', 20)""",
+            (WORKSPACE_BUDGET, SERVICE_ID, WORKSPACE_ID),
+        )
 
 
 def test_limit_api_rejects_parent_below_child_and_currency_change(

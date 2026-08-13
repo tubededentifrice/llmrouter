@@ -366,8 +366,7 @@ class PostgresBudgetRepository:
                 ceiling = connection.execute(
                     """SELECT amount, currency::text
                        FROM router.workspace_budget_ceilings
-                       WHERE service_id = %s AND workspace_id = %s
-                       FOR UPDATE""",
+                       WHERE service_id = %s AND workspace_id = %s""",
                     (target.service_id, target.workspace_id),
                 ).fetchone()
                 if ceiling is not None and ceiling["currency"] != currency:
@@ -382,7 +381,7 @@ class PostgresBudgetRepository:
                 ceilings = connection.execute(
                     """SELECT amount, currency::text
                        FROM router.workspace_budget_ceilings
-                       WHERE service_id = %s ORDER BY workspace_id FOR UPDATE""",
+                       WHERE service_id = %s ORDER BY workspace_id""",
                     (target.service_id,),
                 ).fetchall()
                 if any(row["currency"] != currency for row in ceilings):
@@ -607,7 +606,7 @@ class PostgresBudgetRepository:
                 )
             existing = connection.execute(
                 """SELECT id::text, candidate_id::text, candidate_kind,
-                          estimated_amount, reserved_amount
+                          request_fingerprint, estimated_amount, reserved_amount
                    FROM router.budget_candidate_reservations
                    WHERE budget_set_id = %s AND reservation_key = %s""",
                 (budget_set["id"], reservation_key),
@@ -616,13 +615,16 @@ class PostgresBudgetRepository:
                 if (
                     existing["candidate_id"] != candidate_id
                     or existing["candidate_kind"] != candidate_kind.value
+                    or existing["request_fingerprint"] != request_fingerprint
                     or existing["estimated_amount"] != estimate
                     or existing["reserved_amount"] != reserved
                 ):
                     raise BudgetError(
                         BudgetErrorCode.IDEMPOTENCY_CONFLICT, context.request_id
                     )
-                accounting_scope_id = _accounting_scope_id(connection, existing["id"])
+                accounting_scope_id = _accounting_scope_id(
+                    connection, existing["id"], candidate_kind
+                )
                 return ReservationResult(
                     ReservationState.RESERVED,
                     request_row_id,
@@ -725,15 +727,16 @@ class PostgresBudgetRepository:
             connection.execute(
                 """INSERT INTO router.budget_candidate_reservations (
                        id, budget_set_id, reservation_key, candidate_id,
-                       candidate_kind,
+                       candidate_kind, request_fingerprint,
                        estimated_amount, reserved_amount, created_at
-                   ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                   ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                 (
                     reservation_id,
                     budget_set["id"],
                     reservation_key,
                     candidate_id,
                     candidate_kind.value,
+                    request_fingerprint,
                     estimate,
                     reserved,
                     now,
@@ -768,7 +771,7 @@ class PostgresBudgetRepository:
             currency,
             str(reservation_id),
             summaries=tuple(summaries),
-            accounting_scope_id=_select_accounting_scope_id(scopes),
+            accounting_scope_id=_select_accounting_scope_id(scopes, candidate_kind),
         )
 
     def reconcile(
@@ -1039,8 +1042,10 @@ def _scope_row(row: DictRow) -> _ScopeRow:
     )
 
 
-def _select_accounting_scope_id(scopes: tuple[_ScopeRow, ...]) -> str | None:
-    """Select the most exact scope; prefer the host ceiling when it exists."""
+def _select_accounting_scope_id(
+    scopes: tuple[_ScopeRow, ...], candidate_kind: BudgetCandidateKind
+) -> str | None:
+    """Select the most exact scope that the accounting subject can name."""
     priority = {
         BudgetScopeKind.HOST_CEILING: 0,
         BudgetScopeKind.ASSIGNMENT: 1,
@@ -1048,14 +1053,25 @@ def _select_accounting_scope_id(scopes: tuple[_ScopeRow, ...]) -> str | None:
         BudgetScopeKind.SERVICE: 3,
         BudgetScopeKind.GLOBAL: 4,
     }
-    if not scopes:
+    eligible = (
+        scopes
+        if candidate_kind is BudgetCandidateKind.PROVIDER_ROUTE
+        else tuple(
+            scope
+            for scope in scopes
+            if scope.kind is not BudgetScopeKind.ASSIGNMENT
+        )
+    )
+    if not eligible:
         return None
-    selected = min(scopes, key=lambda scope: (priority[scope.kind], scope.scope_id))
+    selected = min(eligible, key=lambda scope: (priority[scope.kind], scope.scope_id))
     return selected.scope_id
 
 
 def _accounting_scope_id(
-    connection: Connection[DictRow], reservation_id: str
+    connection: Connection[DictRow],
+    reservation_id: str,
+    candidate_kind: BudgetCandidateKind,
 ) -> str | None:
     rows = connection.execute(
         """SELECT budget.id::text, budget.scope_kind, budget.currency::text,
@@ -1067,7 +1083,9 @@ def _accounting_scope_id(
            WHERE allocation.reservation_id = %s""",
         (reservation_id,),
     ).fetchall()
-    return _select_accounting_scope_id(tuple(_scope_row(row) for row in rows))
+    return _select_accounting_scope_id(
+        tuple(_scope_row(row) for row in rows), candidate_kind
+    )
 
 
 def _scope_balance(
@@ -1358,6 +1376,26 @@ def _validate_limit_hierarchy(
     hard_limit: Decimal,
     request_id: str,
 ) -> None:
+    if target.kind is BudgetScopeKind.WORKSPACE:
+        incompatible = connection.execute(
+            """SELECT 1 FROM router.budget_scopes
+               WHERE scope_kind = 'assignment' AND service_id = %s
+                 AND workspace_id IS NULL AND currency <> %s
+               LIMIT 1""",
+            (target.service_id, currency),
+        ).fetchone()
+    elif target.kind is BudgetScopeKind.ASSIGNMENT and target.workspace_id is None:
+        incompatible = connection.execute(
+            """SELECT 1 FROM router.budget_scopes
+               WHERE scope_kind = 'workspace' AND service_id = %s
+                 AND currency <> %s
+               LIMIT 1""",
+            (target.service_id, currency),
+        ).fetchone()
+    else:
+        incompatible = None
+    if incompatible is not None:
+        raise BudgetError(BudgetErrorCode.CURRENCY_MISMATCH, request_id)
     if parent_id is not None:
         parent = connection.execute(
             """SELECT currency::text, hard_limit
