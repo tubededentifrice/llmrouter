@@ -1,5 +1,5 @@
 """Fenced central allowances and durable node-local consumption."""
-# ruff: noqa: D105, D107, E501, EM101, PLR0913, PLR0917, PLR2004, TRY003
+# ruff: noqa: C901, D105, D107, E501, EM101, PLR0913, PLR0917, PLR2004, TRY003
 
 from __future__ import annotations
 
@@ -9,6 +9,8 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from hashlib import sha256
+from json import dumps
 from typing import TYPE_CHECKING
 
 import psycopg
@@ -40,7 +42,9 @@ class AllowanceRequest:
         amount = exact_decimal(self.amount)
         risk = exact_decimal(self.maximum_correction_risk)
         if amount <= 0 or risk < 0:
-            raise ValueError("Allowance amounts must be positive with nonnegative risk.")
+            raise ValueError(
+                "Allowance amounts must be positive with nonnegative risk."
+            )
         object.__setattr__(self, "amount", amount)
         object.__setattr__(self, "maximum_correction_risk", risk)
 
@@ -62,7 +66,9 @@ class AllowanceLease:
     safety_until: datetime
 
     def __post_init__(self) -> None:
-        if not all((self.lease_id, self.batch_id, self.budget_scope_id, self.owner_node_id)):
+        if not all(
+            (self.lease_id, self.batch_id, self.budget_scope_id, self.owner_node_id)
+        ):
             raise ValueError("Allowance identities must not be empty.")
         if self.lease_generation < 1:
             raise ValueError("The allowance generation must be positive.")
@@ -111,17 +117,19 @@ class AllowanceBatch:
         if not self.leases:
             raise ValueError("An allowance batch must contain a complete scope set.")
         scope_ids = {lease.budget_scope_id for lease in self.leases}
-        if scope_ids != set(self.applicable_scope_ids) or len(scope_ids) != len(
-            self.applicable_scope_ids
-        ) or any(
-            lease.batch_id != self.batch_id
-            or lease.owner_node_id != self.owner_node_id
-            or lease.lease_generation != self.lease_generation
-            or lease.currency != currency
-            or lease.issued_at != self.leases[0].issued_at
-            or lease.expires_at != self.leases[0].expires_at
-            or lease.safety_until != self.leases[0].safety_until
-            for lease in self.leases
+        if (
+            scope_ids != set(self.applicable_scope_ids)
+            or len(scope_ids) != len(self.applicable_scope_ids)
+            or any(
+                lease.batch_id != self.batch_id
+                or lease.owner_node_id != self.owner_node_id
+                or lease.lease_generation != self.lease_generation
+                or lease.currency != currency
+                or lease.issued_at != self.leases[0].issued_at
+                or lease.expires_at != self.leases[0].expires_at
+                or lease.safety_until != self.leases[0].safety_until
+                for lease in self.leases
+            )
         ):
             raise ValueError("Allowance leases do not match their complete batch.")
         object.__setattr__(self, "currency", currency)
@@ -202,6 +210,7 @@ class PostgresAllowanceRepository:
         issued_at: datetime,
         expires_at: datetime,
         safety_until: datetime,
+        idempotency_key: str,
         lineage_id: str | None = None,
     ) -> AllowanceBatch:
         """Issue one complete applicable allowance set in one transaction."""
@@ -212,38 +221,91 @@ class PostgresAllowanceRepository:
         currency = currency_code(currency)
         _ordered_times(issued_at, expires_at, safety_until)
         requested = tuple(requests)
+        if not 1 <= len(idempotency_key) <= 200:
+            raise BudgetError(BudgetErrorCode.INVALID_REQUEST, context.request_id)
         if not requested or len({item.budget_scope_id for item in requested}) != len(
             requested
         ):
             raise BudgetError(BudgetErrorCode.INVALID_REQUEST, context.request_id)
-        batch_id = self._identity_factory()
-        lineage = self._identity_factory() if lineage_id is None else uuid.UUID(lineage_id)
         if lineage_id is None and lease_generation != 1:
             raise BudgetError(BudgetErrorCode.INVALID_REQUEST, context.request_id)
+        fingerprint = _fingerprint(
+            {
+                "owner_node_id": owner_node_id,
+                "lease_generation": lease_generation,
+                "service_id": service_id,
+                "workspace_id": workspace_id,
+                "assignment_id": assignment_id,
+                "currency": currency,
+                "requests": [
+                    [
+                        item.budget_scope_id,
+                        _decimal_text(item.amount),
+                        _decimal_text(item.maximum_correction_risk),
+                    ]
+                    for item in requested
+                ],
+                "issued_at": issued_at.isoformat(),
+                "expires_at": expires_at.isoformat(),
+                "safety_until": safety_until.isoformat(),
+                "lineage_id": lineage_id,
+            }
+        )
+        batch_id = self._identity_factory()
+        lineage = (
+            self._identity_factory() if lineage_id is None else uuid.UUID(lineage_id)
+        )
         leases: list[AllowanceLease] = []
         try:
             with self._connection() as connection, connection.transaction():
                 connection.execute(
                     "SELECT pg_advisory_xact_lock(hashtextextended('budget-hierarchy', 0))"
                 )
+                existing = connection.execute(
+                    """SELECT id::text, request_fingerprint
+                       FROM router.budget_allowance_batches
+                       WHERE issuer_id = %s AND idempotency_key = %s""",
+                    (context.actor_id, idempotency_key),
+                ).fetchone()
+                if existing is not None:
+                    if existing["request_fingerprint"] != fingerprint:
+                        raise BudgetError(
+                            BudgetErrorCode.IDEMPOTENCY_CONFLICT,
+                            context.request_id,
+                        )
+                    return self._load_batch(connection, existing["id"])
                 rows = connection.execute(
                     _APPLICABLE_SCOPE_SQL,
-                    (service_id, service_id, workspace_id, service_id, assignment_id, workspace_id),
+                    (
+                        service_id,
+                        service_id,
+                        workspace_id,
+                        service_id,
+                        assignment_id,
+                        workspace_id,
+                    ),
                 ).fetchall()
                 applicable = {row["id"]: row["currency"] for row in rows}
                 supplied = {item.budget_scope_id for item in requested}
                 if supplied != set(applicable) or any(
                     applicable[item.budget_scope_id] != currency for item in requested
                 ):
-                    raise BudgetError(BudgetErrorCode.INVALID_REQUEST, context.request_id)
+                    raise BudgetError(
+                        BudgetErrorCode.INVALID_REQUEST, context.request_id
+                    )
                 connection.execute(
                     """INSERT INTO router.budget_allowance_batches (
-                           id, lineage_id, owner_node_id, lease_generation, service_id,
+                           id, issuer_id, idempotency_key, request_fingerprint,
+                           lineage_id, owner_node_id, lease_generation, service_id,
                            workspace_id, assignment_id, currency, issued_at,
                            expires_at, safety_until
-                       ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                       ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                                 %s, %s, %s, %s)""",
                     (
                         batch_id,
+                        context.actor_id,
+                        idempotency_key,
+                        fingerprint,
                         lineage,
                         owner_node_id,
                         lease_generation,
@@ -308,9 +370,13 @@ class PostgresAllowanceRepository:
                         )
                     )
         except psycopg.errors.CheckViolation as error:
-            raise BudgetError(BudgetErrorCode.BUDGET_EXHAUSTED, context.request_id) from error
+            raise BudgetError(
+                BudgetErrorCode.BUDGET_EXHAUSTED, context.request_id
+            ) from error
         except psycopg.errors.SerializationFailure as error:
-            raise BudgetError(BudgetErrorCode.STALE_ALLOWANCE, context.request_id) from error
+            raise BudgetError(
+                BudgetErrorCode.STALE_ALLOWANCE, context.request_id
+            ) from error
         return AllowanceBatch(
             str(batch_id),
             str(lineage),
@@ -327,122 +393,273 @@ class PostgresAllowanceRepository:
     def reconcile(
         self,
         context: RequestContext,
-        final: AllowanceFinal,
+        batch_id: str,
+        finals: Iterable[AllowanceFinal],
         *,
+        reconciliation_id: str,
         now: datetime,
-    ) -> None:
-        """Finalize one exact owner generation with used and returned amounts."""
-        _require_node(context, "budget.allowance.reconcile", final.owner_node_id)
+    ) -> bool:
+        """Finalize one complete batch atomically, or return an exact replay."""
+        _require_system(context, "budget.allowance.reconcile")
         _aware(now)
-        used = exact_decimal(final.used_amount)
-        returned = exact_decimal(final.returned_amount)
-        reconciliation_id = self._identity_factory()
+        reconciliation_uuid = uuid.UUID(reconciliation_id)
+        supplied = tuple(finals)
+        if not supplied or len({item.lease_id for item in supplied}) != len(supplied):
+            raise BudgetError(BudgetErrorCode.INVALID_REQUEST, context.request_id)
+        normalized = tuple(
+            AllowanceFinal(
+                item.lease_id,
+                item.owner_node_id,
+                item.lease_generation,
+                exact_decimal(item.used_amount),
+                exact_decimal(item.returned_amount),
+            )
+            for item in supplied
+        )
+        fingerprint = _final_fingerprint(batch_id, normalized, now, reclaimed=False)
         try:
             with self._connection() as connection, connection.transaction():
-                row = connection.execute(
-                    """SELECT budget_scope_id::text, issued_at
-                       FROM router.budget_allowance_leases
-                       WHERE id = %s""",
-                    (final.lease_id,),
+                batch = connection.execute(
+                    """SELECT owner_node_id::text, lease_generation
+                       FROM router.budget_allowance_batches WHERE id = %s FOR UPDATE""",
+                    (batch_id,),
                 ).fetchone()
-                if row is None:
+                if batch is None:
                     raise BudgetError(BudgetErrorCode.NOT_FOUND, context.request_id)
+                _require_node(
+                    context,
+                    "budget.allowance.reconcile",
+                    batch["owner_node_id"],
+                )
+                existing = connection.execute(
+                    """SELECT batch_id::text, request_fingerprint
+                       FROM router.budget_allowance_batch_reconciliations
+                       WHERE reconciliation_id = %s""",
+                    (reconciliation_uuid,),
+                ).fetchone()
+                if existing is not None:
+                    if (
+                        existing["batch_id"] != batch_id
+                        or existing["request_fingerprint"] != fingerprint
+                    ):
+                        raise BudgetError(
+                            BudgetErrorCode.IDEMPOTENCY_CONFLICT, context.request_id
+                        )
+                    return True
+                rows = connection.execute(
+                    """SELECT id::text, budget_scope_id::text, issued_at
+                       FROM router.budget_allowance_leases
+                       WHERE batch_id = %s ORDER BY id FOR UPDATE""",
+                    (batch_id,),
+                ).fetchall()
+                by_lease = {item.lease_id: item for item in normalized}
+                if set(by_lease) != {row["id"] for row in rows} or any(
+                    item.owner_node_id != batch["owner_node_id"]
+                    or item.lease_generation != batch["lease_generation"]
+                    for item in normalized
+                ):
+                    raise BudgetError(
+                        BudgetErrorCode.STALE_ALLOWANCE, context.request_id
+                    )
                 connection.execute(
-                    """INSERT INTO router.budget_allowance_reconciliations (
-                           reconciliation_id, allowance_lease_id, owner_node_id,
-                           lease_generation, used_amount, returned_amount,
-                           occurred_at, reclaimed
-                       ) VALUES (%s, %s, %s, %s, %s, %s, %s, false)""",
+                    """INSERT INTO router.budget_allowance_batch_reconciliations (
+                           reconciliation_id, batch_id, owner_node_id,
+                           lease_generation, request_fingerprint, occurred_at, reclaimed
+                       ) VALUES (%s, %s, %s, %s, %s, %s, false)""",
                     (
-                        reconciliation_id,
-                        final.lease_id,
-                        final.owner_node_id,
-                        final.lease_generation,
-                        used,
-                        returned,
+                        reconciliation_uuid,
+                        batch_id,
+                        batch["owner_node_id"],
+                        batch["lease_generation"],
+                        fingerprint,
                         now,
                     ),
                 )
-                self._insert_final_ledger(
-                    connection,
-                    final.lease_id,
-                    row["budget_scope_id"],
-                    reconciliation_id,
-                    used,
-                    returned,
-                    row["issued_at"],
-                )
+                for row in rows:
+                    final = by_lease[row["id"]]
+                    lease_reconciliation_id = self._identity_factory()
+                    connection.execute(
+                        """INSERT INTO router.budget_allowance_reconciliations (
+                           reconciliation_id, batch_reconciliation_id,
+                           allowance_lease_id, owner_node_id, lease_generation,
+                           used_amount, returned_amount, occurred_at, reclaimed
+                       ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, false)""",
+                        (
+                            lease_reconciliation_id,
+                            reconciliation_uuid,
+                            final.lease_id,
+                            final.owner_node_id,
+                            final.lease_generation,
+                            final.used_amount,
+                            final.returned_amount,
+                            now,
+                        ),
+                    )
+                    self._insert_final_ledger(
+                        connection,
+                        final.lease_id,
+                        row["budget_scope_id"],
+                        lease_reconciliation_id,
+                        final.used_amount,
+                        final.returned_amount,
+                        row["issued_at"],
+                    )
         except psycopg.errors.UniqueViolation as error:
-            raise BudgetError(BudgetErrorCode.STALE_ALLOWANCE, context.request_id) from error
-        except (psycopg.errors.SerializationFailure, psycopg.errors.CheckViolation) as error:
-            raise BudgetError(BudgetErrorCode.STALE_ALLOWANCE, context.request_id) from error
+            raise BudgetError(
+                BudgetErrorCode.STALE_ALLOWANCE, context.request_id
+            ) from error
+        except (
+            psycopg.errors.SerializationFailure,
+            psycopg.errors.CheckViolation,
+        ) as error:
+            raise BudgetError(
+                BudgetErrorCode.STALE_ALLOWANCE, context.request_id
+            ) from error
+        return False
 
     def reclaim(
         self,
         context: RequestContext,
         *,
-        lease_id: str,
+        batch_id: str,
+        reconciliation_id: str,
         now: datetime,
-    ) -> None:
-        """Reclaim one unreported lease only after its safety window."""
+    ) -> bool:
+        """Reclaim one complete unreported batch after its safety window."""
         _require_system(context, "budget.allowance.reclaim")
         _aware(now)
-        reconciliation_id = self._identity_factory()
+        reconciliation_uuid = uuid.UUID(reconciliation_id)
         try:
             with self._connection() as connection, connection.transaction():
-                row = connection.execute(
-                    """SELECT budget_scope_id::text, owner_node_id::text,
-                              lease_generation, issued_amount, issued_at
-                       FROM router.budget_allowance_leases WHERE id = %s""",
-                    (lease_id,),
+                batch = connection.execute(
+                    """SELECT owner_node_id::text, lease_generation
+                       FROM router.budget_allowance_batches WHERE id = %s FOR UPDATE""",
+                    (batch_id,),
                 ).fetchone()
-                if row is None:
+                if batch is None:
                     raise BudgetError(BudgetErrorCode.NOT_FOUND, context.request_id)
-                connection.execute(
-                    """INSERT INTO router.budget_allowance_reconciliations (
-                           reconciliation_id, allowance_lease_id, owner_node_id,
-                           lease_generation, used_amount, returned_amount,
-                           occurred_at, reclaimed
-                       ) VALUES (%s, %s, %s, %s, %s, 0, %s, true)""",
-                    (
-                        reconciliation_id,
-                        lease_id,
-                        row["owner_node_id"],
-                        row["lease_generation"],
+                rows = connection.execute(
+                    """SELECT id::text, budget_scope_id::text, issued_amount, issued_at
+                       FROM router.budget_allowance_leases
+                       WHERE batch_id = %s ORDER BY id FOR UPDATE""",
+                    (batch_id,),
+                ).fetchall()
+                finals = tuple(
+                    AllowanceFinal(
+                        row["id"],
+                        batch["owner_node_id"],
+                        batch["lease_generation"],
                         row["issued_amount"],
+                        Decimal(0),
+                    )
+                    for row in rows
+                )
+                fingerprint = _final_fingerprint(batch_id, finals, now, reclaimed=True)
+                existing = connection.execute(
+                    """SELECT batch_id::text, request_fingerprint
+                       FROM router.budget_allowance_batch_reconciliations
+                       WHERE reconciliation_id = %s""",
+                    (reconciliation_uuid,),
+                ).fetchone()
+                if existing is not None:
+                    if (
+                        existing["batch_id"] != batch_id
+                        or existing["request_fingerprint"] != fingerprint
+                    ):
+                        raise BudgetError(
+                            BudgetErrorCode.IDEMPOTENCY_CONFLICT, context.request_id
+                        )
+                    return True
+                connection.execute(
+                    """INSERT INTO router.budget_allowance_batch_reconciliations (
+                           reconciliation_id, batch_id, owner_node_id,
+                           lease_generation, request_fingerprint, occurred_at, reclaimed
+                       ) VALUES (%s, %s, %s, %s, %s, %s, true)""",
+                    (
+                        reconciliation_uuid,
+                        batch_id,
+                        batch["owner_node_id"],
+                        batch["lease_generation"],
+                        fingerprint,
                         now,
                     ),
                 )
-                self._insert_final_ledger(
-                    connection,
-                    lease_id,
-                    row["budget_scope_id"],
-                    reconciliation_id,
-                    row["issued_amount"],
-                    Decimal(0),
-                    row["issued_at"],
-                )
+                for row in rows:
+                    lease_reconciliation_id = self._identity_factory()
+                    connection.execute(
+                        """INSERT INTO router.budget_allowance_reconciliations (
+                           reconciliation_id, batch_reconciliation_id,
+                           allowance_lease_id, owner_node_id, lease_generation,
+                           used_amount, returned_amount, occurred_at, reclaimed
+                       ) VALUES (%s, %s, %s, %s, %s, %s, 0, %s, true)""",
+                        (
+                            lease_reconciliation_id,
+                            reconciliation_uuid,
+                            row["id"],
+                            batch["owner_node_id"],
+                            batch["lease_generation"],
+                            row["issued_amount"],
+                            now,
+                        ),
+                    )
+                    self._insert_final_ledger(
+                        connection,
+                        row["id"],
+                        row["budget_scope_id"],
+                        lease_reconciliation_id,
+                        row["issued_amount"],
+                        Decimal(0),
+                        row["issued_at"],
+                    )
         except (psycopg.errors.CheckViolation, psycopg.errors.UniqueViolation) as error:
-            raise BudgetError(BudgetErrorCode.STALE_ALLOWANCE, context.request_id) from error
+            raise BudgetError(
+                BudgetErrorCode.STALE_ALLOWANCE, context.request_id
+            ) from error
+        return False
 
     def append_correction(
         self,
         context: RequestContext,
         *,
         lease_id: str,
+        correction_id: str,
         amount_delta: Decimal,
         reason: str,
         now: datetime,
-    ) -> None:
+    ) -> bool:
         """Append one bounded late usage correction after final reconciliation."""
         _require_system(context, "budget.allowance.correct")
-        delta = exact_decimal(amount_delta)
+        delta = exact_decimal(amount_delta, signed=True)
         _aware(now)
         if not 1 <= len(reason) <= 500:
             raise BudgetError(BudgetErrorCode.INVALID_REQUEST, context.request_id)
-        correction_id = self._identity_factory()
+        correction_uuid = uuid.UUID(correction_id)
         try:
             with self._connection() as connection, connection.transaction():
+                lease = connection.execute(
+                    """SELECT id FROM router.budget_allowance_leases
+                       WHERE id = %s FOR UPDATE""",
+                    (lease_id,),
+                ).fetchone()
+                if lease is None:
+                    raise BudgetError(BudgetErrorCode.NOT_FOUND, context.request_id)
+                existing = connection.execute(
+                    """SELECT allowance_lease_id::text, amount_delta, reason, occurred_at
+                       FROM router.budget_allowance_corrections
+                       WHERE correction_id = %s""",
+                    (correction_uuid,),
+                ).fetchone()
+                if existing is not None:
+                    if (
+                        existing["allowance_lease_id"],
+                        existing["amount_delta"],
+                        existing["reason"],
+                        existing["occurred_at"],
+                    ) != (lease_id, delta, reason, now):
+                        raise BudgetError(
+                            BudgetErrorCode.IDEMPOTENCY_CONFLICT, context.request_id
+                        )
+                    return True
                 row = connection.execute(
                     """SELECT budget_scope_id::text, issued_at
                        FROM router.budget_allowance_leases
@@ -456,7 +673,7 @@ class PostgresAllowanceRepository:
                            correction_id, allowance_lease_id, amount_delta,
                            reason, occurred_at
                        ) VALUES (%s, %s, %s, %s, %s)""",
-                    (correction_id, lease_id, delta, reason, now),
+                    (correction_uuid, lease_id, delta, reason, now),
                 )
                 connection.execute(
                     """INSERT INTO router.budget_allowance_ledger_entries (
@@ -468,12 +685,66 @@ class PostgresAllowanceRepository:
                         lease_id,
                         row["budget_scope_id"],
                         delta,
-                        correction_id,
+                        correction_uuid,
                         row["issued_at"],
                     ),
                 )
         except psycopg.errors.CheckViolation as error:
-            raise BudgetError(BudgetErrorCode.INVALID_REQUEST, context.request_id) from error
+            raise BudgetError(
+                BudgetErrorCode.INVALID_REQUEST, context.request_id
+            ) from error
+        return False
+
+    def _load_batch(
+        self,
+        connection: Connection[DictRow],
+        batch_id: str,
+    ) -> AllowanceBatch:
+        batch = connection.execute(
+            """SELECT id::text, lineage_id::text, owner_node_id::text,
+                      lease_generation, service_id::text, workspace_id::text,
+                      assignment_id::text, currency::text
+               FROM router.budget_allowance_batches WHERE id = %s""",
+            (batch_id,),
+        ).fetchone()
+        if batch is None:
+            raise RuntimeError("The allowance batch disappeared during replay.")
+        rows = connection.execute(
+            """SELECT id::text, budget_scope_id::text, owner_node_id::text,
+                      lease_generation, currency::text, issued_amount,
+                      maximum_correction_risk, issued_at, expires_at, safety_until
+               FROM router.budget_allowance_leases
+               WHERE batch_id = %s ORDER BY budget_scope_id""",
+            (batch_id,),
+        ).fetchall()
+        leases = tuple(
+            AllowanceLease(
+                row["id"],
+                batch["id"],
+                row["budget_scope_id"],
+                row["owner_node_id"],
+                row["lease_generation"],
+                row["currency"],
+                row["issued_amount"],
+                row["maximum_correction_risk"],
+                row["issued_at"],
+                row["expires_at"],
+                row["safety_until"],
+            )
+            for row in rows
+        )
+        return AllowanceBatch(
+            batch["id"],
+            batch["lineage_id"],
+            batch["owner_node_id"],
+            batch["lease_generation"],
+            batch["service_id"],
+            batch["workspace_id"],
+            batch["assignment_id"],
+            batch["currency"],
+            tuple(row["budget_scope_id"] for row in rows),
+            leases,
+        )
 
     def _insert_final_ledger(
         self,
@@ -509,19 +780,37 @@ class PostgresAllowanceRepository:
 class SqliteAllowanceWallet:
     """Persist and atomically consume complete local allowance batches."""
 
-    def __init__(self, path: str | Path, *, owner_node_id: str) -> None:
-        if not owner_node_id:
-            raise ValueError("The node identity must not be empty.")
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        owner_node_id: str,
+        authority_id: str,
+    ) -> None:
+        if not owner_node_id or not authority_id:
+            raise ValueError("The node and authority identities must not be empty.")
         self._path = str(path)
         if self._path == ":memory:":
             raise ValueError("An allowance wallet must use durable storage.")
         self._owner_node_id = owner_node_id
+        self._authority_id = authority_id
         self._lock = threading.Lock()
         with self._connection() as connection:
             connection.executescript(_WALLET_SCHEMA)
+            columns = {
+                row[1]
+                for row in connection.execute("PRAGMA table_info(allowance_batches)")
+            }
+            if "last_observed_at" not in columns:
+                connection.execute(
+                    "ALTER TABLE allowance_batches ADD COLUMN last_observed_at TEXT"
+                )
 
-    def install(self, batch: AllowanceBatch) -> None:
+    def install(self, context: RequestContext, batch: AllowanceBatch) -> None:
         """Persist a trusted complete batch without restoring spent value."""
+        _require_system(context, "budget.allowance.install")
+        if context.actor_id != self._authority_id:
+            raise BudgetError(BudgetErrorCode.INSUFFICIENT_SCOPE, context.request_id)
         if batch.owner_node_id != self._owner_node_id or not batch.leases:
             raise BudgetError(BudgetErrorCode.STALE_ALLOWANCE, batch.batch_id)
         with self._lock, self._connection() as connection:
@@ -586,7 +875,10 @@ class SqliteAllowanceWallet:
                 ),
             )
             for lease in batch.leases:
-                if lease.batch_id != batch.batch_id or lease.owner_node_id != batch.owner_node_id:
+                if (
+                    lease.batch_id != batch.batch_id
+                    or lease.owner_node_id != batch.owner_node_id
+                ):
                     raise BudgetError(BudgetErrorCode.STALE_ALLOWANCE, batch.batch_id)
                 connection.execute(
                     """INSERT INTO allowance_leases (
@@ -622,13 +914,14 @@ class SqliteAllowanceWallet:
             connection.execute("BEGIN IMMEDIATE")
             batch = connection.execute(
                 """SELECT owner_node_id, lease_generation, service_id,
-                          workspace_id, assignment_id, expires_at, finalized
+                          workspace_id, assignment_id, issued_at, expires_at,
+                          finalized, last_observed_at
                    FROM allowance_batches WHERE batch_id = ?""",
                 (batch_id,),
             ).fetchone()
             if batch is None or batch[0] != self._owner_node_id:
                 raise BudgetError(BudgetErrorCode.STALE_ALLOWANCE, batch_id)
-            if batch[6]:
+            if batch[7]:
                 raise BudgetError(BudgetErrorCode.STALE_ALLOWANCE, batch_id)
             if (batch[2], batch[3], batch[4]) != (
                 service_id,
@@ -645,7 +938,11 @@ class SqliteAllowanceWallet:
             ).fetchone()[0]
             if batch[1] != highest:
                 raise BudgetError(BudgetErrorCode.STALE_ALLOWANCE, batch_id)
-            if now >= datetime.fromisoformat(batch[5]):
+            if now < datetime.fromisoformat(batch[5]):
+                raise BudgetError(BudgetErrorCode.STALE_ALLOWANCE, batch_id)
+            if batch[8] is not None and now <= datetime.fromisoformat(batch[8]):
+                raise BudgetError(BudgetErrorCode.STALE_ALLOWANCE, batch_id)
+            if now >= datetime.fromisoformat(batch[6]):
                 raise BudgetError(BudgetErrorCode.ALLOWANCE_EXPIRED, batch_id)
             rows = connection.execute(
                 """SELECT lease_id, issued_amount, consumed_amount
@@ -664,6 +961,10 @@ class SqliteAllowanceWallet:
                     (str(cumulative), lease_id),
                 )
                 consumed.append((lease_id, cumulative))
+            connection.execute(
+                "UPDATE allowance_batches SET last_observed_at = ? WHERE batch_id = ?",
+                (now.isoformat(), batch_id),
+            )
             connection.commit()
             return AllowanceDebit(batch_id, batch[1], amount, tuple(consumed))
 
@@ -705,7 +1006,7 @@ class SqliteAllowanceWallet:
         with self._lock, self._connection() as connection:
             batch = connection.execute(
                 """SELECT owner_node_id, lease_generation, lineage_id,
-                          expires_at, finalized
+                          issued_at, expires_at, finalized, last_observed_at
                    FROM allowance_batches WHERE batch_id = ?""",
                 (batch_id,),
             ).fetchone()
@@ -725,11 +1026,13 @@ class SqliteAllowanceWallet:
             return AllowanceState(
                 batch_id,
                 batch[1],
-                datetime.fromisoformat(batch[3]),
+                datetime.fromisoformat(batch[4]),
                 batch[1] == highest
-                and now < datetime.fromisoformat(batch[3])
-                and not batch[4],
-                bool(batch[4]),
+                and now >= datetime.fromisoformat(batch[3])
+                and now < datetime.fromisoformat(batch[4])
+                and (batch[6] is None or now >= datetime.fromisoformat(batch[6]))
+                and not batch[5],
+                bool(batch[5]),
                 tuple(
                     AllowanceScopeState(
                         row[0], Decimal(row[1]) - Decimal(row[2]), Decimal(row[3])
@@ -776,6 +1079,7 @@ CREATE TABLE IF NOT EXISTS allowance_batches (
     issued_at TEXT NOT NULL,
     expires_at TEXT NOT NULL,
     safety_until TEXT NOT NULL,
+    last_observed_at TEXT,
     finalized INTEGER NOT NULL DEFAULT 0 CHECK (finalized IN (0, 1))
 );
 CREATE TABLE IF NOT EXISTS allowance_leases (
@@ -811,9 +1115,48 @@ def _aware(value: datetime) -> None:
         raise ValueError("Allowance times must include a time zone.")
 
 
-def _ordered_times(issued_at: datetime, expires_at: datetime, safety_until: datetime) -> None:
+def _ordered_times(
+    issued_at: datetime, expires_at: datetime, safety_until: datetime
+) -> None:
     _aware(issued_at)
     _aware(expires_at)
     _aware(safety_until)
     if not issued_at < expires_at <= safety_until:
         raise ValueError("Allowance times are not ordered.")
+
+
+def _decimal_text(value: Decimal) -> str:
+    normalized = value.normalize()
+    return "0" if normalized == 0 else format(normalized, "f")
+
+
+def _fingerprint(value: object) -> bytes:
+    return sha256(
+        dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).digest()
+
+
+def _final_fingerprint(
+    batch_id: str,
+    finals: Iterable[AllowanceFinal],
+    now: datetime,
+    *,
+    reclaimed: bool,
+) -> bytes:
+    return _fingerprint(
+        {
+            "batch_id": batch_id,
+            "finals": [
+                [
+                    item.lease_id,
+                    item.owner_node_id,
+                    item.lease_generation,
+                    _decimal_text(item.used_amount),
+                    _decimal_text(item.returned_amount),
+                ]
+                for item in sorted(finals, key=lambda value: value.lease_id)
+            ],
+            "occurred_at": now.isoformat(),
+            "reclaimed": reclaimed,
+        }
+    )

@@ -2,6 +2,7 @@ DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM router.budget_allowance_batches WHERE NOT legacy)
        OR EXISTS (SELECT 1 FROM router.budget_allowance_reconciliations)
+       OR EXISTS (SELECT 1 FROM router.budget_allowance_batch_reconciliations)
        OR EXISTS (SELECT 1 FROM router.budget_allowance_corrections) THEN
         RAISE EXCEPTION 'budget allowance migration cannot roll back without data loss'
             USING ERRCODE = '55000';
@@ -19,12 +20,17 @@ DROP TRIGGER budget_allowance_corrections_guard ON router.budget_allowance_corre
 DROP FUNCTION router.check_budget_allowance_correction();
 DROP TRIGGER budget_allowance_reconciliations_complete ON router.budget_allowance_reconciliations;
 DROP FUNCTION router.check_complete_budget_allowance_reconciliation();
+DROP TRIGGER budget_allowance_batch_reconciliations_complete ON router.budget_allowance_batch_reconciliations;
+DROP FUNCTION router.check_complete_budget_allowance_batch_reconciliation();
 DROP TRIGGER budget_allowance_ledger_append_only ON router.budget_allowance_ledger_entries;
 DROP TRIGGER budget_allowance_ledger_guard ON router.budget_allowance_ledger_entries;
 DROP FUNCTION router.check_budget_allowance_ledger();
 DROP TRIGGER budget_allowance_reconciliations_append_only ON router.budget_allowance_reconciliations;
 DROP TRIGGER budget_allowance_reconciliations_guard ON router.budget_allowance_reconciliations;
 DROP FUNCTION router.check_budget_allowance_reconciliation();
+DROP TRIGGER budget_allowance_batch_reconciliations_append_only ON router.budget_allowance_batch_reconciliations;
+DROP TRIGGER budget_allowance_batch_reconciliations_guard ON router.budget_allowance_batch_reconciliations;
+DROP FUNCTION router.check_budget_allowance_batch_reconciliation();
 DROP TRIGGER budget_allowance_batches_complete ON router.budget_allowance_batches;
 DROP FUNCTION router.check_complete_budget_allowance_batch();
 DROP TRIGGER services_allowance_topology ON router.services;
@@ -33,12 +39,15 @@ DROP FUNCTION router.check_outstanding_budget_allowance_topology();
 DROP FUNCTION router.budget_allowance_batch_is_complete(uuid);
 DROP TRIGGER budget_allowance_leases_guard ON router.budget_allowance_leases;
 DROP FUNCTION router.check_budget_allowance_lease();
+DROP TRIGGER budget_allowance_leases_complete ON router.budget_allowance_leases;
+DROP FUNCTION router.check_complete_budget_allowance_lease();
 DROP TRIGGER budget_allowance_batches_guard ON router.budget_allowance_batches;
 DROP FUNCTION router.check_budget_allowance_batch();
 DROP FUNCTION router.allowance_scope_consumed(uuid, timestamptz);
 DROP TABLE router.budget_allowance_ledger_entries;
 DROP TABLE router.budget_allowance_corrections;
 DROP TABLE router.budget_allowance_reconciliations;
+DROP TABLE router.budget_allowance_batch_reconciliations;
 ALTER TABLE router.budget_allowance_leases
 DROP CONSTRAINT budget_allowance_leases_batch_scope_unique,
 DROP CONSTRAINT budget_allowance_leases_batch_fk,

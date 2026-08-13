@@ -1,5 +1,5 @@
 """Durable node-local budget allowance tests."""
-# ruff: noqa: D103, PLR2004
+# ruff: noqa: D103, FBT003, PLR2004
 
 from __future__ import annotations
 
@@ -9,6 +9,13 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
+from llmrouter_backend.authority import (
+    AuthorityClass,
+    AuthorityPath,
+    PrincipalKind,
+    RequestContext,
+    Scope,
+)
 from llmrouter_backend.budgets import (
     AllowanceBatch,
     AllowanceLease,
@@ -24,6 +31,23 @@ LEASE_A = "0198a080-0000-7000-8000-000000000303"
 LEASE_B = "0198a080-0000-7000-8000-000000000304"
 SCOPE_A = "0198a080-0000-7000-8000-000000000305"
 SCOPE_B = "0198a080-0000-7000-8000-000000000306"
+AUTHORITY = "budget-authority"
+
+
+def _authority(*, actor_id: str = AUTHORITY) -> RequestContext:
+    return RequestContext(
+        "allowance-install",
+        PrincipalKind.SYSTEM,
+        actor_id,
+        AuthorityClass.SYSTEM,
+        AuthorityPath.MACHINE,
+        None,
+        "budget.allowance.install",
+        Scope(),
+        NOW,
+        None,
+        True,
+    )
 
 
 def _batch(*, generation: int = 1, batch_id: str = BATCH) -> AllowanceBatch:
@@ -59,20 +83,28 @@ def _batch(*, generation: int = 1, batch_id: str = BATCH) -> AllowanceBatch:
 
 def test_wallet_restart_keeps_consumption_and_finalization(tmp_path: object) -> None:
     path = tmp_path / "allowance.sqlite"  # type: ignore[operator]
-    first = SqliteAllowanceWallet(path, owner_node_id=NODE)
-    first.install(_batch())
+    first = SqliteAllowanceWallet(path, owner_node_id=NODE, authority_id=AUTHORITY)
+    first.install(_authority(), _batch())
     first.consume(
-        BATCH, Decimal(4), service_id=None, workspace_id=None,
-        assignment_id=None, now=NOW
+        BATCH,
+        Decimal(4),
+        service_id=None,
+        workspace_id=None,
+        assignment_id=None,
+        now=NOW,
     )
 
-    restarted = SqliteAllowanceWallet(path, owner_node_id=NODE)
+    restarted = SqliteAllowanceWallet(path, owner_node_id=NODE, authority_id=AUTHORITY)
     debit = restarted.consume(
-        BATCH, Decimal(3), service_id=None, workspace_id=None,
-        assignment_id=None, now=NOW
+        BATCH,
+        Decimal(3),
+        service_id=None,
+        workspace_id=None,
+        assignment_id=None,
+        now=NOW + timedelta(seconds=1),
     )
     assert dict(debit.consumed_by_lease) == {LEASE_A: Decimal(7), LEASE_B: Decimal(7)}
-    state = restarted.state(BATCH, now=NOW)
+    state = restarted.state(BATCH, now=NOW + timedelta(seconds=1))
     assert state.current
     assert not state.finalized
     assert {item.remaining_amount for item in state.scopes} == {Decimal(3)}
@@ -82,13 +114,17 @@ def test_wallet_restart_keeps_consumption_and_finalization(tmp_path: object) -> 
         (Decimal(7), Decimal(3))
     }
     assert restarted.final(BATCH) == final
-    final_state = restarted.state(BATCH, now=NOW)
+    final_state = restarted.state(BATCH, now=NOW + timedelta(seconds=1))
     assert final_state.finalized
     assert not final_state.current
     with pytest.raises(BudgetError) as error:
         restarted.consume(
-            BATCH, Decimal(1), service_id=None, workspace_id=None,
-            assignment_id=None, now=NOW
+            BATCH,
+            Decimal(1),
+            service_id=None,
+            workspace_id=None,
+            assignment_id=None,
+            now=NOW + timedelta(seconds=2),
         )
     assert error.value.code is BudgetErrorCode.STALE_ALLOWANCE
 
@@ -97,14 +133,19 @@ def test_wallet_finalization_and_consumption_serialize(tmp_path: object) -> None
     wallet = SqliteAllowanceWallet(
         tmp_path / "allowance.sqlite",  # type: ignore[operator]
         owner_node_id=NODE,
+        authority_id=AUTHORITY,
     )
-    wallet.install(_batch())
+    wallet.install(_authority(), _batch())
 
     def consume() -> str:
         try:
             wallet.consume(
-                BATCH, Decimal(1), service_id=None, workspace_id=None,
-                assignment_id=None, now=NOW
+                BATCH,
+                Decimal(1),
+                service_id=None,
+                workspace_id=None,
+                assignment_id=None,
+                now=NOW,
             )
         except BudgetError:
             return "closed"
@@ -121,13 +162,72 @@ def test_wallet_finalization_and_consumption_serialize(tmp_path: object) -> None
     assert all(item.used_amount + item.returned_amount == 10 for item in final)
 
 
+def test_wallet_rejects_preissue_and_frozen_clock_after_restart(
+    tmp_path: object,
+) -> None:
+    path = tmp_path / "allowance.sqlite"  # type: ignore[operator]
+    wallet = SqliteAllowanceWallet(path, owner_node_id=NODE, authority_id=AUTHORITY)
+    with pytest.raises(BudgetError) as unauthorized:
+        wallet.install(_authority(actor_id="untrusted-node"), _batch())
+    assert unauthorized.value.code is BudgetErrorCode.INSUFFICIENT_SCOPE
+    wallet.install(_authority(), _batch())
+    with pytest.raises(BudgetError) as early:
+        wallet.consume(
+            BATCH,
+            Decimal(1),
+            service_id=None,
+            workspace_id=None,
+            assignment_id=None,
+            now=NOW - timedelta(seconds=1),
+        )
+    assert early.value.code is BudgetErrorCode.STALE_ALLOWANCE
+    wallet.consume(
+        BATCH,
+        Decimal(1),
+        service_id=None,
+        workspace_id=None,
+        assignment_id=None,
+        now=NOW + timedelta(seconds=1),
+    )
+    restarted = SqliteAllowanceWallet(path, owner_node_id=NODE, authority_id=AUTHORITY)
+    with pytest.raises(BudgetError) as frozen:
+        restarted.consume(
+            BATCH,
+            Decimal(1),
+            service_id=None,
+            workspace_id=None,
+            assignment_id=None,
+            now=NOW + timedelta(seconds=1),
+        )
+    assert frozen.value.code is BudgetErrorCode.STALE_ALLOWANCE
+    with pytest.raises(BudgetError) as backward:
+        restarted.consume(
+            BATCH,
+            Decimal(1),
+            service_id=None,
+            workspace_id=None,
+            assignment_id=None,
+            now=NOW,
+        )
+    assert backward.value.code is BudgetErrorCode.STALE_ALLOWANCE
+    restarted.consume(
+        BATCH,
+        Decimal(1),
+        service_id=None,
+        workspace_id=None,
+        assignment_id=None,
+        now=NOW + timedelta(seconds=2),
+    )
+
+
 def test_wallet_fences_old_generation_and_invalid_batches(tmp_path: object) -> None:
     wallet = SqliteAllowanceWallet(
         tmp_path / "allowance.sqlite",  # type: ignore[operator]
         owner_node_id=NODE,
+        authority_id=AUTHORITY,
     )
     old = _batch()
-    wallet.install(old)
+    wallet.install(_authority(), old)
     new = _batch(
         generation=2,
         batch_id="0198a080-0000-7000-8000-000000000307",
@@ -143,7 +243,7 @@ def test_wallet_fences_old_generation_and_invalid_batches(tmp_path: object) -> N
             for index, lease in enumerate(new.leases, 8)
         ),
     )
-    wallet.install(new)
+    wallet.install(_authority(), new)
     with pytest.raises(BudgetError) as wrong_scope:
         wallet.consume(
             new.batch_id,
@@ -158,24 +258,33 @@ def test_wallet_fences_old_generation_and_invalid_batches(tmp_path: object) -> N
     assert all(item.remaining_amount == 10 for item in wrong_scope_state.scopes)
     with pytest.raises(BudgetError) as error:
         wallet.consume(
-            BATCH, Decimal(1), service_id=None, workspace_id=None,
-            assignment_id=None, now=NOW
+            BATCH,
+            Decimal(1),
+            service_id=None,
+            workspace_id=None,
+            assignment_id=None,
+            now=NOW,
         )
     assert error.value.code is BudgetErrorCode.STALE_ALLOWANCE
     wallet.consume(
-        new.batch_id, Decimal(1), service_id=None, workspace_id=None,
-        assignment_id=None, now=NOW
+        new.batch_id,
+        Decimal(1),
+        service_id=None,
+        workspace_id=None,
+        assignment_id=None,
+        now=NOW,
     )
 
     with pytest.raises(BudgetError) as changed_replay:
         wallet.install(
+            _authority(),
             replace(
                 new,
                 leases=(
                     replace(new.leases[0], issued_amount=Decimal(9)),
                     new.leases[1],
                 ),
-            )
+            ),
         )
     assert changed_replay.value.code is BudgetErrorCode.STALE_ALLOWANCE
 

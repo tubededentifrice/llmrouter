@@ -3,6 +3,9 @@ DROP FUNCTION router.check_budget_allowance();
 
 CREATE TABLE router.budget_allowance_batches (
     id uuid PRIMARY KEY,
+    issuer_id text NOT NULL,
+    idempotency_key text NOT NULL CHECK (char_length(idempotency_key) BETWEEN 1 AND 200),
+    request_fingerprint bytea NOT NULL CHECK (octet_length(request_fingerprint) = 32),
     lineage_id uuid NOT NULL,
     owner_node_id uuid NOT NULL,
     lease_generation bigint NOT NULL CHECK (lease_generation > 0),
@@ -19,7 +22,8 @@ CREATE TABLE router.budget_allowance_batches (
     CHECK (expires_at > issued_at),
     CHECK (safety_until >= expires_at),
     CHECK (service_id IS NOT NULL OR (workspace_id IS NULL AND assignment_id IS NULL)),
-    UNIQUE (lineage_id, lease_generation)
+    UNIQUE (lineage_id, lease_generation),
+    UNIQUE (issuer_id, idempotency_key)
 );
 
 ALTER TABLE router.budget_allowance_leases
@@ -28,10 +32,13 @@ ADD COLUMN maximum_correction_risk numeric(38, 18) NOT NULL DEFAULT 0
     CHECK (maximum_correction_risk >= 0);
 
 INSERT INTO router.budget_allowance_batches (
-    id, lineage_id, owner_node_id, lease_generation, service_id, workspace_id,
-    assignment_id, currency, issued_at, expires_at, safety_until, legacy
+    id, issuer_id, idempotency_key, request_fingerprint, lineage_id,
+    owner_node_id, lease_generation, service_id, workspace_id, assignment_id,
+    currency, issued_at, expires_at, safety_until, legacy
 )
-SELECT lease.id, lease.id, lease.owner_node_id, lease.lease_generation,
+SELECT lease.id, 'legacy-migration', lease.id::text,
+       decode(replace(lease.id::text, '-', '') || replace(lease.id::text, '-', ''), 'hex'),
+       lease.id, lease.owner_node_id, lease.lease_generation,
        scope.service_id, scope.workspace_id, scope.assignment_id,
        lease.currency, lease.issued_at, lease.expires_at, lease.safety_until, true
 FROM router.budget_allowance_leases AS lease
@@ -57,6 +64,22 @@ CREATE TABLE router.budget_allowance_reconciliations (
     occurred_at timestamptz NOT NULL,
     reclaimed boolean NOT NULL
 );
+
+CREATE TABLE router.budget_allowance_batch_reconciliations (
+    reconciliation_id uuid PRIMARY KEY,
+    batch_id uuid NOT NULL UNIQUE
+        REFERENCES router.budget_allowance_batches (id) ON DELETE RESTRICT,
+    owner_node_id uuid NOT NULL,
+    lease_generation bigint NOT NULL CHECK (lease_generation > 0),
+    request_fingerprint bytea NOT NULL CHECK (octet_length(request_fingerprint) = 32),
+    occurred_at timestamptz NOT NULL,
+    reclaimed boolean NOT NULL
+);
+
+ALTER TABLE router.budget_allowance_reconciliations
+ADD COLUMN batch_reconciliation_id uuid NOT NULL
+    REFERENCES router.budget_allowance_batch_reconciliations (reconciliation_id)
+    ON DELETE RESTRICT;
 
 CREATE TABLE router.budget_allowance_corrections (
     correction_id uuid PRIMARY KEY,
@@ -128,6 +151,23 @@ RETURNS numeric LANGUAGE sql STABLE AS $$
                   date_trunc('day', requested_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
               OR (scope.reset_period = 'monthly' AND lease.issued_at >=
                   date_trunc('month', requested_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'))), 0)
+      + COALESCE((SELECT sum(reservation.reserved_amount - reservation.released_amount)
+          FROM router.budget_reservations AS reservation
+          WHERE reservation.budget_scope_id = requested_scope
+            AND reservation.allowance_lease_id IS NULL
+            AND reservation.reconciled_at IS NULL), 0)
+      + greatest(COALESCE((SELECT sum(COALESCE(
+              reservation.corrected_amount, reservation.actual_amount, 0))
+          FROM router.budget_reservations AS reservation
+          JOIN router.budget_scopes AS scope ON scope.id = reservation.budget_scope_id
+          WHERE reservation.budget_scope_id = requested_scope
+            AND reservation.allowance_lease_id IS NULL
+            AND reservation.reconciled_at IS NOT NULL
+            AND (scope.reset_period = 'none'
+              OR (scope.reset_period = 'daily' AND reservation.created_at >=
+                  date_trunc('day', requested_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
+              OR (scope.reset_period = 'monthly' AND reservation.created_at >=
+                  date_trunc('month', requested_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'))), 0), 0)
       + greatest(COALESCE((SELECT sum(CASE ledger.event_kind
             WHEN 'usage' THEN ledger.amount
             WHEN 'correction' THEN ledger.amount ELSE 0 END)
@@ -161,7 +201,8 @@ BEGIN
     FROM router.budget_allowance_batches
     WHERE lineage_id = NEW.lineage_id
     ORDER BY lease_generation DESC LIMIT 1 FOR UPDATE;
-    IF highest_generation IS NOT NULL AND NEW.lease_generation <= highest_generation THEN
+    IF highest_generation IS NOT NULL
+       AND NEW.lease_generation <> highest_generation + 1 THEN
         RAISE EXCEPTION 'budget allowance generation is stale' USING ERRCODE = '40001';
     END IF;
     IF highest_generation IS NULL AND NEW.lease_generation <> 1 THEN
@@ -244,6 +285,28 @@ CREATE TRIGGER budget_allowance_leases_guard
 BEFORE INSERT OR UPDATE OR DELETE ON router.budget_allowance_leases
 FOR EACH ROW EXECUTE FUNCTION router.check_budget_allowance_lease();
 
+CREATE FUNCTION router.check_complete_budget_allowance_lease()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM router.budget_allowance_ledger_entries
+        WHERE allowance_lease_id = NEW.id
+          AND budget_scope_id = NEW.budget_scope_id
+          AND event_kind = 'grant'
+          AND amount = NEW.issued_amount
+          AND occurred_at = NEW.issued_at
+    ) THEN
+        RAISE EXCEPTION 'budget allowance grant ledger is incomplete'
+            USING ERRCODE = '23514';
+    END IF;
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER budget_allowance_leases_complete
+AFTER INSERT ON router.budget_allowance_leases DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION router.check_complete_budget_allowance_lease();
+
 CREATE FUNCTION router.budget_allowance_batch_is_complete(requested_batch uuid)
 RETURNS boolean LANGUAGE sql STABLE AS $$
     SELECT NOT EXISTS (
@@ -305,6 +368,21 @@ BEGIN
                 )
           )
           AND NOT router.budget_allowance_batch_is_complete(batch.id)
+    ) OR EXISTS (
+        SELECT 1
+        FROM router.budget_allowance_leases AS lease
+        JOIN router.budget_scopes AS scope ON scope.id = lease.budget_scope_id
+        WHERE NOT EXISTS (
+            SELECT 1 FROM router.budget_allowance_reconciliations AS final
+            WHERE final.allowance_lease_id = lease.id
+        )
+          AND lease.expires_at > CASE scope.reset_period
+              WHEN 'daily' THEN date_trunc('day', lease.issued_at AT TIME ZONE 'UTC')
+                  AT TIME ZONE 'UTC' + interval '1 day'
+              WHEN 'monthly' THEN date_trunc('month', lease.issued_at AT TIME ZONE 'UTC')
+                  AT TIME ZONE 'UTC' + interval '1 month'
+              ELSE lease.expires_at
+          END
     ) THEN
         RAISE EXCEPTION 'budget topology would invalidate an outstanding allowance'
             USING ERRCODE = '23514';
@@ -321,12 +399,22 @@ FOR EACH ROW EXECUTE FUNCTION router.check_outstanding_budget_allowance_topology
 
 CREATE FUNCTION router.check_budget_allowance_reconciliation()
 RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE lease router.budget_allowance_leases%ROWTYPE;
+DECLARE
+    lease router.budget_allowance_leases%ROWTYPE;
+    batch_final router.budget_allowance_batch_reconciliations%ROWTYPE;
 BEGIN
     SELECT * INTO lease FROM router.budget_allowance_leases
     WHERE id = NEW.allowance_lease_id FOR UPDATE;
-    IF lease.id IS NULL OR NEW.owner_node_id <> lease.owner_node_id
+    SELECT * INTO batch_final FROM router.budget_allowance_batch_reconciliations
+    WHERE reconciliation_id = NEW.batch_reconciliation_id FOR UPDATE;
+    IF lease.id IS NULL OR batch_final.reconciliation_id IS NULL
+       OR batch_final.batch_id <> lease.batch_id
+       OR NEW.owner_node_id <> lease.owner_node_id
        OR NEW.lease_generation <> lease.lease_generation
+       OR NEW.owner_node_id <> batch_final.owner_node_id
+       OR NEW.lease_generation <> batch_final.lease_generation
+       OR NEW.reclaimed <> batch_final.reclaimed
+       OR NEW.occurred_at <> batch_final.occurred_at
        OR NEW.used_amount + NEW.returned_amount <> lease.issued_amount THEN
         RAISE EXCEPTION 'budget allowance reconciliation does not match its lease'
             USING ERRCODE = '40001';
@@ -342,6 +430,36 @@ BEGIN
     RETURN NEW;
 END;
 $$;
+
+CREATE FUNCTION router.check_budget_allowance_batch_reconciliation()
+RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE batch router.budget_allowance_batches%ROWTYPE;
+BEGIN
+    SELECT * INTO batch FROM router.budget_allowance_batches
+    WHERE id = NEW.batch_id FOR UPDATE;
+    IF batch.id IS NULL OR NEW.owner_node_id <> batch.owner_node_id
+       OR NEW.lease_generation <> batch.lease_generation
+       OR NEW.occurred_at < batch.issued_at THEN
+        RAISE EXCEPTION 'budget allowance batch reconciliation is stale'
+            USING ERRCODE = '40001';
+    END IF;
+    IF NEW.reclaimed AND EXISTS (
+        SELECT 1 FROM router.budget_allowance_leases
+        WHERE batch_id = NEW.batch_id AND NEW.occurred_at < safety_until
+    ) THEN
+        RAISE EXCEPTION 'budget allowance batch reclaim precedes its safety window'
+            USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER budget_allowance_batch_reconciliations_guard
+BEFORE INSERT ON router.budget_allowance_batch_reconciliations
+FOR EACH ROW EXECUTE FUNCTION router.check_budget_allowance_batch_reconciliation();
+CREATE TRIGGER budget_allowance_batch_reconciliations_append_only
+BEFORE UPDATE OR DELETE ON router.budget_allowance_batch_reconciliations
+FOR EACH ROW EXECUTE FUNCTION router.reject_record_change();
 
 CREATE TRIGGER budget_allowance_reconciliations_guard
 BEFORE INSERT ON router.budget_allowance_reconciliations
@@ -410,6 +528,31 @@ $$;
 CREATE CONSTRAINT TRIGGER budget_allowance_reconciliations_complete
 AFTER INSERT ON router.budget_allowance_reconciliations DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION router.check_complete_budget_allowance_reconciliation();
+
+CREATE FUNCTION router.check_complete_budget_allowance_batch_reconciliation()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF EXISTS (
+        (SELECT id FROM router.budget_allowance_leases WHERE batch_id = NEW.batch_id)
+        EXCEPT
+        (SELECT allowance_lease_id FROM router.budget_allowance_reconciliations
+         WHERE batch_reconciliation_id = NEW.reconciliation_id)
+    ) OR EXISTS (
+        (SELECT allowance_lease_id FROM router.budget_allowance_reconciliations
+         WHERE batch_reconciliation_id = NEW.reconciliation_id)
+        EXCEPT
+        (SELECT id FROM router.budget_allowance_leases WHERE batch_id = NEW.batch_id)
+    ) THEN
+        RAISE EXCEPTION 'budget allowance batch reconciliation is incomplete'
+            USING ERRCODE = '23514';
+    END IF;
+    RETURN NULL;
+END;
+$$;
+CREATE CONSTRAINT TRIGGER budget_allowance_batch_reconciliations_complete
+AFTER INSERT ON router.budget_allowance_batch_reconciliations
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION router.check_complete_budget_allowance_batch_reconciliation();
 
 CREATE FUNCTION router.check_budget_allowance_correction()
 RETURNS trigger LANGUAGE plpgsql AS $$
