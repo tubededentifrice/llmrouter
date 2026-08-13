@@ -21,27 +21,14 @@ NODE_VERSION = "24.17.0"
 NPM_VERSION = "11.18.0"
 PYTHON_VERSION = "3.13.12"
 UV_VERSION = "0.12.0"
-APPROVED_NPM_EXCEPTION_DOCUMENT = {
-    "approved_at": "2026-08-13",
-    "decision": "docs/decisions/0053-allow-two-early-security-fix-pins.md",
-    "exceptions": [
-        {
-            "name": "brace-expansion",
-            "version": "5.0.9",
-            "released_at": "2026-07-30T10:00:00Z",
-            "reason": "First compatible fix for GHSA-rgw5-rvv9-x895",
-        },
-        {
-            "name": "nanoid",
-            "version": "3.3.17",
-            "released_at": "2026-08-03T10:39:00Z",
-            "reason": "First compatible fix for GHSA-2v37-7h3g-55p8",
-        },
-    ],
+APPROVED_NPM_EXCEPTION_DOCUMENT: dict[str, Any] = {
+    "approved_at": None,
+    "decision": None,
+    "exceptions": [],
 }
-APPROVED_NPM_EXCEPTIONS = {
+APPROVED_NPM_OVERRIDES = {
     "brace-expansion": "5.0.9",
-    "nanoid": "3.3.17",
+    "nanoid": "5.1.16",
 }
 
 
@@ -77,9 +64,9 @@ def check_package_json(path: Path) -> list[str]:
                 errors.append(f"{path}: Node dependency is not exact: {name}@{version}")
     if path == Path("package.json"):
         overrides = document.get("overrides", {})
-        if overrides != APPROVED_NPM_EXCEPTIONS:
+        if overrides != APPROVED_NPM_OVERRIDES:
             errors.append(
-                "package.json: overrides must equal the two approved security fixes"
+                "package.json: overrides must equal the approved security fixes"
             )
     return errors
 
@@ -122,8 +109,6 @@ def check_root_policy() -> list[str]:
     npm_policy = Path(".npmrc").read_text(encoding="utf-8").splitlines()
     required_npm_policy = {
         "min-release-age=14",
-        "min-release-age-exclude[]=brace-expansion",
-        "min-release-age-exclude[]=nanoid",
         "save-exact=true",
         "engine-strict=true",
         "audit=true",
@@ -137,8 +122,8 @@ def check_root_policy() -> list[str]:
         for line in npm_policy
         if line.startswith("min-release-age-exclude[]=")
     }
-    if declared_exclusions != set(APPROVED_NPM_EXCEPTIONS):
-        errors.append(".npmrc: release-age exclusions must equal decision 0053")
+    if declared_exclusions:
+        errors.append(".npmrc: release-age exclusions must be empty")
     return errors
 
 

@@ -3,48 +3,51 @@
 ## Context
 
 The initial TypeScript scaffold needs ESLint and Vite build dependencies. On
-2026-08-13, all mature compatible versions of two transitive packages have
-high-severity security advisories. The first compatible fixes are
+2026-08-13, it selected two new transitive package versions to address
+high-severity security advisories. The selected versions were
 `brace-expansion` 5.0.9, released on 2026-07-30 at 10:00 UTC, and `nanoid`
-3.3.17, released on 2026-08-03 at 10:39 UTC. These versions are less than 14
+3.3.17, released on 2026-08-03 at 10:39 UTC. These versions were less than 14
 complete days old.
 
 The user approved a narrow dependency-age exception on 2026-08-13. The normal
 14-day dependency-age rule stays active for all other packages.
 
+A later review found that `nanoid` 3.3.16, released on 2026-07-12, had already
+fixed GHSA-28wg-ghj8-5hjv and was mature. A later audit found
+GHSA-2v37-7h3g-55p8 in `nanoid` 3.3.17. The compatible 3.3.18 fix is not 14
+complete days old. `nanoid` 5.1.16 was released on 2026-06-24 and is mature.
+The Node tests and builds show that it is compatible with the pinned tree.
+`brace-expansion` 5.0.9 is also now 14 complete days old.
+
 ## Accepted choice
 
-Pin `brace-expansion` to 5.0.9 and `nanoid` to 3.3.17 as exact npm overrides.
-Record both pins in the machine-checked dependency exception file. Do not add
-another early package through this decision.
+Pin `brace-expansion` to 5.0.9 and `nanoid` to 5.1.16 as exact npm overrides.
+Keep the machine-checked dependency exception list empty. Do not add an early
+package through this decision.
 
 Keep the complete npm lock audit active. Do not ignore the related advisories.
-After both pins are 14 complete days old, a normal lock refresh can remove the
-age-exception record while it keeps the secure versions or later mature
-versions.
 
 ## Alternatives
 
 - Keep the mature vulnerable packages and ignore exact advisories temporarily.
-- Delay the repository scaffold until 2026-08-17 at 10:39 UTC.
+- Delay the repository scaffold until `nanoid` 3.3.18 is mature.
 - Remove the accepted Vite or ESLint foundation.
 
 ## Good effects
 
 - The complete dependency audit has no known high-severity finding.
-- The exception is limited to two exact transitive packages.
+- The overrides are limited to two exact transitive packages.
 - The dependency gate rejects an added or changed exception.
 
 ## Bad effects
 
-- The two fixes have less ecosystem observation time than normal.
-- The repository must review the exception record during a later lock refresh.
+- The `nanoid` override crosses a major version because no secure compatible
+  3.x version is mature.
 
 ## Migration effect
 
-There is no product data migration. The npm lock changes to the two secure
-transitive versions. A later mature lock refresh can remove only the exception
-record and keep compatible secure versions.
+There is no product data migration. The npm lock changes to the secure
+transitive versions. The age-exception record becomes empty.
 
 ## Security effect
 
