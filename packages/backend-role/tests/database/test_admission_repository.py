@@ -300,9 +300,7 @@ def test_disabled_service_ancestor_stops_descendant_admission(
             (parent_id,),
         )
     with pytest.raises(AdmissionError) as unavailable:
-        repository.admit(
-            _context(), _request(_uuidv7(NOW, 9)), now=NOW
-        )
+        repository.admit(_context(), _request(_uuidv7(NOW, 9)), now=NOW)
     assert unavailable.value.code is AdmissionErrorCode.ASSIGNMENT_UNAVAILABLE
 
 
@@ -329,9 +327,22 @@ def test_attachment_must_be_ready_immutable_current_and_in_scope(
         )
         connection.execute(
             """INSERT INTO router.attachment_status (
-                   attachment_id, state, verified_at, updated_at
-               ) VALUES (%s, 'ready', %s, %s)""",
-            (ATTACHMENT_ID, NOW, NOW),
+                   attachment_id, state, updated_at
+               ) VALUES (%s, 'pending', %s)""",
+            (ATTACHMENT_ID, NOW),
+        )
+        connection.execute(
+            """INSERT INTO router.attachment_content (
+                   attachment_id, ciphertext, encrypted_data_key,
+                   wrapping_key_id, stored_at
+               ) VALUES (%s, %s, %s, 'fixture-key', %s)""",
+            (ATTACHMENT_ID, bytes(45), bytes(72), NOW),
+        )
+        connection.execute(
+            """UPDATE router.attachment_status
+               SET state = 'ready', verified_at = %s, revision = 2,
+                   updated_at = %s WHERE attachment_id = %s""",
+            (NOW, NOW, ATTACHMENT_ID),
         )
     request_id = _uuidv7(NOW, 10)
     created = repository.admit(
@@ -341,7 +352,7 @@ def test_attachment_must_be_ready_immutable_current_and_in_scope(
     with psycopg.connect(database_url) as connection:
         connection.execute(
             """UPDATE router.attachment_status
-               SET state = 'expired', verified_at = NULL, revision = 2,
+               SET state = 'expired', verified_at = NULL, revision = 3,
                    updated_at = %s WHERE attachment_id = %s""",
             (NOW + timedelta(hours=2), ATTACHMENT_ID),
         )

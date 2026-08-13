@@ -77,7 +77,7 @@ def _migrate_current(database_url: str) -> tuple[int, ...]:
 def test_migration_plan_has_reversible_contiguous_pairs() -> None:
     """Keep each schema change ordered and reversible."""
     plan = migration_plan()
-    assert [migration.version for migration in plan] == [1, 2, 3, 4, 5, 6, 7, 8, 9]
+    assert [migration.version for migration in plan] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     assert all(migration.up_sql and migration.down_sql for migration in plan)
 
 
@@ -85,7 +85,7 @@ def test_migrate_empty_database(database_url: str) -> None:
     """Create the current schema from an empty database."""
     with psycopg.connect(database_url, autocommit=True) as connection:
         migrate(connection)
-        assert applied_versions(connection) == (1, 2, 3, 4, 5, 6, 7, 8, 9)
+        assert applied_versions(connection) == (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
         table_count = connection.execute(
             """
             SELECT count(*)
@@ -305,6 +305,121 @@ def test_admission_upgrade_keeps_legacy_targetless_rows(database_url: str) -> No
         ).fetchone() == (uuid.UUID(request_id),)
 
 
+def test_attachment_storage_rollback_rejects_encrypted_content_loss(
+    database_url: str,
+) -> None:
+    """Stop rollback while one encrypted attachment payload exists."""
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        migrate(connection)
+        seed_scope(connection)
+        attachment_id = "0198a080-0000-7000-8000-000000000151"
+        connection.execute(
+            """INSERT INTO router.attachments (
+                   id, service_id, workspace_id, media_type, byte_length,
+                   content_sha256, object_manifest_id, expires_at
+               ) VALUES (%s, %s, %s, 'text/plain', 1,
+                         decode(repeat('15', 32), 'hex'), %s,
+                         now() + interval '1 day')""",
+            (attachment_id, SERVICE_ID, WORKSPACE_ID, attachment_id),
+        )
+        connection.execute(
+            """INSERT INTO router.attachment_status (attachment_id, state)
+               VALUES (%s, 'pending')""",
+            (attachment_id,),
+        )
+        connection.execute(
+            """INSERT INTO router.attachment_content (
+                   attachment_id, ciphertext, encrypted_data_key, wrapping_key_id
+               ) VALUES (%s, %s, %s, 'test-key')""",
+            (attachment_id, bytes(41), bytes(72)),
+        )
+        with pytest.raises(psycopg.Error, match="cannot roll back without data loss"):
+            migrate(connection, target=9)
+
+
+def test_attachment_storage_upgrade_fails_closed_for_legacy_ready_metadata(
+    database_url: str,
+) -> None:
+    """Do not leave legacy ready metadata without encrypted content admissible."""
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        migrate(connection, target=9)
+        seed_scope(connection)
+        attachment_id = "0198a080-0000-7000-8000-000000000152"
+        verified_at = "2026-08-13T19:00:00Z"
+        updated_at = "2026-08-13T19:30:00Z"
+        connection.execute(
+            """INSERT INTO router.attachments (
+                   id, service_id, workspace_id, media_type, byte_length,
+                   content_sha256, object_manifest_id, expires_at
+               ) VALUES (%s, %s, %s, 'text/plain', 1,
+                         decode(repeat('16', 32), 'hex'), %s,
+                         now() + interval '1 day')""",
+            (attachment_id, SERVICE_ID, WORKSPACE_ID, attachment_id),
+        )
+        connection.execute(
+            """INSERT INTO router.attachment_status (
+                   attachment_id, state, revision, verified_at, updated_at
+               ) VALUES (%s, 'ready', 7, %s, %s)""",
+            (attachment_id, verified_at, updated_at),
+        )
+        migrate(connection)
+        assert connection.execute(
+            """SELECT state, verified_at FROM router.attachment_status
+               WHERE attachment_id = %s""",
+            (attachment_id,),
+        ).fetchone() == ("failed", None)
+        migrate(connection, target=9)
+        restored = connection.execute(
+            """SELECT state, revision, verified_at::text, updated_at::text
+               FROM router.attachment_status WHERE attachment_id = %s""",
+            (attachment_id,),
+        ).fetchone()
+        assert restored == (
+            "ready",
+            7,
+            "2026-08-13 19:00:00+00",
+            "2026-08-13 19:30:00+00",
+        )
+
+
+def test_attachment_storage_rollback_does_not_resurrect_expired_legacy_row(
+    database_url: str,
+) -> None:
+    """Preserve an expiry that occurs after the fail-closed upgrade."""
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        migrate(connection, target=9)
+        seed_scope(connection)
+        attachment_id = "0198a080-0000-7000-8000-000000000153"
+        connection.execute(
+            """INSERT INTO router.attachments (
+                   id, service_id, workspace_id, media_type, byte_length,
+                   content_sha256, object_manifest_id, expires_at
+               ) VALUES (%s, %s, %s, 'text/plain', 1,
+                         decode(repeat('17', 32), 'hex'), %s,
+                         now() + interval '1 day')""",
+            (attachment_id, SERVICE_ID, WORKSPACE_ID, attachment_id),
+        )
+        connection.execute(
+            """INSERT INTO router.attachment_status (
+                   attachment_id, state, revision, verified_at
+               ) VALUES (%s, 'ready', 4, now())""",
+            (attachment_id,),
+        )
+        migrate(connection)
+        connection.execute(
+            """UPDATE router.attachment_status
+               SET state = 'expired', revision = 6, updated_at = now()
+               WHERE attachment_id = %s""",
+            (attachment_id,),
+        )
+        migrate(connection, target=9)
+        assert connection.execute(
+            """SELECT state, revision FROM router.attachment_status
+               WHERE attachment_id = %s""",
+            (attachment_id,),
+        ).fetchone() == ("expired", 6)
+
+
 def test_route_price_source_rollback_rejects_new_manual_pin_loss(
     database_url: str,
 ) -> None:
@@ -374,7 +489,10 @@ def test_concurrent_migration_runners_serialize(database_url: str) -> None:
         migrate(connection, target=2)
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         results = list(executor.map(_migrate_current, [database_url, database_url]))
-    assert results == [(1, 2, 3, 4, 5, 6, 7, 8, 9), (1, 2, 3, 4, 5, 6, 7, 8, 9)]
+    assert results == [
+        (1, 2, 3, 4, 5, 6, 7, 8, 9, 10),
+        (1, 2, 3, 4, 5, 6, 7, 8, 9, 10),
+    ]
 
 
 def test_rollback_keeps_previous_schema_data(database_url: str) -> None:
@@ -401,7 +519,7 @@ def test_rollback_keeps_previous_schema_data(database_url: str) -> None:
             "SELECT to_regclass('router.logical_requests')"
         ).fetchone() == (None,)
         migrate(connection)
-        assert applied_versions(connection) == (1, 2, 3, 4, 5, 6, 7, 8, 9)
+        assert applied_versions(connection) == (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
         assert connection.execute(
             "SELECT stable_name FROM router.services WHERE id = %s", (SERVICE_ID,)
         ).fetchone() == ("kept-service",)
