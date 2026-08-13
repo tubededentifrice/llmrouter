@@ -42,7 +42,7 @@ class ScopeTestBuilder:
         )
         return ServicePrincipal(
             issuer="test-router",
-            token_id="test-token",  # noqa: S106
+            token_id="test-token",  # noqa: S106  # nosec B106
             audience=audience,
             service_id=self.scope.service_id,
             operations=frozenset(operations),

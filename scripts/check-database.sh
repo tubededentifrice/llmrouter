@@ -44,6 +44,6 @@ if [[ -z "${LLMROUTER_TEST_DATABASE_URL:-}" ]]; then
 fi
 
 cd "${repository_root}"
-uv run pytest packages/backend-role/tests/database
+uv run --all-packages pytest packages/backend-role/tests/database
 
 echo "Database checks passed."

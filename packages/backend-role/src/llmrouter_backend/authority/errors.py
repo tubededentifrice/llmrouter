@@ -9,7 +9,7 @@ from typing import NamedTuple, TypedDict
 class SafeErrorCode(StrEnum):
     """Authority and mutation errors from the public error catalog."""
 
-    INVALID_TOKEN = "invalid_token"  # noqa: S105
+    INVALID_TOKEN = "invalid_token"  # noqa: S105  # nosec B105
     RECENT_AUTH_REQUIRED = "recent_auth_required"
     INSUFFICIENT_SCOPE = "insufficient_scope"
     SERVICE_SCOPE_MISMATCH = "service_scope_mismatch"

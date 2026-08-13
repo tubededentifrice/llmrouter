@@ -14,6 +14,7 @@ if [[ "$(npm --version)" != "11.18.0" ]]; then
   exit 1
 fi
 
+npm ci
 npm run format:check
 npm run lint
 npm run typecheck

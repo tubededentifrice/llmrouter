@@ -107,6 +107,14 @@ def test_rollback_keeps_previous_schema_data(database_url: str) -> None:
         assert connection.execute(
             "SELECT to_regclass('router.logical_requests')"
         ).fetchone() == (None,)
+        migrate(connection)
+        assert applied_versions(connection) == (1, 2)
+        assert connection.execute(
+            "SELECT stable_name FROM router.services WHERE id = %s", (SERVICE_ID,)
+        ).fetchone() == ("kept-service",)
+        assert connection.execute(
+            "SELECT to_regclass('router.logical_requests')"
+        ).fetchone() == ("router.logical_requests",)
         migrate(connection, target=0)
         assert applied_versions(connection) == ()
         assert connection.execute("SELECT to_regnamespace('router')").fetchone() == (

@@ -1031,6 +1031,9 @@ CREATE TABLE router.audit_events (
     )),
     actor_kind text NOT NULL CHECK (actor_kind IN ('system', 'administrator', 'service', 'node')),
     actor_id text NOT NULL CHECK (actor_id <> ''),
+    authority_class text NOT NULL CHECK (authority_class IN (
+        'service', 'global_administrator', 'system'
+    )),
     service_id uuid REFERENCES router.services (id) ON DELETE RESTRICT,
     workspace_id uuid,
     action text NOT NULL CHECK (action <> ''),
