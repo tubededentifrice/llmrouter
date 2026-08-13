@@ -6,11 +6,17 @@ import hashlib
 import json
 import uuid
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, cast
 
 import psycopg
 from psycopg.types.json import Jsonb
 
+from llmrouter_backend.accounting.model import (
+    PriceComponent,
+    SynchronizationState,
+    UsageUnit,
+)
 from llmrouter_backend.authority import (
     Audience,
     AuthorityClass,
@@ -29,7 +35,11 @@ from .model import (
     ConfigurationState,
     ConfigurationWriteResult,
     DistributionState,
+    EffectiveConfiguration,
+    EffectiveItem,
     InheritedDisable,
+    PriceAuthority,
+    PriceAuthorityMode,
     ProviderInstance,
     ProviderModelRoute,
     RegisteredDocument,
@@ -47,8 +57,6 @@ if TYPE_CHECKING:
     from psycopg import Connection
 
     from llmrouter_backend.authority import RequestContext
-
-    from .model import EffectiveConfiguration
 
 _MAXIMUM_REASON_CHARACTERS = 500
 _MAXIMUM_DESCENDANT_SCOPES = 10_000
@@ -104,6 +112,11 @@ class PostgresConfigurationRepository:
                 if current is None
                 else _revision_content(connection, current[0], context.request_id)
             )
+            content = _prepare_price_content(
+                content,
+                old_content,
+                identity_factory=self._identity_factory,
+            )
             issues = list(_shape_issues(content))
             issues.extend(_transition_issues(old_content, content))
             if not issues:
@@ -111,6 +124,7 @@ class PostgresConfigurationRepository:
                     _projection_identity_issues(connection, old_content, content)
                 )
             issues.extend(_eligibility_issues(connection, scope, content))
+            issues.extend(_price_currency_issues(connection, scope, content))
             proposed = RevisionLayer(scope, str(revision_id), content)
             issues.extend(self._affected_validation(connection, scope, proposed))
             issues.extend(_credential_issues(connection, scope, content))
@@ -150,6 +164,7 @@ class PostgresConfigurationRepository:
                 content,
                 revision_id=revision_id,
                 now=now,
+                identity_factory=self._identity_factory,
             )
             _insert_assignment_rows(
                 connection,
@@ -234,7 +249,13 @@ class PostgresConfigurationRepository:
                 raise ConfigurationError(
                     ConfigurationErrorCode.NOT_FOUND, context.request_id
                 )
-            content = _decode_content(cast("dict[str, Any]", target[0]))
+            content = _decode_content(
+                _with_legacy_price_content(
+                    connection,
+                    target_revision,
+                    cast("dict[str, Any]", target[0]),
+                )
+            )
             old_content = _revision_content(connection, current[0], context.request_id)
             issues = list(
                 _transition_issues(old_content, content, allow_omissions=True)
@@ -243,6 +264,7 @@ class PostgresConfigurationRepository:
             issues.extend(self._affected_validation(connection, scope, proposed))
             issues.extend(_credential_issues(connection, scope, content))
             issues.extend(_eligibility_issues(connection, scope, content))
+            issues.extend(_price_currency_issues(connection, scope, content))
             if issues:
                 raise ConfigurationError(
                     ConfigurationErrorCode.VALIDATION_FAILED,
@@ -281,6 +303,7 @@ class PostgresConfigurationRepository:
                 revision_id=new_revision,
                 now=now,
                 retire_omitted=True,
+                identity_factory=self._identity_factory,
             )
             _insert_assignment_rows(
                 connection,
@@ -344,11 +367,12 @@ class PostgresConfigurationRepository:
                 )
             state = _effective_distribution_state(connection, layers)
             try:
-                return resolve_configuration(
+                resolved = resolve_configuration(
                     layers,
                     registry=self._registry,
                     distribution_state=state,
                 )
+                return _with_current_price_states(connection, resolved)
             except ValueError as error:
                 raise ConfigurationError(
                     ConfigurationErrorCode.VALIDATION_FAILED,
@@ -462,6 +486,45 @@ def _load_layers(
                 )
             )
     return tuple(layers)
+
+
+def _with_current_price_states(
+    connection: Connection[Any], value: EffectiveConfiguration
+) -> EffectiveConfiguration:
+    """Show the latest safe synchronization state with immutable route prices."""
+    route_ids = [uuid.UUID(item.stable_id) for item in value.provider_model_routes]
+    if not route_ids:
+        return value
+    states = {
+        str(row[0]): SynchronizationState(row[1])
+        for row in connection.execute(
+            """SELECT state.provider_model_route_id,
+                      CASE
+                        WHEN state.synchronization_state = 'current'
+                         AND source.authority_kind = 'synchronized'
+                         AND state.observed_at + source.stale_after <=
+                             transaction_timestamp()
+                        THEN 'stale'
+                        ELSE state.synchronization_state
+                      END
+               FROM router.route_price_synchronization_states AS state
+               JOIN router.route_price_sources AS source
+                 ON source.provider_model_route_id = state.provider_model_route_id
+               WHERE state.provider_model_route_id = ANY(%s)""",
+            (route_ids,),
+        ).fetchall()
+    }
+    routes: list[EffectiveItem] = []
+    for item in value.provider_model_routes:
+        route = cast("ProviderModelRoute", item.value)
+        state = states.get(item.stable_id, route.synchronization_state)
+        routes.append(
+            replace(
+                item,
+                value=replace(route, synchronization_state=state),
+            )
+        )
+    return replace(value, provider_model_routes=tuple(routes))
 
 
 def _scope_chain(
@@ -593,7 +656,103 @@ def _revision_content(
     ).fetchone()
     if row is None:
         raise ConfigurationError(ConfigurationErrorCode.NOT_FOUND, request_id)
-    return _decode_content(cast("dict[str, Any]", row[0]))
+    content = cast("dict[str, Any]", row[0])
+    return _decode_content(_with_legacy_price_content(connection, revision_id, content))
+
+
+def _with_legacy_price_content(
+    connection: Connection[Any], revision_id: uuid.UUID, value: dict[str, Any]
+) -> dict[str, Any]:
+    """Read pre-pricing revision content through immutable migration bindings."""
+    routes = value.get("provider_model_routes", [])
+    legacy_ids = [
+        uuid.UUID(item["provider_model_route_id"])
+        for item in routes
+        if "price_authority" not in item
+    ]
+    if not legacy_ids:
+        return value
+    rows = connection.execute(
+        """
+        SELECT legacy.provider_model_route_id::text,
+               COALESCE(source.authority_kind, 'synchronized'),
+               CASE WHEN source.authority_kind = 'manual' THEN NULL
+                    ELSE COALESCE(source.source_name, 'legacy-unconfigured') END,
+               CASE WHEN source.authority_kind = 'manual' THEN NULL
+                    ELSE COALESCE(source.lookup_identifier,
+                                  route.wire_model) END,
+               COALESCE(source.synchronization_schedule, '0 0 * * 0'),
+               COALESCE(extract(epoch FROM source.stale_after)::bigint,
+                        1209600),
+               binding.price_version_id::text,
+               CASE WHEN binding.price_version_id IS NULL
+                         AND source.authority_kind = 'manual' THEN 'manual'
+                    WHEN binding.price_version_id IS NULL THEN 'missing'
+                    ELSE COALESCE(
+                        state.synchronization_state,
+                        CASE WHEN source.authority_kind = 'manual'
+                             THEN 'manual' ELSE 'current' END)
+               END,
+               version.currency::text, component.unit_name,
+               component.unit_price, component.raw_source_value,
+               component.unit_quantity
+        FROM unnest(%s::uuid[]) AS legacy(provider_model_route_id)
+        JOIN router.provider_model_routes AS route
+          ON route.id = legacy.provider_model_route_id
+        LEFT JOIN router.route_price_sources AS source
+          ON source.provider_model_route_id = legacy.provider_model_route_id
+        LEFT JOIN router.configuration_price_bindings AS binding
+          ON binding.configuration_revision_id = %s
+         AND binding.provider_model_route_id = legacy.provider_model_route_id
+        LEFT JOIN router.route_price_versions AS version
+          ON version.id = binding.price_version_id
+         AND version.provider_model_route_id = legacy.provider_model_route_id
+        LEFT JOIN router.route_price_components AS component
+          ON component.price_version_id = version.id
+        LEFT JOIN router.route_price_synchronization_states AS state
+          ON state.provider_model_route_id = legacy.provider_model_route_id
+        ORDER BY legacy.provider_model_route_id, component.unit_name
+        """,
+        (legacy_ids, revision_id),
+    ).fetchall()
+    policies: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        policy = policies.setdefault(
+            row[0],
+            {
+                "price_authority": {
+                    "mode": "manual" if row[1] == "manual" else "source",
+                    "source_name": row[2],
+                    "lookup_identifier": row[3],
+                },
+                "prices": [],
+                "synchronization_schedule": row[4],
+                "stale_after_seconds": row[5],
+                "price_version": row[6],
+                "synchronization_state": row[7],
+            },
+        )
+        if row[9] is not None:
+            policy["prices"].append(
+                {
+                    "unit": row[9],
+                    "price": str(row[10]),
+                    "currency": row[8],
+                    "raw_source_value": row[11],
+                    "unit_quantity": str(row[12]),
+                }
+            )
+    if set(policies) != {str(item) for item in legacy_ids}:
+        msg = "A legacy configuration route has no accepted price binding."
+        raise RuntimeError(msg)
+    upgraded = dict(value)
+    upgraded["provider_model_routes"] = [
+        item
+        if "price_authority" in item
+        else {**item, **policies[item["provider_model_route_id"]]}
+        for item in routes
+    ]
+    return upgraded
 
 
 def _transition_issues(
@@ -650,6 +809,19 @@ def _transition_issues(
             issues.extend(
                 _immutable_identity_issues(path, stable_id, previous, current)
             )
+            if (
+                not allow_omissions
+                and isinstance(previous, ProviderModelRoute)
+                and isinstance(current, ProviderModelRoute)
+                and current.price_authority.mode is PriceAuthorityMode.SOURCE
+                and current.prices != previous.prices
+            ):
+                issues.append(
+                    ValidationIssue(
+                        f"{path}.{stable_id}.prices",
+                        "A source-owned price can change only by synchronization.",
+                    )
+                )
     return tuple(issues)
 
 
@@ -774,6 +946,92 @@ def _eligibility_issues(
         )
         for _value in sorted(eligible_ids - valid)
     )
+
+
+def _price_currency_issues(
+    connection: Connection[Any],
+    scope: ConfigurationScope,
+    content: ScopeConfiguration,
+) -> tuple[ValidationIssue, ...]:
+    """Require each route price to match every applicable hard-budget currency."""
+    issues: list[ValidationIssue] = []
+    for index, item in enumerate(content.provider_model_routes):
+        try:
+            route_id = uuid.UUID(item.provider_model_route_id)
+            eligible_ids = [uuid.UUID(value) for value in item.eligible_service_ids]
+            owner_service_id = (
+                None if scope.service_id is None else uuid.UUID(scope.service_id)
+            )
+        except ValueError:
+            continue
+        currencies = connection.execute(
+            """
+            WITH RECURSIVE roots AS (
+                SELECT service.id
+                FROM router.services AS service
+                WHERE service.state <> 'retired'
+                  AND (
+                    (%s::boolean AND %s::uuid[] = '{}'::uuid[])
+                    OR service.id = ANY(%s::uuid[])
+                    OR (NOT %s::boolean
+                        AND %s::uuid[] = '{}'::uuid[]
+                        AND service.id = %s)
+                  )
+            ), permitted_services AS (
+                SELECT id FROM roots
+              UNION
+                SELECT child.id
+                FROM router.services AS child
+                JOIN permitted_services AS parent
+                  ON child.parent_service_id = parent.id
+                WHERE child.state <> 'retired'
+            ), applicable AS (
+                SELECT budget.currency
+                FROM router.budget_scopes AS budget
+                WHERE budget.scope_kind = 'global'
+              UNION
+                SELECT budget.currency
+                FROM router.budget_scopes AS budget
+                WHERE budget.scope_kind IN ('service', 'workspace')
+                  AND (budget.service_id = %s
+                       OR budget.service_id IN (SELECT id FROM permitted_services))
+              UNION
+                SELECT budget.currency
+                FROM router.assignment_candidates AS candidate
+                JOIN router.assignment_definitions AS assignment
+                  ON assignment.id = candidate.assignment_id
+                 AND assignment.configuration_revision_id =
+                     candidate.configuration_revision_id
+                JOIN router.active_configurations AS active
+                  ON active.revision_id = assignment.configuration_revision_id
+                JOIN router.budget_scopes AS budget
+                  ON budget.assignment_id = candidate.assignment_id
+                WHERE candidate.provider_model_route_id = %s
+            )
+            SELECT DISTINCT currency::text FROM applicable
+            """,
+            (
+                scope.service_id is None,
+                eligible_ids,
+                eligible_ids,
+                scope.service_id is None,
+                eligible_ids,
+                owner_service_id,
+                owner_service_id,
+                route_id,
+            ),
+        ).fetchall()
+        if not item.prices:
+            continue
+        currency = item.prices[0].currency
+        if any(row[0] != currency for row in currencies):
+            issues.append(
+                ValidationIssue(
+                    f"provider_model_routes[{index}].prices.currency",
+                    "The price currency does not match an eligible hard-budget scope.",
+                )
+            )
+    return tuple(issues)
 
 
 def _shape_issues(  # noqa: C901, PLR0912
@@ -1019,7 +1277,7 @@ def _retire_omitted_projections(  # noqa: PLR0913
             )
 
 
-def _synchronize_projections(  # noqa: PLR0913
+def _synchronize_projections(  # noqa: C901, PLR0913
     connection: Connection[Any],
     scope: ConfigurationScope,
     old: ScopeConfiguration,
@@ -1027,6 +1285,7 @@ def _synchronize_projections(  # noqa: PLR0913
     *,
     revision_id: uuid.UUID,
     now: datetime,
+    identity_factory: Callable[[], uuid.UUID],
     retire_omitted: bool = False,
 ) -> None:
     if retire_omitted:
@@ -1093,6 +1352,18 @@ def _synchronize_projections(  # noqa: PLR0913
             owner_service_id=owner_service,
             revision_id=revision_id,
             now=now,
+        )
+    old_routes = {
+        item.provider_model_route_id: item for item in old.provider_model_routes
+    }
+    for route_item in new.provider_model_routes:
+        _project_route_price(
+            connection,
+            route_item,
+            previous=old_routes.get(route_item.provider_model_route_id),
+            revision_id=revision_id,
+            now=now,
+            identity_factory=identity_factory,
         )
 
 
@@ -1353,6 +1624,190 @@ def _upsert_provider_route(  # noqa: PLR0913
                 item_id,
             ),
         )
+
+
+def _project_route_price(  # noqa: PLR0913
+    connection: Connection[Any],
+    item: ProviderModelRoute,
+    *,
+    previous: ProviderModelRoute | None,
+    revision_id: uuid.UUID,
+    now: datetime,
+    identity_factory: Callable[[], uuid.UUID],
+) -> None:
+    """Project one revision-bound price authority and exact price version."""
+    route_id = uuid.UUID(item.provider_model_route_id)
+    price_version_id = (
+        None if item.price_version is None else uuid.UUID(item.price_version)
+    )
+    connection.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+        (f"price-version:{item.provider_model_route_id}",),
+    )
+    source = connection.execute(
+        """SELECT id FROM router.route_price_sources
+           WHERE provider_model_route_id = %s FOR UPDATE""",
+        (route_id,),
+    ).fetchone()
+    authority_kind = (
+        "manual"
+        if item.price_authority.mode is PriceAuthorityMode.MANUAL
+        else "synchronized"
+    )
+    source_name = item.price_authority.source_name
+    lookup_identifier = item.price_authority.lookup_identifier
+    source_id = identity_factory() if source is None else source[0]
+    connection.execute(
+        """
+        INSERT INTO router.route_price_sources (
+            id, provider_model_route_id, authority_kind, source_name,
+            lookup_identifier, synchronization_schedule, stale_after
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s * interval '1 second')
+        ON CONFLICT (provider_model_route_id) DO UPDATE
+        SET authority_kind = EXCLUDED.authority_kind,
+            source_name = EXCLUDED.source_name,
+            lookup_identifier = EXCLUDED.lookup_identifier,
+            synchronization_schedule = EXCLUDED.synchronization_schedule,
+            stale_after = EXCLUDED.stale_after
+        """,
+        (
+            source_id,
+            route_id,
+            authority_kind,
+            source_name,
+            lookup_identifier,
+            item.synchronization_schedule,
+            item.stale_after_seconds,
+        ),
+    )
+    version = (
+        None
+        if price_version_id is None
+        else connection.execute(
+            """SELECT provider_model_route_id FROM router.route_price_versions
+           WHERE id = %s""",
+            (price_version_id,),
+        ).fetchone()
+    )
+    if price_version_id is not None and version is None:
+        next_version = connection.execute(
+            """SELECT COALESCE(max(version_number), 0) + 1
+               FROM router.route_price_versions
+               WHERE provider_model_route_id = %s""",
+            (route_id,),
+        ).fetchone()
+        if next_version is None:
+            msg = "The route price version sequence is unavailable."
+            raise RuntimeError(msg)
+        connection.execute(
+            """
+            INSERT INTO router.route_price_versions (
+                id, provider_model_route_id, source_snapshot_id, version_number,
+                currency, status, accepted_at
+            ) VALUES (%s, %s, NULL, %s, %s, 'current', %s)
+            """,
+            (
+                price_version_id,
+                route_id,
+                next_version[0],
+                item.prices[0].currency,
+                now,
+            ),
+        )
+        for component in item.prices:
+            connection.execute(
+                """
+                INSERT INTO router.route_price_components (
+                    price_version_id, component_kind, unit_name, unit_quantity,
+                    unit_price, raw_source_value
+                ) VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    price_version_id,
+                    component.unit.value,
+                    component.unit.value,
+                    component.unit_quantity,
+                    component.price,
+                    component.raw_source_value,
+                ),
+            )
+    elif version is not None and version[0] != route_id:
+        msg = "The route price version belongs to a different route."
+        raise RuntimeError(msg)
+    elif version is not None:
+        stored_rows = connection.execute(
+            """
+            SELECT component.unit_name, component.unit_price,
+                   version.currency::text, component.raw_source_value,
+                   component.unit_quantity
+            FROM router.route_price_versions AS version
+            JOIN router.route_price_components AS component
+              ON component.price_version_id = version.id
+            WHERE version.id = %s
+            ORDER BY component.unit_name
+            """,
+            (price_version_id,),
+        ).fetchall()
+        stored_prices = tuple(
+            PriceComponent(UsageUnit(row[0]), row[1], row[2], row[3], row[4])
+            for row in stored_rows
+        )
+        if stored_prices != item.prices:
+            msg = "The immutable route price version does not match its content."
+            raise RuntimeError(msg)
+    if price_version_id is not None:
+        connection.execute(
+            """
+            INSERT INTO router.configuration_price_bindings (
+                configuration_revision_id, provider_model_route_id, price_version_id
+            ) VALUES (%s, %s, %s)
+            """,
+            (revision_id, route_id, price_version_id),
+        )
+    state = cast("SynchronizationState", item.synchronization_state)
+    must_replace_state = item.price_authority.mode is PriceAuthorityMode.MANUAL
+    if (
+        item.price_authority.mode is PriceAuthorityMode.SOURCE
+        and previous is not None
+        and (
+            previous.price_authority != item.price_authority
+            or previous.price_version != item.price_version
+        )
+    ):
+        state = SynchronizationState.STALE
+        must_replace_state = True
+    statement = (
+        """
+        INSERT INTO router.route_price_synchronization_states (
+            provider_model_route_id, synchronization_state,
+            last_price_version_id, last_error_class, observed_at
+        ) VALUES (%s, %s, %s, NULL, %s)
+        ON CONFLICT (provider_model_route_id) DO UPDATE
+        SET synchronization_state = EXCLUDED.synchronization_state,
+            last_price_version_id = EXCLUDED.last_price_version_id,
+            last_error_class = NULL,
+            observed_at = EXCLUDED.observed_at
+        WHERE EXCLUDED.observed_at >=
+              router.route_price_synchronization_states.observed_at
+        """
+        if must_replace_state
+        else """
+        INSERT INTO router.route_price_synchronization_states (
+            provider_model_route_id, synchronization_state,
+            last_price_version_id, last_error_class, observed_at
+        ) VALUES (%s, %s, %s, NULL, %s)
+        ON CONFLICT (provider_model_route_id) DO NOTHING
+        """
+    )
+    connection.execute(
+        statement,
+        (
+            route_id,
+            state.value,
+            price_version_id,
+            now,
+        ),
+    )
 
 
 def _insert_assignment_rows(
@@ -1740,6 +2195,47 @@ def _canonical_json(value: dict[str, Any]) -> bytes:
     ).encode()
 
 
+def _prepare_price_content(
+    value: ScopeConfiguration,
+    previous: ScopeConfiguration,
+    *,
+    identity_factory: Callable[[], uuid.UUID],
+) -> ScopeConfiguration:
+    """Assign server-owned immutable price identities before publication."""
+    old_routes = {
+        item.provider_model_route_id: item for item in previous.provider_model_routes
+    }
+    routes: list[ProviderModelRoute] = []
+    for item in value.provider_model_routes:
+        old = old_routes.get(item.provider_model_route_id)
+        same_prices = old is not None and old.prices == item.prices
+        price_version_id = str(identity_factory()) if item.prices else None
+        if old is not None and same_prices and old.price_version is not None:
+            price_version_id = old.price_version
+        if item.price_authority.mode is PriceAuthorityMode.MANUAL:
+            state = SynchronizationState.MANUAL
+        elif (
+            old is not None
+            and old.price_authority == item.price_authority
+            and same_prices
+        ):
+            state = cast("SynchronizationState", old.synchronization_state)
+        else:
+            state = (
+                SynchronizationState.CURRENT
+                if item.prices
+                else SynchronizationState.MISSING
+            )
+        routes.append(
+            replace(
+                item,
+                price_version=price_version_id,
+                synchronization_state=state,
+            )
+        )
+    return replace(value, provider_model_routes=tuple(routes))
+
+
 def _encode_content(value: ScopeConfiguration) -> dict[str, Any]:
     return {
         "catalog": [
@@ -1779,6 +2275,27 @@ def _encode_content(value: ScopeConfiguration) -> dict[str, Any]:
                 "wire_model": item.wire_model,
                 "capabilities": sorted(item.capabilities),
                 "settings": _encode_document(item.settings),
+                "price_authority": {
+                    "mode": item.price_authority.mode.value,
+                    "source_name": item.price_authority.source_name,
+                    "lookup_identifier": item.price_authority.lookup_identifier,
+                },
+                "prices": [
+                    {
+                        "unit": price.unit.value,
+                        "price": str(price.price),
+                        "currency": price.currency,
+                        "raw_source_value": price.raw_source_value,
+                        "unit_quantity": str(price.unit_quantity),
+                    }
+                    for price in item.prices
+                ],
+                "synchronization_schedule": item.synchronization_schedule,
+                "stale_after_seconds": item.stale_after_seconds,
+                "price_version": item.price_version,
+                "synchronization_state": cast(
+                    "SynchronizationState", item.synchronization_state
+                ).value,
                 "state": item.state.value,
                 "eligible_service_ids": sorted(item.eligible_service_ids),
                 "embedding_model_space_id": item.embedding_model_space_id,
@@ -1872,6 +2389,29 @@ def _decode_content(value: dict[str, Any]) -> ScopeConfiguration:
                     wire_model=item["wire_model"],
                     capabilities=frozenset(item["capabilities"]),
                     settings=_decode_document(item["settings"]),
+                    price_authority=PriceAuthority(
+                        mode=PriceAuthorityMode(item["price_authority"]["mode"]),
+                        source_name=item["price_authority"].get("source_name"),
+                        lookup_identifier=item["price_authority"].get(
+                            "lookup_identifier"
+                        ),
+                    ),
+                    prices=tuple(
+                        PriceComponent(
+                            unit=UsageUnit(price["unit"]),
+                            price=price["price"],
+                            currency=price["currency"],
+                            raw_source_value=price["raw_source_value"],
+                            unit_quantity=price.get("unit_quantity", "1"),
+                        )
+                        for price in item["prices"]
+                    ),
+                    synchronization_schedule=item["synchronization_schedule"],
+                    stale_after_seconds=item["stale_after_seconds"],
+                    price_version=item["price_version"],
+                    synchronization_state=SynchronizationState(
+                        item["synchronization_state"]
+                    ),
                     state=ConfigurationState(item["state"]),
                     eligible_service_ids=frozenset(item["eligible_service_ids"]),
                     embedding_model_space_id=item.get("embedding_model_space_id"),

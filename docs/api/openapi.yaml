@@ -1926,6 +1926,9 @@ components:
     NonNegativeDecimal:
       type: string
       pattern: '^(0|[1-9][0-9]*)(\.[0-9]+)?$'
+    PositiveDecimal:
+      type: string
+      pattern: '^([1-9][0-9]*)(\.[0-9]+)?$|^0\.[0-9]*[1-9][0-9]*$'
     ContractManifest:
       type: object
       additionalProperties: false
@@ -2856,7 +2859,7 @@ components:
     PutProviderModelRoute:
       type: object
       additionalProperties: false
-      required: [provider_instance_id, canonical_model_id, wire_model, capabilities, price_authority, prices, state, expected_revision]
+      required: [provider_instance_id, canonical_model_id, wire_model, capabilities, price_authority, prices, synchronization_schedule, stale_after_seconds, state, expected_revision]
       allOf:
         - if:
             properties:
@@ -2864,6 +2867,15 @@ components:
             required: [capabilities]
           then:
             required: [embedding_model_space_id, embedding_dimensions]
+        - if:
+            properties:
+              price_authority:
+                properties: {mode: {const: manual}}
+                required: [mode]
+            required: [price_authority]
+          then:
+            properties:
+              prices: {minItems: 1}
       properties:
         provider_instance_id: {$ref: '#/components/schemas/OpaqueId'}
         canonical_model_id: {$ref: '#/components/schemas/OpaqueId'}
@@ -2872,13 +2884,15 @@ components:
         embedding_model_space_id: {$ref: '#/components/schemas/OpaqueId'}
         embedding_dimensions: {type: integer, minimum: 1, maximum: 4096}
         price_authority: {$ref: '#/components/schemas/PriceAuthority'}
-        prices: {type: array, items: {$ref: '#/components/schemas/PriceComponent'}}
+        prices: {type: array, maxItems: 32, items: {$ref: '#/components/schemas/PriceComponent'}, description: A source-owned route can be empty until its first successful synchronization.}
+        synchronization_schedule: {type: string, minLength: 9, maxLength: 100, description: Five-field UTC cron schedule. The initial value is 0 0 * * 0.}
+        stale_after_seconds: {type: integer, minimum: 1, maximum: 31536000, description: A price becomes stale after this age. The initial value is 1209600 seconds.}
         state: {type: string, enum: [active, disabled, retired]}
         expected_revision: {oneOf: [{$ref: '#/components/schemas/OpaqueId'}, {type: 'null'}]}
     ProviderModelRoute:
       type: object
       additionalProperties: false
-      required: [provider_model_route_id, owner_scope, provider_instance_id, canonical_model_id, wire_model, capabilities, price_authority, prices, price_version, synchronization_state, state, active_revision, inherited]
+      required: [provider_model_route_id, owner_scope, provider_instance_id, canonical_model_id, wire_model, capabilities, price_authority, prices, synchronization_schedule, stale_after_seconds, price_version, synchronization_state, state, active_revision, inherited]
       allOf:
         - if:
             properties:
@@ -2896,8 +2910,10 @@ components:
         embedding_model_space_id: {$ref: '#/components/schemas/OpaqueId'}
         embedding_dimensions: {type: integer, minimum: 1, maximum: 4096}
         price_authority: {$ref: '#/components/schemas/PriceAuthority'}
-        prices: {type: array, items: {$ref: '#/components/schemas/PriceComponent'}}
-        price_version: {$ref: '#/components/schemas/OpaqueId'}
+        prices: {type: array, maxItems: 32, items: {$ref: '#/components/schemas/PriceComponent'}}
+        synchronization_schedule: {type: string, minLength: 9, maxLength: 100}
+        stale_after_seconds: {type: integer, minimum: 1, maximum: 31536000}
+        price_version: {oneOf: [{$ref: '#/components/schemas/OpaqueId'}, {type: 'null'}]}
         synchronization_state: {type: string, enum: [manual, current, stale, missing, failed]}
         state: {type: string, enum: [active, disabled, retired]}
         active_revision: {$ref: '#/components/schemas/OpaqueId'}
@@ -2913,12 +2929,13 @@ components:
       type: object
       additionalProperties: false
       description: The currency must equal the accounting currency of every hard-budget scope that makes this route eligible.
-      required: [unit, price, currency, raw_source_value]
+      required: [unit, price, currency, raw_source_value, unit_quantity]
       properties:
-        unit: {type: string, enum: [input_token, output_token, cached_token, request, image, audio_second, search, tool_unit]}
+        unit: {type: string, enum: [input_token, output_token, cached_token, request, image, audio_second, search, tool_unit, other]}
         price: {$ref: '#/components/schemas/NonNegativeDecimal'}
         currency: {type: string, pattern: '^[A-Z]{3}$'}
         raw_source_value: {type: string, minLength: 1, maxLength: 200}
+        unit_quantity: {$ref: '#/components/schemas/PositiveDecimal'}
     PriceAuthority:
       type: object
       additionalProperties: false
@@ -2952,6 +2969,11 @@ components:
         state: {type: string, enum: [previewed, queued, running, completed, failed]}
         dry_run: {type: boolean}
         resulting_configuration_revision: {$ref: '#/components/schemas/OpaqueId'}
+        resulting_configuration_revisions:
+          type: array
+          maxItems: 10000
+          uniqueItems: true
+          items: {$ref: '#/components/schemas/OpaqueId'}
         source_snapshot:
           type: object
           additionalProperties: false

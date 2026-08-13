@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from decimal import Decimal
 
+import pytest
 from llmrouter_backend.configuration import (
     Assignment,
     AssignmentCandidate,
@@ -13,6 +15,9 @@ from llmrouter_backend.configuration import (
     ConfigurationScope,
     DistributionState,
     InheritedDisable,
+    PriceAuthority,
+    PriceAuthorityMode,
+    PriceComponent,
     ProviderInstance,
     ProviderModelRoute,
     RegisteredDocument,
@@ -21,6 +26,8 @@ from llmrouter_backend.configuration import (
     RevisionLayer,
     ScopeConfiguration,
     SettingsSchemaRegistry,
+    SynchronizationState,
+    UsageUnit,
     resolve_configuration,
     validate_endpoint,
     validate_layers,
@@ -92,6 +99,12 @@ def _global_content() -> ScopeConfiguration:
                 "model-a",
                 frozenset({"text"}),
                 _document("route.settings", {"tier": "normal"}),
+                PriceAuthority(PriceAuthorityMode.MANUAL),
+                (
+                    PriceComponent(
+                        UsageUnit.INPUT_TOKEN, Decimal("0.001"), "USD", "0.001"
+                    ),
+                ),
             ),
             ProviderModelRoute(
                 ROUTE_B,
@@ -100,6 +113,12 @@ def _global_content() -> ScopeConfiguration:
                 "model-b",
                 frozenset({"text"}),
                 _document("route.settings", {"tier": "normal"}),
+                PriceAuthority(PriceAuthorityMode.MANUAL),
+                (
+                    PriceComponent(
+                        UsageUnit.INPUT_TOKEN, Decimal("0.002"), "USD", "0.002"
+                    ),
+                ),
             ),
         ),
         assignments=(
@@ -314,3 +333,22 @@ def test_registered_document_is_deeply_immutable_and_finds_nested_secrets() -> N
     assert document.document["nested"]["values"] == ("one",)
     issues = registry.validate(document, field_path="settings")
     assert {item.field_path for item in issues} == {"settings.document.nested.token"}
+
+
+def test_route_price_policy_rejects_invalid_authority_and_time_values() -> None:
+    """Reject incomplete source authority, invalid cron, and unsafe stale ages."""
+    with pytest.raises(ValueError, match="lookup identifier"):
+        PriceAuthority(PriceAuthorityMode.SOURCE, "catalog-test")
+    route = _global_content().provider_model_routes[0]
+    with pytest.raises(ValueError, match="cron"):
+        replace(route, synchronization_schedule="each week")
+    with pytest.raises(ValueError, match="cron"):
+        replace(route, synchronization_schedule="99 0 * * 0")
+    with pytest.raises(ValueError, match="one second"):
+        replace(route, stale_after_seconds=0)
+    manual = replace(
+        route,
+        price_authority=PriceAuthority(PriceAuthorityMode.MANUAL),
+        synchronization_state=SynchronizationState.STALE,
+    )
+    assert manual.synchronization_state is SynchronizationState.MANUAL

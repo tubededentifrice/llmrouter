@@ -1,5 +1,11 @@
 """Catalog, inheritance, validation, and immutable configuration revisions."""
 
+from llmrouter_backend.accounting.model import (
+    PriceComponent,
+    SynchronizationState,
+    UsageUnit,
+)
+
 from .errors import ConfigurationError, ConfigurationErrorCode, ValidationIssue
 from .model import (
     Assignment,
@@ -13,6 +19,8 @@ from .model import (
     EffectiveConfiguration,
     EffectiveItem,
     InheritedDisable,
+    PriceAuthority,
+    PriceAuthorityMode,
     ProviderInstance,
     ProviderModelRoute,
     RegisteredDocument,
@@ -39,6 +47,9 @@ __all__ = [
     "EffectiveItem",
     "InheritedDisable",
     "PostgresConfigurationRepository",
+    "PriceAuthority",
+    "PriceAuthorityMode",
+    "PriceComponent",
     "ProviderInstance",
     "ProviderModelRoute",
     "RegisteredDocument",
@@ -47,6 +58,8 @@ __all__ = [
     "RevisionLayer",
     "ScopeConfiguration",
     "SettingsSchemaRegistry",
+    "SynchronizationState",
+    "UsageUnit",
     "ValidationIssue",
     "resolve_configuration",
     "validate_endpoint",

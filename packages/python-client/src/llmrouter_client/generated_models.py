@@ -233,6 +233,8 @@ Decimal: TypeAlias = str
 
 NonNegativeDecimal: TypeAlias = str
 
+PositiveDecimal: TypeAlias = str
+
 ContractManifest = TypedDict('ContractManifest', {
     'contract_set': 'Literal["llmrouter-v1"]',
     'version': 'str',
@@ -789,6 +791,8 @@ PutProviderModelRoute = TypedDict('PutProviderModelRoute', {
     'embedding_dimensions': 'NotRequired[int]',
     'price_authority': 'PriceAuthority',
     'prices': 'list[PriceComponent]',
+    'synchronization_schedule': 'str',
+    'stale_after_seconds': 'int',
     'state': 'Literal["active", "disabled", "retired"]',
     'expected_revision': 'OpaqueId | None',
 })
@@ -804,7 +808,9 @@ ProviderModelRoute = TypedDict('ProviderModelRoute', {
     'embedding_dimensions': 'NotRequired[int]',
     'price_authority': 'PriceAuthority',
     'prices': 'list[PriceComponent]',
-    'price_version': 'OpaqueId',
+    'synchronization_schedule': 'str',
+    'stale_after_seconds': 'int',
+    'price_version': 'OpaqueId | None',
     'synchronization_state': 'Literal["manual", "current", "stale", "missing", "failed"]',
     'state': 'Literal["active", "disabled", "retired"]',
     'active_revision': 'OpaqueId',
@@ -817,10 +823,11 @@ ProviderModelRoutePage = TypedDict('ProviderModelRoutePage', {
 })
 
 PriceComponent = TypedDict('PriceComponent', {
-    'unit': 'Literal["input_token", "output_token", "cached_token", "request", "image", "audio_second", "search", "tool_unit"]',
+    'unit': 'Literal["input_token", "output_token", "cached_token", "request", "image", "audio_second", "search", "tool_unit", "other"]',
     'price': 'NonNegativeDecimal',
     'currency': 'str',
     'raw_source_value': 'str',
+    'unit_quantity': 'PositiveDecimal',
 })
 
 PriceAuthority = TypedDict('PriceAuthority', {
@@ -839,6 +846,7 @@ PriceSynchronization = TypedDict('PriceSynchronization', {
     'state': 'Literal["previewed", "queued", "running", "completed", "failed"]',
     'dry_run': 'bool',
     'resulting_configuration_revision': 'NotRequired[OpaqueId]',
+    'resulting_configuration_revisions': 'NotRequired[list[OpaqueId]]',
     'source_snapshot': 'PriceSynchronizationSourceSnapshot',
     'results': 'list[PriceSynchronizationResultsItem]',
 })
@@ -4954,6 +4962,10 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
     ],
     "type": "object"
   },
+  "PositiveDecimal": {
+    "pattern": "^([1-9][0-9]*)(\\.[0-9]+)?$|^0\\.[0-9]*[1-9][0-9]*$",
+    "type": "string"
+  },
   "PreviewRetentionConfiguration": {
     "additionalProperties": false,
     "properties": {
@@ -5057,16 +5069,21 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
           "image",
           "audio_second",
           "search",
-          "tool_unit"
+          "tool_unit",
+          "other"
         ],
         "type": "string"
+      },
+      "unit_quantity": {
+        "$ref": "#/components/schemas/PositiveDecimal"
       }
     },
     "required": [
       "unit",
       "price",
       "currency",
-      "raw_source_value"
+      "raw_source_value",
+      "unit_quantity"
     ],
     "type": "object"
   },
@@ -5081,6 +5098,14 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
       },
       "resulting_configuration_revision": {
         "$ref": "#/components/schemas/OpaqueId"
+      },
+      "resulting_configuration_revisions": {
+        "items": {
+          "$ref": "#/components/schemas/OpaqueId"
+        },
+        "maxItems": 10000,
+        "type": "array",
+        "uniqueItems": true
       },
       "results": {
         "items": {
@@ -5363,12 +5388,20 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
         "$ref": "#/components/schemas/PriceAuthority"
       },
       "price_version": {
-        "$ref": "#/components/schemas/OpaqueId"
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          {
+            "type": "null"
+          }
+        ]
       },
       "prices": {
         "items": {
           "$ref": "#/components/schemas/PriceComponent"
         },
+        "maxItems": 32,
         "type": "array"
       },
       "provider_instance_id": {
@@ -5377,12 +5410,22 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
       "provider_model_route_id": {
         "$ref": "#/components/schemas/OpaqueId"
       },
+      "stale_after_seconds": {
+        "maximum": 31536000,
+        "minimum": 1,
+        "type": "integer"
+      },
       "state": {
         "enum": [
           "active",
           "disabled",
           "retired"
         ],
+        "type": "string"
+      },
+      "synchronization_schedule": {
+        "maxLength": 100,
+        "minLength": 9,
         "type": "string"
       },
       "synchronization_state": {
@@ -5410,6 +5453,8 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
       "capabilities",
       "price_authority",
       "prices",
+      "synchronization_schedule",
+      "stale_after_seconds",
       "price_version",
       "synchronization_state",
       "state",
@@ -5755,6 +5800,32 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
             "embedding_dimensions"
           ]
         }
+      },
+      {
+        "if": {
+          "properties": {
+            "price_authority": {
+              "properties": {
+                "mode": {
+                  "const": "manual"
+                }
+              },
+              "required": [
+                "mode"
+              ]
+            }
+          },
+          "required": [
+            "price_authority"
+          ]
+        },
+        "then": {
+          "properties": {
+            "prices": {
+              "minItems": 1
+            }
+          }
+        }
       }
     ],
     "properties": {
@@ -5790,13 +5861,21 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
         "$ref": "#/components/schemas/PriceAuthority"
       },
       "prices": {
+        "description": "A source-owned route can be empty until its first successful synchronization.",
         "items": {
           "$ref": "#/components/schemas/PriceComponent"
         },
+        "maxItems": 32,
         "type": "array"
       },
       "provider_instance_id": {
         "$ref": "#/components/schemas/OpaqueId"
+      },
+      "stale_after_seconds": {
+        "description": "A price becomes stale after this age. The initial value is 1209600 seconds.",
+        "maximum": 31536000,
+        "minimum": 1,
+        "type": "integer"
       },
       "state": {
         "enum": [
@@ -5804,6 +5883,12 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
           "disabled",
           "retired"
         ],
+        "type": "string"
+      },
+      "synchronization_schedule": {
+        "description": "Five-field UTC cron schedule. The initial value is 0 0 * * 0.",
+        "maxLength": 100,
+        "minLength": 9,
         "type": "string"
       },
       "wire_model": {
@@ -5819,6 +5904,8 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
       "capabilities",
       "price_authority",
       "prices",
+      "synchronization_schedule",
+      "stale_after_seconds",
       "state",
       "expected_revision"
     ],

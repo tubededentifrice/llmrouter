@@ -14,6 +14,8 @@ export type Decimal = string;
 
 export type NonNegativeDecimal = string;
 
+export type PositiveDecimal = string;
+
 export type ContractManifest = { readonly contract_set: "llmrouter-v1"; readonly version: string; readonly generated_at: Timestamp; readonly capabilities: ReadonlyArray<"model_requests" | "embedding_requests_v1" | "agent_runs" | "shared_tools" | "attachments" | "request_status" | "request_discovery" | "cancellation" | "sse_stream_v1" | "workspace_lifecycle" | "host_budget_ceiling" | "effective_configuration" | "assignment_configuration" | "provider_instance_configuration" | "provider_model_route_configuration" | "price_synchronization" | "budget_management" | "retention_management" | "configuration_revisions" | "business_tool_gateway" | "diagnostic_routing" | "administration_authentication" | "service_administration" | "catalog_administration" | "credential_administration" | "administrator_grants" | "operational_administration" | "audit_discovery" | "captured_content" | "protected_exports" | "accounting_summary" | "detailed_health" | "openai_chat_completions" | "openai_responses">; readonly artifacts: ReadonlyArray<ContractArtifact>; };
 
 export type ContractArtifact = { readonly name: "openapi" | "stream_protocol" | "error_catalog" | "service_management" | "embed_protocol" | "embedding_protocol" | "business_tool_gateway" | "request_fingerprint" | "cross_service_conformance"; readonly version: string; readonly major_version: number; readonly sha256: string; };
@@ -144,19 +146,19 @@ export type ProviderInstance = { readonly provider_instance_id: OpaqueId; readon
 
 export type ProviderInstancePage = { readonly items: ReadonlyArray<ProviderInstance>; readonly next_cursor?: string | null; };
 
-export type PutProviderModelRoute = { readonly provider_instance_id: OpaqueId; readonly canonical_model_id: OpaqueId; readonly wire_model: string; readonly capabilities: ReadonlyArray<string>; readonly embedding_model_space_id?: OpaqueId; readonly embedding_dimensions?: number; readonly price_authority: PriceAuthority; readonly prices: ReadonlyArray<PriceComponent>; readonly state: "active" | "disabled" | "retired"; readonly expected_revision: OpaqueId | null; };
+export type PutProviderModelRoute = { readonly provider_instance_id: OpaqueId; readonly canonical_model_id: OpaqueId; readonly wire_model: string; readonly capabilities: ReadonlyArray<string>; readonly embedding_model_space_id?: OpaqueId; readonly embedding_dimensions?: number; readonly price_authority: PriceAuthority; readonly prices: ReadonlyArray<PriceComponent>; readonly synchronization_schedule: string; readonly stale_after_seconds: number; readonly state: "active" | "disabled" | "retired"; readonly expected_revision: OpaqueId | null; };
 
-export type ProviderModelRoute = { readonly provider_model_route_id: OpaqueId; readonly owner_scope: OpaqueId; readonly provider_instance_id: OpaqueId; readonly canonical_model_id: OpaqueId; readonly wire_model: string; readonly capabilities: ReadonlyArray<string>; readonly embedding_model_space_id?: OpaqueId; readonly embedding_dimensions?: number; readonly price_authority: PriceAuthority; readonly prices: ReadonlyArray<PriceComponent>; readonly price_version: OpaqueId; readonly synchronization_state: "manual" | "current" | "stale" | "missing" | "failed"; readonly state: "active" | "disabled" | "retired"; readonly active_revision: OpaqueId; readonly inherited: boolean; };
+export type ProviderModelRoute = { readonly provider_model_route_id: OpaqueId; readonly owner_scope: OpaqueId; readonly provider_instance_id: OpaqueId; readonly canonical_model_id: OpaqueId; readonly wire_model: string; readonly capabilities: ReadonlyArray<string>; readonly embedding_model_space_id?: OpaqueId; readonly embedding_dimensions?: number; readonly price_authority: PriceAuthority; readonly prices: ReadonlyArray<PriceComponent>; readonly synchronization_schedule: string; readonly stale_after_seconds: number; readonly price_version: OpaqueId | null; readonly synchronization_state: "manual" | "current" | "stale" | "missing" | "failed"; readonly state: "active" | "disabled" | "retired"; readonly active_revision: OpaqueId; readonly inherited: boolean; };
 
 export type ProviderModelRoutePage = { readonly items: ReadonlyArray<ProviderModelRoute>; readonly next_cursor?: string | null; };
 
-export type PriceComponent = { readonly unit: "input_token" | "output_token" | "cached_token" | "request" | "image" | "audio_second" | "search" | "tool_unit"; readonly price: NonNegativeDecimal; readonly currency: string; readonly raw_source_value: string; };
+export type PriceComponent = { readonly unit: "input_token" | "output_token" | "cached_token" | "request" | "image" | "audio_second" | "search" | "tool_unit" | "other"; readonly price: NonNegativeDecimal; readonly currency: string; readonly raw_source_value: string; readonly unit_quantity: PositiveDecimal; };
 
 export type PriceAuthority = { readonly mode: "manual"; } | { readonly mode: "source"; readonly source_name: string; readonly lookup_identifier: string; };
 
 export type PriceSynchronizationRequest = { readonly dry_run: boolean; readonly provider_model_route_ids?: ReadonlyArray<OpaqueId>; };
 
-export type PriceSynchronization = { readonly operation_id: OpaqueId; readonly state: "previewed" | "queued" | "running" | "completed" | "failed"; readonly dry_run: boolean; readonly resulting_configuration_revision?: OpaqueId; readonly source_snapshot: { readonly source_name: string; readonly fetched_at: Timestamp; readonly source_revision?: string; readonly content_sha256: string; readonly http_validator?: string; }; readonly results: ReadonlyArray<{ readonly provider_model_route_id: OpaqueId; readonly source_name: string; readonly lookup_identifier: string; readonly old_prices: ReadonlyArray<PriceComponent>; readonly new_prices: ReadonlyArray<PriceComponent>; readonly status: "updated" | "unchanged" | "skipped" | "missing" | "failed"; readonly synchronization_state: "manual" | "current" | "stale" | "missing" | "failed"; readonly price_version?: OpaqueId; readonly error_class?: "source_unavailable" | "missing_row" | "invalid_value" | "unsupported_unit" | "currency_mismatch"; readonly safe_error?: string; readonly synchronized_at: Timestamp; }>; };
+export type PriceSynchronization = { readonly operation_id: OpaqueId; readonly state: "previewed" | "queued" | "running" | "completed" | "failed"; readonly dry_run: boolean; readonly resulting_configuration_revision?: OpaqueId; readonly resulting_configuration_revisions?: ReadonlyArray<OpaqueId>; readonly source_snapshot: { readonly source_name: string; readonly fetched_at: Timestamp; readonly source_revision?: string; readonly content_sha256: string; readonly http_validator?: string; }; readonly results: ReadonlyArray<{ readonly provider_model_route_id: OpaqueId; readonly source_name: string; readonly lookup_identifier: string; readonly old_prices: ReadonlyArray<PriceComponent>; readonly new_prices: ReadonlyArray<PriceComponent>; readonly status: "updated" | "unchanged" | "skipped" | "missing" | "failed"; readonly synchronization_state: "manual" | "current" | "stale" | "missing" | "failed"; readonly price_version?: OpaqueId; readonly error_class?: "source_unavailable" | "missing_row" | "invalid_value" | "unsupported_unit" | "currency_mismatch"; readonly safe_error?: string; readonly synchronized_at: Timestamp; }>; };
 
 export type RevisionWrite = { readonly expected_active_revision: OpaqueId; readonly reason: string; };
 
@@ -3981,6 +3983,10 @@ export const contractSchemas = {
     ],
     "type": "object"
   },
+  "PositiveDecimal": {
+    "pattern": "^([1-9][0-9]*)(\\.[0-9]+)?$|^0\\.[0-9]*[1-9][0-9]*$",
+    "type": "string"
+  },
   "PreviewRetentionConfiguration": {
     "additionalProperties": false,
     "properties": {
@@ -4084,16 +4090,21 @@ export const contractSchemas = {
           "image",
           "audio_second",
           "search",
-          "tool_unit"
+          "tool_unit",
+          "other"
         ],
         "type": "string"
+      },
+      "unit_quantity": {
+        "$ref": "#/components/schemas/PositiveDecimal"
       }
     },
     "required": [
       "unit",
       "price",
       "currency",
-      "raw_source_value"
+      "raw_source_value",
+      "unit_quantity"
     ],
     "type": "object"
   },
@@ -4108,6 +4119,14 @@ export const contractSchemas = {
       },
       "resulting_configuration_revision": {
         "$ref": "#/components/schemas/OpaqueId"
+      },
+      "resulting_configuration_revisions": {
+        "items": {
+          "$ref": "#/components/schemas/OpaqueId"
+        },
+        "maxItems": 10000,
+        "type": "array",
+        "uniqueItems": true
       },
       "results": {
         "items": {
@@ -4390,12 +4409,20 @@ export const contractSchemas = {
         "$ref": "#/components/schemas/PriceAuthority"
       },
       "price_version": {
-        "$ref": "#/components/schemas/OpaqueId"
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          {
+            "type": "null"
+          }
+        ]
       },
       "prices": {
         "items": {
           "$ref": "#/components/schemas/PriceComponent"
         },
+        "maxItems": 32,
         "type": "array"
       },
       "provider_instance_id": {
@@ -4404,12 +4431,22 @@ export const contractSchemas = {
       "provider_model_route_id": {
         "$ref": "#/components/schemas/OpaqueId"
       },
+      "stale_after_seconds": {
+        "maximum": 31536000,
+        "minimum": 1,
+        "type": "integer"
+      },
       "state": {
         "enum": [
           "active",
           "disabled",
           "retired"
         ],
+        "type": "string"
+      },
+      "synchronization_schedule": {
+        "maxLength": 100,
+        "minLength": 9,
         "type": "string"
       },
       "synchronization_state": {
@@ -4437,6 +4474,8 @@ export const contractSchemas = {
       "capabilities",
       "price_authority",
       "prices",
+      "synchronization_schedule",
+      "stale_after_seconds",
       "price_version",
       "synchronization_state",
       "state",
@@ -4782,6 +4821,32 @@ export const contractSchemas = {
             "embedding_dimensions"
           ]
         }
+      },
+      {
+        "if": {
+          "properties": {
+            "price_authority": {
+              "properties": {
+                "mode": {
+                  "const": "manual"
+                }
+              },
+              "required": [
+                "mode"
+              ]
+            }
+          },
+          "required": [
+            "price_authority"
+          ]
+        },
+        "then": {
+          "properties": {
+            "prices": {
+              "minItems": 1
+            }
+          }
+        }
       }
     ],
     "properties": {
@@ -4817,13 +4882,21 @@ export const contractSchemas = {
         "$ref": "#/components/schemas/PriceAuthority"
       },
       "prices": {
+        "description": "A source-owned route can be empty until its first successful synchronization.",
         "items": {
           "$ref": "#/components/schemas/PriceComponent"
         },
+        "maxItems": 32,
         "type": "array"
       },
       "provider_instance_id": {
         "$ref": "#/components/schemas/OpaqueId"
+      },
+      "stale_after_seconds": {
+        "description": "A price becomes stale after this age. The initial value is 1209600 seconds.",
+        "maximum": 31536000,
+        "minimum": 1,
+        "type": "integer"
       },
       "state": {
         "enum": [
@@ -4831,6 +4904,12 @@ export const contractSchemas = {
           "disabled",
           "retired"
         ],
+        "type": "string"
+      },
+      "synchronization_schedule": {
+        "description": "Five-field UTC cron schedule. The initial value is 0 0 * * 0.",
+        "maxLength": 100,
+        "minLength": 9,
         "type": "string"
       },
       "wire_model": {
@@ -4846,6 +4925,8 @@ export const contractSchemas = {
       "capabilities",
       "price_authority",
       "prices",
+      "synchronization_schedule",
+      "stale_after_seconds",
       "state",
       "expected_revision"
     ],

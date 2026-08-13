@@ -8,6 +8,16 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Any
 
+from llmrouter_backend.accounting.model import PriceComponent, SynchronizationState
+
+_MAXIMUM_SOURCE_NAME_CHARACTERS = 100
+_MAXIMUM_LOOKUP_IDENTIFIER_CHARACTERS = 500
+_CRON_FIELD_COUNT = 5
+_MAXIMUM_SCHEDULE_CHARACTERS = 100
+_MAXIMUM_STALE_AFTER_SECONDS = 365 * 24 * 60 * 60
+_MAXIMUM_PRICE_COMPONENTS = 32
+_CRON_LIMITS = ((0, 59), (0, 23), (1, 31), (1, 12), (0, 6))
+
 
 class ConfigurationState(StrEnum):
     """The accepted state of one configuration item."""
@@ -37,6 +47,54 @@ class DistributionState(StrEnum):
     DISTRIBUTING = "distributing"
     CURRENT = "current"
     DEGRADED = "degraded"
+
+
+class PriceAuthorityMode(StrEnum):
+    """The accepted authority modes for one route price."""
+
+    MANUAL = "manual"
+    SOURCE = "source"
+
+
+@dataclass(frozen=True, slots=True)
+class PriceAuthority:
+    """One explicit manual pin or named synchronization source."""
+
+    mode: PriceAuthorityMode
+    source_name: str | None = None
+    lookup_identifier: str | None = None
+
+    def __post_init__(self) -> None:
+        """Require complete and bounded authority values."""
+        if self.mode is PriceAuthorityMode.MANUAL:
+            if self.source_name is not None or self.lookup_identifier is not None:
+                msg = "A manual price authority must not contain source values."
+                raise ValueError(msg)
+            return
+        if (
+            self.source_name is None
+            or not self.source_name
+            or len(self.source_name) > _MAXIMUM_SOURCE_NAME_CHARACTERS
+            or not self.source_name[0].islower()
+            or any(
+                character not in "abcdefghijklmnopqrstuvwxyz0123456789._-"
+                for character in self.source_name
+            )
+        ):
+            msg = "A source price authority must name a valid source."
+            raise ValueError(msg)
+        if (
+            self.lookup_identifier is None
+            or not 1
+            <= len(self.lookup_identifier)
+            <= _MAXIMUM_LOOKUP_IDENTIFIER_CHARACTERS
+        ):
+            msg = "A source price authority must contain a lookup identifier."
+            raise ValueError(msg)
+
+
+_WEEKLY_PRICE_SYNCHRONIZATION = "0 0 * * 0"
+_DEFAULT_PRICE_STALE_AFTER_SECONDS = 14 * 24 * 60 * 60
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,10 +189,99 @@ class ProviderModelRoute:
     wire_model: str
     capabilities: frozenset[str]
     settings: RegisteredDocument
+    price_authority: PriceAuthority
+    prices: tuple[PriceComponent, ...]
+    synchronization_schedule: str = _WEEKLY_PRICE_SYNCHRONIZATION
+    stale_after_seconds: int = _DEFAULT_PRICE_STALE_AFTER_SECONDS
+    price_version: str | None = None
+    synchronization_state: SynchronizationState | None = None
     state: ConfigurationState = ConfigurationState.ACTIVE
     eligible_service_ids: frozenset[str] = frozenset()
     embedding_model_space_id: str | None = None
     embedding_dimensions: int | None = None
+
+    def __post_init__(self) -> None:
+        """Freeze and validate exact public route prices and policy."""
+        prices = tuple(sorted(self.prices, key=lambda item: item.unit.value))
+        legacy_empty_price = not prices and (
+            (
+                self.price_authority.mode is PriceAuthorityMode.SOURCE
+                and self.synchronization_state
+                in (None, SynchronizationState.MISSING, SynchronizationState.FAILED)
+            )
+            or (
+                self.price_authority.mode is PriceAuthorityMode.MANUAL
+                and self.synchronization_state is SynchronizationState.MANUAL
+            )
+        )
+        if not prices and not legacy_empty_price:
+            msg = "A provider-model route must contain one or more prices."
+            raise ValueError(msg)
+        if len({item.unit for item in prices}) != len(prices):
+            msg = "A provider-model route price unit must be unique."
+            raise ValueError(msg)
+        if len(prices) > _MAXIMUM_PRICE_COMPONENTS:
+            msg = "A provider-model route contains too many price components."
+            raise ValueError(msg)
+        if prices and len({item.currency for item in prices}) != 1:
+            msg = "A provider-model route must use one accounting currency."
+            raise ValueError(msg)
+        object.__setattr__(self, "prices", prices)
+        if (
+            not _valid_cron(self.synchronization_schedule)
+            or len(self.synchronization_schedule) > _MAXIMUM_SCHEDULE_CHARACTERS
+        ):
+            msg = "A price synchronization schedule must be a bounded cron value."
+            raise ValueError(msg)
+        if not 1 <= self.stale_after_seconds <= _MAXIMUM_STALE_AFTER_SECONDS:
+            msg = "A price stale threshold must be from one second to one year."
+            raise ValueError(msg)
+        expected_state = (
+            SynchronizationState.MANUAL
+            if self.price_authority.mode is PriceAuthorityMode.MANUAL
+            else (
+                SynchronizationState.MISSING
+                if not prices
+                else SynchronizationState.CURRENT
+            )
+        )
+        if (
+            self.synchronization_state is None
+            or self.price_authority.mode is PriceAuthorityMode.MANUAL
+        ):
+            object.__setattr__(self, "synchronization_state", expected_state)
+
+
+def _valid_cron(value: str) -> bool:
+    fields = value.split()
+    if len(fields) != _CRON_FIELD_COUNT:
+        return False
+    return all(
+        _valid_cron_field(field, minimum, maximum)
+        for field, (minimum, maximum) in zip(fields, _CRON_LIMITS, strict=True)
+    )
+
+
+def _valid_cron_field(value: str, minimum: int, maximum: int) -> bool:
+    for item in value.split(","):
+        base, separator, step_value = item.partition("/")
+        if separator and (
+            not step_value.isdecimal() or not 1 <= int(step_value) <= maximum
+        ):
+            return False
+        if base == "*":
+            continue
+        start_value, range_separator, end_value = base.partition("-")
+        if not start_value.isdecimal():
+            return False
+        start = int(start_value)
+        if not minimum <= start <= maximum:
+            return False
+        if range_separator and (
+            not end_value.isdecimal() or not start <= int(end_value) <= maximum
+        ):
+            return False
+    return True
 
 
 @dataclass(frozen=True, slots=True)

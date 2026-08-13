@@ -12,6 +12,60 @@ from llmrouter_backend.database import applied_versions, migrate, migration_plan
 from .helpers import SERVICE_ID, WORKSPACE_ID, seed_scope
 
 _MINIMUM_FOUNDATION_TABLES = 30
+_LEGACY_MODEL_ID = "0198a080-0000-7000-8000-000000000085"
+_LEGACY_CREDENTIAL_ID = "0198a080-0000-7000-8000-000000000086"
+_LEGACY_INSTANCE_ID = "0198a080-0000-7000-8000-000000000087"
+_LEGACY_ROUTE_ID = "0198a080-0000-7000-8000-000000000088"
+_LEGACY_SOURCE_ID = "0198a080-0000-7000-8000-000000000089"
+
+
+def _seed_legacy_route_price_source(connection: psycopg.Connection[object]) -> None:
+    """Insert one migration-0007 route price source with all legacy values."""
+    connection.execute(
+        """INSERT INTO router.provider_adapter_types (
+               id, settings_schema_name, settings_schema_major, capabilities
+           ) VALUES ('provider.legacy', 'provider.settings', 1, '{}')"""
+    )
+    connection.execute(
+        """INSERT INTO router.canonical_models (id, stable_name, capabilities)
+           VALUES (%s, 'legacy-model', '{}')""",
+        (_LEGACY_MODEL_ID,),
+    )
+    connection.execute(
+        """INSERT INTO router.encrypted_credentials (
+               id, owner_kind, credential_kind, ciphertext, encrypted_data_key,
+               wrapping_key_id, safe_fingerprint, current_revision,
+               last_changed_at
+           ) VALUES (%s, 'global', 'provider.legacy', %s, %s, 'wrap', 'safe',
+                     %s, now())""",
+        (_LEGACY_CREDENTIAL_ID, bytes(32), bytes(32), _LEGACY_CREDENTIAL_ID),
+    )
+    connection.execute(
+        """INSERT INTO router.provider_instances (
+               id, owner_kind, adapter_type_id, credential_id, stable_name,
+               endpoint_origin, settings_schema_name, settings_schema_major,
+               settings
+           ) VALUES (%s, 'global', 'provider.legacy', %s, 'legacy-instance',
+                     'https://provider.example', 'provider.settings', 1, '{}')""",
+        (_LEGACY_INSTANCE_ID, _LEGACY_CREDENTIAL_ID),
+    )
+    connection.execute(
+        """INSERT INTO router.provider_model_routes (
+               id, owner_kind, provider_instance_id, canonical_model_id,
+               provider_lookup_id, settings_schema_name,
+               settings_schema_major, settings
+           ) VALUES (%s, 'global', %s, %s, 'legacy-wire',
+                     'route.settings', 1, '{}')""",
+        (_LEGACY_ROUTE_ID, _LEGACY_INSTANCE_ID, _LEGACY_MODEL_ID),
+    )
+    connection.execute(
+        """INSERT INTO router.route_price_sources (
+               id, provider_model_route_id, authority_kind, source_name,
+               lookup_identifier, synchronization_schedule, stale_after
+           ) VALUES (%s, %s, 'synchronized', 'legacy-source', 'legacy-wire',
+                     NULL, interval '9 days')""",
+        (_LEGACY_SOURCE_ID, _LEGACY_ROUTE_ID),
+    )
 
 
 def _migrate_current(database_url: str) -> tuple[int, ...]:
@@ -23,7 +77,7 @@ def _migrate_current(database_url: str) -> tuple[int, ...]:
 def test_migration_plan_has_reversible_contiguous_pairs() -> None:
     """Keep each schema change ordered and reversible."""
     plan = migration_plan()
-    assert [migration.version for migration in plan] == [1, 2, 3, 4, 5, 6, 7]
+    assert [migration.version for migration in plan] == [1, 2, 3, 4, 5, 6, 7, 8]
     assert all(migration.up_sql and migration.down_sql for migration in plan)
 
 
@@ -31,7 +85,7 @@ def test_migrate_empty_database(database_url: str) -> None:
     """Create the current schema from an empty database."""
     with psycopg.connect(database_url, autocommit=True) as connection:
         migrate(connection)
-        assert applied_versions(connection) == (1, 2, 3, 4, 5, 6, 7)
+        assert applied_versions(connection) == (1, 2, 3, 4, 5, 6, 7, 8)
         table_count = connection.execute(
             """
             SELECT count(*)
@@ -165,6 +219,74 @@ def test_credential_store_rollback_rejects_custody_data_loss(
             migrate(connection, target=5)
 
 
+def test_route_price_source_upgrade_and_rollback_preserve_legacy_values(
+    database_url: str,
+) -> None:
+    """Keep all legacy route price authority values through migration 0008."""
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        migrate(connection, target=7)
+        _seed_legacy_route_price_source(connection)
+        legacy = ("synchronized", "legacy-source", "legacy-wire", None, 9)
+        upgraded = (
+            "synchronized",
+            "legacy-source",
+            "legacy-wire",
+            "0 0 * * 0",
+            9,
+        )
+        statement = """
+            SELECT authority_kind, source_name, lookup_identifier,
+                   synchronization_schedule,
+                   extract(day FROM stale_after)::integer
+            FROM router.route_price_sources WHERE id = %s
+        """
+        row = connection.execute(statement, (_LEGACY_SOURCE_ID,)).fetchone()
+        assert row == legacy
+        migrate(connection)
+        row = connection.execute(statement, (_LEGACY_SOURCE_ID,)).fetchone()
+        assert row == upgraded
+        migrate(connection, target=7)
+        row = connection.execute(statement, (_LEGACY_SOURCE_ID,)).fetchone()
+        assert row == legacy
+
+
+def test_route_price_source_rollback_rejects_new_manual_pin_loss(
+    database_url: str,
+) -> None:
+    """Stop rollback when a new manual pin cannot fit the legacy schema."""
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        migrate(connection, target=7)
+        _seed_legacy_route_price_source(connection)
+        migrate(connection)
+        connection.execute(
+            """UPDATE router.route_price_sources
+               SET authority_kind = 'manual', source_name = NULL,
+                   lookup_identifier = NULL
+               WHERE id = %s""",
+            (_LEGACY_SOURCE_ID,),
+        )
+        with pytest.raises(psycopg.Error, match="cannot roll back without data loss"):
+            migrate(connection, target=7)
+
+
+def test_price_snapshot_rollback_rejects_restored_uniqueness_loss(
+    database_url: str,
+) -> None:
+    """Stop rollback when new source evidence has a legacy duplicate key."""
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        migrate(connection)
+        for fetched_at in ("2026-08-13T10:00:00Z", "2026-08-13T11:00:00Z"):
+            connection.execute(
+                """INSERT INTO router.price_source_snapshots (
+                       id, source_name, fetched_at, content_sha256
+                   ) VALUES (gen_random_uuid(), 'catalog-test', %s,
+                             decode(repeat('aa', 32), 'hex'))""",
+                (fetched_at,),
+            )
+        with pytest.raises(psycopg.Error, match="cannot roll back without data loss"):
+            migrate(connection, target=7)
+
+
 def test_migration_history_rejects_a_gap(database_url: str) -> None:
     """Reject an applied migration set that is not a contiguous prefix."""
     with psycopg.connect(database_url, autocommit=True) as connection:
@@ -197,7 +319,7 @@ def test_concurrent_migration_runners_serialize(database_url: str) -> None:
         migrate(connection, target=2)
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         results = list(executor.map(_migrate_current, [database_url, database_url]))
-    assert results == [(1, 2, 3, 4, 5, 6, 7), (1, 2, 3, 4, 5, 6, 7)]
+    assert results == [(1, 2, 3, 4, 5, 6, 7, 8), (1, 2, 3, 4, 5, 6, 7, 8)]
 
 
 def test_rollback_keeps_previous_schema_data(database_url: str) -> None:
@@ -224,7 +346,7 @@ def test_rollback_keeps_previous_schema_data(database_url: str) -> None:
             "SELECT to_regclass('router.logical_requests')"
         ).fetchone() == (None,)
         migrate(connection)
-        assert applied_versions(connection) == (1, 2, 3, 4, 5, 6, 7)
+        assert applied_versions(connection) == (1, 2, 3, 4, 5, 6, 7, 8)
         assert connection.execute(
             "SELECT stable_name FROM router.services WHERE id = %s", (SERVICE_ID,)
         ).fetchone() == ("kept-service",)

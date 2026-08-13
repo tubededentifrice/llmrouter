@@ -4,12 +4,19 @@
 from __future__ import annotations
 
 import concurrent.futures
+import json
 import uuid
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 import psycopg
 import pytest
+from llmrouter_backend.accounting import (
+    PostgresAccountingRepository,
+    SourceSnapshot,
+    SynchronizationStatus,
+)
 from llmrouter_backend.authority import (
     Audience,
     AuthorityClass,
@@ -28,12 +35,17 @@ from llmrouter_backend.configuration import (
     ConfigurationScope,
     ConfigurationState,
     PostgresConfigurationRepository,
+    PriceAuthority,
+    PriceAuthorityMode,
+    PriceComponent,
     ProviderInstance,
     ProviderModelRoute,
     RegisteredDocument,
     RegisteredSchema,
     ScopeConfiguration,
     SettingsSchemaRegistry,
+    SynchronizationState,
+    UsageUnit,
 )
 from llmrouter_backend.database import migrate
 
@@ -118,6 +130,16 @@ def _content(*, routes: tuple[str, ...] = (ROUTE_ID,)) -> ScopeConfiguration:
             f"wire-{index}",
             frozenset({"text"}),
             _document("route.settings", tier="normal"),
+            PriceAuthority(PriceAuthorityMode.SOURCE, "catalog-test", f"wire-{index}"),
+            (
+                PriceComponent(
+                    UsageUnit.INPUT_TOKEN,
+                    Decimal("0.001"),
+                    "USD",
+                    "0.001",
+                    Decimal(1000),
+                ),
+            ),
         )
         for index, route_id in enumerate(routes)
     )
@@ -153,6 +175,13 @@ def _content(*, routes: tuple[str, ...] = (ROUTE_ID,)) -> ScopeConfiguration:
             Assignment("chat", (AssignmentCandidate(routes[0]),), frozenset({"text"})),
         ),
     )
+
+
+def _source_snapshot(
+    fetched_at: datetime,
+    rows: dict[str, tuple[PriceComponent, ...]],
+) -> SourceSnapshot:
+    return SourceSnapshot("catalog-test", fetched_at, SourceSnapshot.digest(rows), rows)
 
 
 @pytest.fixture
@@ -389,6 +418,476 @@ def test_provider_display_name_and_wire_model_are_mutable_metadata(
         ).fetchone()
     assert instance == (INSTANCE_ID, "Changed provider")
     assert route == (ROUTE_ID, "changed-wire")
+
+
+def test_route_prices_pin_unpin_schedule_and_rollback_are_revisioned(
+    database_url: str, repository: PostgresConfigurationRepository
+) -> None:
+    """Round-trip exact route prices and restore one manual price policy."""
+    first = _publish_global(repository)
+    effective = repository.effective(
+        _context("configuration.read", service_id=SERVICE_ID, mutation=False),
+        ConfigurationScope(service_id=SERVICE_ID),
+    )
+    first_route = effective.provider_model_routes[0].value
+    assert isinstance(first_route, ProviderModelRoute)
+    assert first_route.price_authority == PriceAuthority(
+        PriceAuthorityMode.SOURCE, "catalog-test", "wire-0"
+    )
+    assert first_route.price_version is not None
+    assert first_route.synchronization_schedule == "0 0 * * 0"
+    assert first_route.stale_after_seconds == 14 * 24 * 60 * 60
+    accounting = PostgresAccountingRepository(database_url)
+    missing_sync = accounting.synchronize(
+        _context("provider_route.manage"),
+        service_id=None,
+        snapshot=_source_snapshot(NOW + timedelta(milliseconds=500), {}),
+        route_ids=(ROUTE_ID,),
+        dry_run=False,
+        now=NOW + timedelta(milliseconds=500),
+    )
+    assert missing_sync.rows[0].status is SynchronizationStatus.MISSING
+    stale_route = (
+        repository.effective(
+            _context("configuration.read", service_id=SERVICE_ID, mutation=False),
+            ConfigurationScope(service_id=SERVICE_ID),
+        )
+        .provider_model_routes[0]
+        .value
+    )
+    assert isinstance(stale_route, ProviderModelRoute)
+    assert stale_route.synchronization_state is SynchronizationState.STALE
+
+    manual_price = PriceComponent(
+        UsageUnit.INPUT_TOKEN, Decimal("0.002"), "USD", "0.002", Decimal(1000)
+    )
+    manual_content = replace(
+        _content(),
+        provider_model_routes=(
+            replace(
+                _content().provider_model_routes[0],
+                price_authority=PriceAuthority(PriceAuthorityMode.MANUAL),
+                prices=(manual_price,),
+                synchronization_schedule="0 6 * * 1",
+                stale_after_seconds=3 * 24 * 60 * 60,
+            ),
+        ),
+    )
+    manual_revision = repository.publish(
+        _context("provider_route.manage"),
+        ConfigurationScope(),
+        manual_content,
+        expected_active_revision=first,
+        reason="Pin the route price.",
+        now=NOW + timedelta(seconds=1),
+    ).active_revision
+    manual_route = (
+        repository.effective(
+            _context("configuration.read", service_id=SERVICE_ID, mutation=False),
+            ConfigurationScope(service_id=SERVICE_ID),
+        )
+        .provider_model_routes[0]
+        .value
+    )
+    assert isinstance(manual_route, ProviderModelRoute)
+    manual_version = manual_route.price_version
+    source_price = PriceComponent(
+        UsageUnit.INPUT_TOKEN, Decimal("0.003"), "USD", "0.003", Decimal(1000)
+    )
+    snapshot = _source_snapshot(NOW + timedelta(seconds=2), {"wire-0": (source_price,)})
+    pinned_sync = accounting.synchronize(
+        _context("provider_route.manage"),
+        service_id=None,
+        snapshot=snapshot,
+        route_ids=(ROUTE_ID,),
+        dry_run=False,
+        now=NOW + timedelta(seconds=2),
+    )
+    assert pinned_sync.rows[0].status is SynchronizationStatus.SKIPPED
+    assert pinned_sync.resulting_configuration_revision is None
+    unpinned_content = replace(
+        manual_content,
+        provider_model_routes=(
+            replace(
+                manual_content.provider_model_routes[0],
+                price_authority=PriceAuthority(
+                    PriceAuthorityMode.SOURCE, "catalog-test", "wire-0"
+                ),
+            ),
+        ),
+    )
+    repository.publish(
+        _context("provider_route.manage"),
+        ConfigurationScope(),
+        unpinned_content,
+        expected_active_revision=manual_revision,
+        reason="Remove the manual route price pin.",
+        now=NOW + timedelta(seconds=2),
+    )
+    synchronized = accounting.synchronize(
+        _context("provider_route.manage"),
+        service_id=None,
+        snapshot=replace(snapshot, fetched_at=NOW + timedelta(seconds=3)),
+        route_ids=(ROUTE_ID,),
+        dry_run=False,
+        now=NOW + timedelta(seconds=3),
+    )
+    assert synchronized.rows[0].status is SynchronizationStatus.UPDATED
+    assert synchronized.resulting_configuration_revision is not None
+    synchronized_route = (
+        repository.effective(
+            _context("configuration.read", service_id=SERVICE_ID, mutation=False),
+            ConfigurationScope(service_id=SERVICE_ID),
+        )
+        .provider_model_routes[0]
+        .value
+    )
+    assert isinstance(synchronized_route, ProviderModelRoute)
+    assert synchronized_route.prices == (
+        PriceComponent(
+            UsageUnit.INPUT_TOKEN,
+            Decimal("0.003"),
+            "USD",
+            "0.003",
+            Decimal(1000),
+        ),
+    )
+    rollback = repository.rollback(
+        _context("provider_route.manage"),
+        ConfigurationScope(),
+        manual_revision,
+        expected_active_revision=synchronized.resulting_configuration_revision,
+        reason="Restore the manual route price pin.",
+        now=NOW + timedelta(seconds=3),
+    )
+    restored = (
+        repository.effective(
+            _context("configuration.read", service_id=SERVICE_ID, mutation=False),
+            ConfigurationScope(service_id=SERVICE_ID),
+        )
+        .provider_model_routes[0]
+        .value
+    )
+    assert isinstance(restored, ProviderModelRoute)
+    assert restored.price_authority.mode is PriceAuthorityMode.MANUAL
+    assert restored.prices == (manual_price,)
+    assert restored.synchronization_schedule == "0 6 * * 1"
+    assert restored.stale_after_seconds == 3 * 24 * 60 * 60
+    assert restored.price_version == manual_version
+    with psycopg.connect(database_url) as connection:
+        projection = connection.execute(
+            """
+            SELECT source.authority_kind, source.source_name,
+                   source.lookup_identifier, source.synchronization_schedule,
+                   extract(epoch FROM source.stale_after)::bigint,
+                   state.synchronization_state,
+                   (SELECT count(*) FROM router.route_price_versions
+                    WHERE provider_model_route_id = %s),
+                   (SELECT count(*) FROM router.configuration_price_bindings
+                    WHERE provider_model_route_id = %s)
+            FROM router.route_price_sources AS source
+            JOIN router.route_price_synchronization_states AS state
+              ON state.provider_model_route_id = source.provider_model_route_id
+            WHERE source.provider_model_route_id = %s
+            """,
+            (ROUTE_ID, ROUTE_ID, ROUTE_ID),
+        ).fetchone()
+    assert projection == (
+        "manual",
+        None,
+        None,
+        "0 6 * * 1",
+        3 * 24 * 60 * 60,
+        "manual",
+        3,
+        5,
+    )
+    assert rollback.active_revision != manual_revision
+
+
+def test_source_price_edit_is_rejected_and_metadata_preserves_stale_state(
+    database_url: str, repository: PostgresConfigurationRepository
+) -> None:
+    """Keep a source price under synchronization and preserve newer state."""
+    first = _publish_global(repository)
+    direct_price = replace(
+        _content(),
+        provider_model_routes=(
+            replace(
+                _content().provider_model_routes[0],
+                prices=(
+                    PriceComponent(
+                        UsageUnit.INPUT_TOKEN,
+                        Decimal("0.002"),
+                        "USD",
+                        "0.002",
+                        Decimal(1000),
+                    ),
+                ),
+            ),
+        ),
+    )
+    with pytest.raises(ConfigurationError) as rejected:
+        repository.publish(
+            _context("provider_route.manage"),
+            ConfigurationScope(),
+            direct_price,
+            expected_active_revision=first,
+            reason="Reject a direct source price edit.",
+            now=NOW + timedelta(seconds=1),
+        )
+    assert any(
+        "only by synchronization" in item.reason for item in rejected.value.issues
+    )
+
+    with psycopg.connect(database_url) as connection:
+        connection.execute(
+            """UPDATE router.route_price_synchronization_states
+               SET synchronization_state = 'current',
+                   observed_at = %s
+               WHERE provider_model_route_id = %s""",
+            (NOW - timedelta(days=15), ROUTE_ID),
+        )
+    effective = repository.effective(
+        _context("configuration.read", service_id=SERVICE_ID, mutation=False),
+        ConfigurationScope(service_id=SERVICE_ID),
+    )
+    aged_route = effective.provider_model_routes[0].value
+    assert isinstance(aged_route, ProviderModelRoute)
+    assert aged_route.synchronization_state is SynchronizationState.STALE
+
+    changed = replace(
+        _content(),
+        provider_model_routes=(
+            replace(_content().provider_model_routes[0], wire_model="metadata-only"),
+        ),
+    )
+    repository.publish(
+        _context("provider_route.manage"),
+        ConfigurationScope(),
+        changed,
+        expected_active_revision=first,
+        reason="Change route metadata without replacing price state.",
+        now=NOW + timedelta(seconds=2),
+    )
+    preserved = (
+        repository.effective(
+            _context("configuration.read", service_id=SERVICE_ID, mutation=False),
+            ConfigurationScope(service_id=SERVICE_ID),
+        )
+        .provider_model_routes[0]
+        .value
+    )
+    assert isinstance(preserved, ProviderModelRoute)
+    assert preserved.synchronization_state is SynchronizationState.STALE
+
+
+def test_source_route_can_start_without_a_price_version(
+    database_url: str,
+    repository: PostgresConfigurationRepository,
+) -> None:
+    """Keep a migrated source route visible until its first price sync."""
+    content = replace(
+        _content(),
+        provider_model_routes=(
+            replace(
+                _content().provider_model_routes[0],
+                prices=(),
+                synchronization_state=SynchronizationState.MISSING,
+            ),
+        ),
+    )
+    repository.publish(
+        _context("catalog.manage"),
+        ConfigurationScope(),
+        content,
+        expected_active_revision=None,
+        reason="Publish one source route that needs its first price sync.",
+        now=NOW,
+    )
+    route = (
+        repository.effective(
+            _context("configuration.read", service_id=SERVICE_ID, mutation=False),
+            ConfigurationScope(service_id=SERVICE_ID),
+        )
+        .provider_model_routes[0]
+        .value
+    )
+    assert isinstance(route, ProviderModelRoute)
+    assert route.prices == ()
+    assert route.price_version is None
+    assert route.synchronization_state is SynchronizationState.MISSING
+
+    result = PostgresAccountingRepository(database_url).synchronize(
+        _context("provider_route.manage"),
+        service_id=None,
+        snapshot=_source_snapshot(
+            NOW + timedelta(seconds=1),
+            {
+                "wire-0": (
+                    PriceComponent(
+                        UsageUnit.INPUT_TOKEN,
+                        Decimal("0.001"),
+                        "USD",
+                        "0.001",
+                        Decimal(1000),
+                    ),
+                )
+            },
+        ),
+        route_ids=(ROUTE_ID,),
+        dry_run=False,
+        now=NOW + timedelta(seconds=1),
+    )
+    assert result.rows[0].status is SynchronizationStatus.UPDATED
+    updated = (
+        repository.effective(
+            _context("configuration.read", service_id=SERVICE_ID, mutation=False),
+            ConfigurationScope(service_id=SERVICE_ID),
+        )
+        .provider_model_routes[0]
+        .value
+    )
+    assert isinstance(updated, ProviderModelRoute)
+    assert updated.price_version is not None
+    assert updated.synchronization_state is SynchronizationState.CURRENT
+
+
+def test_legacy_revision_without_price_fields_remains_visible(
+    database_url: str, repository: PostgresConfigurationRepository
+) -> None:
+    """Read one immutable pre-pricing revision without changing its content."""
+    first = _publish_global(repository)
+    legacy_revision = str(uuid.uuid4())
+    with psycopg.connect(database_url) as connection:
+        stored = connection.execute(
+            "SELECT content FROM router.configuration_revisions WHERE id = %s",
+            (first,),
+        ).fetchone()
+        assert stored is not None
+        legacy_content = stored[0]
+        for route in legacy_content["provider_model_routes"]:
+            for field in (
+                "price_authority",
+                "prices",
+                "synchronization_schedule",
+                "stale_after_seconds",
+                "price_version",
+                "synchronization_state",
+            ):
+                route.pop(field)
+        connection.execute(
+            """INSERT INTO router.configuration_revisions (
+                   id, scope_kind, revision_number, content, content_sha256,
+                   created_at, created_by_kind, created_by_id
+               ) VALUES (%s, 'global', 2, %s::jsonb,
+                         decode(repeat('ab', 32), 'hex'), %s,
+                         'system', 'migration-test')""",
+            (legacy_revision, json.dumps(legacy_content), NOW + timedelta(seconds=1)),
+        )
+        connection.execute(
+            """UPDATE router.active_configurations
+               SET revision_id = %s, revision_number = 2, activated_at = %s
+               WHERE scope_kind = 'global' AND service_id IS NULL
+                 AND workspace_id IS NULL""",
+            (legacy_revision, NOW + timedelta(seconds=1)),
+        )
+        connection.execute(
+            "DELETE FROM router.route_price_sources WHERE provider_model_route_id = %s",
+            (ROUTE_ID,),
+        )
+    route = (
+        repository.effective(
+            _context("configuration.read", service_id=SERVICE_ID, mutation=False),
+            ConfigurationScope(service_id=SERVICE_ID),
+        )
+        .provider_model_routes[0]
+        .value
+    )
+    assert isinstance(route, ProviderModelRoute)
+    assert route.price_authority == PriceAuthority(
+        PriceAuthorityMode.SOURCE, "legacy-unconfigured", "wire-0"
+    )
+    assert route.prices == ()
+    assert route.price_version is None
+    assert route.synchronization_state is SynchronizationState.MISSING
+
+    manual_content = replace(
+        _content(),
+        provider_model_routes=(
+            replace(
+                _content().provider_model_routes[0],
+                price_authority=PriceAuthority(PriceAuthorityMode.MANUAL),
+            ),
+        ),
+    )
+    modern = repository.publish(
+        _context("provider_route.manage"),
+        ConfigurationScope(),
+        manual_content,
+        expected_active_revision=legacy_revision,
+        reason="Publish one price-aware revision.",
+        now=NOW + timedelta(seconds=2),
+    )
+    rollback = repository.rollback(
+        _context("provider_route.manage"),
+        ConfigurationScope(),
+        legacy_revision,
+        expected_active_revision=modern.active_revision,
+        reason="Restore the legacy route revision.",
+        now=NOW + timedelta(seconds=3),
+    )
+    restored = repository.effective(
+        _context("configuration.read", service_id=SERVICE_ID, mutation=False),
+        ConfigurationScope(service_id=SERVICE_ID),
+    ).provider_model_routes[0].value
+    assert rollback.active_revision != legacy_revision
+    assert isinstance(restored, ProviderModelRoute)
+    assert restored.price_authority.mode is PriceAuthorityMode.MANUAL
+
+
+def test_service_owned_route_price_rejects_cross_scope_write(
+    database_url: str, repository: PostgresConfigurationRepository
+) -> None:
+    """Keep a service-owned price authority in its exact service scope."""
+    global_content = replace(_content(), provider_model_routes=(), assignments=())
+    repository.publish(
+        _context("catalog.manage"),
+        ConfigurationScope(),
+        global_content,
+        expected_active_revision=None,
+        reason="Publish the shared provider without a global route.",
+        now=NOW,
+    )
+    service_content = ScopeConfiguration(
+        provider_model_routes=_content().provider_model_routes,
+        assignments=_content().assignments,
+    )
+    service_revision = repository.publish(
+        _context("configuration.write", service_id=SERVICE_ID),
+        ConfigurationScope(service_id=SERVICE_ID),
+        service_content,
+        expected_active_revision=None,
+        reason="Publish a service-owned priced route.",
+        now=NOW + timedelta(seconds=1),
+    ).active_revision
+    with pytest.raises(ConfigurationError) as denied:
+        repository.publish(
+            _context("configuration.write", service_id=OTHER_SERVICE_ID),
+            ConfigurationScope(service_id=SERVICE_ID),
+            service_content,
+            expected_active_revision=service_revision,
+            reason="Reject a cross-service route price edit.",
+            now=NOW + timedelta(seconds=2),
+        )
+    assert denied.value.code is ConfigurationErrorCode.INSUFFICIENT_SCOPE
+    with psycopg.connect(database_url) as connection:
+        owner = connection.execute(
+            """SELECT owner_kind, owner_service_id::text
+               FROM router.provider_model_routes WHERE id = %s""",
+            (ROUTE_ID,),
+        ).fetchone()
+    assert owner == ("service", SERVICE_ID)
 
 
 def test_distribution_observations_are_authenticated_ordered_snapshots(
