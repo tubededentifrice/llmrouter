@@ -11,6 +11,7 @@ required_files=(
   "docs/product-direction.md"
   "docs/api/README.md"
   "docs/api/business-tool-gateway.md"
+  "docs/api/contract-policy.yaml"
   "docs/api/cross-service-conformance.md"
   "docs/api/embed-protocol.md"
   "docs/api/errors.md"
@@ -18,6 +19,15 @@ required_files=(
   "docs/api/request-fingerprint.md"
   "docs/api/service-management.md"
   "docs/api/stream-protocol.md"
+  "docs/api/fixtures/administration-grant.json"
+  "docs/api/fixtures/attachment.json"
+  "docs/api/fixtures/business-tool-call.json"
+  "docs/api/fixtures/contract-manifest.json"
+  "docs/api/fixtures/effective-configuration.json"
+  "docs/api/fixtures/health.json"
+  "docs/api/fixtures/model-request.json"
+  "docs/api/fixtures/service-token.json"
+  "docs/api/fixtures/workspace.json"
   "docs/decisions/README.md"
   "docs/decisions/0001-complete-platform-with-optional-harness.md"
   "docs/decisions/0002-nearest-scope-replaces-assignment-chain.md"
@@ -135,6 +145,7 @@ grep -qx "min-release-age=14" "${repository_root}/.npmrc"
 jq -e . "${repository_root}/renovate.json" >/dev/null
 grep -qx 'openapi: 3.1.0' "${repository_root}/docs/api/openapi.yaml"
 grep -qx '  version: 1.0.0' "${repository_root}/docs/api/openapi.yaml"
+"${repository_root}/scripts/check-api-contracts.sh"
 
 if command -v bd >/dev/null 2>&1; then
   bd -C "${repository_root}" lint --status all >/dev/null

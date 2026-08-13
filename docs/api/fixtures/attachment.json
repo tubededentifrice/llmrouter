@@ -1,0 +1,9 @@
+{
+  "attachment_id": "attachment-1",
+  "service_id": "service-1",
+  "media_type": "text/plain",
+  "byte_length": 12,
+  "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "state": "ready",
+  "expires_at": "2026-08-14T00:00:00Z"
+}

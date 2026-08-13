@@ -51,6 +51,7 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/ContractManifest'}
+        default: {$ref: '#/components/responses/Error'}
   /v1/service-token-exchanges:
     post:
       tags: [Authentication]
@@ -262,6 +263,14 @@ paths:
               schema: {type: string, format: binary, maxLength: 26214400}
         '404': {$ref: '#/components/responses/NotFound'}
   /v1/model-requests:
+    get:
+      tags: [Requests]
+      operationId: listModelRequests
+      summary: Discover bounded model-request status records in the authenticated scope.
+      parameters: [{$ref: '#/components/parameters/Cursor'}]
+      responses:
+        '200': {$ref: '#/components/responses/RequestStatusPage'}
+        '403': {$ref: '#/components/responses/Forbidden'}
     post:
       tags: [Requests]
       operationId: createModelRequest
@@ -322,6 +331,14 @@ paths:
               schema: {type: string}
         '409': {$ref: '#/components/responses/Conflict'}
   /v1/agent-runs:
+    get:
+      tags: [Runs]
+      operationId: listAgentRuns
+      summary: Discover bounded agent-run status records in the authenticated scope.
+      parameters: [{$ref: '#/components/parameters/Cursor'}]
+      responses:
+        '200': {$ref: '#/components/responses/RequestStatusPage'}
+        '403': {$ref: '#/components/responses/Forbidden'}
     post:
       tags: [Runs]
       operationId: createAgentRun
@@ -380,6 +397,14 @@ paths:
               schema: {type: string}
         '409': {$ref: '#/components/responses/Conflict'}
   /v1/shared-tool-requests:
+    get:
+      tags: [Tools]
+      operationId: listSharedToolRequests
+      summary: Discover bounded shared-tool status records in the authenticated scope.
+      parameters: [{$ref: '#/components/parameters/Cursor'}]
+      responses:
+        '200': {$ref: '#/components/responses/RequestStatusPage'}
+        '403': {$ref: '#/components/responses/Forbidden'}
     post:
       tags: [Tools]
       operationId: createSharedToolRequest
@@ -483,6 +508,7 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/EffectiveConfiguration'}
+        default: {$ref: '#/components/responses/Error'}
   /v1/services/{service_id}/business-tool-gateway:
     parameters:
       - $ref: '#/components/parameters/ServiceId'
@@ -549,6 +575,7 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/AssignmentPage'}
+        default: {$ref: '#/components/responses/Error'}
   /v1/services/{service_id}/assignments/{assignment_name}:
     parameters:
       - $ref: '#/components/parameters/ServiceId'
@@ -584,6 +611,7 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/ProviderInstancePage'}
+        default: {$ref: '#/components/responses/Error'}
     post:
       tags: [Configuration]
       operationId: createProviderInstance
@@ -644,6 +672,7 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/ProviderModelRoutePage'}
+        default: {$ref: '#/components/responses/Error'}
     post:
       tags: [Configuration]
       operationId: createProviderModelRoute
@@ -750,6 +779,7 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/BudgetSummary'}
+        default: {$ref: '#/components/responses/Error'}
     put:
       tags: [Budgets]
       operationId: putSubordinateBudget
@@ -783,6 +813,7 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/AccountingSummary'}
+        default: {$ref: '#/components/responses/Error'}
   /v1/services/{service_id}/retention:
     parameters:
       - $ref: '#/components/parameters/ServiceId'
@@ -848,6 +879,7 @@ paths:
       summary: List immutable configuration revisions.
       responses:
         '200': {$ref: '#/components/responses/ConfigurationPage'}
+        default: {$ref: '#/components/responses/Error'}
   /v1/services/{service_id}/configuration-revisions/{revision}/rollback:
     parameters:
       - $ref: '#/components/parameters/ServiceId'
@@ -952,7 +984,9 @@ paths:
       operationId: deleteAdministratorSession
       summary: Revoke the local administrator session and clear its cookie.
       security: [{administratorSession: []}]
-      parameters: [{$ref: '#/components/parameters/CsrfToken'}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/Origin'
       responses:
         '204': {description: Local session revoked.}
         '401': {$ref: '#/components/responses/Unauthorized'}
@@ -969,6 +1003,7 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/ServiceAdministrationPage'}
+        default: {$ref: '#/components/responses/Error'}
     post:
       tags: [Administration]
       operationId: createService
@@ -976,6 +1011,7 @@ paths:
       security: [{administratorSession: []}]
       parameters:
         - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/Origin'
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
@@ -1014,7 +1050,9 @@ paths:
       operationId: putService
       summary: Change display metadata or the one parent link.
       security: [{administratorSession: []}]
-      parameters: [{$ref: '#/components/parameters/CsrfToken'}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/Origin'
       requestBody:
         required: true
         content:
@@ -1041,6 +1079,7 @@ paths:
       security: [{administratorSession: []}]
       parameters:
         - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/Origin'
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
@@ -1067,6 +1106,7 @@ paths:
       security: [{administratorSession: []}]
       responses:
         '200': {$ref: '#/components/responses/ConfigurationPage'}
+        default: {$ref: '#/components/responses/Error'}
     post:
       tags: [Administration]
       operationId: createCatalogEntry
@@ -1074,6 +1114,7 @@ paths:
       security: [{administratorSession: []}]
       parameters:
         - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/Origin'
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
@@ -1111,7 +1152,9 @@ paths:
       operationId: putCatalogEntry
       summary: Change, disable, or retire one catalog entry.
       security: [{administratorSession: []}]
-      parameters: [{$ref: '#/components/parameters/CsrfToken'}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/Origin'
       requestBody:
         required: true
         content:
@@ -1141,6 +1184,7 @@ paths:
       security: [{administratorSession: []}]
       parameters:
         - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/Origin'
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
@@ -1175,7 +1219,9 @@ paths:
       operationId: putGlobalProviderInstance
       summary: Change, disable, or retire one global provider instance.
       security: [{administratorSession: []}]
-      parameters: [{$ref: '#/components/parameters/CsrfToken'}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/Origin'
       requestBody:
         required: true
         content:
@@ -1205,6 +1251,7 @@ paths:
       security: [{administratorSession: []}]
       parameters:
         - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/Origin'
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
@@ -1239,7 +1286,9 @@ paths:
       operationId: putGlobalProviderModelRoute
       summary: Change, disable, or retire one global provider-model route.
       security: [{administratorSession: []}]
-      parameters: [{$ref: '#/components/parameters/CsrfToken'}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/Origin'
       requestBody:
         required: true
         content:
@@ -1259,6 +1308,7 @@ paths:
       security: [{administratorSession: []}]
       parameters:
         - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/Origin'
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
@@ -1285,6 +1335,7 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/CredentialPage'}
+        default: {$ref: '#/components/responses/Error'}
     post:
       tags: [Administration]
       operationId: createCredential
@@ -1292,6 +1343,7 @@ paths:
       security: [{administratorSession: []}]
       parameters:
         - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/Origin'
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
@@ -1309,6 +1361,7 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/CredentialMetadata'}
+        default: {$ref: '#/components/responses/Error'}
   /v1/admin/credentials/{credential_id}/{credential_action}:
     parameters:
       - name: credential_id
@@ -1324,7 +1377,9 @@ paths:
       operationId: changeCredential
       summary: Rotate, disable, or retire a credential.
       security: [{administratorSession: []}]
-      parameters: [{$ref: '#/components/parameters/CsrfToken'}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/Origin'
       requestBody:
         required: true
         content:
@@ -1349,6 +1404,7 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/AdministratorGrantPage'}
+        default: {$ref: '#/components/responses/Error'}
     post:
       tags: [Administration]
       operationId: createAdministratorGrant
@@ -1356,6 +1412,7 @@ paths:
       security: [{administratorSession: []}]
       parameters:
         - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/Origin'
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
@@ -1393,7 +1450,9 @@ paths:
       operationId: putAdministratorGrant
       summary: Replace one grant within the current delegated authority.
       security: [{administratorSession: []}]
-      parameters: [{$ref: '#/components/parameters/CsrfToken'}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/Origin'
       requestBody:
         required: true
         content:
@@ -1412,7 +1471,9 @@ paths:
       operationId: revokeAdministratorGrant
       summary: Revoke one local administrator grant.
       security: [{administratorSession: []}]
-      parameters: [{$ref: '#/components/parameters/CsrfToken'}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/Origin'
       responses:
         '204': {description: Grant revoked and an audit event written.}
         '403': {$ref: '#/components/responses/Forbidden'}
@@ -1429,6 +1490,7 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/OperationalState'}
+        default: {$ref: '#/components/responses/Error'}
   /v1/admin/operations:
     post:
       tags: [Administration]
@@ -1437,6 +1499,7 @@ paths:
       security: [{administratorSession: []}]
       parameters:
         - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/Origin'
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
@@ -1486,6 +1549,7 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/AuditPage'}
+        default: {$ref: '#/components/responses/Error'}
   /v1/admin/retention:
     get:
       tags: [Administration]
@@ -1498,12 +1562,15 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/RetentionConfiguration'}
+        default: {$ref: '#/components/responses/Error'}
     put:
       tags: [Administration]
       operationId: putRetentionConfiguration
       summary: Publish retention values after effect preview and confirmation.
       security: [{administratorSession: []}]
-      parameters: [{$ref: '#/components/parameters/CsrfToken'}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/Origin'
       requestBody:
         required: true
         content:
@@ -1522,6 +1589,9 @@ paths:
       operationId: previewRetentionConfiguration
       summary: Preview fleet deletion and storage effects without a change.
       security: [{administratorSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/Origin'
       requestBody:
         required: true
         content:
@@ -1543,6 +1613,7 @@ paths:
       security: [{administratorSession: []}]
       parameters:
         - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/Origin'
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
@@ -1587,6 +1658,7 @@ paths:
       security: [{administratorSession: []}]
       parameters:
         - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/Origin'
       requestBody:
         required: true
         content:
@@ -1625,7 +1697,23 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/CapturedContent'}
         '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
+  /v1/admin/captured-content:
+    get:
+      tags: [Audit]
+      operationId: listCapturedContent
+      summary: Discover protected captured-content metadata without content values.
+      security: [{administratorSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Bounded captured-content metadata page.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CapturedContentMetadataPage'}
+        '403': {$ref: '#/components/responses/Forbidden'}
   /v1/health:
     get:
       tags: [Health]
@@ -1691,6 +1779,11 @@ components:
       in: header
       required: true
       schema: {type: string, minLength: 32, maxLength: 500}
+    Origin:
+      name: Origin
+      in: header
+      required: true
+      schema: {type: string, format: uri, pattern: '^https?://[^/]+$'}
     LastEventId:
       name: Last-Event-ID
       in: header
@@ -1712,6 +1805,9 @@ components:
       required: false
       schema: {type: string, maxLength: 1000}
   responses:
+    Error:
+      description: A documented error from the shared error catalog.
+      content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}
     BadRequest:
       description: Invalid request.
       content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}
@@ -1751,6 +1847,9 @@ components:
     RequestStatus:
       description: Current or terminal request status.
       content: {application/json: {schema: {$ref: '#/components/schemas/RequestStatus'}}}
+    RequestStatusPage:
+      description: Bounded logical request status page.
+      content: {application/json: {schema: {$ref: '#/components/schemas/RequestStatusPage'}}}
     ConfigurationPage:
       description: Bounded configuration page.
       content: {application/json: {schema: {$ref: '#/components/schemas/ConfigurationPage'}}}
@@ -1788,7 +1887,7 @@ components:
           uniqueItems: true
           items:
             type: string
-            enum: [model_requests, agent_runs, shared_tools, attachments, request_status, cancellation, sse_stream_v1, workspace_lifecycle, host_budget_ceiling, service_administration, administrator_grants, operational_administration, protected_exports, accounting_summary, openai_chat_completions, openai_responses]
+            enum: [model_requests, agent_runs, shared_tools, attachments, request_status, request_discovery, cancellation, sse_stream_v1, workspace_lifecycle, host_budget_ceiling, effective_configuration, assignment_configuration, provider_instance_configuration, provider_model_route_configuration, price_synchronization, budget_management, retention_management, configuration_revisions, business_tool_gateway, diagnostic_routing, administration_authentication, service_administration, catalog_administration, credential_administration, administrator_grants, operational_administration, audit_discovery, captured_content, protected_exports, accounting_summary, detailed_health, openai_chat_completions, openai_responses]
         artifacts:
           type: array
           items: {$ref: '#/components/schemas/ContractArtifact'}
@@ -1915,18 +2014,35 @@ components:
           additionalProperties: false
           required: [type, attachment_id, sha256, media_type]
           properties:
-            type: {type: string, enum: [image, audio, file]}
+            type: {type: string, const: image}
             attachment_id: {$ref: '#/components/schemas/OpaqueId'}
             sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
-            media_type: {type: string, maxLength: 200}
+            media_type: {type: string, enum: [image/jpeg, image/png, image/webp]}
+        - type: object
+          additionalProperties: false
+          required: [type, attachment_id, sha256, media_type]
+          properties:
+            type: {type: string, const: audio}
+            attachment_id: {$ref: '#/components/schemas/OpaqueId'}
+            sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+            media_type: {type: string, enum: [audio/mpeg, audio/wav]}
+        - type: object
+          additionalProperties: false
+          required: [type, attachment_id, sha256, media_type]
+          properties:
+            type: {type: string, const: file}
+            attachment_id: {$ref: '#/components/schemas/OpaqueId'}
+            sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+            media_type: {type: string, enum: [text/plain, text/markdown, application/json, application/pdf]}
     ToolDefinition:
       type: object
       additionalProperties: false
-      required: [name, description, input_schema]
+      required: [name, description, input_schema_name, input_schema_major_version]
       properties:
         name: {type: string, pattern: '^[a-zA-Z][a-zA-Z0-9_.-]{0,99}$'}
         description: {type: string, maxLength: 4000}
-        input_schema: {type: object}
+        input_schema_name: {type: string, pattern: '^[a-z][a-z0-9._-]{0,99}$'}
+        input_schema_major_version: {type: integer, minimum: 1}
     RequestLimits:
       type: object
       additionalProperties: false
@@ -1941,7 +2057,8 @@ components:
       additionalProperties: false
       properties:
         format: {type: string, enum: [text, json]}
-        json_schema: {type: object}
+        json_schema_name: {type: string, pattern: '^[a-z][a-z0-9._-]{0,99}$'}
+        json_schema_major_version: {type: integer, minimum: 1}
         temperature: {type: number, minimum: 0, maximum: 2}
     ModelRequest:
       type: object
@@ -1982,7 +2099,7 @@ components:
           x-router-fingerprint: true
         limits: {$ref: '#/components/schemas/RequestLimits', x-router-fingerprint: true}
         output: {$ref: '#/components/schemas/OutputControls', x-router-fingerprint: true}
-        trace_context: {type: object, x-router-fingerprint: false}
+        trace_context: {$ref: '#/components/schemas/TraceContext', x-router-fingerprint: false}
     AgentRunRequest:
       type: object
       additionalProperties: false
@@ -2035,7 +2152,7 @@ components:
               maxItems: 100
               items: {type: string}
           x-router-fingerprint: true
-        trace_context: {type: object, x-router-fingerprint: false}
+        trace_context: {$ref: '#/components/schemas/TraceContext', x-router-fingerprint: false}
     SharedToolRequest:
       type: object
       additionalProperties: false
@@ -2048,7 +2165,7 @@ components:
         tool: {type: string, enum: [search, extract, scrape, screenshot], x-router-fingerprint: true}
         input: {$ref: '#/components/schemas/RegisteredDocument', x-router-fingerprint: true}
         limits: {$ref: '#/components/schemas/RequestLimits', x-router-fingerprint: true}
-        trace_context: {type: object, x-router-fingerprint: false}
+        trace_context: {$ref: '#/components/schemas/TraceContext', x-router-fingerprint: false}
     CompatibleChatRequest:
       type: object
       additionalProperties: false
@@ -2063,12 +2180,12 @@ components:
         model: {$ref: '#/components/schemas/AssignmentName', x-router-fingerprint: true}
         messages: {type: array, minItems: 1, maxItems: 1000, items: {$ref: '#/components/schemas/Message'}, x-router-fingerprint: true}
         tools: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/ToolDefinition'}, x-router-fingerprint: true}
-        tool_choice: {oneOf: [{type: string, enum: [auto, none, required]}, {type: object}], x-router-fingerprint: true}
-        response_format: {type: object, x-router-fingerprint: true}
+        tool_choice: {$ref: '#/components/schemas/CompatibilityToolChoice', x-router-fingerprint: true}
+        response_format: {$ref: '#/components/schemas/CompatibilityResponseFormat', x-router-fingerprint: true}
         temperature: {type: number, minimum: 0, maximum: 2, x-router-fingerprint: true}
         max_completion_tokens: {type: integer, minimum: 1, maximum: 1000000, x-router-fingerprint: true}
         stream: {type: boolean, default: false, x-router-fingerprint: false}
-        metadata: {type: object, x-router-fingerprint: true}
+        metadata: {$ref: '#/components/schemas/MetadataEntries', x-router-fingerprint: true}
         user: {type: string, maxLength: 200, x-router-fingerprint: true}
         x_llmrouter_workspace_id: {$ref: '#/components/schemas/OpaqueId', x-router-fingerprint: true}
         x_llmrouter_data_profile: {$ref: '#/components/schemas/DataProfile', x-router-fingerprint: true}
@@ -2094,12 +2211,12 @@ components:
           x-router-fingerprint: true
         instructions: {type: string, maxLength: 1048576, x-router-fingerprint: true}
         tools: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/ToolDefinition'}, x-router-fingerprint: true}
-        tool_choice: {oneOf: [{type: string, enum: [auto, none, required]}, {type: object}], x-router-fingerprint: true}
-        text: {type: object, x-router-fingerprint: true}
+        tool_choice: {$ref: '#/components/schemas/CompatibilityToolChoice', x-router-fingerprint: true}
+        text: {$ref: '#/components/schemas/CompatibilityResponseFormat', x-router-fingerprint: true}
         temperature: {type: number, minimum: 0, maximum: 2, x-router-fingerprint: true}
         max_output_tokens: {type: integer, minimum: 1, maximum: 1000000, x-router-fingerprint: true}
         stream: {type: boolean, default: false, x-router-fingerprint: false}
-        metadata: {type: object, x-router-fingerprint: true}
+        metadata: {$ref: '#/components/schemas/MetadataEntries', x-router-fingerprint: true}
         user: {type: string, maxLength: 200, x-router-fingerprint: true}
         x_llmrouter_workspace_id: {$ref: '#/components/schemas/OpaqueId', x-router-fingerprint: true}
         x_llmrouter_data_profile: {$ref: '#/components/schemas/DataProfile', x-router-fingerprint: true}
@@ -2115,7 +2232,41 @@ components:
         major_version: {type: integer, minimum: 1}
         document:
           type: object
+          x-registered-schema: true
           description: A closed JSON document validated against the named registered schema major version.
+    TraceContext:
+      type: object
+      additionalProperties: false
+      properties:
+        traceparent: {type: string, pattern: '^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$'}
+        tracestate: {type: string, maxLength: 512}
+    CompatibilityToolChoice:
+      oneOf:
+        - {type: string, enum: [auto, none, required]}
+        - type: object
+          additionalProperties: false
+          required: [type, name]
+          properties:
+            type: {type: string, const: function}
+            name: {type: string, pattern: '^[a-zA-Z][a-zA-Z0-9_.-]{0,99}$'}
+    CompatibilityResponseFormat:
+      type: object
+      additionalProperties: false
+      required: [type]
+      properties:
+        type: {type: string, enum: [text, json_object, json_schema]}
+        schema_name: {type: string, pattern: '^[a-z][a-z0-9._-]{0,99}$'}
+        schema_major_version: {type: integer, minimum: 1}
+    MetadataEntries:
+      type: array
+      maxItems: 100
+      items:
+        type: object
+        additionalProperties: false
+        required: [key, value]
+        properties:
+          key: {type: string, minLength: 1, maxLength: 100}
+          value: {type: string, maxLength: 1000}
     PutBusinessToolGateway:
       type: object
       additionalProperties: false
@@ -2135,6 +2286,59 @@ components:
           items: {type: string, pattern: '^[a-z][a-z0-9._-]{0,99}$'}
         network_policy_id: {$ref: '#/components/schemas/OpaqueId'}
         expected_revision: {oneOf: [{$ref: '#/components/schemas/OpaqueId'}, {type: 'null'}]}
+    BusinessToolCall:
+      type: object
+      additionalProperties: false
+      required: [contract_version, operation_id, service_id, run_id, owner_epoch, tool_name, permitted_operation, input, deadline, tool_grant]
+      properties:
+        contract_version: {type: integer, const: 1}
+        operation_id: {$ref: '#/components/schemas/OpaqueId'}
+        service_id: {$ref: '#/components/schemas/OpaqueId'}
+        workspace_id: {$ref: '#/components/schemas/OpaqueId'}
+        run_id: {$ref: '#/components/schemas/UuidV7'}
+        owner_epoch: {type: integer, minimum: 1}
+        tool_name: {type: string, pattern: '^[a-z][a-z0-9._-]{0,99}$'}
+        permitted_operation: {type: string, pattern: '^[a-z][a-z0-9._-]{0,99}$'}
+        input: {$ref: '#/components/schemas/RegisteredDocument'}
+        deadline: {$ref: '#/components/schemas/Timestamp'}
+        tool_grant: {type: string, minLength: 43, maxLength: 200, writeOnly: true}
+    BusinessToolResult:
+      type: object
+      additionalProperties: false
+      required: [contract_version, operation_id, state, effect_state]
+      oneOf:
+        - required: [result]
+          not: {required: [safe_error]}
+        - required: [safe_error]
+          not: {required: [result]}
+      properties:
+        contract_version: {type: integer, const: 1}
+        operation_id: {$ref: '#/components/schemas/OpaqueId'}
+        state: {type: string, enum: [succeeded, failed, uncertain]}
+        effect_state: {type: string, enum: [none, committed, unknown]}
+        result: {$ref: '#/components/schemas/RegisteredDocument'}
+        safe_error: {$ref: '#/components/schemas/TerminalError'}
+    BusinessToolReconciliationRequest:
+      type: object
+      additionalProperties: false
+      required: [contract_version, operation_id, service_id, run_id, owner_epoch, reconciliation_grant]
+      properties:
+        contract_version: {type: integer, const: 1}
+        operation_id: {$ref: '#/components/schemas/OpaqueId'}
+        service_id: {$ref: '#/components/schemas/OpaqueId'}
+        workspace_id: {$ref: '#/components/schemas/OpaqueId'}
+        run_id: {$ref: '#/components/schemas/UuidV7'}
+        owner_epoch: {type: integer, minimum: 1}
+        reconciliation_grant: {type: string, minLength: 43, maxLength: 200, writeOnly: true}
+    BusinessToolReconciliationResult:
+      type: object
+      additionalProperties: false
+      required: [contract_version, operation_id, effect_state, evidence]
+      properties:
+        contract_version: {type: integer, const: 1}
+        operation_id: {$ref: '#/components/schemas/OpaqueId'}
+        effect_state: {type: string, enum: [not_started, committed, failed, unknown]}
+        evidence: {$ref: '#/components/schemas/RegisteredDocument'}
     BusinessToolGatewayApproval:
       type: object
       additionalProperties: false
@@ -2284,14 +2488,32 @@ components:
           type: array
           maxItems: 100
           items:
-            type: object
-            additionalProperties: false
-            required: [type]
-            properties:
-              type: {type: string, enum: [text, json, image, audio, tool_result]}
-              text: {type: string}
-              json: {}
-              attachment_id: {$ref: '#/components/schemas/OpaqueId'}
+            oneOf:
+              - type: object
+                additionalProperties: false
+                required: [type, text]
+                properties:
+                  type: {type: string, const: text}
+                  text: {type: string}
+              - type: object
+                additionalProperties: false
+                required: [type, document]
+                properties:
+                  type: {type: string, enum: [json, tool_result]}
+                  document: {$ref: '#/components/schemas/RegisteredDocument'}
+              - type: object
+                additionalProperties: false
+                required: [type, attachment_id]
+                properties:
+                  type: {type: string, enum: [image, audio]}
+                  attachment_id: {$ref: '#/components/schemas/OpaqueId'}
+    RequestStatusPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, maxItems: 1000, items: {$ref: '#/components/schemas/RequestStatus'}}
+        next_cursor: {type: [string, 'null']}
     TerminalError:
       type: object
       additionalProperties: false
@@ -2469,19 +2691,20 @@ components:
     PutProviderModelRoute:
       type: object
       additionalProperties: false
-      required: [provider_instance_id, canonical_model_id, wire_model, capabilities, prices, state, expected_revision]
+      required: [provider_instance_id, canonical_model_id, wire_model, capabilities, price_authority, prices, state, expected_revision]
       properties:
         provider_instance_id: {$ref: '#/components/schemas/OpaqueId'}
         canonical_model_id: {$ref: '#/components/schemas/OpaqueId'}
         wire_model: {type: string, minLength: 1, maxLength: 500}
         capabilities: {type: array, uniqueItems: true, items: {type: string}}
+        price_authority: {$ref: '#/components/schemas/PriceAuthority'}
         prices: {type: array, items: {$ref: '#/components/schemas/PriceComponent'}}
         state: {type: string, enum: [active, disabled, retired]}
         expected_revision: {oneOf: [{$ref: '#/components/schemas/OpaqueId'}, {type: 'null'}]}
     ProviderModelRoute:
       type: object
       additionalProperties: false
-      required: [provider_model_route_id, owner_scope, provider_instance_id, canonical_model_id, wire_model, capabilities, prices, state, active_revision, inherited]
+      required: [provider_model_route_id, owner_scope, provider_instance_id, canonical_model_id, wire_model, capabilities, price_authority, prices, price_version, synchronization_state, state, active_revision, inherited]
       properties:
         provider_model_route_id: {$ref: '#/components/schemas/OpaqueId'}
         owner_scope: {$ref: '#/components/schemas/OpaqueId'}
@@ -2489,7 +2712,10 @@ components:
         canonical_model_id: {$ref: '#/components/schemas/OpaqueId'}
         wire_model: {type: string, minLength: 1, maxLength: 500}
         capabilities: {type: array, uniqueItems: true, items: {type: string}}
+        price_authority: {$ref: '#/components/schemas/PriceAuthority'}
         prices: {type: array, items: {$ref: '#/components/schemas/PriceComponent'}}
+        price_version: {$ref: '#/components/schemas/OpaqueId'}
+        synchronization_state: {type: string, enum: [manual, current, stale, missing, failed]}
         state: {type: string, enum: [active, disabled, retired]}
         active_revision: {$ref: '#/components/schemas/OpaqueId'}
         inherited: {type: boolean}
@@ -2504,11 +2730,25 @@ components:
       type: object
       additionalProperties: false
       description: The currency must equal the accounting currency of every hard-budget scope that makes this route eligible.
-      required: [unit, price, currency]
+      required: [unit, price, currency, raw_source_value]
       properties:
         unit: {type: string, enum: [input_token, output_token, cached_token, request, image, audio_second, search, tool_unit]}
         price: {$ref: '#/components/schemas/NonNegativeDecimal'}
         currency: {type: string, pattern: '^[A-Z]{3}$'}
+        raw_source_value: {type: string, minLength: 1, maxLength: 200}
+    PriceAuthority:
+      type: object
+      additionalProperties: false
+      required: [mode]
+      oneOf:
+        - properties: {mode: {const: manual}}
+          not: {anyOf: [{required: [source_name]}, {required: [lookup_identifier]}]}
+        - properties: {mode: {const: source}}
+          required: [source_name, lookup_identifier]
+      properties:
+        mode: {type: string, enum: [manual, source]}
+        source_name: {type: string, pattern: '^[a-z][a-z0-9._-]{0,99}$'}
+        lookup_identifier: {type: string, minLength: 1, maxLength: 500}
     PriceSynchronizationRequest:
       type: object
       additionalProperties: false
@@ -2523,21 +2763,40 @@ components:
     PriceSynchronization:
       type: object
       additionalProperties: false
-      required: [operation_id, state, dry_run, results]
+      required: [operation_id, state, dry_run, source_snapshot, results]
       properties:
         operation_id: {$ref: '#/components/schemas/OpaqueId'}
         state: {type: string, enum: [previewed, queued, running, completed, failed]}
         dry_run: {type: boolean}
+        resulting_configuration_revision: {$ref: '#/components/schemas/OpaqueId'}
+        source_snapshot:
+          type: object
+          additionalProperties: false
+          required: [source_name, fetched_at, content_sha256]
+          properties:
+            source_name: {type: string, pattern: '^[a-z][a-z0-9._-]{0,99}$'}
+            fetched_at: {$ref: '#/components/schemas/Timestamp'}
+            source_revision: {type: string, maxLength: 500}
+            content_sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+            http_validator: {type: string, maxLength: 500}
         results:
           type: array
           items:
             type: object
             additionalProperties: false
-            required: [provider_model_route_id, status]
+            required: [provider_model_route_id, source_name, lookup_identifier, old_prices, new_prices, status, synchronization_state, synchronized_at]
             properties:
               provider_model_route_id: {$ref: '#/components/schemas/OpaqueId'}
+              source_name: {type: string}
+              lookup_identifier: {type: string}
+              old_prices: {type: array, items: {$ref: '#/components/schemas/PriceComponent'}}
+              new_prices: {type: array, items: {$ref: '#/components/schemas/PriceComponent'}}
               status: {type: string, enum: [updated, unchanged, skipped, missing, failed]}
+              synchronization_state: {type: string, enum: [manual, current, stale, missing, failed]}
+              price_version: {$ref: '#/components/schemas/OpaqueId'}
+              error_class: {type: string, enum: [source_unavailable, missing_row, invalid_value, unsupported_unit, currency_mismatch]}
               safe_error: {type: string}
+              synchronized_at: {$ref: '#/components/schemas/Timestamp'}
     RevisionWrite:
       type: object
       additionalProperties: false
@@ -2574,12 +2833,13 @@ components:
     EffectiveConfiguration:
       type: object
       additionalProperties: false
-      required: [service_id, active_revision, distribution_state, assignments, provider_instances, provider_model_routes]
+      required: [service_id, active_revision, distribution_state, catalog, assignments, provider_instances, provider_model_routes]
       properties:
         service_id: {$ref: '#/components/schemas/OpaqueId'}
         workspace_id: {$ref: '#/components/schemas/OpaqueId'}
         active_revision: {$ref: '#/components/schemas/OpaqueId'}
         distribution_state: {type: string, enum: [distributing, current, degraded]}
+        catalog: {type: array, items: {$ref: '#/components/schemas/EffectiveItem'}}
         assignments: {type: array, items: {$ref: '#/components/schemas/EffectiveItem'}}
         provider_instances: {type: array, items: {$ref: '#/components/schemas/EffectiveItem'}}
         provider_model_routes: {type: array, items: {$ref: '#/components/schemas/EffectiveItem'}}
@@ -2684,7 +2944,7 @@ components:
         identity_account_url: {type: string, format: uri}
     AdministratorOperation:
       type: string
-      enum: [service.manage, service_parent.manage, catalog.manage, provider_instance.manage, provider_route.manage, credential.manage, assignment.manage, budget.read, budget.write, accounting.read, retention.manage, grant.manage, content.read, export.create, health.read, node.drain, circuit.probe, circuit.reset, high_availability.promote, high_availability.failback, backup.start, restore.validate, disaster_recovery.test]
+      enum: [service.manage, service_parent.manage, catalog.manage, provider_instance.manage, provider_route.manage, business_tool_gateway.approve, credential.manage, assignment.manage, budget.read, budget.write, accounting.read, retention.manage, grant.manage, audit.read, content.read, export.create, health.read, node.drain, circuit.probe, circuit.reset, high_availability.promote, high_availability.failback, backup.start, restore.validate, disaster_recovery.test]
     PutAdministratorGrant:
       type: object
       additionalProperties: false
@@ -2879,7 +3139,7 @@ components:
     RetentionConfiguration:
       type: object
       additionalProperties: false
-      required: [revision, values]
+      required: [revision, values, revision_retention_evidence]
       properties:
         revision: {$ref: '#/components/schemas/OpaqueId'}
         scope: {type: string, enum: [global, service, workspace]}
@@ -2887,6 +3147,15 @@ components:
         workspace_id: {$ref: '#/components/schemas/OpaqueId'}
         source_layer: {$ref: '#/components/schemas/OpaqueId'}
         values: {type: array, items: {$ref: '#/components/schemas/RetentionValue'}}
+        revision_retention_evidence:
+          type: object
+          additionalProperties: false
+          required: [oldest_retained_revision, retained_by]
+          properties:
+            oldest_retained_revision: {$ref: '#/components/schemas/OpaqueId'}
+            retained_by: {type: string, enum: [minimum_count, minimum_age, both]}
+            minimum_count_boundary: {$ref: '#/components/schemas/OpaqueId'}
+            minimum_age_boundary: {$ref: '#/components/schemas/Timestamp'}
     RetentionSelection:
       type: object
       additionalProperties: false
@@ -3029,8 +3298,43 @@ components:
               actor: {type: string}
               action: {type: string}
               outcome: {type: string}
-              scope: {type: object}
-              safe_detail: {type: object}
+              scope: {$ref: '#/components/schemas/AuditScope'}
+              safe_detail: {$ref: '#/components/schemas/AuditSafeDetail'}
+        next_cursor: {type: [string, 'null']}
+    AuditScope:
+      type: object
+      additionalProperties: false
+      required: [authority_class]
+      properties:
+        authority_class: {type: string, enum: [service, global_administrator, system]}
+        service_id: {$ref: '#/components/schemas/OpaqueId'}
+        workspace_id: {$ref: '#/components/schemas/OpaqueId'}
+    AuditSafeDetail:
+      type: object
+      additionalProperties: false
+      properties:
+        resource_type: {type: string, maxLength: 100}
+        resource_id: {$ref: '#/components/schemas/OpaqueId'}
+        reason: {type: string, maxLength: 500}
+        safe_error_code: {type: string, maxLength: 100}
+    CapturedContentMetadata:
+      type: object
+      additionalProperties: false
+      required: [content_id, service_id, request_id, capture_policy, expires_at, content_type]
+      properties:
+        content_id: {$ref: '#/components/schemas/OpaqueId'}
+        service_id: {$ref: '#/components/schemas/OpaqueId'}
+        workspace_id: {$ref: '#/components/schemas/OpaqueId'}
+        request_id: {$ref: '#/components/schemas/UuidV7'}
+        capture_policy: {type: string, enum: [complete, metadata_only, disabled]}
+        expires_at: {$ref: '#/components/schemas/Timestamp'}
+        content_type: {type: string, maxLength: 200}
+    CapturedContentMetadataPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, maxItems: 1000, items: {$ref: '#/components/schemas/CapturedContentMetadata'}}
         next_cursor: {type: [string, 'null']}
     CapturedContent:
       type: object
@@ -3041,22 +3345,61 @@ components:
         service_id: {$ref: '#/components/schemas/OpaqueId'}
         workspace_id: {$ref: '#/components/schemas/OpaqueId'}
         request_id: {$ref: '#/components/schemas/UuidV7'}
-        capture_policy: {type: string}
+        capture_policy: {type: string, enum: [complete, metadata_only, disabled]}
         expires_at: {$ref: '#/components/schemas/Timestamp'}
-        content_type: {type: string}
-        value: {}
+        content_type: {type: string, maxLength: 200}
+        value: {$ref: '#/components/schemas/RegisteredDocument'}
     Health:
       type: object
       additionalProperties: false
-      required: [status, role, contract_set, active_configuration_revision, configuration_age_seconds]
+      required: [status, role, contract_set, active_configuration_revision, configuration_age_seconds, configuration_state, circuits, spool, replication, recovery]
       properties:
         status: {type: string, enum: [ready, degraded, not_ready]}
         role: {type: string, enum: [combined, control-plane, data-plane, worker]}
         contract_set: {type: string, const: llmrouter-v1}
         active_configuration_revision: {$ref: '#/components/schemas/OpaqueId'}
         configuration_age_seconds: {type: integer, minimum: 0}
-        spool_state: {type: string, enum: [normal, warning, shedding, stopped, emergency]}
-        control_plane_state: {type: string, enum: [primary, standby, unavailable]}
+        configuration_state: {type: string, enum: [current, stale, unavailable]}
+        circuits:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [provider_instance_id, state, sample_period_seconds, reason, changed_at]
+            properties:
+              provider_instance_id: {$ref: '#/components/schemas/OpaqueId'}
+              state: {type: string, enum: [closed, open, half_open]}
+              sample_period_seconds: {type: integer, minimum: 1}
+              reason: {type: string, maxLength: 200}
+              next_probe_at: {$ref: '#/components/schemas/Timestamp'}
+              changed_at: {$ref: '#/components/schemas/Timestamp'}
+        spool:
+          type: object
+          additionalProperties: false
+          required: [state, used_bytes, capacity_bytes]
+          properties:
+            state: {type: string, enum: [normal, warning, shedding, stopped, emergency]}
+            used_bytes: {type: integer, minimum: 0}
+            capacity_bytes: {type: integer, minimum: 1}
+        replication:
+          type: object
+          additionalProperties: false
+          required: [control_plane_state, promotion_state, possible_data_loss_seconds]
+          properties:
+            control_plane_state: {type: string, enum: [primary, standby, unavailable]}
+            promotion_state: {type: string, enum: [stable, promoting, promoted, fenced, degraded]}
+            possible_data_loss_seconds: {type: integer, minimum: 0}
+        recovery:
+          type: object
+          additionalProperties: false
+          required: [newest_backup_at, recovery_log_continuous, point_in_time_window_days, last_restore_test_state, disaster_recovery_state]
+          properties:
+            newest_backup_at: {$ref: '#/components/schemas/Timestamp'}
+            recovery_log_continuous: {type: boolean}
+            point_in_time_window_days: {type: integer, minimum: 35}
+            last_restore_test_at: {$ref: '#/components/schemas/Timestamp'}
+            last_restore_test_state: {type: string, enum: [passed, failed, overdue]}
+            disaster_recovery_state: {type: string, enum: [not_run, passed, failed, overdue]}
     FieldError:
       type: object
       additionalProperties: false
@@ -3077,7 +3420,7 @@ components:
           properties:
             code:
               type: string
-              enum: [invalid_request, unsupported_contract, unsupported_capability, invalid_token, recent_auth_required, insufficient_scope, service_scope_mismatch, workspace_scope_mismatch, policy_denied, diagnostic_permission_required, not_found, request_not_found, workspace_not_found, idempotency_conflict, state_revision_conflict, configuration_revision_conflict, request_identity_conflict, stream_replay_unavailable, terminal_state, budget_ceiling_conflict, request_identity_expired, workspace_retired, assignment_unavailable, workspace_unavailable, capability_mismatch, budget_exhausted, secret_detected, rate_limited, temporarily_unavailable, stale_configuration, spool_capacity_exhausted, allowance_unavailable, internal_error]
+              enum: [invalid_request, unsupported_contract, unsupported_capability, invalid_token, recent_auth_required, insufficient_scope, service_scope_mismatch, workspace_scope_mismatch, policy_denied, diagnostic_permission_required, not_found, request_not_found, workspace_not_found, attachment_not_found, idempotency_conflict, state_revision_conflict, configuration_revision_conflict, request_identity_conflict, stream_replay_unavailable, terminal_state, budget_ceiling_conflict, attachment_already_complete, request_identity_expired, workspace_retired, assignment_unavailable, workspace_unavailable, capability_mismatch, budget_exhausted, secret_detected, attachment_invalid, rate_limited, temporarily_unavailable, stale_configuration, spool_capacity_exhausted, allowance_unavailable, internal_error]
             message: {type: string, maxLength: 1000}
             retryable: {type: boolean}
             request_id: {$ref: '#/components/schemas/OpaqueId'}

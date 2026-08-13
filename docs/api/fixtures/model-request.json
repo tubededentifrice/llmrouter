@@ -1,0 +1,8 @@
+{
+  "api_version": "1",
+  "data_profile": "service-data",
+  "assignment": "general",
+  "messages": [{"role": "user", "content": "Hello"}],
+  "limits": {"attempt_timeout_ms": 120000, "max_output_units": 1000, "logical_timeout_ms": 900000},
+  "output": {"format": "text"}
+}

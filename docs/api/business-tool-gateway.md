@@ -15,7 +15,9 @@ MUST reject an unknown field, schema, major version, tool kind, or result kind.
 
 ## Call
 
-The Router sends an HTTPS `POST` to the registered gateway operation. The call
+The Router sends an HTTPS `POST` to
+`/llmrouter/business-tool-gateway/v1/calls`. The request uses the closed
+OpenAPI `BusinessToolCall` schema. The call
 contains these fields:
 
 - `contract_version`, with the value `1`;
@@ -34,7 +36,8 @@ connection does not prove that an effect completed.
 
 ## Result
 
-The closed result contains `contract_version`, `operation_id`, `state`,
+The gateway returns the closed OpenAPI `BusinessToolResult` schema from the
+call operation. The result contains `contract_version`, `operation_id`, `state`,
 `effect_state`, and either a registered result document or a safe error.
 `state` is `succeeded`, `failed`, or `uncertain`. `effect_state` is `none`,
 `committed`, or `unknown`.
@@ -45,7 +48,10 @@ or unknown effect.
 
 ## Reconciliation
 
-For an unconfirmed effect, the Router can send a reconciliation request with
+For an unconfirmed effect, the Router sends `POST` to
+`/llmrouter/business-tool-gateway/v1/reconciliations`. The request and response
+use the closed OpenAPI `BusinessToolReconciliationRequest` and
+`BusinessToolReconciliationResult` schemas. The request contains
 the same operation identity, service, workspace, run, owner epoch, and a new
 one-use reconciliation grant. The gateway returns `not_started`, `committed`,
 `failed`, or `unknown` with safe evidence metadata. It must not start the

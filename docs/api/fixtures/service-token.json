@@ -1,0 +1,9 @@
+{
+  "access_token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "token_type": "Bearer",
+  "expires_in": 300,
+  "service_id": "service-1",
+  "audience": "data_plane",
+  "operations": ["model.create"],
+  "credential_generation": 1
+}

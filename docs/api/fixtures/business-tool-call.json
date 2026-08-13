@@ -1,0 +1,12 @@
+{
+  "contract_version": 1,
+  "operation_id": "operation-1",
+  "service_id": "service-1",
+  "run_id": "0198a5b0-1234-7abc-8def-0123456789ab",
+  "owner_epoch": 1,
+  "tool_name": "customer.lookup",
+  "permitted_operation": "read",
+  "input": {"schema_name": "customer.lookup", "major_version": 1, "document": {}},
+  "deadline": "2026-08-13T00:01:00Z",
+  "tool_grant": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+}

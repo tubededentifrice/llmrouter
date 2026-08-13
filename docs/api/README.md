@@ -82,6 +82,11 @@ contract versions, authenticated scope, and compatibility extensions are part
 of the request fingerprint. A compatibility retry MUST use the same UUIDv7 and
 the same request body.
 
+Bounded status discovery uses `GET /v1/model-requests`,
+`GET /v1/agent-runs`, and `GET /v1/shared-tool-requests`. Protected content
+metadata discovery uses `GET /v1/admin/captured-content`; content values remain
+available only from the authorized per-record Router operation.
+
 An attachment upload can contain no more than 25 MiB. One logical request can
 reference no more than 20 attachments and no more than 100 MiB of attachment
 content in total. The Router verifies each declared byte length and SHA-256

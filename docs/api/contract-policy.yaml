@@ -1,0 +1,196 @@
+version: 1
+
+profiles:
+  public: &public {permission: public, recent_auth: false, conformance_case: contract_manifest}
+  service_auth: &service_auth {permission: service.bootstrap.exchange, recent_auth: false, conformance_case: service_authentication}
+  workspace_read: &workspace_read {permission: workspace.read, recent_auth: false, conformance_case: workspace}
+  workspace_write: &workspace_write {permission: workspace.write, recent_auth: false, conformance_case: workspace}
+  attachment_read: &attachment_read {permission: attachment.read, recent_auth: false, conformance_case: attachment}
+  attachment_write: &attachment_write {permission: attachment.create, recent_auth: false, conformance_case: attachment}
+  model_read: &model_read {permission: model.read, recent_auth: false, conformance_case: model_request}
+  model_create: &model_create {permission: model.create, recent_auth: false, conformance_case: model_request}
+  model_cancel: &model_cancel {permission: model.cancel, recent_auth: false, conformance_case: model_request}
+  run_read: &run_read {permission: run.read, recent_auth: false, conformance_case: model_request}
+  run_create: &run_create {permission: run.create, recent_auth: false, conformance_case: model_request}
+  run_cancel: &run_cancel {permission: run.cancel, recent_auth: false, conformance_case: model_request}
+  tool_read: &tool_read {permission: tool.read, recent_auth: false, conformance_case: model_request}
+  tool_create: &tool_create {permission: tool.create, recent_auth: false, conformance_case: model_request}
+  tool_cancel: &tool_cancel {permission: tool.cancel, recent_auth: false, conformance_case: model_request}
+  configuration_read: &configuration_read {permission: configuration.read, recent_auth: false, conformance_case: effective_configuration}
+  configuration_write: &configuration_write {permission: configuration.write, recent_auth: false, conformance_case: effective_configuration}
+  budget_read: &budget_read {permission: budget.read, recent_auth: false, conformance_case: effective_configuration}
+  budget_write: &budget_write {permission: budget.write, recent_auth: false, conformance_case: effective_configuration}
+  accounting_read: &accounting_read {permission: accounting.read, recent_auth: false, conformance_case: effective_configuration}
+  admin_session: &admin_session {permission: administrator.session, recent_auth: false, conformance_case: administrator_grant}
+  service_read: &service_read {permission: service.manage, recent_auth: false, conformance_case: administrator_grant}
+  service_write: &service_write {permission: service.manage, recent_auth: true, conformance_case: administrator_grant}
+  catalog_read: &catalog_read {permission: catalog.manage, recent_auth: false, conformance_case: administrator_grant}
+  catalog_write: &catalog_write {permission: catalog.manage, recent_auth: false, conformance_case: administrator_grant}
+  provider_instance_read: &provider_instance_read {permission: provider_instance.manage, recent_auth: false, conformance_case: administrator_grant}
+  provider_instance_write: &provider_instance_write {permission: provider_instance.manage, recent_auth: false, conformance_case: administrator_grant}
+  provider_route_read: &provider_route_read {permission: provider_route.manage, recent_auth: false, conformance_case: administrator_grant}
+  provider_route_write: &provider_route_write {permission: provider_route.manage, recent_auth: false, conformance_case: administrator_grant}
+  credential_read: &credential_read {permission: credential.manage, recent_auth: false, conformance_case: administrator_grant}
+  credential_write: &credential_write {permission: credential.manage, recent_auth: true, conformance_case: administrator_grant}
+  grant_read: &grant_read {permission: grant.manage, recent_auth: false, conformance_case: administrator_grant}
+  grant_write: &grant_write {permission: grant.manage, recent_auth: true, conformance_case: administrator_grant}
+  operation_read: &operation_read {permission: health.read, recent_auth: false, conformance_case: administrator_grant}
+  retention_read: &retention_read {permission: retention.manage, recent_auth: false, conformance_case: administrator_grant}
+  retention_write: &retention_write {permission: retention.manage, recent_auth: true, conformance_case: administrator_grant}
+  export_read: &export_read {permission: export.create, recent_auth: false, conformance_case: administrator_grant}
+  content_read: &content_read {permission: content.read, recent_auth: true, conformance_case: administrator_grant}
+  health: &health {permission: health.read, recent_auth: false, conformance_case: health}
+
+operations:
+  getContractManifest: *public
+  exchangeServiceToken: *service_auth
+  createWorkspace: *workspace_write
+  getWorkspace: *workspace_read
+  disableWorkspace: *workspace_write
+  restoreWorkspace: *workspace_write
+  retireWorkspace: *workspace_write
+  getWorkspaceBudgetCeiling: *budget_read
+  putWorkspaceBudgetCeiling: *budget_write
+  createAttachment: *attachment_write
+  getAttachment: *attachment_read
+  putAttachmentContent: *attachment_write
+  getAttachmentContent: *attachment_read
+  listModelRequests: *model_read
+  createModelRequest: *model_create
+  getModelRequest: *model_read
+  cancelModelRequest: *model_cancel
+  streamModelRequest: *model_read
+  listAgentRuns: *run_read
+  createAgentRun: *run_create
+  getAgentRun: *run_read
+  cancelAgentRun: *run_cancel
+  streamAgentRun: *run_read
+  listSharedToolRequests: *tool_read
+  createSharedToolRequest: *tool_create
+  getSharedToolRequest: *tool_read
+  cancelSharedToolRequest: *tool_cancel
+  createChatCompletion: *model_create
+  createCompatibleResponse: *model_create
+  getEffectiveConfiguration: *configuration_read
+  getBusinessToolGateway: *configuration_read
+  putBusinessToolGateway: *configuration_write
+  createDiagnosticGrant: {permission: diagnostic.grant.create, recent_auth: false, conformance_case: effective_configuration}
+  listAssignments: *configuration_read
+  putAssignment: *configuration_write
+  listProviderInstances: *configuration_read
+  createProviderInstance: *configuration_write
+  getProviderInstance: *configuration_read
+  putProviderInstance: *configuration_write
+  listProviderModelRoutes: *configuration_read
+  createProviderModelRoute: *configuration_write
+  getProviderModelRoute: *configuration_read
+  putProviderModelRoute: *configuration_write
+  synchronizePrices: *configuration_write
+  getPriceSynchronization: *configuration_read
+  getBudgetSummary: *budget_read
+  putSubordinateBudget: *budget_write
+  getAccountingSummary: *accounting_read
+  getScopedRetentionConfiguration: {permission: retention.read, recent_auth: false, conformance_case: effective_configuration}
+  putScopedRetentionConfiguration: {permission: retention.write, recent_auth: false, conformance_case: effective_configuration}
+  previewScopedRetentionConfiguration: {permission: retention.preview, recent_auth: false, conformance_case: effective_configuration}
+  listConfigurationRevisions: *configuration_read
+  rollbackConfiguration: *configuration_write
+  createAdministrationEmbedSession: {permission: admin_embed.create, recent_auth: false, conformance_case: effective_configuration}
+  startAdministratorSession: *admin_session
+  completeAdministratorSession: *admin_session
+  getAdministratorSession: *admin_session
+  deleteAdministratorSession: *admin_session
+  listServices: *service_read
+  createService: {permission: service.manage and credential.manage, recent_auth: true, conformance_case: administrator_grant}
+  getService: *service_read
+  putService: {permission: service.manage and service_parent.manage when new_parent_service_id is present, recent_auth: true, conformance_case: administrator_grant}
+  changeService: *service_write
+  listCatalog: *catalog_read
+  createCatalogEntry: *catalog_write
+  getCatalogEntry: *catalog_read
+  putCatalogEntry: *catalog_write
+  listGlobalProviderInstances: *provider_instance_read
+  createGlobalProviderInstance: *provider_instance_write
+  getGlobalProviderInstance: *provider_instance_read
+  putGlobalProviderInstance: *provider_instance_write
+  listGlobalProviderModelRoutes: *provider_route_read
+  createGlobalProviderModelRoute: *provider_route_write
+  getGlobalProviderModelRoute: *provider_route_read
+  putGlobalProviderModelRoute: *provider_route_write
+  approveBusinessToolGateway: {permission: business_tool_gateway.approve, recent_auth: true, conformance_case: administrator_grant}
+  listCredentials: *credential_read
+  createCredential: *credential_write
+  changeCredential: *credential_write
+  listAdministratorGrants: *grant_read
+  createAdministratorGrant: *grant_write
+  getAdministratorGrant: *grant_read
+  putAdministratorGrant: *grant_write
+  revokeAdministratorGrant: *grant_write
+  getOperationalState: *operation_read
+  createOperationalAction:
+    permission:
+      field: action
+      values:
+        node_drain: node.drain
+        circuit_probe: circuit.probe
+        circuit_reset: circuit.reset
+        promote: high_availability.promote
+        failback: high_availability.failback
+        backup_start: backup.start
+        restore_validate: restore.validate
+        disaster_recovery_test_start: disaster_recovery.test
+    recent_auth:
+      field: action
+      values:
+        node_drain: false
+        circuit_probe: false
+        circuit_reset: false
+        promote: true
+        failback: true
+        backup_start: false
+        restore_validate: true
+        disaster_recovery_test_start: false
+    conformance_case: administrator_grant
+  getOperationalAction: *operation_read
+  listAuditEvents: {permission: audit.read, recent_auth: false, conformance_case: administrator_grant}
+  getRetentionConfiguration: *retention_read
+  putRetentionConfiguration: *retention_write
+  previewRetentionConfiguration: *retention_read
+  createRetentionExport: {permission: export.create and content.read for captured_content, recent_auth: true, conformance_case: administrator_grant}
+  getRetentionExport: *export_read
+  redeemRetentionExport: {permission: export.create and content.read for captured_content, recent_auth: true, conformance_case: administrator_grant}
+  listCapturedContent: *content_read
+  getCapturedContent: *content_read
+  getHealth: *health
+
+conformance_cases:
+  contract_manifest: {fixture: docs/api/fixtures/contract-manifest.json, schema: ContractManifest}
+  service_authentication: {fixture: docs/api/fixtures/service-token.json, schema: ServiceToken}
+  workspace: {fixture: docs/api/fixtures/workspace.json, schema: Workspace}
+  attachment: {fixture: docs/api/fixtures/attachment.json, schema: Attachment}
+  model_request: {fixture: docs/api/fixtures/model-request.json, schema: ModelRequest}
+  effective_configuration: {fixture: docs/api/fixtures/effective-configuration.json, schema: EffectiveConfiguration}
+  administrator_grant: {fixture: docs/api/fixtures/administration-grant.json, schema: AdministratorGrant}
+  health: {fixture: docs/api/fixtures/health.json, schema: Health}
+  business_tool_gateway: {fixture: docs/api/fixtures/business-tool-call.json, schema: BusinessToolCall}
+
+readable_contracts:
+  docs/api/README.md:
+    required_markers: [/v1/contracts, /v1/model-requests, /v1/admin/captured-content]
+  docs/api/business-tool-gateway.md:
+    required_markers: [/llmrouter/business-tool-gateway/v1/calls, /llmrouter/business-tool-gateway/v1/reconciliations, BusinessToolCall, BusinessToolResult]
+  docs/api/request-fingerprint.md:
+    required_markers: [x_llmrouter_exact_route, x_llmrouter_exact_route_grant, SHA-256]
+  docs/api/cross-service-conformance.md:
+    required_markers: [attachment, exact route, grant, backup]
+
+artifact_sha256:
+  docs/api/README.md: 8bf645e0a4f1bcb98e3e8b30e33d421ecaec1a511e3eb532a10c5980c0bd4433
+  docs/api/business-tool-gateway.md: 8622f79febd1e7499a38eec3d6735929555edb974321b6a792f1eb36f8fdca76
+  docs/api/cross-service-conformance.md: 3d135d560d5a90b94f1193b823ee17b9a009171efa78990c69e3721de043e26a
+  docs/api/embed-protocol.md: 7b01be032006ef40a369501a03b1630db511bbc5912a3b61bab197267fc6bc21
+  docs/api/errors.md: 6161588a55edaa06b87e662aee1828f89bcbbc7c59ac58cefac15b4a2d1191e8
+  docs/api/openapi.yaml: 7f953cd862595af40af74c2bb438de00a5b8bd711df583031717825dfdac54e5
+  docs/api/request-fingerprint.md: 4af9756953f91e24c0c3a8e9fdddfabc4413ede8cee00656fe60ea3c3ea6f764
+  docs/api/service-management.md: 501f672274ecb9599ee005d66b33938ead8757693608c8d5e36d9e19c5a76215
+  docs/api/stream-protocol.md: 3245e7315826449a1017af56f1cebbafad97dec4e0e9bb8c1592d34d121021a2
