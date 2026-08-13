@@ -108,6 +108,7 @@ def embed_policy(
     ("audience", "operation"),
     [
         (Audience.DATA_PLANE, "model.create"),
+        (Audience.DATA_PLANE, "embedding.create"),
         (Audience.SERVICE_MANAGEMENT, "workspace.create"),
         (Audience.HOST_BACKEND, "admin_embed.create"),
         (Audience.ACCOUNTING, "accounting.read"),
@@ -134,6 +135,52 @@ def test_each_machine_audience_accepts_only_its_exact_operation(
 
 def test_machine_audience_operation_matrix_is_closed() -> None:
     """Each accepted pair works, and each cross-audience pair is rejected."""
+    expected_operations = {
+        Audience.DATA_PLANE: frozenset(
+            {
+                "model.create",
+                "model.read",
+                "model.cancel",
+                "run.create",
+                "run.read",
+                "run.cancel",
+                "tool.create",
+                "tool.read",
+                "tool.cancel",
+                "attachment.create",
+                "attachment.read",
+                "embedding.create",
+                "embedding.read",
+            }
+        ),
+        Audience.SERVICE_MANAGEMENT: frozenset(
+            {
+                "workspace.create",
+                "workspace.read",
+                "workspace.disable",
+                "workspace.restore",
+                "workspace.retire",
+            }
+        ),
+        Audience.HOST_BACKEND: frozenset({"admin_embed.create"}),
+        Audience.ACCOUNTING: frozenset({"accounting.read"}),
+        Audience.CONFIGURATION: frozenset(
+            {
+                "configuration.read",
+                "configuration.write",
+                "diagnostic.grant.create",
+                "retention.read",
+                "retention.preview",
+                "retention.write",
+                "budget.read",
+                "budget.write",
+            }
+        ),
+        Audience.BUDGET_AUTHORITY: frozenset(
+            {"budget_ceiling.read", "budget_ceiling.write"}
+        ),
+    }
+    assert expected_operations == MACHINE_OPERATIONS_BY_AUDIENCE
     for audience, operations in MACHINE_OPERATIONS_BY_AUDIENCE.items():
         builder = ScopeTestBuilder(SERVICE_SCOPE, now=NOW)
         for operation in operations:

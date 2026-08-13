@@ -15,6 +15,7 @@ WORKSPACE_ID = "0198a080-0000-7000-8000-000000000003"
 CONFIGURATION_ID = "0198a080-0000-7000-8000-000000000004"
 REQUEST_ROW_ID = "0198a080-0000-7000-8000-000000000005"
 REQUEST_ID = "0198a080-0000-7000-8000-000000000006"
+OTHER_WORKSPACE_ID = "0198a080-0000-7000-8000-000000000007"
 
 
 def seed_scope(connection: Connection[Any]) -> None:
@@ -34,6 +35,15 @@ def seed_scope(connection: Connection[Any]) -> None:
         ) VALUES (%s, %s, 'caller-a', 'create-a', decode(repeat('01', 32), 'hex'))
         """,
         (WORKSPACE_ID, SERVICE_ID),
+    )
+    connection.execute(
+        """
+        INSERT INTO router.workspaces (
+            id, service_id, caller_reference, creation_idempotency_key,
+            creation_fingerprint
+        ) VALUES (%s, %s, 'caller-b', 'create-b', decode(repeat('04', 32), 'hex'))
+        """,
+        (OTHER_WORKSPACE_ID, OTHER_SERVICE_ID),
     )
     connection.execute(
         """

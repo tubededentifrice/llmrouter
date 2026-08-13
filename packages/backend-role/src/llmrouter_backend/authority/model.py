@@ -36,6 +36,8 @@ MACHINE_OPERATIONS_BY_AUDIENCE: dict[Audience, frozenset[str]] = {
             "tool.cancel",
             "attachment.create",
             "attachment.read",
+            "embedding.create",
+            "embedding.read",
         }
     ),
     Audience.SERVICE_MANAGEMENT: frozenset(

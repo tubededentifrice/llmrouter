@@ -916,9 +916,7 @@ def _workspace_transition(
     return state is not desired, desired
 
 
-def _service_tree_is_active(
-    connection: Connection[Any], service_id: uuid.UUID
-) -> bool:
+def _service_tree_is_active(connection: Connection[Any], service_id: uuid.UUID) -> bool:
     row = connection.execute(
         """
         WITH RECURSIVE ancestors AS (

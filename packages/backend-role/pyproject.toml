@@ -8,6 +8,7 @@ version = "0.0.0"
 description = "LLM Router backend role scaffold"
 requires-python = "==3.13.*"
 dependencies = [
+  "argon2-cffi==25.1.0",
   "fastapi==0.140.13",
   "psycopg[binary]==3.3.4",
   "uvicorn==0.51.0",
