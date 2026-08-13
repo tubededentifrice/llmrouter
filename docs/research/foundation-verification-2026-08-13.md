@@ -78,3 +78,21 @@ The product, language, database, security, Beads plan, and repository checks
 passed after these fixes. The final detached clean command used Node.js 24.17.0
 through `npm exec`. It set `LLMROUTER_FULL_CHECKS` to `1`, ran
 `./scripts/check-repository.sh`, and exited with status 0.
+
+## Second clean run
+
+The repair verification used detached source
+`2cff5033f101a0a4e8651a68c2794bf906832dea`. The worktree did not contain a
+uv environment or a Node dependency tree before the run. The full gate
+recreated its local dependency and PostgreSQL test state.
+
+The second run matched the first run. All contract, fixture, lock, and
+migration SHA-256 values were unchanged. The Python suite had 91 passed cases
+and 26 expected database skips. The TypeScript suite had 27 passed cases. The
+new real PostgreSQL state had 27 passed cases. React Doctor had score 100 and
+zero diagnostics. The Python and npm audits found no known vulnerability.
+The API, generated-model, package, migration, transaction, scope-isolation,
+permission-order, audit-authority, dependency-policy, and Beads plan checks
+passed. The exact pinned full repository gate exited with status 0. The run
+found no new defect and no order-dependent or retained-state result. The same
+full gate passed again in the detached worktree with the same test counts.
