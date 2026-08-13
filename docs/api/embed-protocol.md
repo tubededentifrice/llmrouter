@@ -65,6 +65,10 @@ No embed permission grants captured-content read, global administration,
 service creation, workspace creation, credential-secret read, or another
 service's data.
 
+`budget.write` can set only a lower Router workspace or assignment limit. It
+cannot raise, remove, or replace a host-set workspace ceiling. The host backend
+uses the separate `budget_authority` audience for ceiling changes.
+
 `recent_auth_at` is optional for a read-only session. It is required when the
 permissions contain `configuration.write`, `budget.write`, or `diagnostic.run`.
 The host asserts the time of its latest successful passkey authentication for

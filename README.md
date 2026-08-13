@@ -10,11 +10,8 @@ change those services during the specification phase.
 
 ## Status
 
-This repository is in architecture discovery. It contains repository controls,
-research, and draft design boundaries. It does not contain a product
-implementation. The first product-boundary, inheritance, administration,
-interface, and shared-tool decisions are accepted. Other behavior remains
-under review.
+This repository contains a complete implementation-ready specification set
+and no product implementation. The user approval gate remains open.
 
 Beads is initialized, but it has no work items. Beads planning stays disabled
 until the user approves the specifications and explicitly asks to enable it.
@@ -56,11 +53,9 @@ use.
 
 ## Work process
 
-1. Review the architecture interview with the user.
-2. Write and review the product specifications.
-3. Record accepted architecture decisions.
-4. Enable Beads only after the user approves the specification set.
-5. Plan and implement the service in small, verified changes.
+1. Obtain explicit user approval of the specification set.
+2. Enable Beads only when the user also explicitly asks to enable it.
+3. Plan and implement the service in small, verified changes.
 
 ## License
 

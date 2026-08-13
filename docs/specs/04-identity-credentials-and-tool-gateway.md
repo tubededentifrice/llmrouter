@@ -1,7 +1,6 @@
 # Identity, credentials, and tool gateway
 
-Status: Accepted sections only. Token formats, lifetimes, key custody, and
-mutual TLS deployment profiles remain open.
+Status: Ready for approval.
 
 ## Service bootstrap and access
 
@@ -24,10 +23,43 @@ recent global administrator authentication and MUST create audit events.
 Rotation MUST support a bounded overlap period. Revocation MUST stop new token
 exchanges immediately.
 
+A bootstrap secret MUST contain at least 256 bits from a cryptographically
+secure random source. Its printable value MUST use unambiguous base64url
+encoding. The router MUST store an Argon2id verifier with a unique salt and
+deployment-approved cost parameters. It MUST NOT store the secret or a
+reversible form.
+
+A short-lived service token MUST be an opaque bearer value with at least 256
+random bits. The router MUST store only a keyed digest. The token lifetime
+MUST be 5 minutes. The server MAY accept no more than 30 seconds of clock skew
+for expiry checks. A token MUST contain or bind to one issuer, one audience,
+one service, optional allowed workspaces, exact operations, issue and expiry
+times, one token identity, and one bootstrap credential generation. It MUST
+be invalid when its credential generation is revoked.
+
+Bootstrap rotation MUST create a new generation and MAY keep the prior
+generation valid for a selected overlap of 0 to 24 hours. The default overlap
+is 24 hours. The administration interface MUST show the exact end time and MUST
+let an administrator end the overlap early. A token from an old generation
+MUST NOT outlive that generation. Revocation has no overlap.
+This overlap follows [decision 0041](../decisions/0041-allow-24-hour-service-secret-rotation-overlap.md).
+
+The wrapping key and token-digest key MUST be separate deployment secrets.
+They MUST be at least 256 random bits, MUST NOT be stored in the database or
+Git, and MUST support staged rotation. A key-custody loss MUST fail closed for
+token exchange and credential decryption and MUST produce an operator-visible
+security state.
+
 LLM Router MUST support mutual TLS as an optional additional machine control.
 A deployment MAY require mutual TLS for selected services or routes. A mutual
 TLS identity MUST be bound to the same service identity and MUST NOT expand the
 token scope.
+
+The production mutual TLS profile MUST use TLS 1.3, a private deployment trust
+anchor, server and client certificate validation, and revocation or a bounded
+certificate lifetime of no more than 24 hours. A certificate identity MUST
+map to one registered service and credential generation. The router MUST
+reject a certificate for a different service before it checks operation scope.
 
 ## Built-in provider credential store
 

@@ -1,7 +1,6 @@
 # Product specifications
 
-Some specification sections are accepted. Other behavior remains open while
-the architecture interview continues.
+The specification set is complete and ready for explicit user approval.
 
 - [Product and boundaries](00-product-and-boundaries.md)
 - [Configuration and inheritance](01-configuration-and-inheritance.md)

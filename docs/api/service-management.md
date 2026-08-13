@@ -8,6 +8,12 @@ request. A bearer token for these routes MUST have audience
 `service_management` and the exact operation. It MUST NOT have request,
 content-read, accounting-read, or configuration-write permission.
 
+The host-set workspace budget ceiling is a separate budget-authority operation
+in the native OpenAPI contract. Its token MUST use audience `budget_authority`
+and exact operation `budget_ceiling.read` or `budget_ceiling.write`. A
+`service_management` token, embed session, or human administrator session
+cannot change that ceiling.
+
 All request and response bodies are closed JSON objects. An unknown field is
 invalid. An identifier is opaque and has 1 to 200 characters. A caller
 reference is opaque to LLM Router and has 1 to 200 characters.

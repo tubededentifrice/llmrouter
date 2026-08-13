@@ -41,6 +41,10 @@ Accepted decisions:
 - [0037: Use shared Pocket ID for human authentication](0037-use-shared-pocket-id-for-human-authentication.md)
 - [0038: Process authorized service data with normal capture](0038-process-authorized-service-data-with-normal-capture.md)
 - [0039: Let services manage their router workspace scopes](0039-let-services-manage-router-workspace-scopes.md)
+- [0040: Limit cancellation reconciliation to 10 minutes](0040-limit-cancellation-reconciliation-to-ten-minutes.md)
+- [0041: Allow a 24-hour service-secret rotation overlap](0041-allow-24-hour-service-secret-rotation-overlap.md)
+- [0042: Retain agent and business-tool audit for 30 days](0042-retain-agent-and-business-tool-audit-for-thirty-days.md)
+- [0043: Use Python backends and React TypeScript frontends](0043-use-python-backends-and-react-typescript-frontends.md)
 
 Add a numbered decision record only after the user accepts a material choice.
 Each record must state the context, the accepted choice, alternatives, good and

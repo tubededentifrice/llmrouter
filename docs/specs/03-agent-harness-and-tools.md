@@ -1,7 +1,6 @@
 # Agent harness and tools
 
-Status: Accepted sections only. Tool-call concurrency and approval details
-remain open.
+Status: Ready for approval.
 
 ## Optional agent harness
 
@@ -43,8 +42,22 @@ Run admission and ownership takeover MAY use a strongly consistent fencing
 operation. Before a provider attempt, business tool call, or other external
 effect that must not run twice, the owner MUST record the applicable intent at
 a local durable boundary. Remote replication of that record MAY be
-asynchronous. The specification will define recovery behavior for an
-unconfirmed effect before implementation.
+asynchronous. After takeover, an intent without a confirmed result MUST become
+`uncertain`. The router MUST NOT repeat the effect automatically. An authorized
+calling service MUST reconcile the effect through its business-tool operation
+identity before it starts a new run or asks a person to decide the result.
+
+One run MAY have no more than one active business-tool call at a time in the
+first release. Independent shared external-tool calls MAY run concurrently
+only when the request supplies an explicit maximum concurrency of 1 through
+8. The default is 1. The router MUST count every active and completed call
+against the run step and budget limits.
+
+LLM Router MUST NOT provide a generic human approval store. The calling
+service MUST approve a business action before its gateway accepts the tool
+grant. A `waiting_for_tool` run can wait no more than 15 minutes for that
+gateway result. After the limit, the tool step fails unless its effect is
+uncertain, in which case the run becomes `uncertain`.
 
 ## Shared external tools
 

@@ -1,7 +1,6 @@
 # Public interfaces, clients, and packaging
 
-Status: Accepted sections only. Exact operations, stream encoding, OpenAI
-endpoint coverage, and release automation remain open.
+Status: Ready for approval.
 
 ## Native API
 

@@ -10,8 +10,13 @@ required_files=(
   "docs/architecture.md"
   "docs/product-direction.md"
   "docs/api/README.md"
+  "docs/api/cross-service-conformance.md"
   "docs/api/embed-protocol.md"
+  "docs/api/errors.md"
+  "docs/api/openapi.yaml"
+  "docs/api/request-fingerprint.md"
   "docs/api/service-management.md"
+  "docs/api/stream-protocol.md"
   "docs/decisions/README.md"
   "docs/decisions/0001-complete-platform-with-optional-harness.md"
   "docs/decisions/0002-nearest-scope-replaces-assignment-chain.md"
@@ -52,6 +57,10 @@ required_files=(
   "docs/decisions/0037-use-shared-pocket-id-for-human-authentication.md"
   "docs/decisions/0038-process-authorized-service-data-with-normal-capture.md"
   "docs/decisions/0039-let-services-manage-router-workspace-scopes.md"
+  "docs/decisions/0040-limit-cancellation-reconciliation-to-ten-minutes.md"
+  "docs/decisions/0041-allow-24-hour-service-secret-rotation-overlap.md"
+  "docs/decisions/0042-retain-agent-and-business-tool-audit-for-thirty-days.md"
+  "docs/decisions/0043-use-python-backends-and-react-typescript-frontends.md"
   "docs/interviews/architecture-interview.md"
   "docs/research/README.md"
   "docs/research/ontology-administration-alignment-2026-08.md"
@@ -114,6 +123,8 @@ done
 
 grep -qx "min-release-age=14" "${repository_root}/.npmrc"
 jq -e . "${repository_root}/renovate.json" >/dev/null
+grep -qx 'openapi: 3.1.0' "${repository_root}/docs/api/openapi.yaml"
+grep -qx '  version: 1.0.0' "${repository_root}/docs/api/openapi.yaml"
 
 if [[ -s "${repository_root}/.beads/issues.jsonl" ]]; then
   echo "Beads planning is disabled. The issue export must stay empty." >&2

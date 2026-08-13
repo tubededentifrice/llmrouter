@@ -1,0 +1,2562 @@
+openapi: 3.1.0
+info:
+  title: LLM Router native API
+  version: 1.0.0
+  summary: Provider-neutral routing, agent, tool, accounting, and administration API.
+  description: >-
+    This is the complete first-release HTTP JSON contract. Stream event details
+    are in stream-protocol.md. Contract envelopes are closed. A declared JSON
+    document field follows its own supplied schema.
+servers:
+  - url: /
+security:
+  - bearerToken: []
+tags:
+  - name: Contracts
+    description: Safe runtime contract and capability discovery.
+  - name: Authentication
+    description: Service bootstrap exchange.
+  - name: Workspaces
+    description: Calling-service workspace scope management.
+  - name: Requests
+    description: Provider-neutral model requests and compatibility operations.
+  - name: Runs
+    description: Durable provider-neutral agent runs.
+  - name: Tools
+    description: Direct shared external-tool requests.
+  - name: Configuration
+    description: Effective and owned routing configuration.
+  - name: Budgets
+    description: Host ceilings, limits, and enforcement state.
+  - name: Accounting
+    description: Durable usage and cost aggregates.
+  - name: Administration
+    description: Global and service-scoped administration.
+  - name: Audit
+    description: Audit metadata and protected captured-content reads.
+  - name: Health
+    description: Safe readiness and operational state.
+paths:
+  /v1/contracts:
+    get:
+      tags: [Contracts]
+      operationId: getContractManifest
+      summary: Get safe contract versions, capabilities, and artifact digests.
+      security: []
+      responses:
+        '200':
+          description: Current deployed contract set.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ContractManifest'}
+  /v1/service-token-exchanges:
+    post:
+      tags: [Authentication]
+      operationId: exchangeServiceToken
+      summary: Exchange one bootstrap secret for a five-minute scoped token.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ServiceTokenExchange'}
+      responses:
+        '201':
+          description: Token created.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ServiceToken'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '429': {$ref: '#/components/responses/Retryable'}
+  /v1/services/{service_id}/workspaces:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+    post:
+      tags: [Workspaces]
+      operationId: createWorkspace
+      summary: Create one Router workspace scope.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateWorkspace'}
+      responses:
+        '200': {$ref: '#/components/responses/WorkspaceResult'}
+        '201': {$ref: '#/components/responses/WorkspaceResult'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /v1/services/{service_id}/workspaces/{workspace_id}:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+      - $ref: '#/components/parameters/WorkspaceId'
+    get:
+      tags: [Workspaces]
+      operationId: getWorkspace
+      summary: Get one workspace and its current state revision.
+      responses:
+        '200': {$ref: '#/components/responses/WorkspaceResult'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /v1/services/{service_id}/workspaces/{workspace_id}/disable:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+      - $ref: '#/components/parameters/WorkspaceId'
+    post:
+      tags: [Workspaces]
+      operationId: disableWorkspace
+      summary: Disable one workspace.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/WorkspaceStateChange'}
+      responses:
+        '200': {$ref: '#/components/responses/WorkspaceResult'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /v1/services/{service_id}/workspaces/{workspace_id}/restore:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+      - $ref: '#/components/parameters/WorkspaceId'
+    post:
+      tags: [Workspaces]
+      operationId: restoreWorkspace
+      summary: Restore one disabled workspace.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/WorkspaceStateChange'}
+      responses:
+        '200': {$ref: '#/components/responses/WorkspaceResult'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /v1/services/{service_id}/workspaces/{workspace_id}/retire:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+      - $ref: '#/components/parameters/WorkspaceId'
+    post:
+      tags: [Workspaces]
+      operationId: retireWorkspace
+      summary: Permanently retire one workspace identity.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/WorkspaceStateChange'}
+      responses:
+        '200': {$ref: '#/components/responses/WorkspaceResult'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /v1/services/{service_id}/workspaces/{workspace_id}/budget-ceiling:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+      - $ref: '#/components/parameters/WorkspaceId'
+    get:
+      tags: [Budgets]
+      operationId: getWorkspaceBudgetCeiling
+      summary: Get the non-bypassable ceiling that the host service owns.
+      responses:
+        '200':
+          description: Current ceiling.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BudgetCeiling'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    put:
+      tags: [Budgets]
+      operationId: putWorkspaceBudgetCeiling
+      summary: Create or replace the non-bypassable host ceiling.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PutBudgetCeiling'}
+      responses:
+        '200':
+          description: Ceiling changed or an identical operation replayed.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BudgetCeiling'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /v1/model-requests:
+    post:
+      tags: [Requests]
+      operationId: createModelRequest
+      summary: Admit one provider-neutral model request.
+      parameters:
+        - $ref: '#/components/parameters/LogicalRequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ModelRequest'}
+      responses:
+        '200': {$ref: '#/components/responses/AdmissionReplay'}
+        '201': {$ref: '#/components/responses/AdmissionCreated'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '410': {$ref: '#/components/responses/Gone'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+        '429': {$ref: '#/components/responses/Retryable'}
+        '503': {$ref: '#/components/responses/Retryable'}
+  /v1/model-requests/{request_id}:
+    parameters:
+      - $ref: '#/components/parameters/RequestId'
+    get:
+      tags: [Requests]
+      operationId: getModelRequest
+      summary: Recover the current or terminal request status.
+      responses:
+        '200': {$ref: '#/components/responses/RequestStatus'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /v1/model-requests/{request_id}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/RequestId'
+    post:
+      tags: [Requests]
+      operationId: cancelModelRequest
+      summary: Request idempotent best-effort cancellation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CancelRequest'}
+      responses:
+        '200': {$ref: '#/components/responses/RequestStatus'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /v1/model-requests/{request_id}/events:
+    parameters:
+      - $ref: '#/components/parameters/RequestId'
+      - $ref: '#/components/parameters/LastEventId'
+    get:
+      tags: [Requests]
+      operationId: streamModelRequest
+      summary: Read native stream protocol version 1 events.
+      responses:
+        '200':
+          description: Server-sent events defined in stream-protocol.md.
+          content:
+            text/event-stream:
+              schema: {type: string}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /v1/agent-runs:
+    post:
+      tags: [Runs]
+      operationId: createAgentRun
+      summary: Admit one durable provider-neutral agent run.
+      parameters:
+        - $ref: '#/components/parameters/LogicalRequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AgentRunRequest'}
+      responses:
+        '200': {$ref: '#/components/responses/AdmissionReplay'}
+        '201': {$ref: '#/components/responses/AdmissionCreated'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+        '503': {$ref: '#/components/responses/Retryable'}
+  /v1/agent-runs/{request_id}:
+    parameters:
+      - $ref: '#/components/parameters/RequestId'
+    get:
+      tags: [Runs]
+      operationId: getAgentRun
+      summary: Recover one agent-run status.
+      responses:
+        '200': {$ref: '#/components/responses/RequestStatus'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /v1/agent-runs/{request_id}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/RequestId'
+    post:
+      tags: [Runs]
+      operationId: cancelAgentRun
+      summary: Request idempotent best-effort cancellation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CancelRequest'}
+      responses:
+        '200': {$ref: '#/components/responses/RequestStatus'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /v1/agent-runs/{request_id}/events:
+    parameters:
+      - $ref: '#/components/parameters/RequestId'
+      - $ref: '#/components/parameters/LastEventId'
+    get:
+      tags: [Runs]
+      operationId: streamAgentRun
+      summary: Read native stream protocol version 1 events.
+      responses:
+        '200':
+          description: Server-sent events defined in stream-protocol.md.
+          content:
+            text/event-stream:
+              schema: {type: string}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /v1/shared-tool-requests:
+    post:
+      tags: [Tools]
+      operationId: createSharedToolRequest
+      summary: Admit one routed search, extraction, scrape, or screenshot request.
+      parameters:
+        - $ref: '#/components/parameters/LogicalRequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SharedToolRequest'}
+      responses:
+        '200': {$ref: '#/components/responses/AdmissionReplay'}
+        '201': {$ref: '#/components/responses/AdmissionCreated'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+        '503': {$ref: '#/components/responses/Retryable'}
+  /v1/shared-tool-requests/{request_id}:
+    parameters:
+      - $ref: '#/components/parameters/RequestId'
+    get:
+      tags: [Tools]
+      operationId: getSharedToolRequest
+      summary: Recover one shared-tool request status.
+      responses:
+        '200': {$ref: '#/components/responses/RequestStatus'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /v1/shared-tool-requests/{request_id}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/RequestId'
+    post:
+      tags: [Tools]
+      operationId: cancelSharedToolRequest
+      summary: Request idempotent best-effort cancellation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CancelRequest'}
+      responses:
+        '200': {$ref: '#/components/responses/RequestStatus'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /v1/chat/completions:
+    post:
+      tags: [Requests]
+      operationId: createChatCompletion
+      summary: Run the accepted OpenAI-compatible chat completion operation.
+      parameters:
+        - $ref: '#/components/parameters/LogicalRequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CompatibleChatRequest'}
+      responses:
+        '200':
+          description: Compatible completion or event stream.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CompatibleResponse'}
+            text/event-stream:
+              schema: {type: string}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+  /v1/responses:
+    post:
+      tags: [Requests]
+      operationId: createCompatibleResponse
+      summary: Run the accepted OpenAI-compatible response operation.
+      parameters:
+        - $ref: '#/components/parameters/LogicalRequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CompatibleResponsesRequest'}
+      responses:
+        '200':
+          description: Compatible response or event stream.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CompatibleResponse'}
+            text/event-stream:
+              schema: {type: string}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+  /v1/services/{service_id}/effective-configuration:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+    get:
+      tags: [Configuration]
+      operationId: getEffectiveConfiguration
+      summary: Get effective configuration with source and active revision.
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceIdQuery'
+      responses:
+        '200':
+          description: Effective configuration.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/EffectiveConfiguration'}
+  /v1/services/{service_id}/diagnostic-grants:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+    post:
+      tags: [Configuration]
+      operationId: createDiagnosticGrant
+      summary: Create one short-lived grant for one exact eligible route.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateDiagnosticGrant'}
+      responses:
+        '201':
+          description: Short-lived diagnostic bearer value created.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DiagnosticGrant'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+  /v1/services/{service_id}/assignments:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+    get:
+      tags: [Configuration]
+      operationId: listAssignments
+      summary: List bounded assignments in the service scope.
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceIdQuery'
+      responses:
+        '200':
+          description: Assignment page.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AssignmentPage'}
+  /v1/services/{service_id}/assignments/{assignment_name}:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+      - name: assignment_name
+        in: path
+        required: true
+        schema: {$ref: '#/components/schemas/AssignmentName'}
+    put:
+      tags: [Configuration]
+      operationId: putAssignment
+      summary: Atomically publish one complete assignment chain.
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceIdQuery'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PutAssignment'}
+      responses:
+        '200': {$ref: '#/components/responses/ConfigurationWrite'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+  /v1/services/{service_id}/provider-instances:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+    get:
+      tags: [Configuration]
+      operationId: listProviderInstances
+      summary: List eligible provider instances.
+      responses:
+        '200':
+          description: Provider-instance page.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ProviderInstancePage'}
+    post:
+      tags: [Configuration]
+      operationId: createProviderInstance
+      summary: Create and publish a service-owned provider instance.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PutProviderInstance'}
+      responses:
+        '200': {$ref: '#/components/responses/ConfigurationWrite'}
+        '201': {$ref: '#/components/responses/ConfigurationWrite'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+  /v1/services/{service_id}/provider-instances/{provider_instance_id}:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+      - name: provider_instance_id
+        in: path
+        required: true
+        schema: {$ref: '#/components/schemas/OpaqueId'}
+    get:
+      tags: [Configuration]
+      operationId: getProviderInstance
+      summary: Get one eligible provider instance without secret material.
+      responses:
+        '200':
+          description: Provider instance.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ProviderInstance'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    put:
+      tags: [Configuration]
+      operationId: putProviderInstance
+      summary: Change, disable, or retire a service-owned provider instance.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PutProviderInstance'}
+      responses:
+        '200': {$ref: '#/components/responses/ConfigurationWrite'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+  /v1/services/{service_id}/provider-model-routes:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+    get:
+      tags: [Configuration]
+      operationId: listProviderModelRoutes
+      summary: List eligible provider-model routes.
+      responses:
+        '200':
+          description: Provider-model-route page.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ProviderModelRoutePage'}
+    post:
+      tags: [Configuration]
+      operationId: createProviderModelRoute
+      summary: Create and publish a service-owned provider-model route.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PutProviderModelRoute'}
+      responses:
+        '200': {$ref: '#/components/responses/ConfigurationWrite'}
+        '201': {$ref: '#/components/responses/ConfigurationWrite'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+  /v1/services/{service_id}/provider-model-routes/{provider_model_route_id}:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+      - name: provider_model_route_id
+        in: path
+        required: true
+        schema: {$ref: '#/components/schemas/OpaqueId'}
+    get:
+      tags: [Configuration]
+      operationId: getProviderModelRoute
+      summary: Get one eligible provider-model route and immutable prices.
+      responses:
+        '200':
+          description: Provider-model route.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ProviderModelRoute'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    put:
+      tags: [Configuration]
+      operationId: putProviderModelRoute
+      summary: Change, disable, or retire a service-owned provider-model route.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PutProviderModelRoute'}
+      responses:
+        '200': {$ref: '#/components/responses/ConfigurationWrite'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+  /v1/services/{service_id}/price-synchronizations:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+    post:
+      tags: [Configuration]
+      operationId: synchronizePrices
+      summary: Preview or start one bounded price synchronization.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PriceSynchronizationRequest'}
+      responses:
+        '200':
+          description: Dry-run result.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PriceSynchronization'}
+        '202':
+          description: Synchronization accepted.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PriceSynchronization'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /v1/services/{service_id}/price-synchronizations/{operation_id}:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+      - name: operation_id
+        in: path
+        required: true
+        schema: {$ref: '#/components/schemas/OpaqueId'}
+    get:
+      tags: [Configuration]
+      operationId: getPriceSynchronization
+      summary: Get one price-synchronization result and row failures.
+      responses:
+        '200':
+          description: Current synchronization state.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PriceSynchronization'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /v1/services/{service_id}/budgets:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+    get:
+      tags: [Budgets]
+      operationId: getBudgetSummary
+      summary: Get limits, reservations, use, corrections, and remaining amounts.
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceIdQuery'
+      responses:
+        '200':
+          description: Budget summary.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BudgetSummary'}
+    put:
+      tags: [Budgets]
+      operationId: putSubordinateBudget
+      summary: Set a service, workspace, or assignment limit below all ceilings.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PutBudgetLimit'}
+      responses:
+        '200':
+          description: Budget limit published.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BudgetSummary'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /v1/services/{service_id}/accounting/summary:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+    get:
+      tags: [Accounting]
+      operationId: getAccountingSummary
+      summary: Get a bounded aggregate without captured content.
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceIdQuery'
+        - $ref: '#/components/parameters/From'
+        - $ref: '#/components/parameters/To'
+      responses:
+        '200':
+          description: Accounting summary.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AccountingSummary'}
+  /v1/services/{service_id}/retention:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+    get:
+      tags: [Administration]
+      operationId: getScopedRetentionConfiguration
+      summary: Get effective service or workspace retention and allowed ranges.
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceIdQuery'
+      responses:
+        '200':
+          description: Effective scoped retention.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RetentionConfiguration'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    put:
+      tags: [Administration]
+      operationId: putScopedRetentionConfiguration
+      summary: Publish service or workspace retention after confirming a current preview.
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceIdQuery'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PutRetentionConfiguration'}
+      responses:
+        '200':
+          description: Scoped retention published.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RetentionConfiguration'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+  /v1/services/{service_id}/retention-previews:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+    post:
+      tags: [Administration]
+      operationId: previewScopedRetentionConfiguration
+      summary: Preview deletion and storage effects for a service or workspace change.
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceIdQuery'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PreviewRetentionConfiguration'}
+      responses:
+        '200':
+          description: Bounded preview. It does not change retention.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RetentionPreview'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+  /v1/services/{service_id}/configuration-revisions:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+    get:
+      tags: [Configuration]
+      operationId: listConfigurationRevisions
+      summary: List immutable configuration revisions.
+      responses:
+        '200': {$ref: '#/components/responses/ConfigurationPage'}
+  /v1/services/{service_id}/configuration-revisions/{revision}/rollback:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+      - name: revision
+        in: path
+        required: true
+        schema: {$ref: '#/components/schemas/OpaqueId'}
+    post:
+      tags: [Configuration]
+      operationId: rollbackConfiguration
+      summary: Publish a new revision that restores selected earlier content.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RevisionWrite'}
+      responses:
+        '200': {$ref: '#/components/responses/ConfigurationWrite'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /v1/services/{service_id}/administration/embed-sessions:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+    post:
+      tags: [Administration]
+      operationId: createAdministrationEmbedSession
+      summary: Create one short-lived hosted administration session.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/EmbedSessionRequest'}
+      responses:
+        '201':
+          description: Embed session created.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/EmbedSession'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /v1/admin/session-starts:
+    post:
+      tags: [Authentication]
+      operationId: startAdministratorSession
+      summary: Start a Pocket ID login or recent-authentication flow.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AdministratorSessionStart'}
+      responses:
+        '201':
+          description: Authorization redirect created with server-held state, nonce, and PKCE verifier.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdministratorAuthorization'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '503': {$ref: '#/components/responses/Retryable'}
+  /v1/admin/oidc/callback:
+    get:
+      tags: [Authentication]
+      operationId: completeAdministratorSession
+      summary: Validate the Pocket ID callback and create or refresh the local session.
+      security: []
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema: {type: string, minLength: 1, maxLength: 4096}
+        - name: state
+          in: query
+          required: true
+          schema: {type: string, minLength: 32, maxLength: 4096}
+      responses:
+        '303':
+          description: Authentication completed. The response sets the local session cookie and redirects to the validated local return path.
+          headers:
+            Location:
+              required: true
+              schema: {type: string}
+            Set-Cookie:
+              required: true
+              schema: {type: string}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '503': {$ref: '#/components/responses/Retryable'}
+  /v1/admin/session:
+    get:
+      tags: [Authentication]
+      operationId: getAdministratorSession
+      summary: Get the local administrator session and current local grants.
+      security: [{administratorSession: []}]
+      responses:
+        '200':
+          description: Current local session without an identity-provider token.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdministratorSession'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+    delete:
+      tags: [Authentication]
+      operationId: deleteAdministratorSession
+      summary: Revoke the local administrator session and clear its cookie.
+      security: [{administratorSession: []}]
+      parameters: [{$ref: '#/components/parameters/CsrfToken'}]
+      responses:
+        '204': {description: Local session revoked.}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /v1/admin/services:
+    get:
+      tags: [Administration]
+      operationId: listServices
+      summary: List services in global administration.
+      security: [{administratorSession: []}]
+      responses:
+        '200':
+          description: Service administration page.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ServiceAdministrationPage'}
+    post:
+      tags: [Administration]
+      operationId: createService
+      summary: Create one service and show its bootstrap secret once.
+      security: [{administratorSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateService'}
+      responses:
+        '200':
+          description: Identical replay. The response does not repeat the show-once secret.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ServiceCreated'}
+        '201':
+          description: Service created. The bootstrap secret is shown once.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ServiceCreated'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /v1/admin/services/{service_id}:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+    get:
+      tags: [Administration]
+      operationId: getService
+      summary: Get one service, parent, state, and credential metadata.
+      security: [{administratorSession: []}]
+      responses:
+        '200':
+          description: Service administration record.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ServiceAdministrationRecord'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    put:
+      tags: [Administration]
+      operationId: putService
+      summary: Change display metadata or the one parent link.
+      security: [{administratorSession: []}]
+      parameters: [{$ref: '#/components/parameters/CsrfToken'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AdministrationChange'}
+      responses:
+        '200':
+          description: Service changed.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdministrationResult'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /v1/admin/services/{service_id}/{service_action}:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+      - name: service_action
+        in: path
+        required: true
+        schema: {type: string, enum: [disable, restore, retire, rotate-bootstrap, revoke-bootstrap]}
+    post:
+      tags: [Administration]
+      operationId: changeService
+      summary: Change service state or bootstrap credential generation.
+      security: [{administratorSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AdministrationChange'}
+      responses:
+        '200':
+          description: Operation completed.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdministrationResult'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /v1/admin/catalog/{catalog_kind}:
+    parameters:
+      - name: catalog_kind
+        in: path
+        required: true
+        schema: {type: string, enum: [providers, models]}
+    get:
+      tags: [Administration]
+      operationId: listCatalog
+      summary: List provider adapter or canonical model catalog entries.
+      security: [{administratorSession: []}]
+      responses:
+        '200': {$ref: '#/components/responses/ConfigurationPage'}
+    post:
+      tags: [Administration]
+      operationId: createCatalogEntry
+      summary: Create and publish one global catalog entry.
+      security: [{administratorSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ConfigurationDocument'}
+      responses:
+        '200': {$ref: '#/components/responses/ConfigurationWrite'}
+        '201': {$ref: '#/components/responses/ConfigurationWrite'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+  /v1/admin/catalog/{catalog_kind}/{catalog_id}:
+    parameters:
+      - name: catalog_kind
+        in: path
+        required: true
+        schema: {type: string, enum: [providers, models]}
+      - name: catalog_id
+        in: path
+        required: true
+        schema: {$ref: '#/components/schemas/OpaqueId'}
+    get:
+      tags: [Administration]
+      operationId: getCatalogEntry
+      summary: Get one catalog entry.
+      security: [{administratorSession: []}]
+      responses:
+        '200':
+          description: Catalog entry.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ConfigurationDocument'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    put:
+      tags: [Administration]
+      operationId: putCatalogEntry
+      summary: Change, disable, or retire one catalog entry.
+      security: [{administratorSession: []}]
+      parameters: [{$ref: '#/components/parameters/CsrfToken'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ConfigurationDocument'}
+      responses:
+        '200': {$ref: '#/components/responses/ConfigurationWrite'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+  /v1/admin/provider-instances:
+    get:
+      tags: [Administration]
+      operationId: listGlobalProviderInstances
+      summary: List global provider instances without secret material.
+      security: [{administratorSession: []}]
+      responses:
+        '200':
+          description: Global provider-instance page.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ProviderInstancePage'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+    post:
+      tags: [Administration]
+      operationId: createGlobalProviderInstance
+      summary: Create and publish one global provider instance.
+      security: [{administratorSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PutProviderInstance'}
+      responses:
+        '200': {$ref: '#/components/responses/ConfigurationWrite'}
+        '201': {$ref: '#/components/responses/ConfigurationWrite'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+  /v1/admin/provider-instances/{provider_instance_id}:
+    parameters:
+      - name: provider_instance_id
+        in: path
+        required: true
+        schema: {$ref: '#/components/schemas/OpaqueId'}
+    get:
+      tags: [Administration]
+      operationId: getGlobalProviderInstance
+      summary: Get one global provider instance without secret material.
+      security: [{administratorSession: []}]
+      responses:
+        '200':
+          description: Global provider instance.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ProviderInstance'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    put:
+      tags: [Administration]
+      operationId: putGlobalProviderInstance
+      summary: Change, disable, or retire one global provider instance.
+      security: [{administratorSession: []}]
+      parameters: [{$ref: '#/components/parameters/CsrfToken'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PutProviderInstance'}
+      responses:
+        '200': {$ref: '#/components/responses/ConfigurationWrite'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+  /v1/admin/provider-model-routes:
+    get:
+      tags: [Administration]
+      operationId: listGlobalProviderModelRoutes
+      summary: List global provider-model routes and immutable prices.
+      security: [{administratorSession: []}]
+      responses:
+        '200':
+          description: Global provider-model-route page.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ProviderModelRoutePage'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+    post:
+      tags: [Administration]
+      operationId: createGlobalProviderModelRoute
+      summary: Create and publish one global provider-model route.
+      security: [{administratorSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PutProviderModelRoute'}
+      responses:
+        '200': {$ref: '#/components/responses/ConfigurationWrite'}
+        '201': {$ref: '#/components/responses/ConfigurationWrite'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+  /v1/admin/provider-model-routes/{provider_model_route_id}:
+    parameters:
+      - name: provider_model_route_id
+        in: path
+        required: true
+        schema: {$ref: '#/components/schemas/OpaqueId'}
+    get:
+      tags: [Administration]
+      operationId: getGlobalProviderModelRoute
+      summary: Get one global provider-model route and immutable prices.
+      security: [{administratorSession: []}]
+      responses:
+        '200':
+          description: Global provider-model route.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ProviderModelRoute'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    put:
+      tags: [Administration]
+      operationId: putGlobalProviderModelRoute
+      summary: Change, disable, or retire one global provider-model route.
+      security: [{administratorSession: []}]
+      parameters: [{$ref: '#/components/parameters/CsrfToken'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PutProviderModelRoute'}
+      responses:
+        '200': {$ref: '#/components/responses/ConfigurationWrite'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+  /v1/admin/credentials:
+    get:
+      tags: [Administration]
+      operationId: listCredentials
+      summary: List safe credential metadata.
+      security: [{administratorSession: []}]
+      responses:
+        '200':
+          description: Safe credential metadata page.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CredentialPage'}
+    post:
+      tags: [Administration]
+      operationId: createCredential
+      summary: Store one write-only provider or shared-tool secret.
+      security: [{administratorSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateCredential'}
+      responses:
+        '200':
+          description: Identical replay returned safe credential metadata.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CredentialMetadata'}
+        '201':
+          description: Safe credential metadata.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CredentialMetadata'}
+  /v1/admin/credentials/{credential_id}/{credential_action}:
+    parameters:
+      - name: credential_id
+        in: path
+        required: true
+        schema: {$ref: '#/components/schemas/OpaqueId'}
+      - name: credential_action
+        in: path
+        required: true
+        schema: {type: string, enum: [rotate, disable, retire]}
+    post:
+      tags: [Administration]
+      operationId: changeCredential
+      summary: Rotate, disable, or retire a credential.
+      security: [{administratorSession: []}]
+      parameters: [{$ref: '#/components/parameters/CsrfToken'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CredentialChange'}
+      responses:
+        '200':
+          description: Safe credential metadata.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CredentialMetadata'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /v1/admin/audit-events:
+    get:
+      tags: [Audit]
+      operationId: listAuditEvents
+      summary: List bounded global audit events without captured content.
+      security: [{administratorSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/From'
+        - $ref: '#/components/parameters/To'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Audit page.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AuditPage'}
+  /v1/admin/retention:
+    get:
+      tags: [Administration]
+      operationId: getRetentionConfiguration
+      summary: Get retention defaults and global allowed ranges by data class.
+      security: [{administratorSession: []}]
+      responses:
+        '200':
+          description: Retention configuration.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RetentionConfiguration'}
+    put:
+      tags: [Administration]
+      operationId: putRetentionConfiguration
+      summary: Publish retention values after effect preview and confirmation.
+      security: [{administratorSession: []}]
+      parameters: [{$ref: '#/components/parameters/CsrfToken'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PutRetentionConfiguration'}
+      responses:
+        '200':
+          description: Retention configuration published.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RetentionConfiguration'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /v1/admin/retention-previews:
+    post:
+      tags: [Administration]
+      operationId: previewRetentionConfiguration
+      summary: Preview fleet deletion and storage effects without a change.
+      security: [{administratorSession: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PreviewRetentionConfiguration'}
+      responses:
+        '200':
+          description: Bounded preview. It does not change retention.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RetentionPreview'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+  /v1/admin/exports:
+    post:
+      tags: [Administration]
+      operationId: createRetentionExport
+      summary: Start a bounded accounting, audit, configuration, or content export.
+      security: [{administratorSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateExport'}
+      responses:
+        '202':
+          description: Export accepted.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ExportOperation'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /v1/admin/exports/{operation_id}:
+    parameters:
+      - name: operation_id
+        in: path
+        required: true
+        schema: {$ref: '#/components/schemas/OpaqueId'}
+    get:
+      tags: [Administration]
+      operationId: getRetentionExport
+      summary: Get export progress and one short-lived result location.
+      security: [{administratorSession: []}]
+      responses:
+        '200':
+          description: Export state.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ExportOperation'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /v1/admin/captured-content/{content_id}:
+    parameters:
+      - name: content_id
+        in: path
+        required: true
+        schema: {$ref: '#/components/schemas/OpaqueId'}
+    get:
+      tags: [Audit]
+      operationId: getCapturedContent
+      summary: Read one retained content record after recent authentication.
+      security: [{administratorSession: []}]
+      responses:
+        '200':
+          description: Sensitive captured content.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CapturedContent'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /v1/health:
+    get:
+      tags: [Health]
+      operationId: getHealth
+      summary: Get bounded readiness and contract information.
+      security: []
+      responses:
+        '200':
+          description: Ready or degraded health.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Health'}
+        '503':
+          description: Not ready.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Health'}
+components:
+  securitySchemes:
+    bearerToken:
+      type: http
+      scheme: bearer
+    administratorSession:
+      type: apiKey
+      in: cookie
+      name: __Host-llmrouter-admin
+  parameters:
+    ServiceId:
+      name: service_id
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/OpaqueId'}
+    WorkspaceId:
+      name: workspace_id
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/OpaqueId'}
+    WorkspaceIdQuery:
+      name: workspace_id
+      in: query
+      required: false
+      schema: {$ref: '#/components/schemas/OpaqueId'}
+    RequestId:
+      name: request_id
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/UuidV7'}
+    LogicalRequestId:
+      name: X-LLMRouter-Request-ID
+      in: header
+      required: true
+      schema: {$ref: '#/components/schemas/UuidV7'}
+      description: >-
+        Client-generated logical request UUIDv7. It is the durable binding key
+        and is not part of the provider-neutral request fingerprint.
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: {type: string, minLength: 16, maxLength: 200}
+    CsrfToken:
+      name: X-CSRF-Token
+      in: header
+      required: true
+      schema: {type: string, minLength: 32, maxLength: 500}
+    LastEventId:
+      name: Last-Event-ID
+      in: header
+      required: false
+      schema: {type: string, pattern: '^[0-9]+$'}
+    From:
+      name: from
+      in: query
+      required: true
+      schema: {type: string, format: date-time}
+    To:
+      name: to
+      in: query
+      required: true
+      schema: {type: string, format: date-time}
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      schema: {type: string, maxLength: 1000}
+  responses:
+    BadRequest:
+      description: Invalid request.
+      content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}
+    Unauthorized:
+      description: Authentication failed or is too old.
+      content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}
+    Forbidden:
+      description: The authenticated actor lacks exact scope.
+      content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}
+    NotFound:
+      description: The record is absent or hidden from this scope.
+      content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}
+    Conflict:
+      description: Identity, state, revision, or ceiling conflict.
+      content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}
+    Gone:
+      description: The identity or resource cannot be used again.
+      content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}
+    Unprocessable:
+      description: The request is valid JSON but cannot execute under current configuration.
+      content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}
+    Retryable:
+      description: Temporary failure. Retry only as errors.md permits.
+      headers:
+        Retry-After:
+          schema: {type: integer, minimum: 1}
+      content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}
+    WorkspaceResult:
+      description: Current workspace and stable operation receipt.
+      content: {application/json: {schema: {$ref: '#/components/schemas/Workspace'}}}
+    AdmissionCreated:
+      description: Logical request admitted.
+      content: {application/json: {schema: {$ref: '#/components/schemas/AdmissionReceipt'}}}
+    AdmissionReplay:
+      description: Identical replay returned the existing admission.
+      content: {application/json: {schema: {$ref: '#/components/schemas/AdmissionReceipt'}}}
+    RequestStatus:
+      description: Current or terminal request status.
+      content: {application/json: {schema: {$ref: '#/components/schemas/RequestStatus'}}}
+    ConfigurationPage:
+      description: Bounded configuration page.
+      content: {application/json: {schema: {$ref: '#/components/schemas/ConfigurationPage'}}}
+    ConfigurationWrite:
+      description: Configuration revision published.
+      content: {application/json: {schema: {$ref: '#/components/schemas/ConfigurationWriteResult'}}}
+  schemas:
+    OpaqueId:
+      type: string
+      minLength: 1
+      maxLength: 200
+    UuidV7:
+      type: string
+      format: uuid
+      pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+    Timestamp:
+      type: string
+      format: date-time
+    Decimal:
+      type: string
+      pattern: '^-?[0-9]+(\.[0-9]+)?$'
+    NonNegativeDecimal:
+      type: string
+      pattern: '^(0|[1-9][0-9]*)(\.[0-9]+)?$'
+    ContractManifest:
+      type: object
+      additionalProperties: false
+      required: [contract_set, version, generated_at, capabilities, artifacts]
+      properties:
+        contract_set: {type: string, const: llmrouter-v1}
+        version: {type: string, pattern: '^[1-9][0-9]*\.[0-9]+\.[0-9]+$'}
+        generated_at: {$ref: '#/components/schemas/Timestamp'}
+        capabilities:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            enum: [model_requests, agent_runs, shared_tools, request_status, cancellation, sse_stream_v1, workspace_lifecycle, host_budget_ceiling, service_administration, accounting_summary, openai_chat_completions, openai_responses]
+        artifacts:
+          type: array
+          items: {$ref: '#/components/schemas/ContractArtifact'}
+    ContractArtifact:
+      type: object
+      additionalProperties: false
+      required: [name, version, major_version, sha256]
+      properties:
+        name: {type: string, enum: [openapi, stream_protocol, error_catalog, service_management, embed_protocol, request_fingerprint, cross_service_conformance]}
+        version: {type: string, pattern: '^[1-9][0-9]*\.[0-9]+\.[0-9]+$'}
+        major_version: {type: integer, minimum: 1}
+        sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+    ServiceTokenExchange:
+      type: object
+      additionalProperties: false
+      required: [service_id, bootstrap_secret, audience, operations]
+      properties:
+        service_id: {$ref: '#/components/schemas/OpaqueId'}
+        bootstrap_secret: {type: string, minLength: 43, maxLength: 200, pattern: '^[A-Za-z0-9_-]+$', writeOnly: true}
+        audience: {type: string, enum: [data_plane, service_management, host_backend, accounting, configuration, budget_authority]}
+        workspace_ids:
+          type: array
+          maxItems: 1000
+          uniqueItems: true
+          items: {$ref: '#/components/schemas/OpaqueId'}
+        operations:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+            enum: [model.create, model.read, model.cancel, run.create, run.read, run.cancel, tool.create, tool.read, tool.cancel, workspace.create, workspace.read, workspace.disable, workspace.restore, workspace.retire, admin_embed.create, accounting.read, configuration.read, configuration.write, diagnostic.grant.create, retention.read, retention.preview, retention.write, budget.read, budget.write, budget_ceiling.read, budget_ceiling.write]
+    ServiceToken:
+      type: object
+      additionalProperties: false
+      required: [access_token, token_type, expires_in, service_id, audience, operations, credential_generation]
+      properties:
+        access_token: {type: string, minLength: 43, maxLength: 200, pattern: '^[A-Za-z0-9_-]+$', writeOnly: true}
+        token_type: {type: string, const: Bearer}
+        expires_in: {type: integer, const: 300}
+        service_id: {$ref: '#/components/schemas/OpaqueId'}
+        workspace_ids:
+          type: array
+          items: {$ref: '#/components/schemas/OpaqueId'}
+        audience: {type: string}
+        operations: {type: array, items: {type: string}}
+        credential_generation: {type: integer, minimum: 1}
+    CreateWorkspace:
+      type: object
+      additionalProperties: false
+      required: [caller_reference, display_name]
+      properties:
+        caller_reference: {type: string, minLength: 1, maxLength: 200}
+        display_name: {type: string, minLength: 1, maxLength: 200}
+    WorkspaceStateChange:
+      type: object
+      additionalProperties: false
+      required: [expected_state_revision, reason]
+      properties:
+        expected_state_revision: {$ref: '#/components/schemas/OpaqueId'}
+        reason: {type: string, minLength: 1, maxLength: 500}
+    Workspace:
+      type: object
+      additionalProperties: false
+      required: [workspace_id, caller_reference, display_name, state, state_revision, operation_id]
+      properties:
+        workspace_id: {$ref: '#/components/schemas/OpaqueId'}
+        caller_reference: {type: string}
+        display_name: {type: string}
+        state: {type: string, enum: [active, disabled, retired]}
+        state_revision: {$ref: '#/components/schemas/OpaqueId'}
+        operation_id: {$ref: '#/components/schemas/OpaqueId'}
+    DataProfile:
+      type: string
+      const: service-data
+    AssignmentName:
+      type: string
+      pattern: '^[a-z][a-z0-9.-]{0,99}$'
+    Message:
+      type: object
+      additionalProperties: false
+      required: [role, content]
+      properties:
+        role: {type: string, enum: [system, user, assistant, tool]}
+        content:
+          oneOf:
+            - {type: string, maxLength: 1048576}
+            - type: array
+              maxItems: 100
+              items: {$ref: '#/components/schemas/ContentPart'}
+    ContentPart:
+      type: object
+      additionalProperties: false
+      required: [type]
+      properties:
+        type: {type: string, enum: [text, image, audio, file]}
+        text: {type: string, maxLength: 1048576}
+        attachment_id: {$ref: '#/components/schemas/OpaqueId'}
+        sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+        media_type: {type: string, maxLength: 200}
+    ToolDefinition:
+      type: object
+      additionalProperties: false
+      required: [name, description, input_schema]
+      properties:
+        name: {type: string, pattern: '^[a-zA-Z][a-zA-Z0-9_.-]{0,99}$'}
+        description: {type: string, maxLength: 4000}
+        input_schema: {type: object}
+    RequestLimits:
+      type: object
+      additionalProperties: false
+      required: [timeout_ms, max_output_units]
+      properties:
+        timeout_ms: {type: integer, minimum: 100, maximum: 900000}
+        max_output_units: {type: integer, minimum: 1, maximum: 1000000}
+        max_cost: {$ref: '#/components/schemas/Money'}
+    OutputControls:
+      type: object
+      additionalProperties: false
+      properties:
+        format: {type: string, enum: [text, json]}
+        json_schema: {type: object}
+        temperature: {type: number, minimum: 0, maximum: 2}
+    ModelRequest:
+      type: object
+      additionalProperties: false
+      required: [api_version, data_profile, messages, limits, output]
+      oneOf:
+        - required: [assignment]
+          not:
+            anyOf:
+              - required: [exact_route]
+              - required: [exact_route_grant]
+        - required: [exact_route, exact_route_grant]
+          not:
+            required: [assignment]
+      properties:
+        api_version: {type: string, const: '1', x-router-fingerprint: true}
+        data_profile: {$ref: '#/components/schemas/DataProfile', x-router-fingerprint: true}
+        workspace_id: {$ref: '#/components/schemas/OpaqueId', x-router-fingerprint: true}
+        assignment: {$ref: '#/components/schemas/AssignmentName', x-router-fingerprint: true}
+        exact_route: {$ref: '#/components/schemas/OpaqueId', x-router-fingerprint: true}
+        exact_route_grant: {type: string, writeOnly: true, x-router-fingerprint: false}
+        messages:
+          type: array
+          minItems: 1
+          maxItems: 1000
+          items: {$ref: '#/components/schemas/Message'}
+          x-router-fingerprint: true
+        tools:
+          type: array
+          maxItems: 100
+          items: {$ref: '#/components/schemas/ToolDefinition'}
+          x-router-fingerprint: true
+        tool_allow_list:
+          type: array
+          uniqueItems: true
+          items: {type: string}
+          x-router-fingerprint: true
+        limits: {$ref: '#/components/schemas/RequestLimits', x-router-fingerprint: true}
+        output: {$ref: '#/components/schemas/OutputControls', x-router-fingerprint: true}
+        trace_context: {type: object, x-router-fingerprint: false}
+    AgentRunRequest:
+      type: object
+      additionalProperties: false
+      required: [api_version, data_profile, messages, limits, output, agent]
+      oneOf:
+        - required: [assignment]
+          not:
+            anyOf:
+              - required: [exact_route]
+              - required: [exact_route_grant]
+        - required: [exact_route, exact_route_grant]
+          not:
+            required: [assignment]
+      properties:
+        api_version: {type: string, const: '1', x-router-fingerprint: true}
+        data_profile: {$ref: '#/components/schemas/DataProfile', x-router-fingerprint: true}
+        workspace_id: {$ref: '#/components/schemas/OpaqueId', x-router-fingerprint: true}
+        assignment: {$ref: '#/components/schemas/AssignmentName', x-router-fingerprint: true}
+        exact_route: {$ref: '#/components/schemas/OpaqueId', x-router-fingerprint: true}
+        exact_route_grant: {type: string, writeOnly: true, x-router-fingerprint: false}
+        messages:
+          type: array
+          minItems: 1
+          maxItems: 1000
+          items: {$ref: '#/components/schemas/Message'}
+          x-router-fingerprint: true
+        tools:
+          type: array
+          maxItems: 100
+          items: {$ref: '#/components/schemas/ToolDefinition'}
+          x-router-fingerprint: true
+        tool_allow_list:
+          type: array
+          uniqueItems: true
+          items: {type: string}
+          x-router-fingerprint: true
+        limits: {$ref: '#/components/schemas/RequestLimits', x-router-fingerprint: true}
+        output: {$ref: '#/components/schemas/OutputControls', x-router-fingerprint: true}
+        agent:
+          type: object
+          additionalProperties: false
+          required: [max_steps, max_tool_concurrency]
+          properties:
+            max_steps: {type: integer, minimum: 1, maximum: 100}
+            max_tool_concurrency: {type: integer, minimum: 1, maximum: 8, default: 1}
+            business_tool_names:
+              type: array
+              uniqueItems: true
+              maxItems: 100
+              items: {type: string}
+          x-router-fingerprint: true
+        trace_context: {type: object, x-router-fingerprint: false}
+    SharedToolRequest:
+      type: object
+      additionalProperties: false
+      required: [api_version, data_profile, assignment, tool, input, limits]
+      properties:
+        api_version: {type: string, const: '1', x-router-fingerprint: true}
+        data_profile: {$ref: '#/components/schemas/DataProfile', x-router-fingerprint: true}
+        workspace_id: {$ref: '#/components/schemas/OpaqueId', x-router-fingerprint: true}
+        assignment: {$ref: '#/components/schemas/AssignmentName', x-router-fingerprint: true}
+        tool: {type: string, enum: [search, extract, scrape, screenshot], x-router-fingerprint: true}
+        input: {type: object, x-router-fingerprint: true}
+        limits: {$ref: '#/components/schemas/RequestLimits', x-router-fingerprint: true}
+        trace_context: {type: object, x-router-fingerprint: false}
+    CompatibleChatRequest:
+      type: object
+      additionalProperties: false
+      required: [model, messages]
+      properties:
+        model: {$ref: '#/components/schemas/AssignmentName', x-router-fingerprint: true}
+        messages: {type: array, minItems: 1, maxItems: 1000, items: {$ref: '#/components/schemas/Message'}, x-router-fingerprint: true}
+        tools: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/ToolDefinition'}, x-router-fingerprint: true}
+        tool_choice: {oneOf: [{type: string, enum: [auto, none, required]}, {type: object}], x-router-fingerprint: true}
+        response_format: {type: object, x-router-fingerprint: true}
+        temperature: {type: number, minimum: 0, maximum: 2, x-router-fingerprint: true}
+        max_completion_tokens: {type: integer, minimum: 1, maximum: 1000000, x-router-fingerprint: true}
+        stream: {type: boolean, default: false, x-router-fingerprint: false}
+        metadata: {type: object, x-router-fingerprint: true}
+        user: {type: string, maxLength: 200, x-router-fingerprint: true}
+        x_llmrouter_workspace_id: {$ref: '#/components/schemas/OpaqueId', x-router-fingerprint: true}
+        x_llmrouter_data_profile: {$ref: '#/components/schemas/DataProfile', x-router-fingerprint: true}
+        x_llmrouter_max_cost: {$ref: '#/components/schemas/Money', x-router-fingerprint: true}
+    CompatibleResponsesRequest:
+      type: object
+      additionalProperties: false
+      required: [model, input]
+      properties:
+        model: {$ref: '#/components/schemas/AssignmentName', x-router-fingerprint: true}
+        input:
+          oneOf:
+            - {type: string, maxLength: 1048576}
+            - {type: array, maxItems: 1000, items: {$ref: '#/components/schemas/Message'}}
+          x-router-fingerprint: true
+        instructions: {type: string, maxLength: 1048576, x-router-fingerprint: true}
+        tools: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/ToolDefinition'}, x-router-fingerprint: true}
+        tool_choice: {oneOf: [{type: string, enum: [auto, none, required]}, {type: object}], x-router-fingerprint: true}
+        text: {type: object, x-router-fingerprint: true}
+        temperature: {type: number, minimum: 0, maximum: 2, x-router-fingerprint: true}
+        max_output_tokens: {type: integer, minimum: 1, maximum: 1000000, x-router-fingerprint: true}
+        stream: {type: boolean, default: false, x-router-fingerprint: false}
+        metadata: {type: object, x-router-fingerprint: true}
+        user: {type: string, maxLength: 200, x-router-fingerprint: true}
+        x_llmrouter_workspace_id: {$ref: '#/components/schemas/OpaqueId', x-router-fingerprint: true}
+        x_llmrouter_data_profile: {$ref: '#/components/schemas/DataProfile', x-router-fingerprint: true}
+        x_llmrouter_max_cost: {$ref: '#/components/schemas/Money', x-router-fingerprint: true}
+    CompatibleResponse:
+      type: object
+      additionalProperties: false
+      required: [id, object, x_llmrouter_request_id, x_llmrouter_state, x_llmrouter_status_url]
+      properties:
+        id: {$ref: '#/components/schemas/OpaqueId'}
+        object: {type: string}
+        created: {type: integer, minimum: 0}
+        model: {$ref: '#/components/schemas/AssignmentName'}
+        choices:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [index, message, finish_reason]
+            properties:
+              index: {type: integer, minimum: 0}
+              message: {$ref: '#/components/schemas/Message'}
+              finish_reason: {type: [string, 'null']}
+        output: {type: array, items: {$ref: '#/components/schemas/ContentPart'}}
+        usage: {$ref: '#/components/schemas/CompatibilityUsage'}
+        x_llmrouter_request_id: {$ref: '#/components/schemas/UuidV7'}
+        x_llmrouter_state: {$ref: '#/components/schemas/RequestState'}
+        x_llmrouter_status_url: {type: string, format: uri}
+    CompatibilityUsage:
+      type: object
+      additionalProperties: false
+      required: [input_tokens, output_tokens, total_tokens]
+      properties:
+        input_tokens: {type: integer, minimum: 0}
+        output_tokens: {type: integer, minimum: 0}
+        total_tokens: {type: integer, minimum: 0}
+    RequestState:
+      type: string
+      enum: [admitted, running, waiting_for_tool, cancel_requested, succeeded, failed, interrupted, cancelled, uncertain]
+    AdmissionReceipt:
+      type: object
+      additionalProperties: false
+      required: [request_id, admitted_at, state, state_revision, status_url, cancel_url, fingerprint_version, capture_enabled, capture_reason]
+      properties:
+        request_id: {$ref: '#/components/schemas/UuidV7'}
+        run_id: {$ref: '#/components/schemas/OpaqueId'}
+        admitted_at: {$ref: '#/components/schemas/Timestamp'}
+        state: {$ref: '#/components/schemas/RequestState'}
+        state_revision: {type: integer, minimum: 1}
+        status_url: {type: string, format: uri}
+        cancel_url: {type: string, format: uri}
+        events_url: {type: string, format: uri}
+        fingerprint_version: {type: string, const: rfc8785-sha256-v1}
+        capture_enabled: {type: boolean}
+        capture_reason: {type: string, enum: [configured, spool_pressure]}
+    CancelRequest:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason: {type: string, minLength: 1, maxLength: 500}
+    RequestStatus:
+      type: object
+      additionalProperties: false
+      required: [request_id, state, state_revision, admitted_at, last_transition_at, partial_output, committed_effects, configuration_revision, admission, attempts, tool_calls, accounting]
+      oneOf:
+        - required: [assignment]
+          properties:
+            assignment: {}
+            exact_route: {}
+          not:
+            required: [exact_route]
+        - required: [exact_route]
+          properties:
+            assignment: {}
+            exact_route: {}
+          not:
+            required: [assignment]
+      properties:
+        request_id: {$ref: '#/components/schemas/UuidV7'}
+        run_id: {$ref: '#/components/schemas/OpaqueId'}
+        state: {$ref: '#/components/schemas/RequestState'}
+        state_revision: {type: integer, minimum: 1}
+        admitted_at: {$ref: '#/components/schemas/Timestamp'}
+        last_transition_at: {$ref: '#/components/schemas/Timestamp'}
+        terminal_at: {$ref: '#/components/schemas/Timestamp'}
+        partial_output: {type: boolean}
+        committed_effects: {type: boolean}
+        configuration_revision: {$ref: '#/components/schemas/OpaqueId'}
+        assignment: {$ref: '#/components/schemas/AssignmentName'}
+        exact_route: {$ref: '#/components/schemas/OpaqueId'}
+        admission: {$ref: '#/components/schemas/AdmissionReceipt'}
+        owner_epoch: {type: integer, minimum: 1}
+        attempts: {type: array, maxItems: 1000, items: {$ref: '#/components/schemas/AttemptStatus'}}
+        tool_calls: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/ToolCallStatus'}}
+        result: {$ref: '#/components/schemas/OutputResult'}
+        error: {$ref: '#/components/schemas/TerminalError'}
+        accounting: {$ref: '#/components/schemas/RequestAccounting'}
+    AttemptStatus:
+      type: object
+      additionalProperties: false
+      required: [attempt_id, provider_model_route_id, state, started_at, assignment_revision]
+      properties:
+        attempt_id: {$ref: '#/components/schemas/OpaqueId'}
+        provider_model_route_id: {$ref: '#/components/schemas/OpaqueId'}
+        state: {type: string, enum: [running, succeeded, failed, cancelled, uncertain]}
+        started_at: {$ref: '#/components/schemas/Timestamp'}
+        ended_at: {$ref: '#/components/schemas/Timestamp'}
+        assignment_revision: {$ref: '#/components/schemas/OpaqueId'}
+        error: {$ref: '#/components/schemas/TerminalError'}
+        usage: {type: array, items: {$ref: '#/components/schemas/UsageComponent'}}
+        price_version: {$ref: '#/components/schemas/OpaqueId'}
+    ToolCallStatus:
+      type: object
+      additionalProperties: false
+      required: [tool_call_id, tool_name, tool_kind, state]
+      properties:
+        tool_call_id: {$ref: '#/components/schemas/OpaqueId'}
+        tool_name: {type: string}
+        tool_kind: {type: string, enum: [shared, business]}
+        state: {type: string, enum: [pending, running, succeeded, failed, cancelled, uncertain]}
+        committed_effect: {type: boolean}
+        error: {$ref: '#/components/schemas/TerminalError'}
+    OutputResult:
+      type: object
+      additionalProperties: false
+      required: [outputs]
+      properties:
+        outputs:
+          type: array
+          maxItems: 100
+          items:
+            type: object
+            additionalProperties: false
+            required: [type]
+            properties:
+              type: {type: string, enum: [text, json, image, audio, tool_result]}
+              text: {type: string}
+              json: {}
+              attachment_id: {$ref: '#/components/schemas/OpaqueId'}
+    TerminalError:
+      type: object
+      additionalProperties: false
+      required: [class, affected_scope, message]
+      properties:
+        class: {type: string, enum: [authentication, policy, budget, rate_limit, timeout, transport, provider_unavailable, invalid_provider_response, incompatible_request, cancelled, uncertain_effect, router_internal]}
+        affected_scope: {type: string, enum: [attempt, provider_model_route, provider_instance, credential, assignment_candidate, logical_request]}
+        message: {type: string, maxLength: 1000}
+        safe_provider_code: {type: string, maxLength: 200}
+    RequestAccounting:
+      type: object
+      additionalProperties: false
+      required: [estimated, reserved, used, corrected, currency]
+      properties:
+        estimated: {$ref: '#/components/schemas/NonNegativeDecimal'}
+        reserved: {$ref: '#/components/schemas/NonNegativeDecimal'}
+        used: {$ref: '#/components/schemas/NonNegativeDecimal'}
+        corrected: {$ref: '#/components/schemas/NonNegativeDecimal'}
+        currency: {type: string, pattern: '^[A-Z]{3}$'}
+    Money:
+      type: object
+      additionalProperties: false
+      required: [amount, currency]
+      properties:
+        amount: {$ref: '#/components/schemas/NonNegativeDecimal'}
+        currency: {type: string, pattern: '^[A-Z]{3}$'}
+    PutBudgetCeiling:
+      type: object
+      additionalProperties: false
+      required: [amount, currency, expected_revision, reason]
+      properties:
+        amount: {$ref: '#/components/schemas/NonNegativeDecimal'}
+        currency: {type: string, pattern: '^[A-Z]{3}$'}
+        expected_revision: {oneOf: [{$ref: '#/components/schemas/OpaqueId'}, {type: 'null'}]}
+        reason: {type: string, minLength: 1, maxLength: 500}
+    BudgetCeiling:
+      type: object
+      additionalProperties: false
+      required: [service_id, workspace_id, amount, currency, revision, effective_at, operation_id]
+      properties:
+        service_id: {$ref: '#/components/schemas/OpaqueId'}
+        workspace_id: {$ref: '#/components/schemas/OpaqueId'}
+        amount: {$ref: '#/components/schemas/NonNegativeDecimal'}
+        currency: {type: string, pattern: '^[A-Z]{3}$'}
+        revision: {$ref: '#/components/schemas/OpaqueId'}
+        effective_at: {$ref: '#/components/schemas/Timestamp'}
+        operation_id: {$ref: '#/components/schemas/OpaqueId'}
+    PutBudgetLimit:
+      type: object
+      additionalProperties: false
+      required: [scope, hard_limit, warning_threshold, reset_period, expected_revision]
+      properties:
+        scope: {type: string, enum: [service, workspace, assignment]}
+        workspace_id: {$ref: '#/components/schemas/OpaqueId'}
+        assignment: {$ref: '#/components/schemas/AssignmentName'}
+        hard_limit: {$ref: '#/components/schemas/Money'}
+        warning_threshold: {$ref: '#/components/schemas/Money'}
+        reset_period: {type: string, enum: [none, daily, monthly]}
+        expected_revision: {$ref: '#/components/schemas/OpaqueId'}
+    BudgetSummary:
+      type: object
+      additionalProperties: false
+      required: [scope, limit, reserved, used, corrected, remaining, enforcement_state, revision]
+      properties:
+        scope: {type: string}
+        limit: {$ref: '#/components/schemas/Money'}
+        host_ceiling: {$ref: '#/components/schemas/Money'}
+        reserved: {$ref: '#/components/schemas/Money'}
+        used: {$ref: '#/components/schemas/Money'}
+        corrected: {$ref: '#/components/schemas/Money'}
+        remaining: {$ref: '#/components/schemas/Money'}
+        enforcement_state: {type: string, enum: [available, warning, exhausted, allowance_unavailable]}
+        revision: {$ref: '#/components/schemas/OpaqueId'}
+    PutAssignment:
+      type: object
+      additionalProperties: false
+      required: [expected_revision, candidates, state]
+      properties:
+        expected_revision: {$ref: '#/components/schemas/OpaqueId'}
+        state: {type: string, enum: [active, disabled, retired]}
+        candidates:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: object
+            additionalProperties: false
+            required: [provider_model_route_id]
+            properties:
+              provider_model_route_id: {$ref: '#/components/schemas/OpaqueId'}
+              timeout_ms: {type: integer, minimum: 100, maximum: 900000}
+    Assignment:
+      type: object
+      additionalProperties: false
+      required: [name, owner_scope, source_layer, state, inherited, active_revision, candidates]
+      properties:
+        name: {$ref: '#/components/schemas/AssignmentName'}
+        owner_scope: {type: string, enum: [global, service, workspace]}
+        source_layer: {$ref: '#/components/schemas/OpaqueId'}
+        state: {type: string, enum: [active, disabled, retired]}
+        inherited: {type: boolean}
+        active_revision: {$ref: '#/components/schemas/OpaqueId'}
+        candidates:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: object
+            additionalProperties: false
+            required: [provider_model_route_id]
+            properties:
+              provider_model_route_id: {$ref: '#/components/schemas/OpaqueId'}
+              timeout_ms: {type: integer, minimum: 100, maximum: 900000}
+    AssignmentPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/Assignment'}}
+        next_cursor: {type: [string, 'null']}
+    CreateDiagnosticGrant:
+      type: object
+      additionalProperties: false
+      required: [exact_route, reason]
+      properties:
+        workspace_id: {$ref: '#/components/schemas/OpaqueId'}
+        exact_route: {$ref: '#/components/schemas/OpaqueId'}
+        reason: {type: string, minLength: 1, maxLength: 500}
+    DiagnosticGrant:
+      type: object
+      additionalProperties: false
+      required: [grant_id, grant, service_id, exact_route, expires_at]
+      properties:
+        grant_id: {$ref: '#/components/schemas/OpaqueId'}
+        grant: {type: string, minLength: 43, maxLength: 200, pattern: '^[A-Za-z0-9_-]+$', writeOnly: true}
+        service_id: {$ref: '#/components/schemas/OpaqueId'}
+        workspace_id: {$ref: '#/components/schemas/OpaqueId'}
+        exact_route: {$ref: '#/components/schemas/OpaqueId'}
+        expires_at: {$ref: '#/components/schemas/Timestamp'}
+    PutProviderInstance:
+      type: object
+      additionalProperties: false
+      required: [provider_catalog_id, display_name, endpoint, credential_id, state, expected_revision]
+      properties:
+        provider_catalog_id: {$ref: '#/components/schemas/OpaqueId'}
+        display_name: {type: string, minLength: 1, maxLength: 200}
+        endpoint: {type: string, format: uri}
+        credential_id: {$ref: '#/components/schemas/OpaqueId'}
+        state: {type: string, enum: [active, disabled, retired]}
+        settings: {type: object}
+        expected_revision: {oneOf: [{$ref: '#/components/schemas/OpaqueId'}, {type: 'null'}]}
+    ProviderInstance:
+      type: object
+      additionalProperties: false
+      required: [provider_instance_id, owner_scope, provider_catalog_id, display_name, endpoint, credential_id, state, active_revision, inherited]
+      properties:
+        provider_instance_id: {$ref: '#/components/schemas/OpaqueId'}
+        owner_scope: {$ref: '#/components/schemas/OpaqueId'}
+        provider_catalog_id: {$ref: '#/components/schemas/OpaqueId'}
+        display_name: {type: string, minLength: 1, maxLength: 200}
+        endpoint: {type: string, format: uri}
+        credential_id: {$ref: '#/components/schemas/OpaqueId'}
+        state: {type: string, enum: [active, disabled, retired]}
+        active_revision: {$ref: '#/components/schemas/OpaqueId'}
+        inherited: {type: boolean}
+        settings: {type: object}
+    ProviderInstancePage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/ProviderInstance'}}
+        next_cursor: {type: [string, 'null']}
+    PutProviderModelRoute:
+      type: object
+      additionalProperties: false
+      required: [provider_instance_id, canonical_model_id, wire_model, capabilities, prices, state, expected_revision]
+      properties:
+        provider_instance_id: {$ref: '#/components/schemas/OpaqueId'}
+        canonical_model_id: {$ref: '#/components/schemas/OpaqueId'}
+        wire_model: {type: string, minLength: 1, maxLength: 500}
+        capabilities: {type: array, uniqueItems: true, items: {type: string}}
+        prices: {type: array, items: {$ref: '#/components/schemas/PriceComponent'}}
+        state: {type: string, enum: [active, disabled, retired]}
+        expected_revision: {oneOf: [{$ref: '#/components/schemas/OpaqueId'}, {type: 'null'}]}
+    ProviderModelRoute:
+      type: object
+      additionalProperties: false
+      required: [provider_model_route_id, owner_scope, provider_instance_id, canonical_model_id, wire_model, capabilities, prices, state, active_revision, inherited]
+      properties:
+        provider_model_route_id: {$ref: '#/components/schemas/OpaqueId'}
+        owner_scope: {$ref: '#/components/schemas/OpaqueId'}
+        provider_instance_id: {$ref: '#/components/schemas/OpaqueId'}
+        canonical_model_id: {$ref: '#/components/schemas/OpaqueId'}
+        wire_model: {type: string, minLength: 1, maxLength: 500}
+        capabilities: {type: array, uniqueItems: true, items: {type: string}}
+        prices: {type: array, items: {$ref: '#/components/schemas/PriceComponent'}}
+        state: {type: string, enum: [active, disabled, retired]}
+        active_revision: {$ref: '#/components/schemas/OpaqueId'}
+        inherited: {type: boolean}
+    ProviderModelRoutePage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/ProviderModelRoute'}}
+        next_cursor: {type: [string, 'null']}
+    PriceComponent:
+      type: object
+      additionalProperties: false
+      required: [unit, price, currency]
+      properties:
+        unit: {type: string, enum: [input_token, output_token, cached_token, request, image, audio_second, search, tool_unit]}
+        price: {$ref: '#/components/schemas/NonNegativeDecimal'}
+        currency: {type: string, pattern: '^[A-Z]{3}$'}
+    PriceSynchronizationRequest:
+      type: object
+      additionalProperties: false
+      required: [dry_run]
+      properties:
+        dry_run: {type: boolean}
+        provider_model_route_ids:
+          type: array
+          maxItems: 10000
+          uniqueItems: true
+          items: {$ref: '#/components/schemas/OpaqueId'}
+    PriceSynchronization:
+      type: object
+      additionalProperties: false
+      required: [operation_id, state, dry_run, results]
+      properties:
+        operation_id: {$ref: '#/components/schemas/OpaqueId'}
+        state: {type: string, enum: [previewed, queued, running, completed, failed]}
+        dry_run: {type: boolean}
+        results:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [provider_model_route_id, status]
+            properties:
+              provider_model_route_id: {$ref: '#/components/schemas/OpaqueId'}
+              status: {type: string, enum: [updated, unchanged, skipped, missing, failed]}
+              safe_error: {type: string}
+    RevisionWrite:
+      type: object
+      additionalProperties: false
+      required: [expected_active_revision, reason]
+      properties:
+        expected_active_revision: {$ref: '#/components/schemas/OpaqueId'}
+        reason: {type: string, minLength: 1, maxLength: 500}
+    ConfigurationDocument:
+      type: object
+      additionalProperties: false
+      required: [stable_id, display_name, state, expected_revision, settings]
+      properties:
+        stable_id: {$ref: '#/components/schemas/OpaqueId'}
+        display_name: {type: string, minLength: 1, maxLength: 200}
+        state: {type: string, enum: [active, disabled, retired]}
+        expected_revision: {oneOf: [{$ref: '#/components/schemas/OpaqueId'}, {type: 'null'}]}
+        settings: {type: object}
+    ConfigurationWriteResult:
+      type: object
+      additionalProperties: false
+      required: [resource_id, active_revision, distribution_state, operation_id]
+      properties:
+        resource_id: {$ref: '#/components/schemas/OpaqueId'}
+        active_revision: {$ref: '#/components/schemas/OpaqueId'}
+        distribution_state: {type: string, enum: [distributing, current, degraded]}
+        operation_id: {$ref: '#/components/schemas/OpaqueId'}
+    ConfigurationPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/ConfigurationDocument'}}
+        next_cursor: {type: [string, 'null']}
+    EffectiveConfiguration:
+      type: object
+      additionalProperties: false
+      required: [service_id, active_revision, distribution_state, assignments, provider_instances, provider_model_routes]
+      properties:
+        service_id: {$ref: '#/components/schemas/OpaqueId'}
+        workspace_id: {$ref: '#/components/schemas/OpaqueId'}
+        active_revision: {$ref: '#/components/schemas/OpaqueId'}
+        distribution_state: {type: string, enum: [distributing, current, degraded]}
+        assignments: {type: array, items: {$ref: '#/components/schemas/EffectiveItem'}}
+        provider_instances: {type: array, items: {$ref: '#/components/schemas/EffectiveItem'}}
+        provider_model_routes: {type: array, items: {$ref: '#/components/schemas/EffectiveItem'}}
+    EffectiveItem:
+      type: object
+      additionalProperties: false
+      required: [stable_id, owner_scope, source_layer, state, inherited, active_revision]
+      properties:
+        stable_id: {$ref: '#/components/schemas/OpaqueId'}
+        owner_scope: {type: string, enum: [global, service, workspace]}
+        source_layer: {$ref: '#/components/schemas/OpaqueId'}
+        state: {type: string, enum: [active, disabled, retired]}
+        inherited: {type: boolean}
+        active_revision: {$ref: '#/components/schemas/OpaqueId'}
+        settings: {type: object}
+    AccountingSummary:
+      type: object
+      additionalProperties: false
+      required: [from, to, currency, logical_requests, attempts, usage, cost, corrections]
+      properties:
+        from: {$ref: '#/components/schemas/Timestamp'}
+        to: {$ref: '#/components/schemas/Timestamp'}
+        currency: {type: string, pattern: '^[A-Z]{3}$'}
+        logical_requests: {type: integer, minimum: 0}
+        attempts: {type: integer, minimum: 0}
+        usage: {type: array, items: {$ref: '#/components/schemas/UsageComponent'}}
+        cost: {$ref: '#/components/schemas/NonNegativeDecimal'}
+        corrections: {$ref: '#/components/schemas/Decimal'}
+    UsageComponent:
+      type: object
+      additionalProperties: false
+      required: [unit, quantity]
+      properties:
+        unit: {type: string}
+        quantity: {$ref: '#/components/schemas/NonNegativeDecimal'}
+    EmbedSessionRequest:
+      type: object
+      additionalProperties: false
+      required: [host_user_subject, allowed_origin, permissions, theme]
+      properties:
+        host_user_subject: {type: string, minLength: 1, maxLength: 200}
+        workspace_id: {$ref: '#/components/schemas/OpaqueId'}
+        allowed_origin: {type: string, format: uri}
+        permissions:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {type: string, enum: [configuration.read, configuration.write, budget.read, budget.write, accounting.read, request_status.read, health.read, diagnostic.run]}
+        recent_auth_at: {$ref: '#/components/schemas/Timestamp'}
+        theme:
+          type: object
+          additionalProperties: false
+          required: [mode, density, corner_style]
+          properties:
+            mode: {type: string, enum: [light, dark, system]}
+            density: {type: string, enum: [comfortable, compact]}
+            corner_style: {type: string, enum: [square, rounded]}
+    EmbedSession:
+      type: object
+      additionalProperties: false
+      required: [session_id, bootstrap_token, frame_url, expires_at, message_version]
+      properties:
+        session_id: {$ref: '#/components/schemas/OpaqueId'}
+        bootstrap_token: {type: string, writeOnly: true}
+        frame_url: {type: string, format: uri}
+        expires_at: {$ref: '#/components/schemas/Timestamp'}
+        message_version: {type: string, const: '1'}
+    AdministratorSessionStart:
+      type: object
+      additionalProperties: false
+      required: [purpose, return_path]
+      properties:
+        purpose: {type: string, enum: [login, recent_authentication]}
+        return_path:
+          type: string
+          pattern: '^/[A-Za-z0-9._~!$&''()*+,;=:@%/?-]*$'
+          maxLength: 2000
+    AdministratorAuthorization:
+      type: object
+      additionalProperties: false
+      required: [authorization_url, expires_at]
+      properties:
+        authorization_url: {type: string, format: uri}
+        expires_at: {$ref: '#/components/schemas/Timestamp'}
+    AdministratorSession:
+      type: object
+      additionalProperties: false
+      required: [issuer, subject, grants, authenticated_at, account_state_checked_at, idle_expires_at, absolute_expires_at, csrf_token, identity_account_url]
+      properties:
+        issuer: {type: string, format: uri}
+        subject: {$ref: '#/components/schemas/OpaqueId'}
+        grants:
+          type: array
+          uniqueItems: true
+          items: {type: string, maxLength: 200}
+        authenticated_at: {$ref: '#/components/schemas/Timestamp'}
+        account_state_checked_at: {$ref: '#/components/schemas/Timestamp'}
+        recent_authentication_at: {$ref: '#/components/schemas/Timestamp'}
+        idle_expires_at: {$ref: '#/components/schemas/Timestamp'}
+        absolute_expires_at: {$ref: '#/components/schemas/Timestamp'}
+        csrf_token: {type: string, minLength: 32, maxLength: 200, pattern: '^[A-Za-z0-9_-]+$'}
+        identity_account_url: {type: string, format: uri}
+    CreateService:
+      type: object
+      additionalProperties: false
+      required: [display_name, parent_service_id, bootstrap_scope]
+      properties:
+        display_name: {type: string, minLength: 1, maxLength: 200}
+        parent_service_id: {oneOf: [{$ref: '#/components/schemas/OpaqueId'}, {type: 'null'}]}
+        bootstrap_scope: {$ref: '#/components/schemas/BootstrapScope'}
+    BootstrapScope:
+      type: object
+      additionalProperties: false
+      required: [audiences, operations]
+      properties:
+        audiences:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {type: string, enum: [data_plane, service_management, host_backend, accounting, configuration, budget_authority]}
+        operations:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {type: string}
+        workspace_limit:
+          type: string
+          enum: [all_service_workspaces, explicit_only]
+    ServiceCreated:
+      type: object
+      additionalProperties: false
+      required: [service_id, state, state_revision, bootstrap_secret_available, credential_generation]
+      properties:
+        service_id: {$ref: '#/components/schemas/OpaqueId'}
+        state: {type: string, const: active}
+        state_revision: {$ref: '#/components/schemas/OpaqueId'}
+        bootstrap_secret: {type: string, writeOnly: true}
+        bootstrap_secret_available: {type: boolean}
+        credential_generation: {type: integer, const: 1}
+    AdministrationChange:
+      type: object
+      additionalProperties: false
+      required: [expected_revision, reason]
+      properties:
+        expected_revision: {$ref: '#/components/schemas/OpaqueId'}
+        reason: {type: string, minLength: 1, maxLength: 500}
+        overlap_seconds: {type: integer, minimum: 0, maximum: 86400, default: 86400}
+        new_parent_service_id: {$ref: '#/components/schemas/OpaqueId'}
+    AdministrationResult:
+      type: object
+      additionalProperties: false
+      required: [resource_id, state, revision, operation_id]
+      properties:
+        resource_id: {$ref: '#/components/schemas/OpaqueId'}
+        state: {type: string}
+        revision: {$ref: '#/components/schemas/OpaqueId'}
+        operation_id: {$ref: '#/components/schemas/OpaqueId'}
+        bootstrap_secret: {type: string, writeOnly: true}
+        prior_generation_expires_at: {$ref: '#/components/schemas/Timestamp'}
+    ServiceAdministrationRecord:
+      type: object
+      additionalProperties: false
+      required: [service_id, display_name, state, revision, credential_generation, bootstrap_scope]
+      properties:
+        service_id: {$ref: '#/components/schemas/OpaqueId'}
+        display_name: {type: string, minLength: 1, maxLength: 200}
+        parent_service_id: {oneOf: [{$ref: '#/components/schemas/OpaqueId'}, {type: 'null'}]}
+        state: {type: string, enum: [active, disabled, retired]}
+        revision: {$ref: '#/components/schemas/OpaqueId'}
+        credential_generation: {type: integer, minimum: 1}
+        prior_generation_expires_at: {$ref: '#/components/schemas/Timestamp'}
+        bootstrap_scope: {$ref: '#/components/schemas/BootstrapScope'}
+    ServiceAdministrationPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/ServiceAdministrationRecord'}}
+        next_cursor: {type: [string, 'null']}
+    RetentionValue:
+      type: object
+      additionalProperties: false
+      required: [data_class, days, minimum_days, maximum_days]
+      properties:
+        data_class: {type: string, enum: [diagnostic_logs, captured_content, raw_accounting, agent_tool_audit, daily_accounting, security_audit, configuration_revisions]}
+        days: {type: integer, minimum: 1, maximum: 36500}
+        minimum_days: {type: integer, minimum: 1, maximum: 36500}
+        maximum_days: {type: integer, minimum: 1, maximum: 36500}
+    RetentionConfiguration:
+      type: object
+      additionalProperties: false
+      required: [revision, values]
+      properties:
+        revision: {$ref: '#/components/schemas/OpaqueId'}
+        scope: {type: string, enum: [global, service, workspace]}
+        service_id: {$ref: '#/components/schemas/OpaqueId'}
+        workspace_id: {$ref: '#/components/schemas/OpaqueId'}
+        source_layer: {$ref: '#/components/schemas/OpaqueId'}
+        values: {type: array, items: {$ref: '#/components/schemas/RetentionValue'}}
+    RetentionSelection:
+      type: object
+      additionalProperties: false
+      required: [data_class, days]
+      properties:
+        data_class: {type: string, enum: [diagnostic_logs, captured_content, raw_accounting, agent_tool_audit, daily_accounting, security_audit, configuration_revisions]}
+        days: {type: integer, minimum: 1, maximum: 36500}
+    PutRetentionConfiguration:
+      type: object
+      additionalProperties: false
+      required: [expected_revision, values, confirmed_preview_id]
+      properties:
+        expected_revision: {$ref: '#/components/schemas/OpaqueId'}
+        values: {type: array, items: {$ref: '#/components/schemas/RetentionSelection'}}
+        confirmed_preview_id: {$ref: '#/components/schemas/OpaqueId'}
+    PreviewRetentionConfiguration:
+      type: object
+      additionalProperties: false
+      required: [expected_revision, values]
+      properties:
+        expected_revision: {$ref: '#/components/schemas/OpaqueId'}
+        values: {type: array, items: {$ref: '#/components/schemas/RetentionSelection'}}
+    RetentionPreview:
+      type: object
+      additionalProperties: false
+      required: [preview_id, revision, expires_at, effects]
+      properties:
+        preview_id: {$ref: '#/components/schemas/OpaqueId'}
+        revision: {$ref: '#/components/schemas/OpaqueId'}
+        expires_at: {$ref: '#/components/schemas/Timestamp'}
+        effects:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [data_class, direction, estimated_records, estimated_bytes]
+            properties:
+              data_class: {type: string}
+              direction: {type: string, enum: [delete_sooner, retain_longer, no_change]}
+              estimated_records: {type: integer, minimum: 0}
+              estimated_bytes: {type: integer, minimum: 0}
+    CreateExport:
+      type: object
+      additionalProperties: false
+      required: [data_class, from, to, format]
+      properties:
+        data_class: {type: string, enum: [accounting, audit, configuration, captured_content]}
+        service_id: {$ref: '#/components/schemas/OpaqueId'}
+        workspace_id: {$ref: '#/components/schemas/OpaqueId'}
+        from: {$ref: '#/components/schemas/Timestamp'}
+        to: {$ref: '#/components/schemas/Timestamp'}
+        format: {type: string, enum: [jsonl, csv]}
+    ExportOperation:
+      type: object
+      additionalProperties: false
+      required: [operation_id, state, created_at, expires_at]
+      properties:
+        operation_id: {$ref: '#/components/schemas/OpaqueId'}
+        state: {type: string, enum: [queued, running, completed, failed, expired]}
+        created_at: {$ref: '#/components/schemas/Timestamp'}
+        expires_at: {$ref: '#/components/schemas/Timestamp'}
+        download_url:
+          type: string
+          format: uri
+          writeOnly: true
+          description: One-use secret location. It expires in no more than five minutes and must not be logged.
+        download_expires_at: {$ref: '#/components/schemas/Timestamp'}
+        sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+        safe_error: {type: string}
+    CreateCredential:
+      type: object
+      additionalProperties: false
+      required: [owner_scope, provider_catalog_id, secret]
+      properties:
+        owner_scope: {$ref: '#/components/schemas/OpaqueId'}
+        provider_catalog_id: {$ref: '#/components/schemas/OpaqueId'}
+        secret: {type: string, minLength: 1, maxLength: 65536, writeOnly: true}
+        safe_label: {type: string, maxLength: 200}
+    CredentialChange:
+      type: object
+      additionalProperties: false
+      required: [expected_revision, reason]
+      properties:
+        expected_revision: {$ref: '#/components/schemas/OpaqueId'}
+        reason: {type: string, minLength: 1, maxLength: 500}
+        replacement_secret: {type: string, minLength: 1, maxLength: 65536, writeOnly: true}
+    CredentialMetadata:
+      type: object
+      additionalProperties: false
+      required: [credential_id, owner_scope, provider_catalog_id, state, revision, created_at, fingerprint]
+      properties:
+        credential_id: {$ref: '#/components/schemas/OpaqueId'}
+        owner_scope: {$ref: '#/components/schemas/OpaqueId'}
+        provider_catalog_id: {$ref: '#/components/schemas/OpaqueId'}
+        state: {type: string, enum: [active, disabled, retired]}
+        revision: {$ref: '#/components/schemas/OpaqueId'}
+        created_at: {$ref: '#/components/schemas/Timestamp'}
+        fingerprint: {type: string, maxLength: 32}
+    CredentialPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/CredentialMetadata'}}
+        next_cursor: {type: [string, 'null']}
+    AuditPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [event_id, occurred_at, actor, action, outcome, scope]
+            properties:
+              event_id: {$ref: '#/components/schemas/OpaqueId'}
+              occurred_at: {$ref: '#/components/schemas/Timestamp'}
+              actor: {type: string}
+              action: {type: string}
+              outcome: {type: string}
+              scope: {type: object}
+              safe_detail: {type: object}
+        next_cursor: {type: [string, 'null']}
+    CapturedContent:
+      type: object
+      additionalProperties: false
+      required: [content_id, service_id, request_id, capture_policy, expires_at, content_type, value]
+      properties:
+        content_id: {$ref: '#/components/schemas/OpaqueId'}
+        service_id: {$ref: '#/components/schemas/OpaqueId'}
+        workspace_id: {$ref: '#/components/schemas/OpaqueId'}
+        request_id: {$ref: '#/components/schemas/UuidV7'}
+        capture_policy: {type: string}
+        expires_at: {$ref: '#/components/schemas/Timestamp'}
+        content_type: {type: string}
+        value: {}
+    Health:
+      type: object
+      additionalProperties: false
+      required: [status, role, contract_set, active_configuration_revision, configuration_age_seconds]
+      properties:
+        status: {type: string, enum: [ready, degraded, not_ready]}
+        role: {type: string, enum: [combined, control-plane, data-plane, worker]}
+        contract_set: {type: string, const: llmrouter-v1}
+        active_configuration_revision: {$ref: '#/components/schemas/OpaqueId'}
+        configuration_age_seconds: {type: integer, minimum: 0}
+        spool_state: {type: string, enum: [normal, warning, shedding, stopped, emergency]}
+        control_plane_state: {type: string, enum: [primary, standby, unavailable]}
+    FieldError:
+      type: object
+      additionalProperties: false
+      required: [path, code, message]
+      properties:
+        path: {type: string, maxLength: 500}
+        code: {type: string, maxLength: 100}
+        message: {type: string, maxLength: 1000}
+    ErrorEnvelope:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, retryable, request_id]
+          properties:
+            code:
+              type: string
+              enum: [invalid_request, unsupported_contract, unsupported_capability, invalid_token, recent_auth_required, insufficient_scope, service_scope_mismatch, workspace_scope_mismatch, policy_denied, diagnostic_permission_required, not_found, request_not_found, workspace_not_found, idempotency_conflict, state_revision_conflict, configuration_revision_conflict, request_identity_conflict, stream_replay_unavailable, terminal_state, budget_ceiling_conflict, request_identity_expired, workspace_retired, assignment_unavailable, workspace_unavailable, capability_mismatch, budget_exhausted, secret_detected, rate_limited, temporarily_unavailable, stale_configuration, spool_capacity_exhausted, allowance_unavailable, internal_error]
+            message: {type: string, maxLength: 1000}
+            retryable: {type: boolean}
+            request_id: {$ref: '#/components/schemas/OpaqueId'}
+            retry_after_ms: {type: [integer, 'null'], minimum: 0}
+            field_errors: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/FieldError'}}

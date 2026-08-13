@@ -1,7 +1,6 @@
 # Logging, accounting, and retention
 
-Status: Accepted sections only. Exact event schemas, storage products, export
-formats, and global limit ranges remain open.
+Status: Ready for approval.
 
 ## Data classes
 
@@ -65,6 +64,14 @@ capture in the first release. Router capture MUST expire under the effective
 retention rule recorded at request admission. A service-facing result MUST not
 claim that source deletion removed the router copy.
 
+A captured-content export is a captured-content read. It MUST require the
+explicit global content-read permission and Pocket ID authentication no more
+than five minutes old. Creating the export, reading its status, and issuing or
+using a result location MUST create audit events. A result location MUST be
+one-use, expire in no more than five minutes, and MUST NOT enter a log or a
+referrer. The router MUST NOT include captured content in a service-scoped
+export.
+
 ## Editable retention defaults
 
 The initial fleet defaults are:
@@ -72,6 +79,7 @@ The initial fleet defaults are:
 - diagnostic logs: 7 days;
 - captured content: 7 days;
 - raw logical-request and attempt accounting: 90 days;
+- agent-run and business-tool audit: 30 days;
 - daily accounting aggregates: 2 years;
 - security and global-administration audit: 2 years;
 - configuration revisions: the latest 100 revisions and all revisions from
@@ -82,6 +90,11 @@ administrator MUST be able to change fleet defaults and global minimum or
 maximum limits. A service or workspace MUST be able to select an allowed value
 without a deployment. The nearest configured value MUST replace the inherited
 value for that data class.
+
+The initial allowed range for agent-run and business-tool audit MUST be 7 to
+365 days. A global administrator MAY make this range narrower. It MUST NOT
+permit a value outside these safety limits. The 30-day default and this range
+follow [decision 0042](../decisions/0042-retain-agent-and-business-tool-audit-for-thirty-days.md).
 
 A retention change MUST show its affected data classes and estimated deletion
 or storage effect before confirmation. It MUST create an audit event. A longer

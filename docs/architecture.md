@@ -3,6 +3,21 @@
 Status: Working model. Accepted choices link to decision records. Other choices
 remain proposals.
 
+## Implementation languages
+
+All LLM Router backend roles use Python. This includes the control plane, data
+plane, combined role, workers, HTTP and streaming servers, provider and tool
+adapters, scheduled work, and administration backend. All Router frontend code
+uses React with strict TypeScript. The global administration application and
+service-scoped hosted view can share the frontend code while they keep
+separate authority.
+
+The public HTTP, streaming, compatibility, and embed contracts stay
+language-neutral. A calling service does not need React. Exact runtime,
+framework, and build-tool versions are selected and pinned during
+implementation setup. See
+[decision 0043](decisions/0043-use-python-backends-and-react-typescript-frontends.md).
+
 ## Main split
 
 The current recommendation is to separate a control plane from replicated data
@@ -105,7 +120,7 @@ not wait for remote consensus on each chunk.
 
 ## Administration surfaces
 
-The accepted design uses one hosted React administration application with two
+The accepted design uses one hosted administration application with two
 permission modes:
 
 - global administration for the full fleet;

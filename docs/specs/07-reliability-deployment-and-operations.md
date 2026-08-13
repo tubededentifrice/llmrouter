@@ -1,7 +1,6 @@
 # Reliability, deployment, and operations
 
-Status: Accepted sections only. Placement, backup, restore, and capacity
-details remain open.
+Status: Ready for approval.
 
 ## Static node discovery
 

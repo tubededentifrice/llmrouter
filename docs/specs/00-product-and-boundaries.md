@@ -1,6 +1,6 @@
 # Product and boundaries
 
-Status: Accepted sections only. Other product behavior remains open.
+Status: Ready for approval.
 
 ## Complete platform
 

@@ -1,7 +1,6 @@
 # Routing, failover, and request lifecycle
 
-Status: Accepted sections only. Exact error codes, the complete status-
-transition table, and the cancellation reconciliation time limit remain open.
+Status: Ready for approval.
 
 ## Assignment and diagnostic selection
 
@@ -116,6 +115,45 @@ request scope, time, prior state, permission result, adapter stop results, and
 final state when known. It MUST NOT include a credential or unsafe provider
 content.
 
+Cancellation reconciliation MUST stop after 10 minutes. If the router cannot
+prove that all active work stopped by then, it MUST make the request terminal
+as `uncertain`. A deployment MUST NOT increase this limit. It MAY use a lower
+adapter-specific limit when the adapter cannot supply later evidence.
+This limit follows [decision 0040](../decisions/0040-limit-cancellation-reconciliation-to-ten-minutes.md).
+
+## State transitions
+
+The model-request and direct shared-tool state machine is:
+
+| Current state | Allowed next state | Cause |
+| --- | --- | --- |
+| none | `admitted` | The identity and fingerprint bind durably. |
+| `admitted` | `running`, `cancel_requested`, `failed` | Work starts, cancellation is accepted, or a request-wide failure stops work. |
+| `running` | `succeeded`, `failed`, `interrupted`, `cancel_requested` | Work finishes, fails, passes a stream boundary and fails, or cancellation is accepted. |
+| `cancel_requested` | `cancelled`, `uncertain` | The router proves that work stopped, or reconciliation reaches its limit without proof. |
+
+The agent-run state machine is:
+
+| Current state | Allowed next state | Cause |
+| --- | --- | --- |
+| none | `admitted` | The run identity and fingerprint bind durably. |
+| `admitted` | `running`, `cancel_requested`, `failed` | The owner lease starts, cancellation is accepted, or a request-wide failure stops the run. |
+| `running` | `waiting_for_tool`, `succeeded`, `failed`, `interrupted`, `cancel_requested`, `uncertain` | The run needs a business-tool result, finishes, fails, loses a committed stream, receives cancellation, or cannot reconcile a committed effect after ownership recovery. |
+| `waiting_for_tool` | `running`, `failed`, `cancel_requested`, `uncertain` | A confirmed result resumes the run, the tool fails, cancellation is accepted, or an effect cannot be reconciled. |
+| `cancel_requested` | `cancelled`, `uncertain` | The router proves that work stopped, or reconciliation reaches its limit without proof. |
+
+`succeeded`, `failed`, `interrupted`, `cancelled`, and `uncertain` are terminal.
+A terminal state MUST NOT change. A late usage report, price correction, or
+audit delivery MUST append accounting or audit data without changing the
+state. A client disconnect MUST NOT change the state. A node takeover MUST
+preserve the state and owner epoch rules.
+
+Each status response MUST contain the state, monotonically increasing state
+revision, admission receipt, last transition time, terminal time when
+applicable, safe error when applicable, partial-output indicator, committed-
+effect indicator, and links to the status, cancel, and stream operations that
+the caller can use.
+
 ## Streaming commit boundary
 
 The router MAY retry or move to another provider before it releases model
@@ -198,5 +236,26 @@ or resets the limit.
 
 The administration interface MUST show limit, reserved, used, corrected,
 remaining, and enforcement state for each scope. It MUST indicate the request
-and candidate that caused a budget rejection. Exact cross-node reservation and
-outage behavior remains open.
+and candidate that caused a budget rejection.
+
+### Host-set workspace ceiling
+
+A calling service MAY set one non-bypassable Router cost ceiling for each of
+its workspaces. Only a service token with `budget_ceiling.read` or
+`budget_ceiling.write` for the exact service and workspace can read or change
+this ceiling. A hosted administration session and a human Router administrator
+MUST NOT raise, remove, or replace it.
+
+The ceiling MUST be an ancestor of all Router workspace and assignment limits
+in that workspace. A service-scoped administrator MAY set lower limits but
+MUST NOT set a value above the ceiling. A ceiling reduction MUST stop new work
+that does not fit. It MUST NOT cancel admitted work or change completed
+accounting.
+
+Each change MUST use an expected revision and idempotency key. It MUST return
+the ceiling, currency, revision, effective time, and operation receipt. It
+MUST create an audit event. Xbot remains the user-visible authority for its
+workspace-wide cap and Router allocation.
+
+Cross-node reservation and outage behavior follows the leased allowance rules
+in specification 07.

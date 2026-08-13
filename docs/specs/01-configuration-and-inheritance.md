@@ -1,7 +1,6 @@
 # Configuration and inheritance
 
-Status: Accepted sections only. Detailed disablement and validation limits
-remain open.
+Status: Ready for approval.
 
 ## Scope chain
 
@@ -26,6 +25,13 @@ configuration revision.
 
 Only a global administrator can create, disable, retire, or restore a service,
 or change a service parent.
+
+A service starts as `active`. Disable changes `active` to `disabled`. Restore
+changes only `disabled` to `active`. Retire changes `active` or `disabled` to
+`retired`. A retired service is terminal, and its stable identity MUST NOT be
+reused. A service state change MUST use an expected revision. Disablement and
+retirement stop new work for the service and its descendants without deleting
+their retained records.
 
 A service administrator can manage the assignments and permitted settings of
 that service. It can manage workspace overrides for workspaces that the
@@ -110,3 +116,21 @@ Normal revision distribution remains asynchronous and follows the accepted
 separate urgent path. A rollback MUST validate and immediately publish a new
 immutable revision whose content restores a selected earlier revision. It
 MUST NOT make stored history mutable.
+
+## Disablement and validation limits
+
+A disabled catalog item, provider instance, provider-model route, or
+assignment MUST remain visible to an authorized administrator. It MUST be
+ineligible for new work. Work that is already admitted continues under the
+revision recorded at admission unless an urgent security change stops it.
+
+Disablement MUST NOT delete configuration history, accounting, request status,
+or audit records. Retirement is permanent for that stable identity. A retired
+identity MUST NOT be reused.
+
+A configuration write MUST reject an unknown reference, inheritance cycle,
+duplicate stable identity, empty assignment chain, ineligible route, route
+without an active credential, capability mismatch, limit outside its ancestor
+range, and a secret in a non-secret field. Validation MUST be bounded to the
+affected scope and its descendants. The public error MUST identify each safe
+field path and reason without exposing a credential or hidden scope.

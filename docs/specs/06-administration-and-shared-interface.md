@@ -1,7 +1,6 @@
 # Administration and shared interface
 
-Status: Accepted sections only. Detailed workflows and permissions remain
-open.
+Status: Ready for approval.
 
 ## Global administration identity
 
@@ -78,6 +77,14 @@ account-state check is no more than five minutes old. Local logout MUST revoke
 the local administrator session immediately. Account disablement, passkey
 revocation, and recovery MUST also revoke applicable identity-service sessions.
 
+The local administrator session cookie MUST use `Secure`, `HttpOnly`,
+`SameSite=Lax`, a `__Host-` name, and no `Domain` attribute. Each administrator
+write MUST require a session-bound CSRF token in `X-CSRF-Token` and an exact
+allowed `Origin`. The server MUST reject a missing or mismatched token or
+origin before it changes state. An OIDC callback MUST validate the stored
+state, nonce, Proof Key for Code Exchange verifier, issuer, and exact redirect
+URI before it creates the local session.
+
 The global administration application MUST provide a clear link to the shared
 identity account page for passkey and account management. It MUST NOT copy the
 identity service's account or passkey management functions into LLM Router.
@@ -86,7 +93,7 @@ rules in specification 04 and MUST NOT become human identity credentials.
 
 ## Hosted service interface
 
-LLM Router MUST host one React administration application. A service MUST be
+LLM Router MUST host one administration application. A service MUST be
 able to embed its service-scoped administration view in an isolated,
 cross-origin frame. A service MUST also be able to build its own interface with
 the headless, versioned API.
@@ -108,8 +115,8 @@ LLM Router MUST use its own frame protocol name and version. It MUST NOT reuse
 Ontology message types for different actions.
 
 The embedded service view MUST NOT expose global administration functions. The
-global administration application can use the same React codebase, but it MUST
-use the separate global administrator authority.
+global administration application can use the same frontend codebase, but it
+MUST use the separate global administrator authority.
 
 The host service owns authentication and authorization for a person who opens
 its embedded service view. The person MUST NOT need a Pocket ID session only
