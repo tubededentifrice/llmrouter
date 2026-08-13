@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -75,6 +76,53 @@ SERVICE_ROUTE_ID = "0198a080-0000-7000-8000-000000000137"
 SERVICE_SOURCE_ID = "0198a080-0000-7000-8000-000000000138"
 SERVICE_REVISION = "0198a080-0000-7000-8000-000000000139"
 SERVICE_REQUEST_ASSIGNMENT = "0198a080-0000-7000-8000-000000000140"
+SERVICE_GLOBAL_BUDGET = "0198a080-0000-7000-8000-000000000141"
+
+
+def _record_budget_limit(connection: psycopg.Connection[Any], budget_id: str) -> None:
+    row = connection.execute(
+        """SELECT hard_limit, warning_threshold, currency::text, revision,
+                  reset_period, effective_at
+           FROM router.budget_scopes WHERE id = %s""",
+        (budget_id,),
+    ).fetchone()
+    assert row is not None
+    operation_id = uuid.uuid4()
+    connection.execute(
+        """INSERT INTO router.audit_events (
+               event_id, audit_class, actor_kind, actor_id, authority_class,
+               action, permission_result, safe_details, occurred_at
+           ) VALUES (
+               %s, 'security', 'system', 'accounting-test', 'system',
+               'budget.write', 'permitted',
+               '{"resource_type":"budget_limit"}', %s
+           )""",
+        (operation_id, row[5]),
+    )
+    connection.execute(
+        """INSERT INTO router.budget_limit_operations (
+               operation_id, budget_scope_id, actor_id, idempotency_key,
+               request_fingerprint, expected_revision, resulting_revision,
+               hard_limit, warning_threshold, currency, reset_period,
+               audit_event_id, effective_at
+           ) VALUES (
+               %s, %s, 'accounting-test', %s, %s, 0, %s, %s, %s, %s, %s,
+               %s, %s
+           )""",
+        (
+            operation_id,
+            budget_id,
+            f"accounting-budget-{budget_id}",
+            bytes.fromhex("44" * 32),
+            row[3],
+            row[0],
+            row[1],
+            row[2],
+            row[4],
+            operation_id,
+            row[5],
+        ),
+    )
 
 
 def _system(operation: str) -> RequestContext:
@@ -159,6 +207,7 @@ def _seed_accounting(
         """,
         (BUDGET_ID, SERVICE_ID, WORKSPACE_ID),
     )
+    _record_budget_limit(connection, BUDGET_ID)
     connection.execute(
         """
         INSERT INTO router.canonical_events (
@@ -313,6 +362,7 @@ def test_service_scope_daily_aggregate_accepts_null_workspace(
     with psycopg.connect(database_url) as connection:
         migrate(connection)
         _seed_accounting(connection)
+        connection.commit()
         connection.execute(
             """INSERT INTO router.configuration_revisions (
                    id, scope_kind, service_id, revision_number, content,
@@ -340,9 +390,23 @@ def test_service_scope_daily_aggregate_accepts_null_workspace(
         )
         connection.execute(
             """INSERT INTO router.budget_scopes (
-                   id, scope_kind, service_id, currency, hard_limit
-               ) VALUES (%s, 'service', %s, 'USD', 100)""",
-            (SERVICE_BUDGET, SERVICE_ID),
+               id, scope_kind, currency, hard_limit
+               ) VALUES (%s, 'global', 'USD', 100)""",
+            (SERVICE_GLOBAL_BUDGET,),
+        )
+        _record_budget_limit(connection, SERVICE_GLOBAL_BUDGET)
+        connection.execute(
+            """INSERT INTO router.budget_scopes (
+                   id, scope_kind, service_id, parent_budget_scope_id,
+                   currency, hard_limit
+               ) VALUES (%s, 'service', %s, %s, 'USD', 100)""",
+            (SERVICE_BUDGET, SERVICE_ID, SERVICE_GLOBAL_BUDGET),
+        )
+        _record_budget_limit(connection, SERVICE_BUDGET)
+        connection.execute(
+            """UPDATE router.budget_scopes
+               SET parent_budget_scope_id = %s WHERE id = %s""",
+            (SERVICE_BUDGET, BUDGET_ID),
         )
         connection.execute(
             """INSERT INTO router.canonical_events (
@@ -788,6 +852,7 @@ def test_price_sync_preserves_active_configuration_and_last_good_price(
                ) VALUES (%s, 'workspace', %s, %s, 'USD', 100)""",
             (BUDGET_ID, SERVICE_ID, WORKSPACE_ID),
         )
+        _record_budget_limit(connection, BUDGET_ID)
         price_versions = connection.execute(
             """SELECT id::text FROM router.route_price_versions
                WHERE provider_model_route_id = %s ORDER BY version_number""",

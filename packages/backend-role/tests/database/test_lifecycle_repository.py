@@ -5,6 +5,7 @@ from __future__ import annotations
 import concurrent.futures
 from dataclasses import replace
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import psycopg
 import pytest
@@ -15,6 +16,12 @@ from llmrouter_backend.authority import (
     PrincipalKind,
     RequestContext,
     Scope,
+)
+from llmrouter_backend.budgets import (
+    BudgetScopeKind,
+    BudgetTarget,
+    PostgresBudgetRepository,
+    ResetPeriod,
 )
 from llmrouter_backend.database import migrate
 from llmrouter_backend.lifecycle import (
@@ -572,6 +579,119 @@ def test_hidden_cross_service_read_and_descendant_admission(
         workspace_id,
     )
     assert retained.state is LifecycleState.ACTIVE
+
+
+def test_service_parent_api_rejects_incompatible_budget_chain(
+    repository: PostgresLifecycleRepository,
+    database_url: str,
+) -> None:
+    """Return a safe lifecycle error when the new parent budget is too small."""
+    parent = _create_service(repository, name="Parent")
+    child = _create_service(
+        repository,
+        key="service-create-key-00002",
+        name="Child",
+    )
+    budgets = PostgresBudgetRepository(database_url)
+    global_context = replace(
+        _global_context("budget.write"), scope=Scope(), request_id="global-budget"
+    )
+    budgets.put_limit(
+        global_context,
+        BudgetTarget(BudgetScopeKind.GLOBAL),
+        hard_limit=Decimal(100),
+        currency="USD",
+        warning_threshold=None,
+        reset_period=ResetPeriod.NONE,
+        expected_revision="0",
+        idempotency_key="lifecycle-global-budget",
+        now=NOW,
+    )
+    for service_id, amount, key in (
+        (parent, Decimal(50), "lifecycle-parent-budget"),
+        (child, Decimal(80), "lifecycle-child-budget"),
+    ):
+        budgets.put_limit(
+            replace(global_context, scope=Scope(service_id)),
+            BudgetTarget(BudgetScopeKind.SERVICE, service_id),
+            hard_limit=amount,
+            currency="USD",
+            warning_threshold=None,
+            reset_period=ResetPeriod.NONE,
+            expected_revision="0",
+            idempotency_key=key,
+            now=NOW,
+        )
+    with pytest.raises(LifecycleError) as error:
+        repository.change_service_parent(
+            _global_context("service_parent.manage"),
+            child,
+            expected_revision="1",
+            new_parent_service_id=parent,
+            reason="Use the parent.",
+        )
+    assert error.value.code is LifecycleErrorCode.INVALID_REQUEST
+
+
+def test_service_parent_waits_for_budget_lock_before_service_row(
+    repository: PostgresLifecycleRepository,
+    database_url: str,
+) -> None:
+    """Keep service-row locks after the shared budget hierarchy lock."""
+    parent = _create_service(repository, name="Parent")
+    child = _create_service(
+        repository,
+        key="service-create-key-00002",
+        name="Child",
+    )
+    budgets = PostgresBudgetRepository(database_url)
+    budget_context = replace(
+        _global_context("budget.write"), scope=Scope(), request_id="global-budget"
+    )
+    idempotency_key = "lifecycle-lock-order-budget"
+    operation_lock = f"budget-limit:{budget_context.actor_id}:{idempotency_key}"
+    with psycopg.connect(database_url) as blocker:
+        blocker.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (operation_lock,),
+        )
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+        try:
+            budget_write = executor.submit(
+                budgets.put_limit,
+                budget_context,
+                BudgetTarget(BudgetScopeKind.GLOBAL),
+                hard_limit=Decimal(100),
+                currency="USD",
+                warning_threshold=None,
+                reset_period=ResetPeriod.NONE,
+                expected_revision="0",
+                idempotency_key=idempotency_key,
+                now=NOW,
+            )
+            with pytest.raises(concurrent.futures.TimeoutError):
+                budget_write.result(timeout=0.1)
+            parent_write = executor.submit(
+                repository.change_service_parent,
+                _global_context("service_parent.manage"),
+                child,
+                expected_revision="1",
+                new_parent_service_id=parent,
+                reason="Use the parent.",
+            )
+            with pytest.raises(concurrent.futures.TimeoutError):
+                parent_write.result(timeout=0.1)
+            with psycopg.connect(database_url) as observer:
+                observer.execute(
+                    "SELECT id FROM router.services WHERE id = %s FOR UPDATE NOWAIT",
+                    (child,),
+                )
+            blocker.commit()
+            assert budget_write.result(timeout=5).hard_limit.amount == Decimal(100)
+            assert parent_write.result(timeout=5).value.parent_service_id == parent
+        finally:
+            blocker.rollback()
+            executor.shutdown(wait=True, cancel_futures=True)
 
 
 def test_parent_cycle_and_restore_guard_fail_closed(

@@ -363,6 +363,7 @@ class PostgresLifecycleRepository:
             connection.transaction(),
         ):
             _lock(connection, "service-parent-tree")
+            _lock(connection, "budget-hierarchy")
             row = connection.execute(
                 """
                     SELECT id, display_name, parent_service_id::text, state,
@@ -418,6 +419,12 @@ class PostgresLifecycleRepository:
             next_revision = revision + 1 if changed else revision
             operation_id = self._identity_factory()
             if changed:
+                if not _service_parent_budget_is_compatible(
+                    connection, parsed_service_id, parsed_parent_id
+                ):
+                    raise LifecycleError(
+                        LifecycleErrorCode.INVALID_REQUEST, context.request_id
+                    )
                 connection.execute(
                     """
                         UPDATE router.services
@@ -1252,6 +1259,52 @@ def _select_workspace(
         """,
         (workspace_id, service_id),
     ).fetchone()
+
+
+def _service_parent_budget_is_compatible(
+    connection: Connection[Any],
+    service_id: uuid.UUID,
+    parent_service_id: uuid.UUID | None,
+) -> bool:
+    outer_budget = connection.execute(
+        """WITH RECURSIVE ancestors AS (
+               SELECT id, parent_service_id, 0 AS depth
+               FROM router.services WHERE id = %s
+             UNION ALL
+               SELECT service.id, service.parent_service_id, parent.depth + 1
+               FROM router.services AS service
+               JOIN ancestors AS parent ON parent.parent_service_id = service.id
+           )
+           SELECT budget.currency::text, budget.hard_limit
+           FROM router.budget_scopes AS budget
+           LEFT JOIN ancestors ON ancestors.id = budget.service_id
+           WHERE budget.scope_kind = 'global'
+              OR (budget.scope_kind = 'service' AND ancestors.id IS NOT NULL)
+           ORDER BY CASE budget.scope_kind WHEN 'service' THEN 0 ELSE 1 END,
+                    ancestors.depth NULLS LAST
+           LIMIT 1""",
+        (parent_service_id,),
+    ).fetchone()
+    if outer_budget is None:
+        return True
+    subtree_budgets = connection.execute(
+        """WITH RECURSIVE descendants AS (
+               SELECT id FROM router.services WHERE id = %s
+             UNION ALL
+               SELECT service.id FROM router.services AS service
+               JOIN descendants AS parent
+                 ON service.parent_service_id = parent.id
+           )
+           SELECT budget.currency::text, budget.hard_limit
+           FROM router.budget_scopes AS budget
+           WHERE budget.scope_kind <> 'host_ceiling'
+             AND budget.service_id IN (SELECT id FROM descendants)""",
+        (service_id,),
+    ).fetchall()
+    return all(
+        budget[0] == outer_budget[0] and budget[1] <= outer_budget[1]
+        for budget in subtree_budgets
+    )
 
 
 def _service_record(row: tuple[Any, ...]) -> ServiceRecord:

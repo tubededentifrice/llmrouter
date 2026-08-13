@@ -263,7 +263,7 @@ def test_stale_run_owner_cannot_resolve_effect(database_url: str) -> None:
 def test_budget_allowances_are_bounded_and_fenced(database_url: str) -> None:
     """Bound live allowance and reject stale consumption generations."""
     with psycopg.connect(database_url, autocommit=True) as connection:
-        migrate(connection)
+        migrate(connection, target=10)
         budget_id = "0198a080-0000-7000-8000-000000000070"
         allowance_id = "0198a080-0000-7000-8000-000000000071"
         connection.execute(
@@ -274,6 +274,7 @@ def test_budget_allowances_are_bounded_and_fenced(database_url: str) -> None:
             """,
             (budget_id,),
         )
+        migrate(connection)
         connection.execute(
             """
             INSERT INTO router.budget_allowance_leases (
