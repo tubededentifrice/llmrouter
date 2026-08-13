@@ -73,12 +73,21 @@ class PostgresLifecycleRepository:
     ) -> LifecycleResult[ServiceRecord]:
         """Create one active service or return its equal durable replay."""
         _require_global_change(context, "service.manage")
+        parent_id = (
+            None
+            if parent_service_id is None
+            else _parse_uuid(
+                parent_service_id,
+                LifecycleErrorCode.NOT_FOUND,
+                request_id=context.request_id,
+            )
+        )
         _require_idempotency_key(idempotency_key)
         _require_bounded(display_name, _MAXIMUM_DISPLAY_NAME_LENGTH, "display name")
         fingerprint = _fingerprint(
             {
                 "display_name": display_name,
-                "parent_service_id": parent_service_id,
+                "parent_service_id": None if parent_id is None else str(parent_id),
             }
         )
         with (
@@ -100,9 +109,9 @@ class PostgresLifecycleRepository:
             )
             if replay is not None:
                 return LifecycleResult(replay, replayed=True, changed=True)
-            if parent_service_id is not None:
+            if parent_id is not None:
                 _require_service_exists(
-                    connection, parent_service_id, request_id=context.request_id
+                    connection, parent_id, request_id=context.request_id
                 )
 
             service_id = self._identity_factory()
@@ -114,7 +123,7 @@ class PostgresLifecycleRepository:
                     )
                     VALUES (%s, %s, %s, %s)
                     """,
-                (service_id, str(service_id), display_name, parent_service_id),
+                (service_id, str(service_id), display_name, parent_id),
             )
             _insert_service_operation(
                 connection,
@@ -127,7 +136,7 @@ class PostgresLifecycleRepository:
                 display_name=display_name,
                 state=LifecycleState.ACTIVE,
                 revision=1,
-                parent_service_id=parent_service_id,
+                parent_service_id=None if parent_id is None else str(parent_id),
                 changed=True,
             )
             _insert_audit(
@@ -142,7 +151,7 @@ class PostgresLifecycleRepository:
             record = ServiceRecord(
                 service_id=str(service_id),
                 display_name=display_name,
-                parent_service_id=parent_service_id,
+                parent_service_id=None if parent_id is None else str(parent_id),
                 state=LifecycleState.ACTIVE,
                 revision="1",
                 operation_id=str(operation_id),
@@ -152,6 +161,11 @@ class PostgresLifecycleRepository:
     def get_service(self, context: RequestContext, service_id: str) -> ServiceRecord:
         """Read one retained service through global administration."""
         _require_global_read(context)
+        parsed_service_id = _parse_uuid(
+            service_id,
+            LifecycleErrorCode.NOT_FOUND,
+            request_id=context.request_id,
+        )
         with psycopg.connect(self._database_url) as connection:
             row = connection.execute(
                 """
@@ -169,7 +183,7 @@ class PostgresLifecycleRepository:
                 ) AS operation ON true
                 WHERE service.id = %s
                 """,
-                (service_id,),
+                (parsed_service_id,),
             ).fetchone()
         if row is None:
             raise LifecycleError(LifecycleErrorCode.NOT_FOUND, context.request_id)
@@ -187,6 +201,11 @@ class PostgresLifecycleRepository:
     ) -> LifecycleResult[ServiceRecord]:
         """Apply one exact service state transition with a stable receipt."""
         _require_global_change(context, "service.manage")
+        parsed_service_id = _parse_uuid(
+            service_id,
+            LifecycleErrorCode.NOT_FOUND,
+            request_id=context.request_id,
+        )
         _require_idempotency_key(idempotency_key)
         _require_bounded(reason, _MAXIMUM_REASON_LENGTH, "reason")
         operation_action = f"service.{action.value}"
@@ -195,7 +214,7 @@ class PostgresLifecycleRepository:
                 "action": operation_action,
                 "expected_revision": expected_revision,
                 "reason": reason,
-                "service_id": service_id,
+                "service_id": str(parsed_service_id),
             }
         )
         with (
@@ -235,7 +254,7 @@ class PostgresLifecycleRepository:
                     WHERE id = %s
                     FOR UPDATE
                     """,
-                (service_id,),
+                (parsed_service_id,),
             ).fetchone()
             if row is None:
                 raise LifecycleError(LifecycleErrorCode.NOT_FOUND, context.request_id)
@@ -263,12 +282,17 @@ class PostgresLifecycleRepository:
                                 THEN transaction_timestamp() ELSE NULL END
                         WHERE id = %s
                         """,
-                    (next_state.value, next_revision, next_state.value, service_id),
+                    (
+                        next_state.value,
+                        next_revision,
+                        next_state.value,
+                        parsed_service_id,
+                    ),
                 )
             _insert_service_operation(
                 connection,
                 operation_id=operation_id,
-                service_id=service_id,
+                service_id=parsed_service_id,
                 actor_id=context.actor_id,
                 action=operation_action,
                 idempotency_key=idempotency_key,
@@ -284,7 +308,7 @@ class PostgresLifecycleRepository:
                 context,
                 operation_id=operation_id,
                 action=operation_action,
-                service_id=service_id,
+                service_id=parsed_service_id,
                 workspace_id=None,
                 reason=reason,
             )
@@ -309,13 +333,29 @@ class PostgresLifecycleRepository:
     ) -> LifecycleResult[ServiceRecord]:
         """Replace one parent link after a serialized cycle check."""
         _require_global_change(context, "service_parent.manage")
+        parsed_service_id = _parse_uuid(
+            service_id,
+            LifecycleErrorCode.NOT_FOUND,
+            request_id=context.request_id,
+        )
+        parsed_parent_id = (
+            None
+            if new_parent_service_id is None
+            else _parse_uuid(
+                new_parent_service_id,
+                LifecycleErrorCode.NOT_FOUND,
+                request_id=context.request_id,
+            )
+        )
         _require_bounded(reason, _MAXIMUM_REASON_LENGTH, "reason")
         fingerprint = _fingerprint(
             {
                 "expected_revision": expected_revision,
-                "new_parent_service_id": new_parent_service_id,
+                "new_parent_service_id": (
+                    None if parsed_parent_id is None else str(parsed_parent_id)
+                ),
                 "reason": reason,
-                "service_id": service_id,
+                "service_id": str(parsed_service_id),
             }
         )
         with (
@@ -331,7 +371,7 @@ class PostgresLifecycleRepository:
                     WHERE id = %s
                     FOR UPDATE
                     """,
-                (service_id,),
+                (parsed_service_id,),
             ).fetchone()
             if row is None:
                 raise LifecycleError(LifecycleErrorCode.NOT_FOUND, context.request_id)
@@ -347,10 +387,10 @@ class PostgresLifecycleRepository:
             _require_revision(
                 expected_revision, state, revision, request_id=context.request_id
             )
-            if new_parent_service_id is not None:
+            if parsed_parent_id is not None:
                 _require_service_exists(
                     connection,
-                    new_parent_service_id,
+                    parsed_parent_id,
                     request_id=context.request_id,
                 )
                 cycle = connection.execute(
@@ -367,13 +407,14 @@ class PostgresLifecycleRepository:
                             SELECT 1 FROM descendants WHERE id = %s
                         )
                         """,
-                    (service_id, new_parent_service_id),
+                    (parsed_service_id, parsed_parent_id),
                 ).fetchone()
                 if cycle is not None and cycle[0]:
                     raise LifecycleError(
                         LifecycleErrorCode.INVALID_REQUEST, context.request_id
                     )
-            changed = row[2] != new_parent_service_id
+            next_parent = None if parsed_parent_id is None else str(parsed_parent_id)
+            changed = row[2] != next_parent
             next_revision = revision + 1 if changed else revision
             operation_id = self._identity_factory()
             if changed:
@@ -383,12 +424,12 @@ class PostgresLifecycleRepository:
                         SET parent_service_id = %s, state_revision = %s
                         WHERE id = %s
                         """,
-                    (new_parent_service_id, next_revision, service_id),
+                    (parsed_parent_id, next_revision, parsed_service_id),
                 )
             _insert_service_operation(
                 connection,
                 operation_id=operation_id,
-                service_id=service_id,
+                service_id=parsed_service_id,
                 actor_id=context.actor_id,
                 action="service.parent",
                 idempotency_key=None,
@@ -396,7 +437,7 @@ class PostgresLifecycleRepository:
                 display_name=str(row[1]),
                 state=state,
                 revision=next_revision,
-                parent_service_id=new_parent_service_id,
+                parent_service_id=next_parent,
                 changed=changed,
             )
             _insert_audit(
@@ -404,14 +445,14 @@ class PostgresLifecycleRepository:
                 context,
                 operation_id=operation_id,
                 action="service.parent",
-                service_id=service_id,
+                service_id=parsed_service_id,
                 workspace_id=None,
                 reason=reason,
             )
             record = ServiceRecord(
                 service_id=str(row[0]),
                 display_name=str(row[1]),
-                parent_service_id=new_parent_service_id,
+                parent_service_id=next_parent,
                 state=state,
                 revision=str(next_revision),
                 operation_id=str(operation_id),
@@ -428,6 +469,11 @@ class PostgresLifecycleRepository:
     ) -> LifecycleResult[WorkspaceRecord]:
         """Create one active workspace with two conflict-bound identities."""
         service_id = _require_workspace_context(context, "workspace.create", None)
+        parsed_service_id = _parse_uuid(
+            service_id,
+            LifecycleErrorCode.WORKSPACE_NOT_FOUND,
+            request_id=context.request_id,
+        )
         _require_idempotency_key(idempotency_key)
         _require_bounded(
             caller_reference,
@@ -453,7 +499,7 @@ class PostgresLifecycleRepository:
                 _lock(connection, lock_name)
             replay = _find_workspace_create_replay(
                 connection,
-                service_id=service_id,
+                service_id=str(parsed_service_id),
                 idempotency_key=idempotency_key,
                 caller_reference=caller_reference,
                 fingerprint=fingerprint,
@@ -461,7 +507,7 @@ class PostgresLifecycleRepository:
             )
             if replay is not None:
                 return LifecycleResult(replay, replayed=True, changed=True)
-            if not _service_tree_is_active(connection, service_id):
+            if not _service_tree_is_active(connection, parsed_service_id):
                 raise LifecycleError(
                     LifecycleErrorCode.WORKSPACE_UNAVAILABLE, context.request_id
                 )
@@ -476,7 +522,7 @@ class PostgresLifecycleRepository:
                     """,
                 (
                     workspace_id,
-                    service_id,
+                    parsed_service_id,
                     caller_reference,
                     idempotency_key,
                     fingerprint,
@@ -486,7 +532,7 @@ class PostgresLifecycleRepository:
             _insert_workspace_operation(
                 connection,
                 operation_id=operation_id,
-                service_id=service_id,
+                service_id=str(parsed_service_id),
                 workspace_id=workspace_id,
                 actor_id=context.actor_id,
                 action="workspace.create",
@@ -503,7 +549,7 @@ class PostgresLifecycleRepository:
                 context,
                 operation_id=operation_id,
                 action="workspace.create",
-                service_id=service_id,
+                service_id=parsed_service_id,
                 workspace_id=workspace_id,
                 reason=None,
             )
@@ -524,8 +570,18 @@ class PostgresLifecycleRepository:
     ) -> WorkspaceRecord:
         """Read a workspace only through its owning service scope."""
         service_id = _require_workspace_context(context, "workspace.read", workspace_id)
+        parsed_service_id = _parse_uuid(
+            service_id,
+            LifecycleErrorCode.WORKSPACE_NOT_FOUND,
+            request_id=context.request_id,
+        )
+        parsed_workspace_id = _parse_uuid(
+            workspace_id,
+            LifecycleErrorCode.WORKSPACE_NOT_FOUND,
+            request_id=context.request_id,
+        )
         with psycopg.connect(self._database_url) as connection:
-            row = _select_workspace(connection, service_id, workspace_id)
+            row = _select_workspace(connection, parsed_service_id, parsed_workspace_id)
         if row is None:
             raise LifecycleError(
                 LifecycleErrorCode.WORKSPACE_NOT_FOUND, context.request_id
@@ -546,6 +602,16 @@ class PostgresLifecycleRepository:
         service_id = _require_workspace_context(
             context, f"workspace.{action.value}", workspace_id
         )
+        parsed_service_id = _parse_uuid(
+            service_id,
+            LifecycleErrorCode.WORKSPACE_NOT_FOUND,
+            request_id=context.request_id,
+        )
+        parsed_workspace_id = _parse_uuid(
+            workspace_id,
+            LifecycleErrorCode.WORKSPACE_NOT_FOUND,
+            request_id=context.request_id,
+        )
         _require_idempotency_key(idempotency_key)
         _require_bounded(reason, _MAXIMUM_REASON_LENGTH, "reason")
         operation_action = f"workspace.{action.value}"
@@ -554,7 +620,7 @@ class PostgresLifecycleRepository:
                 "action": operation_action,
                 "expected_revision": expected_revision,
                 "reason": reason,
-                "workspace_id": workspace_id,
+                "workspace_id": str(parsed_workspace_id),
             }
         )
         with (
@@ -593,7 +659,7 @@ class PostgresLifecycleRepository:
                     WHERE id = %s AND service_id = %s
                     FOR UPDATE
                     """,
-                (workspace_id, service_id),
+                (parsed_workspace_id, parsed_service_id),
             ).fetchone()
             if row is None:
                 raise LifecycleError(
@@ -616,8 +682,10 @@ class PostgresLifecycleRepository:
                 action is WorkspaceAction.RESTORE
                 and changed
                 and (
-                    not _service_tree_is_active(connection, service_id)
-                    or not self._workspace_restore_is_eligible(service_id, workspace_id)
+                    not _service_tree_is_active(connection, parsed_service_id)
+                    or not self._workspace_restore_is_eligible(
+                        str(parsed_service_id), str(parsed_workspace_id)
+                    )
                 )
             ):
                 raise LifecycleError(
@@ -639,15 +707,15 @@ class PostgresLifecycleRepository:
                         next_state.value,
                         next_revision,
                         next_state.value,
-                        workspace_id,
-                        service_id,
+                        parsed_workspace_id,
+                        parsed_service_id,
                     ),
                 )
             _insert_workspace_operation(
                 connection,
                 operation_id=operation_id,
-                service_id=service_id,
-                workspace_id=workspace_id,
+                service_id=str(parsed_service_id),
+                workspace_id=parsed_workspace_id,
                 actor_id=context.actor_id,
                 action=operation_action,
                 idempotency_key=idempotency_key,
@@ -663,8 +731,8 @@ class PostgresLifecycleRepository:
                 context,
                 operation_id=operation_id,
                 action=operation_action,
-                service_id=service_id,
-                workspace_id=workspace_id,
+                service_id=parsed_service_id,
+                workspace_id=parsed_workspace_id,
                 reason=reason,
             )
             record = WorkspaceRecord(
@@ -683,12 +751,19 @@ class PostgresLifecycleRepository:
         workspace_id: str | None = None,
     ) -> bool:
         """Report whether all ancestors and the optional workspace are active."""
+        try:
+            parsed_service_id = uuid.UUID(service_id)
+            parsed_workspace_id = (
+                None if workspace_id is None else uuid.UUID(workspace_id)
+            )
+        except (TypeError, ValueError, AttributeError):
+            return False
         with psycopg.connect(self._database_url) as connection:
             row = connection.execute(
                 """
                 SELECT router.lifecycle_admission_is_allowed(%s, %s)
                 """,
-                (service_id, workspace_id),
+                (parsed_service_id, parsed_workspace_id),
             ).fetchone()
         return row is not None and bool(row[0])
 
@@ -749,6 +824,18 @@ def _require_idempotency_key(value: str) -> None:
         raise ValueError(msg)
 
 
+def _parse_uuid(
+    value: str,
+    code: LifecycleErrorCode,
+    *,
+    request_id: str,
+) -> uuid.UUID:
+    try:
+        return uuid.UUID(value)
+    except (TypeError, ValueError, AttributeError) as error:
+        raise LifecycleError(code, request_id) from error
+
+
 def _require_bounded(value: str, limit: int, label: str) -> None:
     if not 1 <= len(value) <= limit:
         msg = f"The {label} must contain 1 to {limit} characters."
@@ -776,7 +863,7 @@ def _lock_shared(connection: Connection[Any], name: str) -> None:
 
 
 def _require_service_exists(
-    connection: Connection[Any], service_id: str, *, request_id: str
+    connection: Connection[Any], service_id: uuid.UUID, *, request_id: str
 ) -> None:
     if (
         connection.execute(
@@ -829,7 +916,9 @@ def _workspace_transition(
     return state is not desired, desired
 
 
-def _service_tree_is_active(connection: Connection[Any], service_id: str) -> bool:
+def _service_tree_is_active(
+    connection: Connection[Any], service_id: uuid.UUID
+) -> bool:
     row = connection.execute(
         """
         WITH RECURSIVE ancestors AS (
@@ -1144,7 +1233,7 @@ def _insert_audit(  # noqa: PLR0913
 
 
 def _select_workspace(
-    connection: Connection[Any], service_id: str, workspace_id: str
+    connection: Connection[Any], service_id: uuid.UUID, workspace_id: uuid.UUID
 ) -> tuple[Any, ...] | None:
     return connection.execute(
         """

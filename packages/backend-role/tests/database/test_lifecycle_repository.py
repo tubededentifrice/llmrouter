@@ -346,6 +346,87 @@ def test_workspace_context_rejects_a_forged_actor_or_audience(
     assert denied.value.code is LifecycleErrorCode.INSUFFICIENT_SCOPE
 
 
+def test_malformed_lifecycle_identities_return_safe_closed_results(
+    repository: PostgresLifecycleRepository,
+) -> None:
+    """Do not expose PostgreSQL UUID errors for opaque path identities."""
+    with pytest.raises(LifecycleError) as service_read:
+        repository.get_service(_global_context(), "not-a-service-uuid")
+    assert service_read.value.code is LifecycleErrorCode.NOT_FOUND
+    with pytest.raises(LifecycleError) as service_change:
+        repository.change_service_state(
+            _global_context(),
+            "not-a-service-uuid",
+            ServiceAction.DISABLE,
+            expected_revision="1",
+            idempotency_key="service-disable-key-0001",
+            reason="Invalid target.",
+        )
+    assert service_change.value.code is LifecycleErrorCode.NOT_FOUND
+    with pytest.raises(LifecycleError) as parent_create:
+        repository.create_service(
+            _global_context(),
+            idempotency_key="service-create-key-00001",
+            display_name="Invalid child",
+            parent_service_id="not-a-parent-uuid",
+        )
+    assert parent_create.value.code is LifecycleErrorCode.NOT_FOUND
+
+    service_id = _create_service(repository)
+    with pytest.raises(LifecycleError) as parent_change:
+        repository.change_service_parent(
+            _global_context("service_parent.manage"),
+            service_id,
+            expected_revision="1",
+            new_parent_service_id="not-a-parent-uuid",
+            reason="Invalid parent.",
+        )
+    assert parent_change.value.code is LifecycleErrorCode.NOT_FOUND
+    with pytest.raises(LifecycleError) as malformed_service_parent_change:
+        repository.change_service_parent(
+            _global_context("service_parent.manage"),
+            "not-a-service-uuid",
+            expected_revision="1",
+            new_parent_service_id=None,
+            reason="Invalid service.",
+        )
+    assert malformed_service_parent_change.value.code is LifecycleErrorCode.NOT_FOUND
+    with pytest.raises(LifecycleError) as workspace_create:
+        repository.create_workspace(
+            _service_context("not-a-service-uuid", "workspace.create"),
+            idempotency_key=CREATE_KEY,
+            caller_reference="caller-workspace-a",
+            display_name="Invalid workspace",
+        )
+    assert workspace_create.value.code is LifecycleErrorCode.WORKSPACE_NOT_FOUND
+    with pytest.raises(LifecycleError) as workspace_read:
+        repository.get_workspace(
+            _service_context(
+                service_id,
+                "workspace.read",
+                workspace_id="not-a-workspace-uuid",
+            ),
+            "not-a-workspace-uuid",
+        )
+    assert workspace_read.value.code is LifecycleErrorCode.WORKSPACE_NOT_FOUND
+    with pytest.raises(LifecycleError) as workspace_change:
+        repository.change_workspace_state(
+            _service_context(
+                service_id,
+                "workspace.disable",
+                workspace_id="not-a-workspace-uuid",
+            ),
+            "not-a-workspace-uuid",
+            WorkspaceAction.DISABLE,
+            expected_revision="1",
+            idempotency_key=DISABLE_KEY,
+            reason="Invalid target.",
+        )
+    assert workspace_change.value.code is LifecycleErrorCode.WORKSPACE_NOT_FOUND
+    assert not repository.admission_is_allowed("not-a-service-uuid")
+    assert not repository.admission_is_allowed(service_id, "not-a-workspace-uuid")
+
+
 def test_workspace_state_machine_replay_no_change_and_terminal(
     repository: PostgresLifecycleRepository,
     database_url: str,
