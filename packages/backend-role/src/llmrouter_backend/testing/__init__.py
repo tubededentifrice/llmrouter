@@ -1,5 +1,6 @@
 """Deterministic test services for Router components."""
 
+from llmrouter_backend.testing.authority import ScopeSafeRecords, ScopeTestBuilder
 from llmrouter_backend.testing.fakes import (
     Cancelled,
     DuplicateEffect,
@@ -40,6 +41,8 @@ __all__ = [
     "JsonValue",
     "Outcome",
     "RetryableFailure",
+    "ScopeSafeRecords",
+    "ScopeTestBuilder",
     "StaleState",
     "TakeoverRejected",
     "TimedOut",
