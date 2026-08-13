@@ -1,7 +1,6 @@
 # Product direction
 
-Status: Partially accepted. Open behavior remains in the architecture
-interview.
+Status: Accepted as the first-release product direction on 2026-08-13.
 
 ## Problem
 
@@ -62,7 +61,7 @@ The calling service can own domain prompts, domain data, user approval,
 business workflow state, end-user permissions, and tool authorization for each
 agent or request.
 
-The architecture interview will resolve the remaining boundary details.
+Accepted specifications and decisions define the remaining boundary details.
 
 ## Quality goals
 
@@ -80,12 +79,13 @@ The architecture interview will resolve the remaining boundary details.
 - Do not make the public interface depend on one provider SDK, agent framework,
   storage product, queue, or UI framework.
 
-## Out of scope until review
+## Out of scope
 
 - Crewday or FJ2 implementation and migration work;
 - Xbot implementation work beyond specification alignment;
-- a final implementation language or storage product;
-- an accepted wire protocol;
+- an implementation language other than the accepted Python backend and React
+  TypeScript frontend;
+- a public protocol other than the accepted versioned contracts;
 - end-user chat or prompt-management product features;
 - global semantic memory or domain knowledge storage;
-- Beads implementation planning.
+- calling-service implementation planning in this repository.

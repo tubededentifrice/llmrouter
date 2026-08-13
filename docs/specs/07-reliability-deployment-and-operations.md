@@ -1,6 +1,6 @@
 # Reliability, deployment, and operations
 
-Status: Ready for approval.
+Status: Accepted on 2026-08-13.
 
 ## Static node discovery
 
@@ -13,6 +13,13 @@ The client MUST validate each endpoint identity, health-check endpoints, use
 the first healthy eligible endpoint, and fail over in configured order. It
 MUST apply bounded connection and health timeouts and MUST NOT send a request
 to an endpoint whose identity does not match its configured trust policy.
+
+For a non-loopback HTTPS endpoint, the client MUST validate the exact configured
+hostname through the normal public or deployment-provided certificate authority
+chain. A deployment MAY also configure one or more exact SPKI pins. A pin MUST
+add a check and MUST NOT disable certificate or hostname validation. Plaintext
+HTTP MUST be permitted only for an explicit loopback endpoint.
+This profile follows [decision 0052](../decisions/0052-use-structured-secret-fields-and-standard-endpoint-trust.md).
 
 Router nodes MUST use explicit configured lists for control-plane primary and
 standby endpoints and for any required peers. A topology change MUST use a
@@ -62,6 +69,23 @@ state, scope, sample period, normalized reason, next probe time, and last state
 change. An authorized administrator MAY request a bounded probe or reset local
 history. A reset MUST be audited and MUST NOT override policy or eligibility.
 
+## Node draining and shutdown
+
+An authorized operator MAY put one node into `draining`. A draining node MUST
+stop new request and run admission, remain available for status, cancellation,
+reconciliation, and health operations, and continue work that it already owns.
+The default drain period MUST be 15 minutes. A deployment MUST NOT configure a
+period longer than 30 minutes.
+
+At the drain limit, the node MUST transfer work only through the normal fenced
+ownership process. It MUST mark an unconfirmed external effect as `uncertain`
+and MUST NOT repeat it automatically. It MUST flush durable events or preserve
+their spool responsibility before exit. Administration MUST show the drain
+start, deadline, active work, transfer state, and safe-to-stop result. A forced
+stop MUST be an explicit, audited operator action and MUST NOT report a clean
+drain.
+These limits follow [decision 0050](../decisions/0050-use-bounded-attempt-timeouts-and-node-draining.md).
+
 ## Local service and configuration outage
 
 A healthy application server SHOULD use a local LLM Router data-plane node for
@@ -90,6 +114,18 @@ and recovery actions that need fencing. The implementation MUST measure and
 publish the added latency from local durability, lease work, and checkpointing.
 
 ## Local accounting spool and central ledger
+
+The first release MUST use PostgreSQL as the one logical transactional store
+for configuration, identity, grants, credential ciphertext, request bindings,
+request and run state, coordination leases, the central accounting ledger,
+audit records, and database-backed worker jobs. Deployment roles MAY use a
+primary and standby, but they MUST present one fenced writable authority.
+
+The first release MUST NOT require a separate message broker, distributed
+cache, search database, or ledger database. A later product MAY add one only
+through an accepted architecture decision and a migration that preserves the
+formal contracts and correctness rules.
+This foundation follows [decision 0044](../decisions/0044-use-a-postgresql-fastapi-and-vite-foundation.md).
 
 Each data-plane node MUST have an encrypted, append-only local event spool. It
 MUST write the applicable immutable accounting or audit event before it reports
@@ -188,6 +224,23 @@ The system MUST expose replication lag, last confirmed replay position,
 promotion state, and possible data-loss window. Failback MUST be an explicit
 operator action after reconciliation. Backups and restore tests remain required
 and do not become optional because a warm standby exists.
+
+## Backup and point-in-time recovery
+
+The production profile MUST continuously archive PostgreSQL recovery logs and
+MUST create one encrypted full backup each day. It MUST permit point-in-time
+recovery to any supported point in the last 35 days. Backup storage MUST be
+separate from the writable database host and MUST use integrity checks,
+restricted access, and documented key custody.
+
+The project MUST run an automated restore test at least once each month. The
+test MUST restore a full backup, replay recovery logs to a selected point,
+check database integrity and critical record counts, and record achieved
+recovery time and recovery point. It MUST NOT expose credential plaintext or
+captured content in test output. Administration MUST show the newest backup,
+recovery-log continuity, retention window, last restore-test result, and any
+degraded state.
+This policy follows [decision 0051](../decisions/0051-use-daily-backups-with-point-in-time-recovery.md).
 
 ## Recovery objectives
 

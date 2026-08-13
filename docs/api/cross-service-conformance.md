@@ -62,6 +62,16 @@ accepted.
 5. Cancel in `admitted`, `running`, `waiting_for_tool`, and each terminal
    state. Verify idempotency, no new effects, late accounting, and terminal
    `uncertain` after 10 minutes when stop evidence never arrives.
+6. Upload an attachment with a wrong digest, wrong length, unsupported media
+   type, excessive size, excessive count, and wrong service or workspace.
+   Every operation MUST fail before request admission. A complete attachment
+   MUST be immutable and readable only through its authorized Router endpoint.
+7. Run eight timed-out candidates and verify that a ninth attempt cannot start.
+   Verify the 120-second attempt limit and 15-minute logical limit. A late
+   attempt MUST be shortened or skipped.
+8. Submit compatible exact routing with one missing extension field, an exact
+   route encoded in `model`, a wrong grant, and a valid pair. Only the valid
+   explicit pair can use the approved exact route.
 
 ## Authorization and administration tests
 
@@ -78,6 +88,12 @@ accepted.
 4. Disable an Xbot, Ontology, or Router workspace during active work. Verify
    that new admission stops and retained content remains hidden from the
    service-scoped frame.
+5. Create, narrow, expire, and revoke local grants. Verify that a delegating
+   actor cannot expand its own scope. A service administrator MUST be able to
+   select an eligible credential reference and MUST NOT change secret material.
+6. Create a captured-content export. Verify that a direct object-store URL is
+   never returned. Redemption without the current session, content-read grant,
+   recent authentication, or valid one-use token MUST fail and be audited.
 
 ## Outage and recovery tests
 
@@ -96,6 +112,12 @@ accepted.
 5. Fill the Router spool through warning, shedding, stop, and emergency
    thresholds. Verify visible capture state, admission order, reserved
    capacity, and no missing canonical accounting or audit event.
+6. Drain a node for 15 minutes and at the 30-minute maximum. Verify that new
+   admission stops, fenced transfer prevents duplicate ownership, and a forced
+   stop does not report a clean drain.
+7. Restore a daily full backup and replay continuous recovery logs to selected
+   points in the 35-day window. Verify integrity, critical record counts, and
+   the recorded monthly restore-test result.
 
 ## Account deletion and retention tests
 

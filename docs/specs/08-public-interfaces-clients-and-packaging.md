@@ -1,6 +1,6 @@
 # Public interfaces, clients, and packaging
 
-Status: Ready for approval.
+Status: Accepted on 2026-08-13.
 
 ## Native API
 
@@ -26,9 +26,13 @@ authentication, service and workspace isolation, assignment resolution,
 provider retry, fallback, budgets, accounting, and logging as the native API.
 
 The compatibility `model` field MUST select a named assignment by default. An
-exact provider-model value MUST require the same short-lived diagnostic
-permission as an exact native request. The compatibility interface MUST NOT
-make an exact route easier to access.
+exact provider-model value MUST use the explicit
+`x_llmrouter_exact_route` extension and MUST also supply a short-lived,
+write-only `x_llmrouter_exact_route_grant`. The `model` field MUST remain the
+named assignment. Encoding an exact route in `model` MUST be invalid. The
+compatibility interface MUST NOT make an exact route easier to access than the
+native interface.
+This extension follows [decision 0048](../decisions/0048-use-immutable-attachments-and-explicit-compatibility-diagnostics.md).
 
 The contract MUST document supported endpoints, fields, stream events, tool
 calls, errors, and extensions. It MUST reject an unsupported field when
@@ -50,6 +54,16 @@ compatibility checks.
 The clients MUST create the UUIDv7 when an intentional logical request is ready
 for its first submission. They MUST NOT reuse an expired identity. They MUST
 send the same provider-neutral request fields when they repeat a submission.
+
+The clients MUST support immutable attachment creation, content upload, scoped
+read, and request references. They MUST verify the local byte length and SHA-256
+digest before upload, preserve the same attachment identity and digest on a
+repeat submission, and never replace an attachment after admission.
+
+The clients MUST treat 120 seconds as the maximum provider-attempt timeout and
+15 minutes as the maximum logical execution period. A client transport timeout
+MUST NOT create a new logical request. The client MUST use the original request
+identity for status recovery or a matching repeat submission.
 
 The clients MUST NOT contain provider retry or fallback policy. LLM Router owns
 that behavior after admission.

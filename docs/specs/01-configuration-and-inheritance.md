@@ -1,6 +1,6 @@
 # Configuration and inheritance
 
-Status: Ready for approval.
+Status: Accepted on 2026-08-13.
 
 ## Scope chain
 
@@ -83,9 +83,19 @@ provider items are eligible for the service.
 
 A provider instance MUST have one owning scope: global or service. It MUST
 contain the endpoint, credential reference, operating limits, and applicable
-provider settings. A global provider instance can be permitted to selected
-services. A service-owned provider instance MUST be visible only to that
-service and its eligible descendants.
+provider settings. Each settings document MUST name a registered schema and
+major version. The router MUST reject an unknown field or a document that does
+not match that closed, versioned schema. A global provider instance can be
+permitted to selected services. A service-owned provider instance MUST be
+visible only to that service and its eligible descendants.
+
+Only a global administrator with the applicable recent authentication and
+secret-management grant MAY create, replace, disable, or retire provider or
+shared-tool secret material. A service administrator MAY select an eligible
+credential reference for a service-owned provider instance. It MUST NOT read,
+submit, replace, disable, or retire secret material.
+These rules follow [decision 0045](../decisions/0045-use-source-driven-adapters-with-registered-contracts.md)
+and [decision 0046](../decisions/0046-use-least-privilege-grants-and-global-secret-custody.md).
 
 A child service MUST inherit eligible provider instances and model entries
 from its parent chain. Provider-model routes MUST also have a global or service

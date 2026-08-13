@@ -1,6 +1,6 @@
 # Administration and shared interface
 
-Status: Ready for approval.
+Status: Accepted on 2026-08-13.
 
 ## Global administration identity
 
@@ -91,6 +91,20 @@ identity service's account or passkey management functions into LLM Router.
 Service bootstrap credentials and short-lived service tokens remain under the
 rules in specification 04 and MUST NOT become human identity credentials.
 
+LLM Router MUST authorize each administrator action through an explicit local
+grant. A grant MUST identify the human issuer and subject, authority class,
+allowed service and workspace scopes, allowed operations, creation and expiry
+times, and revision. A global administrator MAY delegate only an operation and
+scope that its current grant permits. A service administrator MUST NOT create a
+global grant or expand authority beyond its service and eligible descendants.
+
+The formal contract MUST classify sensitive actions. Secret management,
+content reads and exports, global grant changes, service parent changes,
+promotion, failback, restore, and security-policy changes MUST require recent
+authentication. Grant creation, change, revocation, denial, and use of a
+sensitive action MUST create audit events.
+This model follows [decision 0046](../decisions/0046-use-least-privilege-grants-and-global-secret-custody.md).
+
 ## Hosted service interface
 
 LLM Router MUST host one administration application. A service MUST be
@@ -175,3 +189,18 @@ Configuration forms MUST publish each valid save immediately. The interface
 MUST show validation errors before it reports success and MUST show the new
 active revision and distribution state after success. It MUST NOT require a
 draft, approval, canary, or promotion workflow.
+
+## Headless operational administration
+
+The versioned headless administration API MUST expose every operational action
+that the hosted application can perform. This includes topology and node state,
+node drain, provider-circuit probe and reset, replication and spool state,
+promotion, failback, backup start, restore validation, and disaster-recovery
+test results.
+
+Each write MUST require the same local grant, recent authentication, expected
+revision or operation precondition, CSRF and origin controls for a browser
+session, idempotency behavior, and audit event as the hosted action. A headless
+route MUST NOT create a second authority path or accept a service credential
+for a global operation.
+This API follows [decision 0049](../decisions/0049-proxy-protected-exports-and-version-operations.md).

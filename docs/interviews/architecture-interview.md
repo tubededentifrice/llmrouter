@@ -1,7 +1,8 @@
 # Architecture interview
 
-Status: In progress. The accepted answers are recorded below. Unanswered items
-remain open.
+Status: Complete. The user accepted the specification set on 2026-08-13.
+Later implementation choices are tracked in Beads and recorded in decisions
+and specifications before affected implementation starts.
 
 This interview covers choices that change visible behavior, operating risk,
 security, cost, or stored data. The recommended answer is first in each item.
@@ -777,7 +778,8 @@ remote writes on token and stream paths.
 
 Resolved: Target a 5-minute RTO and 30-second general-state RPO.
 
-## Follow-up rounds
+## Follow-up work
 
-The next interview covers administrator recovery, provider timeout policy,
-node draining, backup restoration, and compatibility endpoint coverage.
+Beads tracks implementation decisions and contract corrections that the
+accepted specification set identifies. Accepted changes must update the
+applicable specification, decision, and formal contract before implementation.

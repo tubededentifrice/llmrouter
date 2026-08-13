@@ -20,6 +20,8 @@ tags:
     description: Calling-service workspace scope management.
   - name: Requests
     description: Provider-neutral model requests and compatibility operations.
+  - name: Attachments
+    description: Scoped immutable request content.
   - name: Runs
     description: Durable provider-neutral agent runs.
   - name: Tools
@@ -188,6 +190,77 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/BudgetCeiling'}
         '409': {$ref: '#/components/responses/Conflict'}
+  /v1/attachments:
+    post:
+      tags: [Attachments]
+      operationId: createAttachment
+      summary: Create one scoped immutable attachment upload.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateAttachment'}
+      responses:
+        '201':
+          description: Attachment metadata accepted. Content is not complete.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Attachment'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+  /v1/attachments/{attachment_id}:
+    parameters:
+      - name: attachment_id
+        in: path
+        required: true
+        schema: {$ref: '#/components/schemas/OpaqueId'}
+    get:
+      tags: [Attachments]
+      operationId: getAttachment
+      summary: Get scoped attachment metadata.
+      responses:
+        '200':
+          description: Attachment metadata.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Attachment'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /v1/attachments/{attachment_id}/content:
+    parameters:
+      - name: attachment_id
+        in: path
+        required: true
+        schema: {$ref: '#/components/schemas/OpaqueId'}
+    put:
+      tags: [Attachments]
+      operationId: putAttachmentContent
+      summary: Upload the exact declared attachment bytes once.
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: {type: string, format: binary, maxLength: 26214400}
+      responses:
+        '200':
+          description: Content verified and made immutable.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Attachment'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+    get:
+      tags: [Attachments]
+      operationId: getAttachmentContent
+      summary: Read scoped immutable attachment content.
+      responses:
+        '200':
+          description: Exact immutable bytes. The response uses Cache-Control no-store.
+          headers:
+            Digest:
+              schema: {type: string, pattern: '^sha-256=:[A-Za-z0-9+/]+={0,2}:$'}
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary, maxLength: 26214400}
+        '404': {$ref: '#/components/responses/NotFound'}
   /v1/model-requests:
     post:
       tags: [Requests]
@@ -410,6 +483,37 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/EffectiveConfiguration'}
+  /v1/services/{service_id}/business-tool-gateway:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+    get:
+      tags: [Configuration]
+      operationId: getBusinessToolGateway
+      summary: Get the registered service gateway without secret material.
+      responses:
+        '200':
+          description: Current gateway registration and approval state.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BusinessToolGateway'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    put:
+      tags: [Configuration]
+      operationId: putBusinessToolGateway
+      summary: Create or replace the service gateway within global policy.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PutBusinessToolGateway'}
+      responses:
+        '200':
+          description: Gateway changed and needs current global approval.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BusinessToolGateway'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
   /v1/services/{service_id}/diagnostic-grants:
     parameters:
       - $ref: '#/components/parameters/ServiceId'
@@ -1145,6 +1249,30 @@ paths:
         '200': {$ref: '#/components/responses/ConfigurationWrite'}
         '409': {$ref: '#/components/responses/Conflict'}
         '422': {$ref: '#/components/responses/Unprocessable'}
+  /v1/admin/business-tool-gateway-approvals/{service_id}:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+    put:
+      tags: [Administration]
+      operationId: approveBusinessToolGateway
+      summary: Approve or deny one current service gateway revision.
+      security: [{administratorSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/BusinessToolGatewayApproval'}
+      responses:
+        '200':
+          description: Gateway approval state changed.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BusinessToolGateway'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
   /v1/admin/credentials:
     get:
       tags: [Administration]
@@ -1209,6 +1337,139 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/CredentialMetadata'}
         '409': {$ref: '#/components/responses/Conflict'}
+  /v1/admin/grants:
+    get:
+      tags: [Administration]
+      operationId: listAdministratorGrants
+      summary: List local administrator grants within the current authority.
+      security: [{administratorSession: []}]
+      responses:
+        '200':
+          description: Grant page.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdministratorGrantPage'}
+    post:
+      tags: [Administration]
+      operationId: createAdministratorGrant
+      summary: Create one least-privilege local administrator grant.
+      security: [{administratorSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PutAdministratorGrant'}
+      responses:
+        '201':
+          description: Grant created.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdministratorGrant'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /v1/admin/grants/{grant_id}:
+    parameters:
+      - name: grant_id
+        in: path
+        required: true
+        schema: {$ref: '#/components/schemas/OpaqueId'}
+    get:
+      tags: [Administration]
+      operationId: getAdministratorGrant
+      summary: Get one local administrator grant.
+      security: [{administratorSession: []}]
+      responses:
+        '200':
+          description: Grant record.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdministratorGrant'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    put:
+      tags: [Administration]
+      operationId: putAdministratorGrant
+      summary: Replace one grant within the current delegated authority.
+      security: [{administratorSession: []}]
+      parameters: [{$ref: '#/components/parameters/CsrfToken'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PutAdministratorGrant'}
+      responses:
+        '200':
+          description: Grant replaced.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdministratorGrant'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+    delete:
+      tags: [Administration]
+      operationId: revokeAdministratorGrant
+      summary: Revoke one local administrator grant.
+      security: [{administratorSession: []}]
+      parameters: [{$ref: '#/components/parameters/CsrfToken'}]
+      responses:
+        '204': {description: Grant revoked and an audit event written.}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /v1/admin/operational-state:
+    get:
+      tags: [Administration]
+      operationId: getOperationalState
+      summary: Get topology, node, circuit, replication, spool, backup, and recovery state.
+      security: [{administratorSession: []}]
+      responses:
+        '200':
+          description: Current bounded operational state.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/OperationalState'}
+  /v1/admin/operations:
+    post:
+      tags: [Administration]
+      operationId: createOperationalAction
+      summary: Start one typed and audited operational action.
+      security: [{administratorSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateOperationalAction'}
+      responses:
+        '202':
+          description: Operational action accepted.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/OperationalAction'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+  /v1/admin/operations/{operation_id}:
+    parameters:
+      - name: operation_id
+        in: path
+        required: true
+        schema: {$ref: '#/components/schemas/OpaqueId'}
+    get:
+      tags: [Administration]
+      operationId: getOperationalAction
+      summary: Get one operational action and its safe result.
+      security: [{administratorSession: []}]
+      responses:
+        '200':
+          description: Operational action state.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/OperationalAction'}
+        '404': {$ref: '#/components/responses/NotFound'}
   /v1/admin/audit-events:
     get:
       tags: [Audit]
@@ -1304,7 +1565,7 @@ paths:
     get:
       tags: [Administration]
       operationId: getRetentionExport
-      summary: Get export progress and one short-lived result location.
+      summary: Get export progress and one short-lived redemption token.
       security: [{administratorSession: []}]
       responses:
         '200':
@@ -1313,6 +1574,39 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/ExportOperation'}
         '404': {$ref: '#/components/responses/NotFound'}
+  /v1/admin/exports/{operation_id}/redeem:
+    parameters:
+      - name: operation_id
+        in: path
+        required: true
+        schema: {$ref: '#/components/schemas/OpaqueId'}
+    post:
+      tags: [Administration]
+      operationId: redeemRetentionExport
+      summary: Redeem one protected export through the Router.
+      security: [{administratorSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RedeemExport'}
+      responses:
+        '200':
+          description: Export bytes. The response uses Cache-Control no-store and Referrer-Policy no-referrer.
+          headers:
+            Cache-Control:
+              schema: {type: string, const: no-store}
+            Referrer-Policy:
+              schema: {type: string, const: no-referrer}
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
   /v1/admin/captured-content/{content_id}:
     parameters:
       - name: content_id
@@ -1494,7 +1788,7 @@ components:
           uniqueItems: true
           items:
             type: string
-            enum: [model_requests, agent_runs, shared_tools, request_status, cancellation, sse_stream_v1, workspace_lifecycle, host_budget_ceiling, service_administration, accounting_summary, openai_chat_completions, openai_responses]
+            enum: [model_requests, agent_runs, shared_tools, attachments, request_status, cancellation, sse_stream_v1, workspace_lifecycle, host_budget_ceiling, service_administration, administrator_grants, operational_administration, protected_exports, accounting_summary, openai_chat_completions, openai_responses]
         artifacts:
           type: array
           items: {$ref: '#/components/schemas/ContractArtifact'}
@@ -1503,7 +1797,7 @@ components:
       additionalProperties: false
       required: [name, version, major_version, sha256]
       properties:
-        name: {type: string, enum: [openapi, stream_protocol, error_catalog, service_management, embed_protocol, request_fingerprint, cross_service_conformance]}
+        name: {type: string, enum: [openapi, stream_protocol, error_catalog, service_management, embed_protocol, business_tool_gateway, request_fingerprint, cross_service_conformance]}
         version: {type: string, pattern: '^[1-9][0-9]*\.[0-9]+\.[0-9]+$'}
         major_version: {type: integer, minimum: 1}
         sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
@@ -1526,7 +1820,7 @@ components:
           uniqueItems: true
           items:
             type: string
-            enum: [model.create, model.read, model.cancel, run.create, run.read, run.cancel, tool.create, tool.read, tool.cancel, workspace.create, workspace.read, workspace.disable, workspace.restore, workspace.retire, admin_embed.create, accounting.read, configuration.read, configuration.write, diagnostic.grant.create, retention.read, retention.preview, retention.write, budget.read, budget.write, budget_ceiling.read, budget_ceiling.write]
+            enum: [model.create, model.read, model.cancel, run.create, run.read, run.cancel, tool.create, tool.read, tool.cancel, attachment.create, attachment.read, workspace.create, workspace.read, workspace.disable, workspace.restore, workspace.retire, admin_embed.create, accounting.read, configuration.read, configuration.write, diagnostic.grant.create, retention.read, retention.preview, retention.write, budget.read, budget.write, budget_ceiling.read, budget_ceiling.write]
     ServiceToken:
       type: object
       additionalProperties: false
@@ -1567,6 +1861,30 @@ components:
         state: {type: string, enum: [active, disabled, retired]}
         state_revision: {$ref: '#/components/schemas/OpaqueId'}
         operation_id: {$ref: '#/components/schemas/OpaqueId'}
+    CreateAttachment:
+      type: object
+      additionalProperties: false
+      required: [media_type, byte_length, sha256]
+      properties:
+        workspace_id: {$ref: '#/components/schemas/OpaqueId'}
+        media_type:
+          type: string
+          enum: [text/plain, text/markdown, application/json, application/pdf, image/jpeg, image/png, image/webp, audio/mpeg, audio/wav]
+        byte_length: {type: integer, minimum: 1, maximum: 26214400}
+        sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+    Attachment:
+      type: object
+      additionalProperties: false
+      required: [attachment_id, service_id, media_type, byte_length, sha256, state, expires_at]
+      properties:
+        attachment_id: {$ref: '#/components/schemas/OpaqueId'}
+        service_id: {$ref: '#/components/schemas/OpaqueId'}
+        workspace_id: {$ref: '#/components/schemas/OpaqueId'}
+        media_type: {type: string}
+        byte_length: {type: integer, minimum: 1, maximum: 26214400}
+        sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+        state: {type: string, enum: [awaiting_content, ready, expired]}
+        expires_at: {$ref: '#/components/schemas/Timestamp'}
     DataProfile:
       type: string
       const: service-data
@@ -1586,15 +1904,21 @@ components:
               maxItems: 100
               items: {$ref: '#/components/schemas/ContentPart'}
     ContentPart:
-      type: object
-      additionalProperties: false
-      required: [type]
-      properties:
-        type: {type: string, enum: [text, image, audio, file]}
-        text: {type: string, maxLength: 1048576}
-        attachment_id: {$ref: '#/components/schemas/OpaqueId'}
-        sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
-        media_type: {type: string, maxLength: 200}
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [type, text]
+          properties:
+            type: {type: string, const: text}
+            text: {type: string, maxLength: 1048576}
+        - type: object
+          additionalProperties: false
+          required: [type, attachment_id, sha256, media_type]
+          properties:
+            type: {type: string, enum: [image, audio, file]}
+            attachment_id: {$ref: '#/components/schemas/OpaqueId'}
+            sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+            media_type: {type: string, maxLength: 200}
     ToolDefinition:
       type: object
       additionalProperties: false
@@ -1606,11 +1930,12 @@ components:
     RequestLimits:
       type: object
       additionalProperties: false
-      required: [timeout_ms, max_output_units]
+      required: [attempt_timeout_ms, max_output_units]
       properties:
-        timeout_ms: {type: integer, minimum: 100, maximum: 900000}
+        attempt_timeout_ms: {type: integer, minimum: 100, maximum: 120000}
         max_output_units: {type: integer, minimum: 1, maximum: 1000000}
         max_cost: {$ref: '#/components/schemas/Money'}
+        logical_timeout_ms: {type: integer, const: 900000}
     OutputControls:
       type: object
       additionalProperties: false
@@ -1621,6 +1946,7 @@ components:
     ModelRequest:
       type: object
       additionalProperties: false
+      description: A request can reference at most 20 attachments and 104857600 attachment bytes in total.
       required: [api_version, data_profile, messages, limits, output]
       oneOf:
         - required: [assignment]
@@ -1660,6 +1986,7 @@ components:
     AgentRunRequest:
       type: object
       additionalProperties: false
+      description: A run can reference at most 20 attachments and 104857600 attachment bytes in total.
       required: [api_version, data_profile, messages, limits, output, agent]
       oneOf:
         - required: [assignment]
@@ -1719,13 +2046,19 @@ components:
         workspace_id: {$ref: '#/components/schemas/OpaqueId', x-router-fingerprint: true}
         assignment: {$ref: '#/components/schemas/AssignmentName', x-router-fingerprint: true}
         tool: {type: string, enum: [search, extract, scrape, screenshot], x-router-fingerprint: true}
-        input: {type: object, x-router-fingerprint: true}
+        input: {$ref: '#/components/schemas/RegisteredDocument', x-router-fingerprint: true}
         limits: {$ref: '#/components/schemas/RequestLimits', x-router-fingerprint: true}
         trace_context: {type: object, x-router-fingerprint: false}
     CompatibleChatRequest:
       type: object
       additionalProperties: false
       required: [model, messages]
+      oneOf:
+        - not:
+            anyOf:
+              - required: [x_llmrouter_exact_route]
+              - required: [x_llmrouter_exact_route_grant]
+        - required: [x_llmrouter_exact_route, x_llmrouter_exact_route_grant]
       properties:
         model: {$ref: '#/components/schemas/AssignmentName', x-router-fingerprint: true}
         messages: {type: array, minItems: 1, maxItems: 1000, items: {$ref: '#/components/schemas/Message'}, x-router-fingerprint: true}
@@ -1740,10 +2073,18 @@ components:
         x_llmrouter_workspace_id: {$ref: '#/components/schemas/OpaqueId', x-router-fingerprint: true}
         x_llmrouter_data_profile: {$ref: '#/components/schemas/DataProfile', x-router-fingerprint: true}
         x_llmrouter_max_cost: {$ref: '#/components/schemas/Money', x-router-fingerprint: true}
+        x_llmrouter_exact_route: {$ref: '#/components/schemas/OpaqueId', x-router-fingerprint: true}
+        x_llmrouter_exact_route_grant: {type: string, minLength: 43, maxLength: 200, writeOnly: true, x-router-fingerprint: false}
     CompatibleResponsesRequest:
       type: object
       additionalProperties: false
       required: [model, input]
+      oneOf:
+        - not:
+            anyOf:
+              - required: [x_llmrouter_exact_route]
+              - required: [x_llmrouter_exact_route_grant]
+        - required: [x_llmrouter_exact_route, x_llmrouter_exact_route_grant]
       properties:
         model: {$ref: '#/components/schemas/AssignmentName', x-router-fingerprint: true}
         input:
@@ -1763,6 +2104,58 @@ components:
         x_llmrouter_workspace_id: {$ref: '#/components/schemas/OpaqueId', x-router-fingerprint: true}
         x_llmrouter_data_profile: {$ref: '#/components/schemas/DataProfile', x-router-fingerprint: true}
         x_llmrouter_max_cost: {$ref: '#/components/schemas/Money', x-router-fingerprint: true}
+        x_llmrouter_exact_route: {$ref: '#/components/schemas/OpaqueId', x-router-fingerprint: true}
+        x_llmrouter_exact_route_grant: {type: string, minLength: 43, maxLength: 200, writeOnly: true, x-router-fingerprint: false}
+    RegisteredDocument:
+      type: object
+      additionalProperties: false
+      required: [schema_name, major_version, document]
+      properties:
+        schema_name: {type: string, pattern: '^[a-z][a-z0-9._-]{0,99}$'}
+        major_version: {type: integer, minimum: 1}
+        document:
+          type: object
+          description: A closed JSON document validated against the named registered schema major version.
+    PutBusinessToolGateway:
+      type: object
+      additionalProperties: false
+      required: [origin, contract_major_versions, tool_kinds, network_policy_id, expected_revision]
+      properties:
+        origin: {type: string, format: uri, pattern: '^https://'}
+        contract_major_versions:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {type: integer, const: 1}
+        tool_kinds:
+          type: array
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+          items: {type: string, pattern: '^[a-z][a-z0-9._-]{0,99}$'}
+        network_policy_id: {$ref: '#/components/schemas/OpaqueId'}
+        expected_revision: {oneOf: [{$ref: '#/components/schemas/OpaqueId'}, {type: 'null'}]}
+    BusinessToolGatewayApproval:
+      type: object
+      additionalProperties: false
+      required: [gateway_revision, decision, reason]
+      properties:
+        gateway_revision: {$ref: '#/components/schemas/OpaqueId'}
+        decision: {type: string, enum: [approved, denied]}
+        reason: {type: string, minLength: 1, maxLength: 500}
+    BusinessToolGateway:
+      type: object
+      additionalProperties: false
+      required: [service_id, origin, contract_major_versions, tool_kinds, network_policy_id, revision, approval_state]
+      properties:
+        service_id: {$ref: '#/components/schemas/OpaqueId'}
+        origin: {type: string, format: uri, pattern: '^https://'}
+        contract_major_versions: {type: array, uniqueItems: true, items: {type: integer, const: 1}}
+        tool_kinds: {type: array, uniqueItems: true, items: {type: string, pattern: '^[a-z][a-z0-9._-]{0,99}$'}}
+        network_policy_id: {$ref: '#/components/schemas/OpaqueId'}
+        revision: {$ref: '#/components/schemas/OpaqueId'}
+        approval_state: {type: string, enum: [pending, approved, denied]}
+        approved_revision: {$ref: '#/components/schemas/OpaqueId'}
     CompatibleResponse:
       type: object
       additionalProperties: false
@@ -1921,6 +2314,7 @@ components:
     Money:
       type: object
       additionalProperties: false
+      description: The currency must equal the one configured currency of the applicable hard-budget scope. The Router does not perform foreign-exchange conversion.
       required: [amount, currency]
       properties:
         amount: {$ref: '#/components/schemas/NonNegativeDecimal'}
@@ -1982,14 +2376,14 @@ components:
         candidates:
           type: array
           minItems: 1
-          maxItems: 100
+          maxItems: 8
           items:
             type: object
             additionalProperties: false
             required: [provider_model_route_id]
             properties:
               provider_model_route_id: {$ref: '#/components/schemas/OpaqueId'}
-              timeout_ms: {type: integer, minimum: 100, maximum: 900000}
+              attempt_timeout_ms: {type: integer, minimum: 100, maximum: 120000}
     Assignment:
       type: object
       additionalProperties: false
@@ -2004,14 +2398,14 @@ components:
         candidates:
           type: array
           minItems: 1
-          maxItems: 100
+          maxItems: 8
           items:
             type: object
             additionalProperties: false
             required: [provider_model_route_id]
             properties:
               provider_model_route_id: {$ref: '#/components/schemas/OpaqueId'}
-              timeout_ms: {type: integer, minimum: 100, maximum: 900000}
+              attempt_timeout_ms: {type: integer, minimum: 100, maximum: 120000}
     AssignmentPage:
       type: object
       additionalProperties: false
@@ -2048,7 +2442,7 @@ components:
         endpoint: {type: string, format: uri}
         credential_id: {$ref: '#/components/schemas/OpaqueId'}
         state: {type: string, enum: [active, disabled, retired]}
-        settings: {type: object}
+        settings: {$ref: '#/components/schemas/RegisteredDocument'}
         expected_revision: {oneOf: [{$ref: '#/components/schemas/OpaqueId'}, {type: 'null'}]}
     ProviderInstance:
       type: object
@@ -2064,7 +2458,7 @@ components:
         state: {type: string, enum: [active, disabled, retired]}
         active_revision: {$ref: '#/components/schemas/OpaqueId'}
         inherited: {type: boolean}
-        settings: {type: object}
+        settings: {$ref: '#/components/schemas/RegisteredDocument'}
     ProviderInstancePage:
       type: object
       additionalProperties: false
@@ -2109,6 +2503,7 @@ components:
     PriceComponent:
       type: object
       additionalProperties: false
+      description: The currency must equal the accounting currency of every hard-budget scope that makes this route eligible.
       required: [unit, price, currency]
       properties:
         unit: {type: string, enum: [input_token, output_token, cached_token, request, image, audio_second, search, tool_unit]}
@@ -2159,7 +2554,7 @@ components:
         display_name: {type: string, minLength: 1, maxLength: 200}
         state: {type: string, enum: [active, disabled, retired]}
         expected_revision: {oneOf: [{$ref: '#/components/schemas/OpaqueId'}, {type: 'null'}]}
-        settings: {type: object}
+        settings: {$ref: '#/components/schemas/RegisteredDocument'}
     ConfigurationWriteResult:
       type: object
       additionalProperties: false
@@ -2199,7 +2594,7 @@ components:
         state: {type: string, enum: [active, disabled, retired]}
         inherited: {type: boolean}
         active_revision: {$ref: '#/components/schemas/OpaqueId'}
-        settings: {type: object}
+        settings: {$ref: '#/components/schemas/RegisteredDocument'}
     AccountingSummary:
       type: object
       additionalProperties: false
@@ -2287,6 +2682,97 @@ components:
         absolute_expires_at: {$ref: '#/components/schemas/Timestamp'}
         csrf_token: {type: string, minLength: 32, maxLength: 200, pattern: '^[A-Za-z0-9_-]+$'}
         identity_account_url: {type: string, format: uri}
+    AdministratorOperation:
+      type: string
+      enum: [service.manage, service_parent.manage, catalog.manage, provider_instance.manage, provider_route.manage, credential.manage, assignment.manage, budget.read, budget.write, accounting.read, retention.manage, grant.manage, content.read, export.create, health.read, node.drain, circuit.probe, circuit.reset, high_availability.promote, high_availability.failback, backup.start, restore.validate, disaster_recovery.test]
+    PutAdministratorGrant:
+      type: object
+      additionalProperties: false
+      required: [issuer, subject, authority_class, operations, expected_revision, reason]
+      properties:
+        issuer: {type: string, format: uri}
+        subject: {$ref: '#/components/schemas/OpaqueId'}
+        authority_class: {type: string, enum: [global, service]}
+        service_id: {$ref: '#/components/schemas/OpaqueId'}
+        workspace_ids:
+          type: array
+          maxItems: 1000
+          uniqueItems: true
+          items: {$ref: '#/components/schemas/OpaqueId'}
+        operations:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {$ref: '#/components/schemas/AdministratorOperation'}
+        expires_at: {oneOf: [{$ref: '#/components/schemas/Timestamp'}, {type: 'null'}]}
+        expected_revision: {oneOf: [{$ref: '#/components/schemas/OpaqueId'}, {type: 'null'}]}
+        reason: {type: string, minLength: 1, maxLength: 500}
+    AdministratorGrant:
+      type: object
+      additionalProperties: false
+      required: [grant_id, issuer, subject, authority_class, operations, state, revision, created_at]
+      properties:
+        grant_id: {$ref: '#/components/schemas/OpaqueId'}
+        issuer: {type: string, format: uri}
+        subject: {$ref: '#/components/schemas/OpaqueId'}
+        authority_class: {type: string, enum: [global, service]}
+        service_id: {$ref: '#/components/schemas/OpaqueId'}
+        workspace_ids: {type: array, items: {$ref: '#/components/schemas/OpaqueId'}}
+        operations: {type: array, uniqueItems: true, items: {$ref: '#/components/schemas/AdministratorOperation'}}
+        state: {type: string, enum: [active, revoked, expired]}
+        revision: {$ref: '#/components/schemas/OpaqueId'}
+        created_at: {$ref: '#/components/schemas/Timestamp'}
+        expires_at: {oneOf: [{$ref: '#/components/schemas/Timestamp'}, {type: 'null'}]}
+    AdministratorGrantPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/AdministratorGrant'}}
+        next_cursor: {type: [string, 'null']}
+    OperationalItem:
+      type: object
+      additionalProperties: false
+      required: [kind, resource_id, state, revision, observed_at]
+      properties:
+        kind: {type: string, enum: [topology, node, provider_circuit, replication, spool, backup, restore_test, disaster_recovery_test]}
+        resource_id: {$ref: '#/components/schemas/OpaqueId'}
+        state: {type: string, maxLength: 100}
+        revision: {$ref: '#/components/schemas/OpaqueId'}
+        observed_at: {$ref: '#/components/schemas/Timestamp'}
+        safe_detail: {$ref: '#/components/schemas/RegisteredDocument'}
+    OperationalState:
+      type: object
+      additionalProperties: false
+      required: [observed_at, items]
+      properties:
+        observed_at: {$ref: '#/components/schemas/Timestamp'}
+        items: {type: array, maxItems: 10000, items: {$ref: '#/components/schemas/OperationalItem'}}
+    CreateOperationalAction:
+      type: object
+      additionalProperties: false
+      required: [action, expected_revision, reason]
+      properties:
+        action: {type: string, enum: [node_drain, circuit_probe, circuit_reset, promote, failback, backup_start, restore_validate, disaster_recovery_test_start]}
+        target_id: {$ref: '#/components/schemas/OpaqueId'}
+        expected_revision: {$ref: '#/components/schemas/OpaqueId'}
+        drain_timeout_seconds: {type: integer, minimum: 1, maximum: 1800, default: 900}
+        recovery_target_time: {$ref: '#/components/schemas/Timestamp'}
+        reason: {type: string, minLength: 1, maxLength: 500}
+    OperationalAction:
+      type: object
+      additionalProperties: false
+      required: [operation_id, action, state, created_at, revision]
+      properties:
+        operation_id: {$ref: '#/components/schemas/OpaqueId'}
+        action: {type: string, enum: [node_drain, circuit_probe, circuit_reset, promote, failback, backup_start, restore_validate, disaster_recovery_test_start]}
+        state: {type: string, enum: [queued, running, succeeded, failed, uncertain]}
+        target_id: {$ref: '#/components/schemas/OpaqueId'}
+        created_at: {$ref: '#/components/schemas/Timestamp'}
+        completed_at: {$ref: '#/components/schemas/Timestamp'}
+        revision: {$ref: '#/components/schemas/OpaqueId'}
+        safe_result: {$ref: '#/components/schemas/RegisteredDocument'}
+        safe_error: {type: string, maxLength: 1000}
     CreateService:
       type: object
       additionalProperties: false
@@ -2368,11 +2854,28 @@ components:
       type: object
       additionalProperties: false
       required: [data_class, days, minimum_days, maximum_days]
+      oneOf:
+        - properties:
+            data_class: {const: configuration_revisions}
+          required: [minimum_count, allowed_minimum_count, allowed_maximum_count]
+        - properties:
+            data_class: {enum: [diagnostic_logs, captured_content, raw_accounting, agent_tool_audit, daily_accounting, security_audit]}
+          not:
+            anyOf:
+              - required: [minimum_count]
+              - required: [allowed_minimum_count]
+              - required: [allowed_maximum_count]
       properties:
         data_class: {type: string, enum: [diagnostic_logs, captured_content, raw_accounting, agent_tool_audit, daily_accounting, security_audit, configuration_revisions]}
         days: {type: integer, minimum: 1, maximum: 36500}
         minimum_days: {type: integer, minimum: 1, maximum: 36500}
         maximum_days: {type: integer, minimum: 1, maximum: 36500}
+        minimum_count:
+          type: integer
+          minimum: 1
+          description: Required for configuration_revisions and invalid for other data classes.
+        allowed_minimum_count: {type: integer, minimum: 1}
+        allowed_maximum_count: {type: integer, minimum: 1}
     RetentionConfiguration:
       type: object
       additionalProperties: false
@@ -2388,9 +2891,18 @@ components:
       type: object
       additionalProperties: false
       required: [data_class, days]
+      oneOf:
+        - properties:
+            data_class: {const: configuration_revisions}
+          required: [minimum_count]
+        - properties:
+            data_class: {enum: [diagnostic_logs, captured_content, raw_accounting, agent_tool_audit, daily_accounting, security_audit]}
+          not:
+            required: [minimum_count]
       properties:
         data_class: {type: string, enum: [diagnostic_logs, captured_content, raw_accounting, agent_tool_audit, daily_accounting, security_audit, configuration_revisions]}
         days: {type: integer, minimum: 1, maximum: 36500}
+        minimum_count: {type: integer, minimum: 1, maximum: 1000000}
     PutRetentionConfiguration:
       type: object
       additionalProperties: false
@@ -2445,14 +2957,25 @@ components:
         state: {type: string, enum: [queued, running, completed, failed, expired]}
         created_at: {$ref: '#/components/schemas/Timestamp'}
         expires_at: {$ref: '#/components/schemas/Timestamp'}
-        download_url:
+        redemption_path:
           type: string
-          format: uri
-          writeOnly: true
-          description: One-use secret location. It expires in no more than five minutes and must not be logged.
-        download_expires_at: {$ref: '#/components/schemas/Timestamp'}
+          pattern: '^/v1/admin/exports/[^/]+/redeem$'
+          description: Same-origin Router endpoint for protected redemption.
+        redemption_token:
+          type: string
+          minLength: 43
+          maxLength: 200
+          readOnly: true
+          description: One-use token that expires in no more than five minutes and must not be logged.
+        redemption_expires_at: {$ref: '#/components/schemas/Timestamp'}
         sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
         safe_error: {type: string}
+    RedeemExport:
+      type: object
+      additionalProperties: false
+      required: [redemption_token]
+      properties:
+        redemption_token: {type: string, minLength: 43, maxLength: 200, writeOnly: true}
     CreateCredential:
       type: object
       additionalProperties: false

@@ -1,17 +1,20 @@
-# Inactive Beads store
+# Active Beads store
 
-Beads is initialized for this repository. It has no work items.
+The user accepted the LLM Router specification set and enabled Beads planning
+on 2026-08-13. Beads is the implementation work tracker for this repository.
 
-Do not create, claim, update, import, or use a Beads work item until the user
-accepts the LLM Router specifications and explicitly asks to enable Beads
-planning.
+Use the repository `beads` skill before a work-item change. Product behavior
+remains normative in `docs/specs/`. A task must link to its applicable
+specification or contract. A specification gap must be a blocker or decision
+item and must block affected implementation.
 
-Read-only inspection is permitted. This command must return an empty JSON
-array during the specification review:
+Use these checks after a task-graph change:
 
 ```bash
+bd dep cycles
+bd graph check
 bd list --all --json
 ```
 
-When the user enables planning, update `AGENTS.md`, the `beads` repository
-skill, this file, and `scripts/check-repository.sh` in one change.
+Each main implementation task must have a dependent self-review task. The
+self-review task must block the next dependent main task.

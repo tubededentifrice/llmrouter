@@ -10,6 +10,7 @@ required_files=(
   "docs/architecture.md"
   "docs/product-direction.md"
   "docs/api/README.md"
+  "docs/api/business-tool-gateway.md"
   "docs/api/cross-service-conformance.md"
   "docs/api/embed-protocol.md"
   "docs/api/errors.md"
@@ -61,6 +62,15 @@ required_files=(
   "docs/decisions/0041-allow-24-hour-service-secret-rotation-overlap.md"
   "docs/decisions/0042-retain-agent-and-business-tool-audit-for-thirty-days.md"
   "docs/decisions/0043-use-python-backends-and-react-typescript-frontends.md"
+  "docs/decisions/0044-use-a-postgresql-fastapi-and-vite-foundation.md"
+  "docs/decisions/0045-use-source-driven-adapters-with-registered-contracts.md"
+  "docs/decisions/0046-use-least-privilege-grants-and-global-secret-custody.md"
+  "docs/decisions/0047-use-one-currency-per-hard-budget-scope.md"
+  "docs/decisions/0048-use-immutable-attachments-and-explicit-compatibility-diagnostics.md"
+  "docs/decisions/0049-proxy-protected-exports-and-version-operations.md"
+  "docs/decisions/0050-use-bounded-attempt-timeouts-and-node-draining.md"
+  "docs/decisions/0051-use-daily-backups-with-point-in-time-recovery.md"
+  "docs/decisions/0052-use-structured-secret-fields-and-standard-endpoint-trust.md"
   "docs/interviews/architecture-interview.md"
   "docs/research/README.md"
   "docs/research/ontology-administration-alignment-2026-08.md"
@@ -126,14 +136,13 @@ jq -e . "${repository_root}/renovate.json" >/dev/null
 grep -qx 'openapi: 3.1.0' "${repository_root}/docs/api/openapi.yaml"
 grep -qx '  version: 1.0.0' "${repository_root}/docs/api/openapi.yaml"
 
-if [[ -s "${repository_root}/.beads/issues.jsonl" ]]; then
-  echo "Beads planning is disabled. The issue export must stay empty." >&2
-  exit 1
-fi
-
 if command -v bd >/dev/null 2>&1; then
-  beads_items="$(bd -C "${repository_root}" list --all --json --limit 1)"
-  jq -e 'type == "array" and length == 0' <<<"${beads_items}" >/dev/null
+  bd -C "${repository_root}" lint --status all >/dev/null
+  bd -C "${repository_root}" dep cycles >/dev/null
+  bd -C "${repository_root}" graph check >/dev/null
+  beads_items="$(bd -C "${repository_root}" list --all --json --limit 0)"
+  jq -e 'type == "array"' <<<"${beads_items}" >/dev/null
+  "${repository_root}/scripts/check-beads-plan.sh"
 fi
 
 git -C "${repository_root}" diff --check

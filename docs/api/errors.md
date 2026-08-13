@@ -48,6 +48,7 @@ MUST use the longer wait if an invalid intermediary changes one value.
 | 404 | `not_found` | No | The record is absent or hidden from this scope. |
 | 404 | `request_not_found` | No | The logical request is absent, hidden, or its status retention expired. |
 | 404 | `workspace_not_found` | No | The workspace is absent or hidden from this service. |
+| 404 | `attachment_not_found` | No | The attachment is absent, expired, incomplete, or hidden from this scope. |
 | 409 | `idempotency_conflict` | No | Use the original body or a new identity for new work. |
 | 409 | `state_revision_conflict` | No | Read current state and submit an intentional new change. |
 | 409 | `configuration_revision_conflict` | No | Read the active revision before another write. |
@@ -55,6 +56,7 @@ MUST use the longer wait if an invalid intermediary changes one value.
 | 409 | `stream_replay_unavailable` | No | Read request status because the requested stream events expired. |
 | 409 | `terminal_state` | No | The operation cannot change a terminal request or retired record. |
 | 409 | `budget_ceiling_conflict` | No | A subordinate limit exceeds the host-set ceiling. |
+| 409 | `attachment_already_complete` | No | Immutable attachment content cannot be replaced. |
 | 410 | `request_identity_expired` | No | Create a new UUIDv7 only for intentional new work. |
 | 410 | `workspace_retired` | No | A retired workspace cannot return to service. |
 | 422 | `assignment_unavailable` | No | Fix configuration or select another eligible assignment in a new request. |
@@ -62,6 +64,7 @@ MUST use the longer wait if an invalid intermediary changes one value.
 | 422 | `capability_mismatch` | No | The assignment cannot meet the required provider-neutral capability. |
 | 422 | `budget_exhausted` | No | Wait for an authorized budget reset or change. Do not retry automatically. |
 | 422 | `secret_detected` | No | Remove the control secret before submission. |
+| 422 | `attachment_invalid` | No | Fix the declared type, length, digest, count, total size, or content. |
 | 429 | `rate_limited` | Yes | Repeat the same operation after `retry_after_ms`. |
 | 503 | `temporarily_unavailable` | Yes | Repeat the same operation or recover its status with the same identity. |
 | 503 | `stale_configuration` | Yes | Wait until a valid revision reaches an eligible node. |

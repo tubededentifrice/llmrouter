@@ -12,18 +12,26 @@ The document contains:
 - native or compatibility operation name and major version;
 - authenticated service identity and optional workspace identity;
 - `data_profile`;
-- assignment name, or resolved exact route identity and diagnostic permission
-  scope;
+- assignment name and, when supplied, the resolved exact route identity and
+  diagnostic permission scope;
 - complete messages, content parts, attachment identities, media types, and
   immutable attachment SHA-256 values;
 - complete tool definitions and tool allow-list;
-- request limits, budget controls, timeout, maximum output, and output controls;
+- request limits, budget controls, per-attempt timeout, fixed logical timeout,
+  maximum output, and output controls;
 - for an agent run, maximum steps, maximum tool concurrency, and allowed
   business-tool names;
-- for a direct shared tool, tool kind and complete provider-neutral input;
+- for a direct shared tool, tool kind and complete registered input document;
 - for a compatibility request, every accepted field after its lossless native
   mapping, including sampling, tool choice, response format, metadata, and
   caller `user` value.
+
+For a compatibility request, `model` remains the assignment. The mapped
+fingerprint includes `x_llmrouter_exact_route` when it is supplied. It excludes
+the `x_llmrouter_exact_route_grant` bearer value.
+
+One request can reference no more than 20 immutable attachments and 100 MiB of
+attachment content in total. Each attachment can contain no more than 25 MiB.
 
 The document does not contain:
 

@@ -10,11 +10,10 @@ change those services during the specification phase.
 
 ## Status
 
-This repository contains a complete implementation-ready specification set
-and no product implementation. The user approval gate remains open.
-
-Beads is initialized, but it has no work items. Beads planning stays disabled
-until the user approves the specifications and explicitly asks to enable it.
+This repository contains an accepted specification set and no product
+implementation. The user accepted the specification set and enabled Beads
+implementation planning on 2026-08-13. Open implementation decisions stay as
+explicit blocker tasks and must close before affected implementation starts.
 
 ## Accepted product boundary
 
@@ -53,9 +52,9 @@ use.
 
 ## Work process
 
-1. Obtain explicit user approval of the specification set.
-2. Enable Beads only when the user also explicitly asks to enable it.
-3. Plan and implement the service in small, verified changes.
+1. Use Beads to select ready implementation work.
+2. Resolve each blocker decision before dependent implementation starts.
+3. Implement the service in small, verified changes.
 
 ## License
 

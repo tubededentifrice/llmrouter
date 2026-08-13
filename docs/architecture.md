@@ -13,10 +13,11 @@ service-scoped hosted view can share the frontend code while they keep
 separate authority.
 
 The public HTTP, streaming, compatibility, and embed contracts stay
-language-neutral. A calling service does not need React. Exact runtime,
-framework, and build-tool versions are selected and pinned during
-implementation setup. See
-[decision 0043](decisions/0043-use-python-backends-and-react-typescript-frontends.md).
+language-neutral. A calling service does not need React. The backend uses
+FastAPI on ASGI. The frontend uses Vite for its React and strict TypeScript
+build. Exact dependency versions are selected and pinned during implementation
+setup. See [decision 0043](decisions/0043-use-python-backends-and-react-typescript-frontends.md)
+and [decision 0044](decisions/0044-use-a-postgresql-fastapi-and-vite-foundation.md).
 
 ## Main split
 
@@ -45,9 +46,8 @@ The proposed effective configuration has these ordered layers:
 For one named assignment, the nearest layer replaces the complete inherited
 fallback chain. Partial chain edits are not in the first release. Providers
 and models are reusable definitions. Assignments refer to an ordered policy of
-model candidates. The specification needs to define
-deletion, disablement, conflict, version pinning, validation, and rollback
-behavior.
+model candidates. Accepted specifications define retirement, disablement,
+conflicts, versioning, validation, and rollback behavior.
 
 ## Request model
 
@@ -156,11 +156,12 @@ The high-availability targets are a 5-minute control-plane RTO and a 30-second
 RPO for general replicated state. Acknowledged admission, fencing, urgent
 revocation, accounting, and audit events have a zero-loss recovery rule.
 
-The specification still needs to define timeout budgets, client endpoint
-health probes, node draining, and recovery from an unconfirmed external effect.
-Eventual consistency is acceptable for fleet telemetry and most configuration
-distribution. Credential revocation and security policy changes use a separate
-urgent distribution path.
+One attempt can run for no more than 120 seconds. One logical execution can run
+for no more than 15 minutes and can use no more than eight attempts. A drain is
+15 minutes by default and cannot exceed 30 minutes. Eventual consistency is
+acceptable for fleet telemetry and most configuration distribution. Credential
+revocation and security policy changes use a separate urgent distribution
+path.
 
 ## Data classes
 
@@ -175,8 +176,10 @@ Do not use one retention rule for all data.
 - Configuration snapshots: immutable revisions with bounded history.
 
 The initial retention defaults are accepted and remain editable configuration.
-The live ledger and coordination storage products remain open. S3-compatible
-object storage is accepted for suitable content and archive objects.
+PostgreSQL is the first-release transactional store for control state,
+coordination, request state, the central ledger, audit, and database-backed
+worker jobs. S3-compatible object storage is accepted for suitable content and
+archive objects.
 
 Complete content capture is enabled by default for the current `service-data`
 profile. It is inherited configuration at global, service, and
@@ -188,6 +191,10 @@ sends them asynchronously to one logical central ledger with idempotent ingest.
 S3-compatible object storage holds encrypted content segments, retention
 exports, and archives. It is not the live request-status, idempotency, lease,
 or fencing store.
+
+Production recovery uses continuous PostgreSQL recovery logs, daily encrypted
+full backups, a 35-day point-in-time recovery window, and monthly automated
+restore tests.
 
 Spool pressure uses graduated shedding. Nodes stop optional logs and capture,
 then background work, then all new admission before canonical events are at

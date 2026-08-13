@@ -1,6 +1,6 @@
 # Product and boundaries
 
-Status: Ready for approval.
+Status: Accepted on 2026-08-13.
 
 ## Complete platform
 
@@ -51,9 +51,12 @@ that the service or workspace policy excludes.
 
 The `service-data` profile MUST NOT contain a provider credential, service
 bootstrap secret, access token, session cookie, passkey material, private key,
-authorization header, or another control secret. The router MUST reject such
-content when it can identify it and MUST remove a control secret before data
-leaves the receiving process.
+authorization header, or another control secret in a structured control field.
+The router MUST reject a control secret in such a field. It MUST remove a known
+authenticated control value before data leaves the receiving process. The
+first release MUST NOT classify or reject arbitrary prompt, response, or tool
+content only because a broad pattern resembles a secret.
+This rule follows [decision 0052](../decisions/0052-use-structured-secret-fields-and-standard-endpoint-trust.md).
 
 Captured content is a retention-bound router technical record. It MUST NOT
 become the calling service's canonical domain store. Deletion of a source

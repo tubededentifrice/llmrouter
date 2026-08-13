@@ -1,6 +1,6 @@
 # Identity, credentials, and tool gateway
 
-Status: Ready for approval.
+Status: Accepted on 2026-08-13.
 
 ## Service bootstrap and access
 
@@ -74,8 +74,12 @@ MUST support wrapping-key rotation and credential rotation without exposing a
 stored plaintext value. A backup without the applicable wrapping key MUST NOT
 be sufficient to decrypt credentials.
 
-Only an eligible control-plane operation MAY create, replace, disable, or
-retire a credential. Secret input MUST be write-only. The interface MUST NOT
+Only a global administrator with an explicit secret-management grant and
+recent authentication MAY create, replace, disable, or retire a credential.
+A service administrator MAY select an eligible credential reference for a
+service-owned provider instance, but it MUST NOT manage secret material.
+This rule follows [decision 0046](../decisions/0046-use-least-privilege-grants-and-global-secret-custody.md).
+Secret input MUST be write-only. The interface MUST NOT
 echo the submitted value or show stored credential material. It MAY show safe
 metadata, such as owner, provider, creation time, rotation state, and a short
 fingerprint. Each change MUST require recent administrator authentication and
@@ -108,3 +112,17 @@ or earlier check MUST NOT replace this execution-time authorization.
 The gateway MUST return a bounded result envelope. LLM Router MUST treat the
 result as untrusted model input. It MUST apply size, type, time, and content
 limits before the next model call.
+
+The gateway registration, call, result, error, and reconciliation documents
+MUST use a formal, closed, versioned contract. A registration MUST declare the
+supported contract major versions and tool kinds. A call MUST identify the
+contract version, operation identity, service, workspace when supplied, run,
+owner epoch, tool, input schema, deadline, and one-use grant. A result MUST
+identify the same operation, contract version, final state, result schema, and
+effect state.
+
+The gateway MUST reject an unknown field, version, tool kind, result kind, or
+reused grant. An unconfirmed effect MUST use the formal reconciliation
+operation. The router and gateway MUST NOT infer success from a transport
+timeout or repeat an effect without a confirmed safe result.
+This contract follows [decision 0045](../decisions/0045-use-source-driven-adapters-with-registered-contracts.md).

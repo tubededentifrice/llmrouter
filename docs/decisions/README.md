@@ -45,6 +45,15 @@ Accepted decisions:
 - [0041: Allow a 24-hour service-secret rotation overlap](0041-allow-24-hour-service-secret-rotation-overlap.md)
 - [0042: Retain agent and business-tool audit for 30 days](0042-retain-agent-and-business-tool-audit-for-thirty-days.md)
 - [0043: Use Python backends and React TypeScript frontends](0043-use-python-backends-and-react-typescript-frontends.md)
+- [0044: Use a PostgreSQL, FastAPI, and Vite foundation](0044-use-a-postgresql-fastapi-and-vite-foundation.md)
+- [0045: Use source-driven adapters with registered contracts](0045-use-source-driven-adapters-with-registered-contracts.md)
+- [0046: Use least-privilege grants and global secret custody](0046-use-least-privilege-grants-and-global-secret-custody.md)
+- [0047: Use one currency per hard-budget scope](0047-use-one-currency-per-hard-budget-scope.md)
+- [0048: Use immutable attachments and explicit compatibility diagnostics](0048-use-immutable-attachments-and-explicit-compatibility-diagnostics.md)
+- [0049: Proxy protected exports and version operations](0049-proxy-protected-exports-and-version-operations.md)
+- [0050: Use bounded attempt timeouts and node draining](0050-use-bounded-attempt-timeouts-and-node-draining.md)
+- [0051: Use daily backups with point-in-time recovery](0051-use-daily-backups-with-point-in-time-recovery.md)
+- [0052: Use structured secret fields and standard endpoint trust](0052-use-structured-secret-fields-and-standard-endpoint-trust.md)
 
 Add a numbered decision record only after the user accepts a material choice.
 Each record must state the context, the accepted choice, alternatives, good and

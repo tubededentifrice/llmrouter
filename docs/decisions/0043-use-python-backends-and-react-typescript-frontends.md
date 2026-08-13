@@ -30,7 +30,8 @@ required.
 The implementation must use `uv` for Python environments and dependencies.
 It must pin exact Python, Node.js, TypeScript, React, and build-tool versions
 that satisfy the repository dependency-age rule. This decision does not select
-a Python web framework, process server, or frontend build tool.
+a Python web framework, process server, or frontend build tool. Decision 0044
+selects FastAPI on ASGI and Vite for the first-release foundation.
 
 ## Alternatives
 

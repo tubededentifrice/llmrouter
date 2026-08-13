@@ -1,6 +1,6 @@
 # Agent harness and tools
 
-Status: Ready for approval.
+Status: Accepted on 2026-08-13.
 
 ## Optional agent harness
 
@@ -65,6 +65,18 @@ LLM Router MUST provide shared adapters for approved external search,
 extraction, scrape, screenshot, and related infrastructure providers. The
 initial provider set can include Brave, ScrapingDog, Serper, SearXNG, and other
 providers that an accepted provider specification adds.
+
+Before the first adapter implementation starts, the project MUST audit the
+active Crewday, FJ2, and Xbot integrations and propose one exact first-release
+adapter matrix. The user MUST approve that matrix. An adapter that is not in
+the approved matrix MUST remain outside the first-release implementation plan.
+
+Each adapter request, result, settings document, and capability declaration
+MUST use a registered, closed, versioned schema. The router MUST reject an
+unknown adapter kind, schema version, field, result kind, or capability. It
+MUST NOT pass an unvalidated provider-specific document through a shared-tool
+contract.
+These rules follow [decision 0045](../decisions/0045-use-source-driven-adapters-with-registered-contracts.md).
 
 Shared tools MUST use named assignments with ordered provider fallbacks. Their
 requests MUST have service scope and, when supplied, workspace scope. The

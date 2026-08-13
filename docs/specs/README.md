@@ -1,6 +1,8 @@
 # Product specifications
 
-The specification set is complete and ready for explicit user approval.
+The user accepted the specification set on 2026-08-13. Implementation planning
+is active. An implementation question that changes product behavior must stay
+as an explicit blocker until the user accepts its specification update.
 
 - [Product and boundaries](00-product-and-boundaries.md)
 - [Configuration and inheritance](01-configuration-and-inheritance.md)
@@ -22,5 +24,5 @@ Keep these rules:
 - Cover normal services, workspaces, global administration, agents, and tools
   where behavior differs.
 - Link accepted implementation choices from `docs/decisions/`.
-- Do not create Beads work items until the user accepts the specification set
-  and explicitly enables Beads planning.
+- Use Beads for implementation planning. Keep specification gaps as blocker or
+  decision items, and do not start their dependent implementation first.

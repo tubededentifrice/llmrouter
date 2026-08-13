@@ -1,6 +1,6 @@
 # Routing, failover, and request lifecycle
 
-Status: Ready for approval.
+Status: Accepted on 2026-08-13.
 
 ## Assignment and diagnostic selection
 
@@ -209,6 +209,44 @@ indicators by provider, provider-model, and assignment when that scope is
 known. It MUST distinguish authentication, policy, budget, rate, availability,
 and request-compatibility failures. It MUST redact credentials and unsafe
 provider content.
+
+## Attempt time limits
+
+One logical request MUST have no more than eight provider candidates and no
+more than eight provider attempts. One provider attempt MUST have a fixed
+timeout of no more than 120 seconds. The complete logical execution MUST stop
+no later than 15 minutes after admission.
+
+The router MUST shorten or skip a late attempt when the remaining logical time
+is less than its configured attempt timeout. It MUST NOT start an attempt that
+cannot make useful progress before the logical limit. A timeout before a
+commit boundary MAY use the normal fallback rules. A timeout after a commit
+boundary MUST NOT repeat visible output or an external effect.
+These limits follow [decision 0050](../decisions/0050-use-bounded-attempt-timeouts-and-node-draining.md).
+
+## Immutable attachments
+
+A service MAY upload an attachment only through an authenticated, versioned
+Router operation. The upload MUST be bound to the authenticated service and,
+when supplied, workspace. The caller MUST declare the media type, byte length,
+and SHA-256 digest before the router accepts content.
+
+The router MUST verify the declared length and digest, store the attachment as
+immutable content, and return an opaque attachment identity. A request that
+uses an attachment MUST include that identity and digest in its fingerprint.
+The router MUST reject an incomplete, expired, changed, unsupported, excessive,
+or out-of-scope attachment before admission.
+
+The fixed first-release media types MUST be plain text, Markdown, JSON, PDF,
+JPEG, PNG, WebP, MP3, and WAV. One attachment MUST contain no more than 25 MiB.
+One logical request MUST reference no more than 20 attachments and no more than
+100 MiB of attachment content in total. A deployment MAY lower these limits
+through effective configuration. It MUST NOT raise them above the formal
+contract limits. Attachment content MUST use the same access, capture,
+encryption, isolation, deletion, and retention rules as the request content
+that refers to it. An authorized read MUST use a Router endpoint and MUST NOT
+return an object-store location.
+This lifecycle follows [decision 0048](../decisions/0048-use-immutable-attachments-and-explicit-compatibility-diagnostics.md).
 
 ## Hierarchical budgets
 

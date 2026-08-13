@@ -1,6 +1,6 @@
 # Logging, accounting, and retention
 
-Status: Ready for approval.
+Status: Accepted on 2026-08-13.
 
 ## Data classes
 
@@ -72,6 +72,13 @@ one-use, expire in no more than five minutes, and MUST NOT enter a log or a
 referrer. The router MUST NOT include captured content in a service-scoped
 export.
 
+The result location MUST be a same-origin Router endpoint. It MUST require the
+current administrator session, the explicit content-read grant, recent
+authentication, and a short-lived one-use redemption token. It MUST send
+`Cache-Control: no-store` and a no-referrer policy. It MUST NOT be a direct or
+presigned object-store URL.
+This rule follows [decision 0049](../decisions/0049-proxy-protected-exports-and-version-operations.md).
+
 ## Editable retention defaults
 
 The initial fleet defaults are:
@@ -91,6 +98,12 @@ maximum limits. A service or workspace MUST be able to select an allowed value
 without a deployment. The nearest configured value MUST replace the inherited
 value for that data class.
 
+Configuration-revision retention MUST use both a minimum revision count and a
+time period. A revision MUST remain while either rule keeps it. The effective
+retention response MUST show both values and the rule that currently keeps the
+oldest retained revision.
+This rule follows [decision 0049](../decisions/0049-proxy-protected-exports-and-version-operations.md).
+
 The initial allowed range for agent-run and business-tool audit MUST be 7 to
 365 days. A global administrator MAY make this range narrower. It MUST NOT
 permit a value outside these safety limits. The 30-day default and this range
@@ -101,6 +114,15 @@ or storage effect before confirmation. It MUST create an audit event. A longer
 new period MUST NOT imply that already deleted data can return.
 
 ## Accounting integrity
+
+Each hard-budget scope MUST use one configured accounting currency. Every
+limit, reservation, price, cost event, correction, and aggregate within that
+scope MUST use the same currency. The first release MUST NOT convert currencies
+or use a live foreign-exchange rate. A route with a different source currency
+MUST have an authorized price in the scope currency before it becomes eligible.
+A currency change MUST start a new budget and price revision and MUST NOT
+rewrite prior accounting.
+This rule follows [decision 0047](../decisions/0047-use-one-currency-per-hard-budget-scope.md).
 
 Each logical request, provider attempt, external-tool attempt, and business
 tool call MUST have a stable identity. Accounting ingest MUST be idempotent by

@@ -58,10 +58,9 @@ the user approves the applicable specifications. Repository maintenance tools,
 research notes, interface experiments, and formal contract drafts are
 permitted when the user asks for them.
 
-Beads is initialized, but Beads planning is disabled. Do not create, claim,
-update, import, or use a Beads work item. The user must state that the
-specifications are ready and explicitly ask to enable Beads before this rule
-can change.
+The user accepted the specification set and enabled Beads planning on
+2026-08-13. Use the repository `beads` skill for implementation planning and
+work-item changes. Keep product gaps as explicit blocker or decision items.
 
 ## Service boundaries
 
@@ -123,7 +122,7 @@ Other agents can change repositories at the same time.
 - `docs/api/`: formal public contracts after the interface review.
 - `app/`: service and user-interface code after specification approval.
 - `scripts/`: local and CI quality tools.
-- `.beads/`: inactive Beads configuration with no work items.
+- `.beads/`: active Beads implementation plan and configuration.
 - `.claude/skills/`: repository workflows, exposed through `.agents/skills`
   and `.codex/skills`.
 
