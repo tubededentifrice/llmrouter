@@ -48,6 +48,10 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'attachment status cannot be deleted'
+            USING ERRCODE = '55000';
+    END IF;
     IF TG_OP = 'INSERT' THEN
         IF NEW.state <> 'pending' OR NEW.revision <> 1
            OR NEW.verified_at IS NOT NULL THEN
@@ -81,7 +85,7 @@ END;
 $$;
 
 CREATE TRIGGER attachment_status_change_guard
-BEFORE INSERT OR UPDATE ON router.attachment_status
+BEFORE INSERT OR UPDATE OR DELETE ON router.attachment_status
 FOR EACH ROW EXECUTE FUNCTION router.protect_attachment_status_change();
 
 CREATE FUNCTION router.protect_attachment_content_change()
@@ -122,3 +126,75 @@ $$;
 CREATE TRIGGER attachment_content_change_guard
 BEFORE INSERT OR UPDATE OR DELETE ON router.attachment_content
 FOR EACH ROW EXECUTE FUNCTION router.protect_attachment_content_change();
+
+CREATE FUNCTION router.check_attachment_storage_invariant()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    checked_attachment_id uuid;
+    attachment_state text;
+    content_exists boolean;
+BEGIN
+    checked_attachment_id := CASE
+        WHEN TG_OP = 'DELETE' THEN OLD.attachment_id
+        ELSE NEW.attachment_id
+    END;
+    SELECT state INTO attachment_state
+    FROM router.attachment_status
+    WHERE attachment_id = checked_attachment_id;
+    IF attachment_state IS NULL THEN
+        RETURN NULL;
+    END IF;
+    SELECT EXISTS (
+        SELECT 1 FROM router.attachment_content
+        WHERE attachment_id = checked_attachment_id
+    ) INTO content_exists;
+    IF (attachment_state = 'ready') <> content_exists THEN
+        RAISE EXCEPTION 'attachment state and content are inconsistent'
+            USING ERRCODE = '55000';
+    END IF;
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER attachment_status_storage_invariant
+AFTER INSERT OR UPDATE ON router.attachment_status
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION router.check_attachment_storage_invariant();
+
+CREATE CONSTRAINT TRIGGER attachment_content_storage_invariant
+AFTER INSERT OR DELETE ON router.attachment_content
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION router.check_attachment_storage_invariant();
+
+CREATE OR REPLACE FUNCTION router.check_request_attachment_scope()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM router.logical_requests
+        WHERE row_id = NEW.request_row_id
+          AND service_id = NEW.service_id
+          AND workspace_id IS NOT DISTINCT FROM NEW.workspace_id
+    ) OR NOT EXISTS (
+        SELECT 1
+        FROM router.attachments AS attachment
+        JOIN router.attachment_status AS status
+          ON status.attachment_id = attachment.id
+        JOIN router.attachment_content AS content
+          ON content.attachment_id = attachment.id
+        WHERE attachment.id = NEW.attachment_id
+          AND attachment.service_id = NEW.service_id
+          AND attachment.workspace_id IS NOT DISTINCT FROM NEW.workspace_id
+          AND attachment.byte_length BETWEEN 1 AND 26214400
+          AND attachment.expires_at > transaction_timestamp()
+          AND status.state = 'ready'
+    ) THEN
+        RAISE EXCEPTION 'request attachment scope or readiness does not match'
+            USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$;

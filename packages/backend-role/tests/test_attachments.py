@@ -34,14 +34,18 @@ def test_declaration_accepts_only_fixed_types_lengths_and_lowercase_digest() -> 
         assert value.media_type == media_type
         assert value.sha256 not in repr(value)
     CreateAttachment("application/pdf", MAXIMUM_ATTACHMENT_BYTES, "01" * 32)
-    for invalid in (
+    invalid_values: tuple[tuple[object, object, object], ...] = (
         ("application/octet-stream", 1, "01" * 32),
         ("text/plain", 0, "01" * 32),
         ("text/plain", MAXIMUM_ATTACHMENT_BYTES + 1, "01" * 32),
         ("text/plain", 1, "AB" * 32),
-    ):
-        with pytest.raises(ValueError, match="attachment"):
-            CreateAttachment(*invalid)
+        ([], 1, "01" * 32),
+        ("text/plain", True, "01" * 32),
+        ("text/plain", 1, bytes(32)),
+    )
+    for invalid in invalid_values:
+        with pytest.raises((TypeError, ValueError), match="attachment"):
+            CreateAttachment(*invalid)  # type: ignore[arg-type]
 
 
 def test_only_ready_metadata_produces_an_admission_reference() -> None:

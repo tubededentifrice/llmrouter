@@ -313,26 +313,34 @@ def test_attachment_storage_rollback_rejects_encrypted_content_loss(
         migrate(connection)
         seed_scope(connection)
         attachment_id = "0198a080-0000-7000-8000-000000000151"
-        connection.execute(
-            """INSERT INTO router.attachments (
-                   id, service_id, workspace_id, media_type, byte_length,
-                   content_sha256, object_manifest_id, expires_at
-               ) VALUES (%s, %s, %s, 'text/plain', 1,
-                         decode(repeat('15', 32), 'hex'), %s,
-                         now() + interval '1 day')""",
-            (attachment_id, SERVICE_ID, WORKSPACE_ID, attachment_id),
-        )
-        connection.execute(
-            """INSERT INTO router.attachment_status (attachment_id, state)
-               VALUES (%s, 'pending')""",
-            (attachment_id,),
-        )
-        connection.execute(
-            """INSERT INTO router.attachment_content (
-                   attachment_id, ciphertext, encrypted_data_key, wrapping_key_id
-               ) VALUES (%s, %s, %s, 'test-key')""",
-            (attachment_id, bytes(41), bytes(72)),
-        )
+        with connection.transaction():
+            connection.execute(
+                """INSERT INTO router.attachments (
+                       id, service_id, workspace_id, media_type, byte_length,
+                       content_sha256, object_manifest_id, expires_at
+                   ) VALUES (%s, %s, %s, 'text/plain', 1,
+                             decode(repeat('15', 32), 'hex'), %s,
+                             now() + interval '1 day')""",
+                (attachment_id, SERVICE_ID, WORKSPACE_ID, attachment_id),
+            )
+            connection.execute(
+                """INSERT INTO router.attachment_status (attachment_id, state)
+                   VALUES (%s, 'pending')""",
+                (attachment_id,),
+            )
+            connection.execute(
+                """INSERT INTO router.attachment_content (
+                       attachment_id, ciphertext, encrypted_data_key, wrapping_key_id
+                   ) VALUES (%s, %s, %s, 'test-key')""",
+                (attachment_id, bytes(41), bytes(72)),
+            )
+            connection.execute(
+                """UPDATE router.attachment_status
+                   SET state = 'ready', revision = 2,
+                       verified_at = now(), updated_at = now()
+                   WHERE attachment_id = %s""",
+                (attachment_id,),
+            )
         with pytest.raises(psycopg.Error, match="cannot roll back without data loss"):
             migrate(connection, target=9)
 

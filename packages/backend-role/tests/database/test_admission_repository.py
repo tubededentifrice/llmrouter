@@ -356,6 +356,10 @@ def test_attachment_must_be_ready_immutable_current_and_in_scope(
                    updated_at = %s WHERE attachment_id = %s""",
             (NOW + timedelta(hours=2), ATTACHMENT_ID),
         )
+        connection.execute(
+            "DELETE FROM router.attachment_content WHERE attachment_id = %s",
+            (ATTACHMENT_ID,),
+        )
     replay = repository.admit(
         _context(),
         _request(request_id, attachments=(reference,)),

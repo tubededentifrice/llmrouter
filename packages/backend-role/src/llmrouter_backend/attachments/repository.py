@@ -410,6 +410,7 @@ def _select_scoped(
               ON status.attachment_id = attachment.id
             WHERE attachment.id = %s AND attachment.service_id = %s
               AND attachment.workspace_id IS NOT DISTINCT FROM %s
+              AND attachment.byte_length BETWEEN 1 AND 26214400
             {lock}""",  # noqa: S608 - lock is a closed local constant.
         (attachment_id, context.scope.service_id, context.scope.workspace_id),
     ).fetchone()

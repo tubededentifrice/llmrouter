@@ -28,7 +28,15 @@ from llmrouter_backend.authority import (
 from llmrouter_backend.credential_store.crypto import EnvelopeCipher
 from llmrouter_backend.database import migrate
 
-from .helpers import OTHER_SERVICE_ID, SERVICE_ID, WORKSPACE_ID, seed_scope
+from .helpers import (
+    OTHER_SERVICE_ID,
+    REQUEST_ID,
+    REQUEST_ROW_ID,
+    SERVICE_ID,
+    WORKSPACE_ID,
+    insert_request,
+    seed_scope,
+)
 
 NOW = datetime(2026, 8, 13, 20, tzinfo=UTC)
 CONTENT = b"bounded attachment content"
@@ -291,6 +299,83 @@ def test_database_rejects_ready_without_content_and_content_without_pending(
             )
 
 
+def test_database_rejects_content_without_ready_state_and_expiry_without_erasure(
+    database_url: str, repository: PostgresAttachmentRepository
+) -> None:
+    """Keep attachment state and stored content equal at transaction commit."""
+    created = repository.create(
+        _context(), DECLARATION, expires_at=NOW + timedelta(days=7), now=NOW
+    ).value
+    with (
+        pytest.raises(psycopg.errors.ObjectNotInPrerequisiteState),
+        psycopg.connect(database_url) as connection,
+    ):
+        connection.execute(
+            """INSERT INTO router.attachment_content (
+                   attachment_id, ciphertext, encrypted_data_key,
+                   wrapping_key_id
+               ) VALUES (%s, %s, %s, 'test-key')""",
+            (
+                created.attachment_id,
+                bytes(len(CONTENT) + 40),
+                bytes(72),
+            ),
+        )
+
+    repository.upload(_context(), created.attachment_id, CONTENT, now=NOW)
+    with (
+        pytest.raises(psycopg.errors.ObjectNotInPrerequisiteState),
+        psycopg.connect(database_url) as connection,
+    ):
+        connection.execute(
+            """UPDATE router.attachment_status
+               SET state = 'expired', revision = revision + 1,
+                   verified_at = NULL, updated_at = %s
+               WHERE attachment_id = %s""",
+            (NOW + timedelta(hours=1), created.attachment_id),
+        )
+
+    assert repository.content(
+        _context(operation="attachment.read", mutation=False),
+        created.attachment_id,
+        now=NOW,
+    ).value == CONTENT
+
+
+def test_database_rejects_status_deletion_and_pending_request_reference(
+    database_url: str, repository: PostgresAttachmentRepository
+) -> None:
+    """Keep status durable and incomplete content out of admitted requests."""
+    created = repository.create(
+        _context(), DECLARATION, expires_at=NOW + timedelta(days=7), now=NOW
+    ).value
+    with (
+        psycopg.connect(database_url) as connection,
+        pytest.raises(psycopg.errors.ObjectNotInPrerequisiteState),
+    ):
+        connection.execute(
+            "DELETE FROM router.attachment_status WHERE attachment_id = %s",
+            (created.attachment_id,),
+        )
+    with psycopg.connect(database_url) as connection:
+        insert_request(connection, REQUEST_ROW_ID, REQUEST_ID)
+        with pytest.raises(psycopg.errors.CheckViolation):
+            connection.execute(
+                """INSERT INTO router.request_attachments (
+                       request_row_id, service_id, workspace_id, attachment_id,
+                       ordinal, content_sha256, byte_length
+                   ) VALUES (%s, %s, %s, %s, 1, %s, %s)""",
+                (
+                    REQUEST_ROW_ID,
+                    SERVICE_ID,
+                    WORKSPACE_ID,
+                    created.attachment_id,
+                    bytes.fromhex(DECLARATION.sha256),
+                    DECLARATION.byte_length,
+                ),
+            )
+
+
 @pytest.mark.parametrize(
     ("ciphertext_size", "encrypted_key_size"),
     [(40, 72), (42, 72), (41, 71), (41, 73)],
@@ -323,7 +408,7 @@ def test_database_rejects_malformed_envelope_sizes(
         )
 
 
-def test_disabled_ancestor_or_workspace_stops_all_access(
+def test_disabled_workspace_stops_all_access(
     database_url: str, repository: PostgresAttachmentRepository
 ) -> None:
     """Require the complete active service and workspace chain."""
@@ -345,3 +430,35 @@ def test_disabled_ancestor_or_workspace_stops_all_access(
             now=NOW,
         )
     assert unavailable.value.code is AttachmentErrorCode.WORKSPACE_UNAVAILABLE
+
+
+def test_disabled_service_ancestor_stops_all_access(
+    database_url: str, repository: PostgresAttachmentRepository
+) -> None:
+    """Require each service ancestor to stay active."""
+    parent_id = "0198a080-0000-7000-8000-000000000154"
+    with psycopg.connect(database_url) as connection:
+        connection.execute(
+            "INSERT INTO router.services (id, stable_name) VALUES (%s, 'parent')",
+            (parent_id,),
+        )
+        connection.execute(
+            """UPDATE router.services
+               SET parent_service_id = %s, state_revision = state_revision + 1
+               WHERE id = %s""",
+            (parent_id, SERVICE_ID),
+        )
+        connection.execute(
+            """UPDATE router.services
+               SET state = 'disabled', state_revision = state_revision + 1
+               WHERE id = %s""",
+            (parent_id,),
+        )
+    with pytest.raises(AttachmentError) as unavailable:
+        repository.create(
+            _context(),
+            DECLARATION,
+            expires_at=NOW + timedelta(days=7),
+            now=NOW,
+        )
+    assert unavailable.value.code is AttachmentErrorCode.INSUFFICIENT_SCOPE

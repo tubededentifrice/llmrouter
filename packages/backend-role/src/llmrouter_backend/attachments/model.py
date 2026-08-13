@@ -42,10 +42,16 @@ class CreateAttachment:
     sha256: str = field(repr=False)
 
     def __post_init__(self) -> None:
+        if not isinstance(self.media_type, str):
+            raise TypeError("The attachment media type must be text.")
         if self.media_type not in ACCEPTED_MEDIA_TYPES:
             raise ValueError("The attachment media type is not supported.")
+        if isinstance(self.byte_length, bool) or not isinstance(self.byte_length, int):
+            raise TypeError("The attachment byte length must be an integer.")
         if not 1 <= self.byte_length <= MAXIMUM_ATTACHMENT_BYTES:
             raise ValueError("The attachment byte length is outside the fixed limit.")
+        if not isinstance(self.sha256, str):
+            raise TypeError("The attachment digest must be text.")
         if _SHA256.fullmatch(self.sha256) is None:
             raise ValueError("The attachment digest must be lowercase SHA-256.")
 
