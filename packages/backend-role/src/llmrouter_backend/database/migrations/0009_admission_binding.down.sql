@@ -3,8 +3,25 @@ BEGIN
     IF EXISTS (
         SELECT 1 FROM router.logical_requests
         WHERE exact_route_id IS NOT NULL
+           OR operation_name <> CASE request_kind
+                WHEN 'model' THEN 'model.create'
+                ELSE 'tool.create'
+              END
+           OR contract_major <> 1
+           OR status_location <> CASE request_kind
+                WHEN 'model' THEN '/v1/model-requests/' || request_id::text
+                ELSE '/v1/shared-tool-requests/' || request_id::text
+              END
+           OR cancel_location IS DISTINCT FROM CASE request_kind
+                WHEN 'model' THEN '/v1/model-requests/' || request_id::text || '/cancel'
+                ELSE '/v1/shared-tool-requests/' || request_id::text || '/cancel'
+              END
+           OR events_location IS DISTINCT FROM CASE request_kind
+                WHEN 'model' THEN '/v1/model-requests/' || request_id::text || '/events'
+                ELSE NULL
+              END
     ) THEN
-        RAISE EXCEPTION 'cannot roll back without data loss: new admission targets exist';
+        RAISE EXCEPTION 'cannot roll back without data loss: new admission data exists';
     END IF;
 END;
 $$;

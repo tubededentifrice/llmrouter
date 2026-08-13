@@ -28,7 +28,7 @@ from llmrouter_backend.authority import (
 )
 from llmrouter_backend.database import migrate
 
-from .helpers import SERVICE_ID, WORKSPACE_ID, seed_scope
+from .helpers import CONFIGURATION_ID, SERVICE_ID, WORKSPACE_ID, seed_scope
 
 NOW = datetime(2026, 8, 13, 18, tzinfo=UTC)
 ASSIGNMENT_ID = "0198a080-0000-7000-8000-000000000110"
@@ -75,6 +75,17 @@ def _fingerprint(
     workspace_id: str | None = WORKSPACE_ID,
     attachments: tuple[AttachmentReference, ...] = (),
 ) -> FingerprintInput:
+    content: object = text
+    if attachments:
+        content = [
+            {
+                "type": "file",
+                "attachment_id": item.attachment_id,
+                "sha256": item.sha256,
+                "media_type": item.media_type,
+            }
+            for item in attachments
+        ]
     return FingerprintInput(
         "model.create",
         1,
@@ -84,7 +95,7 @@ def _fingerprint(
         {
             "api_version": "1",
             "assignment": "chat",
-            "messages": [{"role": "user", "content": text}],
+            "messages": [{"role": "user", "content": content}],
             "limits": {"logical_timeout_ms": 120000},
             "output": {"format": "text"},
         },
@@ -266,6 +277,35 @@ def test_uuid_age_scope_authority_status_and_expired_binding(
     assert expired.value.code is AdmissionErrorCode.REQUEST_IDENTITY_EXPIRED
 
 
+def test_disabled_service_ancestor_stops_descendant_admission(
+    database_url: str, repository: PostgresAdmissionRepository
+) -> None:
+    """Stop new descendant work when one service ancestor is disabled."""
+    parent_id = "0198a080-0000-7000-8000-000000000123"
+    with psycopg.connect(database_url) as connection:
+        connection.execute(
+            "INSERT INTO router.services (id, stable_name) VALUES (%s, 'parent')",
+            (parent_id,),
+        )
+        connection.execute(
+            """UPDATE router.services
+               SET parent_service_id = %s, state_revision = 2
+               WHERE id = %s""",
+            (parent_id, SERVICE_ID),
+        )
+        connection.execute(
+            """UPDATE router.services
+               SET state = 'disabled', state_revision = 2
+               WHERE id = %s""",
+            (parent_id,),
+        )
+    with pytest.raises(AdmissionError) as unavailable:
+        repository.admit(
+            _context(), _request(_uuidv7(NOW, 9)), now=NOW
+        )
+    assert unavailable.value.code is AdmissionErrorCode.ASSIGNMENT_UNAVAILABLE
+
+
 def test_attachment_must_be_ready_immutable_current_and_in_scope(
     database_url: str, repository: PostgresAdmissionRepository
 ) -> None:
@@ -359,3 +399,79 @@ def test_exact_route_is_bound_to_active_configuration_and_blocks_lossy_rollback(
         pytest.raises(psycopg.Error, match="cannot roll back without data loss"),
     ):
         migrate(connection, target=8)
+
+
+@pytest.mark.usefixtures("repository")
+def test_database_requires_one_target_and_exact_route_revision(
+    database_url: str,
+) -> None:
+    """Reject direct SQL that bypasses the target and revision binding."""
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        with pytest.raises(psycopg.errors.CheckViolation):
+            connection.execute(
+                """INSERT INTO router.logical_requests (
+                       row_id, request_id, request_kind, service_id, workspace_id,
+                       configuration_revision_id, fingerprint_version,
+                       fingerprint_sha256, data_profile, capture_enabled,
+                       operation_name, contract_major, status_location
+                   ) VALUES (
+                       %s, %s, 'model', %s, %s, %s, 1, %s, 'service-data', true,
+                       'model.create', 1, %s
+                   )""",
+                (
+                    uuid.uuid4(),
+                    _uuidv7(NOW, 20),
+                    SERVICE_ID,
+                    WORKSPACE_ID,
+                    GLOBAL_CONFIGURATION_ID,
+                    bytes.fromhex("77" * 32),
+                    "/v1/model-requests/no-target",
+                ),
+            )
+        with pytest.raises(psycopg.errors.CheckViolation):
+            connection.execute(
+                """INSERT INTO router.logical_requests (
+                       row_id, request_id, request_kind, service_id, workspace_id,
+                       configuration_revision_id, fingerprint_version,
+                       fingerprint_sha256, data_profile, capture_enabled,
+                       operation_name, contract_major, status_location,
+                       assignment_id, exact_route_id
+                   ) VALUES (
+                       %s, %s, 'model', %s, %s, %s, 1, %s, 'service-data', true,
+                       'model.create', 1, %s, %s, %s
+                   )""",
+                (
+                    uuid.uuid4(),
+                    _uuidv7(NOW, 21),
+                    SERVICE_ID,
+                    WORKSPACE_ID,
+                    GLOBAL_CONFIGURATION_ID,
+                    bytes.fromhex("78" * 32),
+                    "/v1/model-requests/two-targets",
+                    ASSIGNMENT_ID,
+                    ROUTE_ID,
+                ),
+            )
+        with pytest.raises(psycopg.errors.CheckViolation):
+            connection.execute(
+                """INSERT INTO router.logical_requests (
+                       row_id, request_id, request_kind, service_id, workspace_id,
+                       configuration_revision_id, fingerprint_version,
+                       fingerprint_sha256, data_profile, capture_enabled,
+                       operation_name, contract_major, status_location,
+                       exact_route_id
+                   ) VALUES (
+                       %s, %s, 'model', %s, %s, %s, 1, %s, 'service-data', true,
+                       'model.create', 1, %s, %s
+                   )""",
+                (
+                    uuid.uuid4(),
+                    _uuidv7(NOW, 22),
+                    SERVICE_ID,
+                    WORKSPACE_ID,
+                    CONFIGURATION_ID,
+                    bytes.fromhex("79" * 32),
+                    "/v1/model-requests/wrong-route-revision",
+                    ROUTE_ID,
+                ),
+            )

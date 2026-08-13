@@ -11,12 +11,14 @@ from llmrouter_backend.database import migrate
 
 from .helpers import (
     CONFIGURATION_ID,
+    FIXTURE_ASSIGNMENT_ID,
     OTHER_SERVICE_ID,
     REQUEST_ID,
     REQUEST_ROW_ID,
     SERVICE_ID,
     WORKSPACE_ID,
     insert_request,
+    seed_request_target,
     seed_scope,
 )
 
@@ -121,20 +123,21 @@ def test_request_configuration_rejects_cross_service_scope(database_url: str) ->
     with psycopg.connect(database_url, autocommit=True) as connection:
         migrate(connection)
         seed_scope(connection)
+        seed_request_target(connection)
         with pytest.raises(psycopg.errors.CheckViolation):
             connection.execute(
                 """
                 INSERT INTO router.logical_requests (
                     row_id, request_id, request_kind, service_id,
-                    configuration_revision_id, fingerprint_version,
+                    assignment_id, configuration_revision_id, fingerprint_version,
                     fingerprint_sha256, data_profile, capture_enabled
                 ) VALUES (
                     '0198a080-0000-7000-8000-000000000091',
-                    '0198a080-0000-7000-8000-000000000092', 'model', %s, %s, 1,
+                    '0198a080-0000-7000-8000-000000000092', 'model', %s, %s, %s, 1,
                     decode(repeat('09', 32), 'hex'), 'service-data', true
                 )
                 """,
-                (OTHER_SERVICE_ID, CONFIGURATION_ID),
+                (OTHER_SERVICE_ID, FIXTURE_ASSIGNMENT_ID, CONFIGURATION_ID),
             )
 
 

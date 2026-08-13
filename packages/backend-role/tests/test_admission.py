@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 from llmrouter_backend.admission import (
     AdmissionRequest,
+    AttachmentReference,
     FingerprintInput,
     RequestKind,
     uuidv7_time,
@@ -98,6 +99,58 @@ def test_fingerprint_is_immutable_and_rejects_transient_or_unknown_fields() -> N
                 "x_llmrouter_workspace_id": "workspace-b",
             },
         )
+
+
+def test_message_attachments_must_match_the_validated_set() -> None:
+    """Bind each message attachment to one validated immutable reference."""
+    reference = AttachmentReference(
+        "attachment-a", "11" * 32, "application/pdf", 10
+    )
+    content = [
+        {
+            "type": "file",
+            "attachment_id": reference.attachment_id,
+            "sha256": reference.sha256,
+            "media_type": reference.media_type,
+        }
+    ]
+    with pytest.raises(ValueError, match="do not match"):
+        _fingerprint(messages=[{"role": "user", "content": content}])
+    matched = FingerprintInput(
+        "model.create",
+        1,
+        "service-a",
+        "workspace-a",
+        "service-data",
+        {
+            "api_version": "1",
+            "assignment": "chat",
+            "messages": [{"role": "user", "content": content}],
+            "limits": {"logical_timeout_ms": 120000},
+            "output": {"format": "text"},
+        },
+        (reference,),
+    )
+    assert reference.sha256.encode() in matched.canonical_bytes()
+    changed = [dict(content[0], sha256="22" * 32)]
+    with pytest.raises(ValueError, match="do not match"):
+        FingerprintInput(
+            "model.create",
+            1,
+            "service-a",
+            "workspace-a",
+            "service-data",
+            {
+                "api_version": "1",
+                "assignment": "chat",
+                "messages": [{"role": "user", "content": changed}],
+                "limits": {"logical_timeout_ms": 120000},
+                "output": {"format": "text"},
+            },
+            (reference,),
+        )
+    with pytest.raises(ValueError, match="byte length"):
+        AttachmentReference("attachment-b", "33" * 32, "text/plain", 0)
 
 
 def test_uuidv7_requires_canonical_version_variant_and_extracts_time() -> None:

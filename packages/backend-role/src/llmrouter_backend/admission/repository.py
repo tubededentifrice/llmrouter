@@ -380,11 +380,22 @@ def _resolve_target(
 
 
 def _require_active_scope(connection: Connection[Any], context: RequestContext) -> None:
-    service = connection.execute(
-        "SELECT state FROM router.services WHERE id = %s FOR SHARE",
+    services = connection.execute(
+        """WITH RECURSIVE service_chain AS (
+               SELECT id, parent_service_id
+               FROM router.services WHERE id = %s
+             UNION ALL
+               SELECT parent.id, parent.parent_service_id
+               FROM router.services AS parent
+               JOIN service_chain AS child ON child.parent_service_id = parent.id
+           )
+           SELECT service.state
+           FROM router.services AS service
+           JOIN service_chain AS chain ON chain.id = service.id
+           FOR SHARE OF service""",
         (context.scope.service_id,),
-    ).fetchone()
-    if service is None or service["state"] != "active":
+    ).fetchall()
+    if not services or any(service["state"] != "active" for service in services):
         raise AdmissionError(
             AdmissionErrorCode.ASSIGNMENT_UNAVAILABLE, context.request_id
         )
@@ -409,7 +420,9 @@ def _validated_attachments(
     now: datetime,
 ) -> list[tuple[uuid.UUID, bytes, int]]:
     result: list[tuple[uuid.UUID, bytes, int]] = []
-    for reference in request.fingerprint.attachments:
+    for reference in sorted(
+        request.fingerprint.attachments, key=lambda item: item.attachment_id
+    ):
         row = connection.execute(
             """
             SELECT attachment.id, attachment.content_sha256, attachment.byte_length

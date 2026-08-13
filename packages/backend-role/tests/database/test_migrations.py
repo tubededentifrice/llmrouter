@@ -9,7 +9,7 @@ import psycopg
 import pytest
 from llmrouter_backend.database import applied_versions, migrate, migration_plan
 
-from .helpers import SERVICE_ID, WORKSPACE_ID, seed_scope
+from .helpers import CONFIGURATION_ID, SERVICE_ID, WORKSPACE_ID, seed_scope
 
 _MINIMUM_FOUNDATION_TABLES = 30
 _LEGACY_MODEL_ID = "0198a080-0000-7000-8000-000000000085"
@@ -248,6 +248,61 @@ def test_route_price_source_upgrade_and_rollback_preserve_legacy_values(
         migrate(connection, target=7)
         row = connection.execute(statement, (_LEGACY_SOURCE_ID,)).fetchone()
         assert row == legacy
+
+
+def test_admission_upgrade_keeps_legacy_targetless_rows(database_url: str) -> None:
+    """Keep legacy rows but require one target for each new admission."""
+    row_id = "0198a080-0000-7000-8000-000000000141"
+    request_id = "0198a080-0000-7000-8000-000000000142"
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        migrate(connection, target=8)
+        seed_scope(connection)
+        connection.execute(
+            """INSERT INTO router.logical_requests (
+                   row_id, request_id, request_kind, service_id, workspace_id,
+                   configuration_revision_id, fingerprint_version,
+                   fingerprint_sha256, data_profile, capture_enabled
+               ) VALUES (%s, %s, 'model', %s, %s, %s, 1,
+                         decode(repeat('14', 32), 'hex'), 'service-data', true)""",
+            (
+                row_id,
+                request_id,
+                SERVICE_ID,
+                WORKSPACE_ID,
+                CONFIGURATION_ID,
+            ),
+        )
+        migrate(connection)
+        assert connection.execute(
+            """SELECT assignment_id, exact_route_id
+               FROM router.logical_requests WHERE row_id = %s""",
+            (row_id,),
+        ).fetchone() == (None, None)
+        connection.execute(
+            """UPDATE router.logical_requests
+               SET state = 'running', state_revision = 2
+               WHERE row_id = %s""",
+            (row_id,),
+        )
+        with pytest.raises(psycopg.errors.CheckViolation):
+            connection.execute(
+                """INSERT INTO router.logical_requests (
+                       row_id, request_id, request_kind, service_id, workspace_id,
+                       configuration_revision_id, fingerprint_version,
+                       fingerprint_sha256, data_profile, capture_enabled
+                   ) VALUES (
+                       '0198a080-0000-7000-8000-000000000143',
+                       '0198a080-0000-7000-8000-000000000144', 'model', %s, %s,
+                       %s, 1, decode(repeat('15', 32), 'hex'),
+                       'service-data', true
+                   )""",
+                (SERVICE_ID, WORKSPACE_ID, CONFIGURATION_ID),
+            )
+        migrate(connection, target=8)
+        assert connection.execute(
+            "SELECT request_id FROM router.logical_requests WHERE row_id = %s",
+            (row_id,),
+        ).fetchone() == (uuid.UUID(request_id),)
 
 
 def test_route_price_source_rollback_rejects_new_manual_pin_loss(

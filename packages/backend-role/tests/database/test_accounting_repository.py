@@ -41,7 +41,9 @@ from .helpers import (
     REQUEST_ROW_ID,
     SERVICE_ID,
     WORKSPACE_ID,
+    insert_assignment,
     insert_request,
+    seed_request_target,
     seed_scope,
 )
 
@@ -72,6 +74,7 @@ MANUAL_ROUTE_ID = "0198a080-0000-7000-8000-000000000131"
 SERVICE_ROUTE_ID = "0198a080-0000-7000-8000-000000000137"
 SERVICE_SOURCE_ID = "0198a080-0000-7000-8000-000000000138"
 SERVICE_REVISION = "0198a080-0000-7000-8000-000000000139"
+SERVICE_REQUEST_ASSIGNMENT = "0198a080-0000-7000-8000-000000000140"
 
 
 def _system(operation: str) -> RequestContext:
@@ -318,14 +321,22 @@ def test_service_scope_daily_aggregate_accepts_null_workspace(
                          decode(repeat('12', 32), 'hex'), 'system', 'test')""",
             (GLOBAL_REVISION, SERVICE_ID),
         )
+        seed_request_target(connection)
+        insert_assignment(connection, SERVICE_REQUEST_ASSIGNMENT, GLOBAL_REVISION)
         connection.execute(
             """INSERT INTO router.logical_requests (
                    row_id, request_id, request_kind, service_id,
-                   configuration_revision_id, fingerprint_version,
+                   assignment_id, configuration_revision_id, fingerprint_version,
                    fingerprint_sha256, data_profile, capture_enabled
-               ) VALUES (%s, %s, 'model', %s, %s, 1,
+               ) VALUES (%s, %s, 'model', %s, %s, %s, 1,
                          decode(repeat('13', 32), 'hex'), 'service-data', true)""",
-            (SERVICE_REQUEST_ROW, SERVICE_REQUEST, SERVICE_ID, GLOBAL_REVISION),
+            (
+                SERVICE_REQUEST_ROW,
+                SERVICE_REQUEST,
+                SERVICE_ID,
+                SERVICE_REQUEST_ASSIGNMENT,
+                GLOBAL_REVISION,
+            ),
         )
         connection.execute(
             """INSERT INTO router.budget_scopes (

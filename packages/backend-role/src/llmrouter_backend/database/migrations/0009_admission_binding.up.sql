@@ -105,6 +105,10 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    IF (NEW.assignment_id IS NULL) = (NEW.exact_route_id IS NULL) THEN
+        RAISE EXCEPTION 'request must select exactly one admission target'
+            USING ERRCODE = '23514';
+    END IF;
     IF NEW.assignment_id IS NOT NULL AND NOT EXISTS (
         SELECT 1 FROM router.assignment_definitions
         WHERE id = NEW.assignment_id
@@ -117,8 +121,9 @@ BEGIN
     IF NEW.exact_route_id IS NOT NULL AND NOT EXISTS (
         SELECT 1 FROM router.provider_model_routes
         WHERE id = NEW.exact_route_id AND state = 'active'
+          AND current_revision = NEW.configuration_revision_id
     ) THEN
-        RAISE EXCEPTION 'request exact route is not active'
+        RAISE EXCEPTION 'request exact route is not active in its configuration'
             USING ERRCODE = '23514';
     END IF;
     RETURN NEW;

@@ -23,6 +23,19 @@ MINIMUM_TERMINAL_RETENTION = timedelta(hours=24)
 _UUID_V7 = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 )
+_ATTACHMENT_MEDIA_TYPES = frozenset(
+    {
+        "text/plain",
+        "text/markdown",
+        "application/json",
+        "application/pdf",
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+        "audio/mpeg",
+        "audio/wav",
+    }
+)
 
 type JsonScalar = str | int | float | bool | None
 type JsonValue = JsonScalar | Mapping[str, JsonValue] | Sequence[JsonValue]
@@ -65,7 +78,9 @@ class AttachmentReference:
         ):
             raise ValueError("An attachment digest must be lowercase SHA-256.")
         _require_text(self.media_type)
-        if not 0 <= self.byte_length <= 25 * 1024 * 1024:
+        if self.media_type not in _ATTACHMENT_MEDIA_TYPES:
+            raise ValueError("An attachment media type is not supported.")
+        if not 1 <= self.byte_length <= 25 * 1024 * 1024:
             raise ValueError("An attachment byte length is outside the fixed limit.")
 
 
@@ -101,6 +116,9 @@ class FingerprintInput:
             raise ValueError("An attachment identity must be unique in one request.")
         object.__setattr__(self, "execution", _freeze_object(self.execution))
         _validate_execution_fields(self.operation, self.execution)
+        _validate_attachment_references(
+            self.operation, self.execution, self.attachments
+        )
         if self.operation in {"model.create", "tool.create"} and (
             self.execution.get("api_version") != str(self.contract_major)
         ):
@@ -135,7 +153,9 @@ class FingerprintInput:
                     "media_type": item.media_type,
                     "sha256": item.sha256,
                 }
-                for item in self.attachments
+                for item in sorted(
+                    self.attachments, key=lambda value: value.attachment_id
+                )
             ],
             "authenticated_scope": {
                 "service_id": self.service_id,
@@ -388,3 +408,50 @@ def _validate_execution_fields(
         ("assignment" in names) == ("exact_route" in names)
     ):
         raise ValueError("The model fingerprint must select one request target.")
+
+
+def _validate_attachment_references(
+    operation: str,
+    execution: Mapping[str, JsonValue],
+    attachments: tuple[AttachmentReference, ...],
+) -> None:
+    """Require the validated attachment set to match all message references."""
+    message_values: JsonValue | None = execution.get("messages")
+    if operation == "openai.responses.create":
+        response_input = execution.get("input")
+        message_values = None if isinstance(response_input, str) else response_input
+    referenced: set[tuple[str, str, str]] = set()
+    if isinstance(message_values, Sequence) and not isinstance(
+        message_values, (str, bytes, bytearray)
+    ):
+        for message in message_values:
+            if not isinstance(message, Mapping):
+                continue
+            content = message.get("content")
+            if not isinstance(content, Sequence) or isinstance(
+                content, (str, bytes, bytearray)
+            ):
+                continue
+            for part in content:
+                if not isinstance(part, Mapping) or part.get("type") not in {
+                    "image",
+                    "audio",
+                    "file",
+                }:
+                    continue
+                identity = part.get("attachment_id")
+                digest = part.get("sha256")
+                media_type = part.get("media_type")
+                if not all(
+                    isinstance(item, str)
+                    for item in (identity, digest, media_type)
+                ):
+                    raise ValueError("An attachment content part is incomplete.")
+                referenced.add((identity, digest, media_type))
+    declared = {
+        (item.attachment_id, item.sha256, item.media_type) for item in attachments
+    }
+    if referenced != declared:
+        raise ValueError(
+            "The validated attachments do not match the message references."
+        )
