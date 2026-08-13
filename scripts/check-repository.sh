@@ -119,6 +119,11 @@ required_files=(
   "pyproject.toml"
   "tsconfig.json"
   "uv.lock"
+  "packages/backend-role/src/llmrouter_backend/database/migrations/0001_control_foundation.up.sql"
+  "packages/backend-role/src/llmrouter_backend/database/migrations/0001_control_foundation.down.sql"
+  "packages/backend-role/src/llmrouter_backend/database/migrations/0002_runtime_ledger.up.sql"
+  "packages/backend-role/src/llmrouter_backend/database/migrations/0002_runtime_ledger.down.sql"
+  "scripts/check-database.sh"
 )
 
 for required_file in "${required_files[@]}"; do
@@ -160,6 +165,7 @@ grep -qx '  version: 1.0.0' "${repository_root}/docs/api/openapi.yaml"
 if [[ "${LLMROUTER_FULL_CHECKS:-0}" == "1" ]]; then
   "${repository_root}/scripts/check-python.sh"
   "${repository_root}/scripts/check-node.sh"
+  "${repository_root}/scripts/check-database.sh"
 fi
 
 if command -v bd >/dev/null 2>&1; then
