@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import concurrent.futures
+import uuid
 
 import psycopg
 import pytest
 from llmrouter_backend.database import applied_versions, migrate, migration_plan
 
-from .helpers import SERVICE_ID
+from .helpers import SERVICE_ID, WORKSPACE_ID, seed_scope
 
 _MINIMUM_FOUNDATION_TABLES = 30
 
@@ -22,7 +23,7 @@ def _migrate_current(database_url: str) -> tuple[int, ...]:
 def test_migration_plan_has_reversible_contiguous_pairs() -> None:
     """Keep each schema change ordered and reversible."""
     plan = migration_plan()
-    assert [migration.version for migration in plan] == [1, 2, 3, 4]
+    assert [migration.version for migration in plan] == [1, 2, 3, 4, 5]
     assert all(migration.up_sql and migration.down_sql for migration in plan)
 
 
@@ -30,7 +31,7 @@ def test_migrate_empty_database(database_url: str) -> None:
     """Create the current schema from an empty database."""
     with psycopg.connect(database_url, autocommit=True) as connection:
         migrate(connection)
-        assert applied_versions(connection) == (1, 2, 3, 4)
+        assert applied_versions(connection) == (1, 2, 3, 4, 5)
         table_count = connection.execute(
             """
             SELECT count(*)
@@ -54,6 +55,80 @@ def test_upgrade_previous_schema_without_data_loss(database_url: str) -> None:
         assert connection.execute(
             "SELECT stable_name FROM router.services WHERE id = %s", (SERVICE_ID,)
         ).fetchone() == ("kept-service",)
+
+
+def test_administrator_workspace_backfill_and_rollback_are_data_safe(
+    database_url: str,
+) -> None:
+    """Preserve one legacy grant workspace through migration 0005 and rollback."""
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        migrate(connection, target=4)
+        seed_scope(connection)
+        administrator_id = "0198a080-0000-7000-8000-000000000080"
+        grant_id = "0198a080-0000-7000-8000-000000000081"
+        connection.execute(
+            """
+            INSERT INTO router.administrators (id, issuer, subject)
+            VALUES (%s, 'https://identity.example.test', 'person')
+            """,
+            (administrator_id,),
+        )
+        connection.execute(
+            """
+            INSERT INTO router.administrator_grants (
+                id, administrator_id, authority_class, service_id, workspace_id,
+                operations
+            ) VALUES (%s, %s, 'service', %s, %s, ARRAY['health.read'])
+            """,
+            (grant_id, administrator_id, SERVICE_ID, WORKSPACE_ID),
+        )
+        migrate(connection)
+        assert connection.execute(
+            "SELECT workspace_ids FROM router.administrator_grants WHERE id = %s",
+            (grant_id,),
+        ).fetchone() == ([uuid.UUID(WORKSPACE_ID)],)
+        migrate(connection, target=4)
+        assert connection.execute(
+            "SELECT workspace_id FROM router.administrator_grants WHERE id = %s",
+            (grant_id,),
+        ).fetchone() == (uuid.UUID(WORKSPACE_ID),)
+
+
+def test_administrator_authentication_rollback_rejects_idempotency_loss(
+    database_url: str,
+) -> None:
+    """Stop rollback after a durable administrator grant binding exists."""
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        migrate(connection)
+        seed_scope(connection)
+        administrator_id = "0198a080-0000-7000-8000-000000000082"
+        grant_id = "0198a080-0000-7000-8000-000000000083"
+        connection.execute(
+            """
+            INSERT INTO router.administrators (id, issuer, subject)
+            VALUES (%s, 'https://identity.example.test', 'person')
+            """,
+            (administrator_id,),
+        )
+        connection.execute(
+            """
+            INSERT INTO router.administrator_grants (
+                id, administrator_id, authority_class, operations
+            ) VALUES (%s, %s, 'global', ARRAY['grant.manage'])
+            """,
+            (grant_id, administrator_id),
+        )
+        connection.execute(
+            """
+            INSERT INTO router.administrator_grant_idempotency_bindings (
+                administrator_id, idempotency_key, request_fingerprint,
+                grant_id, created_at
+            ) VALUES (%s, 'migration-idempotency-key', %s, %s, now())
+            """,
+            (administrator_id, bytes(32), grant_id),
+        )
+        with pytest.raises(psycopg.Error, match="cannot roll back without data loss"):
+            migrate(connection, target=4)
 
 
 def test_migration_history_rejects_a_gap(database_url: str) -> None:
@@ -88,7 +163,7 @@ def test_concurrent_migration_runners_serialize(database_url: str) -> None:
         migrate(connection, target=2)
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         results = list(executor.map(_migrate_current, [database_url, database_url]))
-    assert results == [(1, 2, 3, 4), (1, 2, 3, 4)]
+    assert results == [(1, 2, 3, 4, 5), (1, 2, 3, 4, 5)]
 
 
 def test_rollback_keeps_previous_schema_data(database_url: str) -> None:
@@ -115,7 +190,7 @@ def test_rollback_keeps_previous_schema_data(database_url: str) -> None:
             "SELECT to_regclass('router.logical_requests')"
         ).fetchone() == (None,)
         migrate(connection)
-        assert applied_versions(connection) == (1, 2, 3, 4)
+        assert applied_versions(connection) == (1, 2, 3, 4, 5)
         assert connection.execute(
             "SELECT stable_name FROM router.services WHERE id = %s", (SERVICE_ID,)
         ).fetchone() == ("kept-service",)
