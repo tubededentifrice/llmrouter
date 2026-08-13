@@ -1,0 +1,18 @@
+{
+  "approved_at": "2026-08-13",
+  "decision": "docs/decisions/0053-allow-two-early-security-fix-pins.md",
+  "exceptions": [
+    {
+      "name": "brace-expansion",
+      "version": "5.0.9",
+      "released_at": "2026-07-30T10:00:00Z",
+      "reason": "First compatible fix for GHSA-rgw5-rvv9-x895"
+    },
+    {
+      "name": "nanoid",
+      "version": "3.3.17",
+      "released_at": "2026-08-03T10:39:00Z",
+      "reason": "First compatible fix for GHSA-2v37-7h3g-55p8"
+    }
+  ]
+}

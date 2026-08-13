@@ -81,6 +81,7 @@ required_files=(
   "docs/decisions/0050-use-bounded-attempt-timeouts-and-node-draining.md"
   "docs/decisions/0051-use-daily-backups-with-point-in-time-recovery.md"
   "docs/decisions/0052-use-structured-secret-fields-and-standard-endpoint-trust.md"
+  "docs/decisions/0053-allow-two-early-security-fix-pins.md"
   "docs/interviews/architecture-interview.md"
   "docs/research/README.md"
   "docs/research/ontology-administration-alignment-2026-08.md"
@@ -110,6 +111,14 @@ required_files=(
   ".gitignore"
   ".npmrc"
   "renovate.json"
+  "dependency-age-exceptions.json"
+  ".node-version"
+  ".python-version"
+  "package-lock.json"
+  "package.json"
+  "pyproject.toml"
+  "tsconfig.json"
+  "uv.lock"
 )
 
 for required_file in "${required_files[@]}"; do
@@ -146,6 +155,12 @@ jq -e . "${repository_root}/renovate.json" >/dev/null
 grep -qx 'openapi: 3.1.0' "${repository_root}/docs/api/openapi.yaml"
 grep -qx '  version: 1.0.0' "${repository_root}/docs/api/openapi.yaml"
 "${repository_root}/scripts/check-api-contracts.sh"
+"${repository_root}/scripts/check-dependency-policy.sh"
+
+if [[ "${LLMROUTER_FULL_CHECKS:-0}" == "1" ]]; then
+  "${repository_root}/scripts/check-python.sh"
+  "${repository_root}/scripts/check-node.sh"
+fi
 
 if command -v bd >/dev/null 2>&1; then
   bd -C "${repository_root}" lint --status all >/dev/null

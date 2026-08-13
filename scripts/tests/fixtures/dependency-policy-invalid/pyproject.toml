@@ -1,0 +1,7 @@
+[project]
+name = "dependency-policy-invalid"
+version = "0.0.0"
+requires-python = "==3.13.*"
+
+[project.optional-dependencies]
+unsafe = ["example>=1.0.0", "wildcard==1.*"]

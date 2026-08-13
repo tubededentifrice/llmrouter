@@ -1,0 +1,13 @@
+[build-system]
+requires = ["hatchling==1.31.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "llmrouter-client"
+version = "0.0.0"
+description = "Official LLM Router Python client scaffold"
+requires-python = "==3.13.*"
+dependencies = ["httpx==0.28.1"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/llmrouter_client"]

@@ -1,0 +1,8 @@
+{
+  "files": [],
+  "references": [
+    { "path": "apps/admin" },
+    { "path": "packages/typescript-server-client" },
+    { "path": "packages/typescript-browser-client" }
+  ]
+}

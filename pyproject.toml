@@ -1,0 +1,42 @@
+[project]
+name = "llmrouter-workspace"
+version = "0.0.0"
+requires-python = "==3.13.*"
+
+[dependency-groups]
+dev = [
+  "bandit==1.9.4",
+  "hatchling==1.31.0",
+  "mypy==2.3.0",
+  "pip-audit==2.10.1",
+  "pytest==9.1.1",
+  "ruff==0.16.0",
+]
+
+[tool.uv]
+package = false
+exclude-newer = "2026-07-30T06:00:00Z"
+required-version = "==0.12.0"
+
+[tool.uv.workspace]
+members = ["packages/backend-role", "packages/python-client"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = ["COM812", "CPY001", "D203", "D213"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["INP001", "S101"]
+"scripts/*.py" = ["T201"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+
+[tool.pytest.ini_options]
+addopts = "--strict-config --strict-markers"
+testpaths = ["packages/backend-role/tests", "packages/python-client/tests", "scripts/tests"]
