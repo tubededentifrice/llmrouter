@@ -23,7 +23,7 @@ def _migrate_current(database_url: str) -> tuple[int, ...]:
 def test_migration_plan_has_reversible_contiguous_pairs() -> None:
     """Keep each schema change ordered and reversible."""
     plan = migration_plan()
-    assert [migration.version for migration in plan] == [1, 2, 3, 4, 5]
+    assert [migration.version for migration in plan] == [1, 2, 3, 4, 5, 6]
     assert all(migration.up_sql and migration.down_sql for migration in plan)
 
 
@@ -31,7 +31,7 @@ def test_migrate_empty_database(database_url: str) -> None:
     """Create the current schema from an empty database."""
     with psycopg.connect(database_url, autocommit=True) as connection:
         migrate(connection)
-        assert applied_versions(connection) == (1, 2, 3, 4, 5)
+        assert applied_versions(connection) == (1, 2, 3, 4, 5, 6)
         table_count = connection.execute(
             """
             SELECT count(*)
@@ -131,6 +131,40 @@ def test_administrator_authentication_rollback_rejects_idempotency_loss(
             migrate(connection, target=4)
 
 
+def test_credential_store_rollback_rejects_custody_data_loss(
+    database_url: str,
+) -> None:
+    """Stop rollback after an encrypted credential binding exists."""
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        migrate(connection)
+        seed_scope(connection)
+        credential_id = "0198a080-0000-7000-8000-000000000084"
+        connection.execute(
+            """
+            INSERT INTO router.encrypted_credentials (
+                id, owner_kind, credential_kind, ciphertext,
+                encrypted_data_key, wrapping_key_id, safe_fingerprint,
+                current_revision, last_changed_at
+            ) VALUES (
+                %s, 'global', 'provider.example', %s, %s, 'wrap-1',
+                'fingerprint', %s, now()
+            )
+            """,
+            (credential_id, bytes(32), bytes(32), credential_id),
+        )
+        connection.execute(
+            """
+            INSERT INTO router.credential_idempotency_bindings (
+                actor_id, idempotency_key, request_fingerprint,
+                credential_id, created_at
+            ) VALUES ('operator', 'credential-create-key', %s, %s, now())
+            """,
+            (bytes(32), credential_id),
+        )
+        with pytest.raises(psycopg.Error, match="cannot roll back without data loss"):
+            migrate(connection, target=5)
+
+
 def test_migration_history_rejects_a_gap(database_url: str) -> None:
     """Reject an applied migration set that is not a contiguous prefix."""
     with psycopg.connect(database_url, autocommit=True) as connection:
@@ -163,7 +197,7 @@ def test_concurrent_migration_runners_serialize(database_url: str) -> None:
         migrate(connection, target=2)
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         results = list(executor.map(_migrate_current, [database_url, database_url]))
-    assert results == [(1, 2, 3, 4, 5), (1, 2, 3, 4, 5)]
+    assert results == [(1, 2, 3, 4, 5, 6), (1, 2, 3, 4, 5, 6)]
 
 
 def test_rollback_keeps_previous_schema_data(database_url: str) -> None:
@@ -190,7 +224,7 @@ def test_rollback_keeps_previous_schema_data(database_url: str) -> None:
             "SELECT to_regclass('router.logical_requests')"
         ).fetchone() == (None,)
         migrate(connection)
-        assert applied_versions(connection) == (1, 2, 3, 4, 5)
+        assert applied_versions(connection) == (1, 2, 3, 4, 5, 6)
         assert connection.execute(
             "SELECT stable_name FROM router.services WHERE id = %s", (SERVICE_ID,)
         ).fetchone() == ("kept-service",)
