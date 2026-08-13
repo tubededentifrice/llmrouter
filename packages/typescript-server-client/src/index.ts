@@ -1,3 +1,6 @@
+export * from "./contracts.js";
+export * from "./generated-models.js";
+
 /** Configuration that is available only to trusted server code. */
 export interface ServerClientOptions {
   readonly endpoint: URL;

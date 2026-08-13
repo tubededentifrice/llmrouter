@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { BrowserClient, type BrowserClientOptions } from "../src/index.js";
+import {
+  BrowserClient,
+  ContractValidationError,
+  validateContract,
+  type BrowserClientOptions,
+} from "../src/index.js";
 
 describe("BrowserClient", () => {
   it("keeps its eligible session", () => {
@@ -19,5 +24,20 @@ describe("BrowserClient", () => {
     } satisfies BrowserClientOptions;
 
     expect(unsafeOptions.serviceBootstrapSecret).toBe("test-only");
+  });
+
+  it("validates public contract JSON without server authority", () => {
+    const workspace = {
+      workspace_id: "workspace-1",
+      caller_reference: "caller-1",
+      display_name: "Workspace",
+      state: "active",
+      state_revision: "revision-1",
+      operation_id: "operation-1",
+    };
+    expect(validateContract("Workspace", workspace)).toBe(workspace);
+    expect(() =>
+      validateContract("Workspace", { ...workspace, unknown: true }),
+    ).toThrow(ContractValidationError);
   });
 });

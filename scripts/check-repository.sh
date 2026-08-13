@@ -12,6 +12,7 @@ required_files=(
   "docs/api/README.md"
   "docs/api/business-tool-gateway.md"
   "docs/api/contract-policy.yaml"
+  "docs/api/contract-digests.json"
   "docs/api/cross-service-conformance.md"
   "docs/api/embed-protocol.md"
   "docs/api/errors.md"
@@ -124,6 +125,9 @@ required_files=(
   "packages/backend-role/src/llmrouter_backend/database/migrations/0002_runtime_ledger.up.sql"
   "packages/backend-role/src/llmrouter_backend/database/migrations/0002_runtime_ledger.down.sql"
   "scripts/check-database.sh"
+  "scripts/check-client-packages.sh"
+  "scripts/check-contract-models.sh"
+  "scripts/generate-contract-models.py"
 )
 
 for required_file in "${required_files[@]}"; do

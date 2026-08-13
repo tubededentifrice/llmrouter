@@ -19,6 +19,7 @@ npm run lint
 npm run typecheck
 npm test
 npm run build
+"${repository_root}/scripts/check-client-packages.sh"
 npm run security
 react_report="$(mktemp)"
 trap 'rm -f "${react_report}"' EXIT
