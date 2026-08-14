@@ -124,16 +124,23 @@ def repository(
             "ALTER TABLE router.logical_requests DISABLE TRIGGER logical_requests_stable_identity"
         )
         connection.execute(
+            "ALTER TABLE router.logical_requests DISABLE TRIGGER logical_requests_state_guard"
+        )
+        connection.execute(
             """
             UPDATE router.logical_requests SET admitted_at = %s,
+                last_transition_at = %s,
                 captured_content_expires_at = %s WHERE request_id = %s
             """,
-            (NOW, NOW + timedelta(days=7), REQUEST_ID),
+            (NOW, NOW, NOW + timedelta(days=7), REQUEST_ID),
         )
         connection.execute(
             """
             ALTER TABLE router.logical_requests ENABLE TRIGGER logical_requests_stable_identity
             """
+        )
+        connection.execute(
+            "ALTER TABLE router.logical_requests ENABLE TRIGGER logical_requests_state_guard"
         )
     return PostgresContentRepository(
         database_url,

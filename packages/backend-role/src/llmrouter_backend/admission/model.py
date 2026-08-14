@@ -12,9 +12,12 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from types import MappingProxyType
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import rfc8785
+
+if TYPE_CHECKING:
+    from llmrouter_backend.execution.model import TerminalError
 
 FINGERPRINT_NAME = "rfc8785-sha256-v1"
 FINGERPRINT_VERSION = 1
@@ -293,11 +296,16 @@ class RequestStatus:
     """The bounded admission status available in the original scope."""
 
     receipt: AdmissionReceipt
+    state: RequestState
+    state_revision: int
     last_transition_at: datetime
     terminal_at: datetime | None
     configuration_revision_id: str
     assignment_id: str | None
     exact_route_id: str | None
+    safe_error: TerminalError | None
+    partial_output: bool
+    committed_effects: bool
 
 
 def validate_uuidv7(value: str) -> uuid.UUID:

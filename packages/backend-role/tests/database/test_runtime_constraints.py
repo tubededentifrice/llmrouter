@@ -4,11 +4,25 @@ from __future__ import annotations
 
 import concurrent.futures
 import uuid
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import psycopg
 import pytest
+from llmrouter_backend.authority import (
+    AuthorityClass,
+    AuthorityPath,
+    PrincipalKind,
+    RequestContext,
+    Scope,
+)
 from llmrouter_backend.database import migrate
+from llmrouter_backend.execution import (
+    ExecutionKind,
+    ExecutionState,
+    ExecutionTarget,
+    PostgresExecutionRepository,
+)
 
 from .helpers import (
     CONFIGURATION_ID,
@@ -50,35 +64,16 @@ def test_concurrent_admission_creates_one_binding(database_url: str) -> None:
 
 
 def test_terminal_request_state_cannot_change(database_url: str) -> None:
-    """Reject a transition away from a terminal request state."""
+    """Reject a direct state change without its durable stream event."""
     with psycopg.connect(database_url, autocommit=True) as connection:
         migrate(connection)
         seed_scope(connection)
         insert_request(connection, REQUEST_ROW_ID, REQUEST_ID)
-        connection.execute(
-            """
-            UPDATE router.logical_requests
-            SET state = 'running', state_revision = 2
-            WHERE row_id = %s
-            """,
-            (REQUEST_ROW_ID,),
-        )
-        connection.execute(
-            """
-            UPDATE router.logical_requests
-            SET state = 'succeeded', state_revision = 3,
-                terminal_at = transaction_timestamp(),
-                expires_at = transaction_timestamp() + interval '24 hours'
-            WHERE row_id = %s
-            """,
-            (REQUEST_ROW_ID,),
-        )
-        with pytest.raises(psycopg.errors.ObjectNotInPrerequisiteState):
+        with pytest.raises(psycopg.errors.CheckViolation):
             connection.execute(
                 """
                 UPDATE router.logical_requests
-                SET state = 'failed', state_revision = 4,
-                    terminal_at = transaction_timestamp()
+                SET state = 'running', state_revision = 2
                 WHERE row_id = %s
                 """,
                 (REQUEST_ROW_ID,),
@@ -153,10 +148,10 @@ def test_run_lease_generation_must_increase(database_url: str) -> None:
             INSERT INTO router.agent_runs (
                 row_id, run_id, service_id, workspace_id,
                 configuration_revision_id, fingerprint_version,
-                fingerprint_sha256
+                fingerprint_sha256, capture_enabled, capture_reason
             ) VALUES (
                 %s, '0198a080-0000-7000-8000-000000000041', %s, %s, %s, 1,
-                decode(repeat('05', 32), 'hex')
+                decode(repeat('05', 32), 'hex'), false, 'configured'
             )
             """,
             (run_row_id, SERVICE_ID, WORKSPACE_ID, CONFIGURATION_ID),
@@ -202,10 +197,10 @@ def test_stale_run_owner_cannot_resolve_effect(database_url: str) -> None:
             INSERT INTO router.agent_runs (
                 row_id, run_id, service_id, workspace_id,
                 configuration_revision_id, fingerprint_version,
-                fingerprint_sha256
+                fingerprint_sha256, capture_enabled, capture_reason
             ) VALUES (
                 %s, '0198a080-0000-7000-8000-000000000061', %s, %s, %s, 1,
-                decode(repeat('0a', 32), 'hex')
+                decode(repeat('0a', 32), 'hex'), false, 'configured'
             )
             """,
             (run_row_id, SERVICE_ID, WORKSPACE_ID, CONFIGURATION_ID),
@@ -227,6 +222,28 @@ def test_stale_run_owner_cannot_resolve_effect(database_url: str) -> None:
             )
             """,
             (run_row_id,),
+        )
+        PostgresExecutionRepository(database_url).transition(
+            RequestContext(
+                request_id="runtime-test",
+                actor_kind=PrincipalKind.SYSTEM,
+                actor_id="system",
+                authority_class=AuthorityClass.SYSTEM,
+                authority_path=AuthorityPath.MACHINE,
+                machine_audience=None,
+                operation="run.create",
+                scope=Scope(SERVICE_ID, WORKSPACE_ID),
+                authorized_at=datetime.now(UTC),
+                recent_authentication_at=None,
+                mutation=True,
+            ),
+            ExecutionTarget(
+                ExecutionKind.AGENT_RUN,
+                "0198a080-0000-7000-8000-000000000061",
+            ),
+            expected_revision=1,
+            new_state=ExecutionState.RUNNING,
+            owner_epoch=1,
         )
         effect_id = "0198a080-0000-7000-8000-000000000063"
         connection.execute(

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import uuid
+from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime, timedelta
 
 import psycopg
@@ -17,6 +18,7 @@ from llmrouter_backend.admission import (
     FingerprintInput,
     PostgresAdmissionRepository,
     RequestKind,
+    RequestState,
 )
 from llmrouter_backend.authority import (
     Audience,
@@ -27,6 +29,15 @@ from llmrouter_backend.authority import (
     Scope,
 )
 from llmrouter_backend.database import migrate
+from llmrouter_backend.execution import (
+    ErrorScope,
+    ExecutionKind,
+    ExecutionState,
+    ExecutionTarget,
+    PostgresExecutionRepository,
+    TerminalError,
+    TerminalErrorClass,
+)
 
 from .helpers import CONFIGURATION_ID, SERVICE_ID, WORKSPACE_ID, seed_scope
 
@@ -248,7 +259,7 @@ def test_configured_disabled_capture_is_not_spool_pressure(
     assert row == (None, "configured")
 
 
-def test_uuid_age_scope_authority_status_and_expired_binding(
+def test_uuid_age_scope_authority_status_and_expired_binding(  # noqa: PLR0915
     database_url: str, repository: PostgresAdmissionRepository
 ) -> None:
     """Apply age only to first submit and hide status outside the exact scope."""
@@ -287,21 +298,64 @@ def test_uuid_age_scope_authority_status_and_expired_binding(
         now=NOW,
     )
     assert independent.created
+    execution = PostgresExecutionRepository(database_url)
+    target = ExecutionTarget(ExecutionKind.MODEL, request_id)
+    execution.transition(
+        _context(), target, expected_revision=1, new_state=ExecutionState.RUNNING
+    )
+    running_status = repository.status(
+        _context("model.read", mutation=False), request_id, now=NOW
+    )
+    running_replay = repository.admit(
+        _context(), _request(request_id), now=NOW + timedelta(minutes=1)
+    )
+    assert running_status.receipt == created.receipt
+    assert running_replay.receipt == created.receipt
+    assert running_status.state is RequestState.RUNNING
+    assert running_status.state_revision == 2  # noqa: PLR2004
+    assert running_status.receipt.state is RequestState.ADMITTED
+    assert running_status.receipt.state_revision == 1
+    terminal_error = TerminalError(
+        TerminalErrorClass.TIMEOUT,
+        ErrorScope.LOGICAL_REQUEST,
+        "The logical request timed out.",
+    )
+    execution.transition(
+        _context(),
+        target,
+        expected_revision=2,
+        new_state=ExecutionState.FAILED,
+        safe_error=terminal_error,
+    )
+    terminal_status = repository.status(
+        _context("model.read", mutation=False), request_id, now=NOW
+    )
+    terminal_replay = repository.admit(
+        _context(), _request(request_id), now=NOW + timedelta(minutes=2)
+    )
+    assert terminal_status.receipt == created.receipt
+    assert terminal_replay.receipt == created.receipt
+    assert terminal_status.state is RequestState.FAILED
+    assert terminal_status.state_revision == 3  # noqa: PLR2004
+    assert terminal_status.receipt.state is RequestState.ADMITTED
+    assert terminal_status.receipt.state_revision == 1
+    assert terminal_status.safe_error == terminal_error
+    assert terminal_status.safe_error is not None
+    with pytest.raises(FrozenInstanceError):
+        setattr(terminal_status.safe_error, "message", "changed")  # noqa: B010
     with psycopg.connect(database_url) as connection:
-        connection.execute(
-            "UPDATE router.logical_requests SET state = 'running', state_revision = 2 WHERE request_id = %s",
-            (request_id,),
-        )
-        connection.execute(
-            """UPDATE router.logical_requests
-               SET state = 'succeeded', state_revision = 3, terminal_at = %s,
-                   expires_at = %s
-               WHERE request_id = %s""",
-            (NOW, NOW + timedelta(hours=24), request_id),
-        )
+        timing = connection.execute(
+            """SELECT terminal_at, expires_at FROM router.logical_requests
+               WHERE request_id = %s AND service_id = %s
+                 AND workspace_id = %s""",
+            (request_id, SERVICE_ID, WORKSPACE_ID),
+        ).fetchone()
+    assert timing is not None
+    terminal_at, expires_at = timing
+    assert expires_at == terminal_at + timedelta(hours=24)
     with pytest.raises(AdmissionError) as expired:
         repository.admit(
-            _context(), _request(request_id), now=NOW + timedelta(hours=25)
+            _context(), _request(request_id), now=expires_at + timedelta(microseconds=1)
         )
     assert expired.value.code is AdmissionErrorCode.REQUEST_IDENTITY_EXPIRED
 

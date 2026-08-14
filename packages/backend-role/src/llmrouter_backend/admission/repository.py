@@ -16,6 +16,7 @@ from llmrouter_backend.authority import (
     AuthorityPath,
     PrincipalKind,
 )
+from llmrouter_backend.execution.model import TerminalError
 
 from .errors import AdmissionError, AdmissionErrorCode
 from .model import (
@@ -220,6 +221,8 @@ class PostgresAdmissionRepository:
             )
         return RequestStatus(
             receipt=_receipt(row),
+            state=RequestState(row["state"]),
+            state_revision=int(row["state_revision"]),
             last_transition_at=row["last_transition_at"],
             terminal_at=row["terminal_at"],
             configuration_revision_id=str(row["configuration_revision_id"]),
@@ -229,6 +232,9 @@ class PostgresAdmissionRepository:
             exact_route_id=(
                 None if row["exact_route_id"] is None else str(row["exact_route_id"])
             ),
+            safe_error=TerminalError.from_document(row["safe_error"]),
+            partial_output=bool(row["partial_output"]),
+            committed_effects=bool(row["committed_effect"]),
         )
 
 
@@ -598,8 +604,8 @@ def _receipt(row: dict[str, Any]) -> AdmissionReceipt:
     return AdmissionReceipt(
         request_id=str(row["request_id"]),
         admitted_at=row["admitted_at"],
-        state=RequestState(row["state"]),
-        state_revision=int(row["state_revision"]),
+        state=RequestState.ADMITTED,
+        state_revision=1,
         status_url=row["status_location"],
         cancel_url=row["cancel_location"],
         events_url=row["events_location"],

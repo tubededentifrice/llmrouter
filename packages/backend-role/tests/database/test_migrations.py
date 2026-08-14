@@ -9,7 +9,16 @@ import psycopg
 import pytest
 from llmrouter_backend.database import applied_versions, migrate, migration_plan
 
-from .helpers import CONFIGURATION_ID, SERVICE_ID, WORKSPACE_ID, seed_scope
+from .helpers import (
+    CONFIGURATION_ID,
+    FIXTURE_ROUTE_ID,
+    REQUEST_ID,
+    REQUEST_ROW_ID,
+    SERVICE_ID,
+    WORKSPACE_ID,
+    insert_request,
+    seed_scope,
+)
 
 _MINIMUM_FOUNDATION_TABLES = 30
 _LEGACY_MODEL_ID = "0198a080-0000-7000-8000-000000000085"
@@ -91,6 +100,7 @@ def test_migration_plan_has_reversible_contiguous_pairs() -> None:
         11,
         12,
         13,
+        14,
     ]
     assert all(migration.up_sql and migration.down_sql for migration in plan)
 
@@ -113,6 +123,7 @@ def test_migrate_empty_database(database_url: str) -> None:
             11,
             12,
             13,
+            14,
         )
         table_count = connection.execute(
             """
@@ -306,12 +317,6 @@ def test_admission_upgrade_keeps_legacy_targetless_rows(database_url: str) -> No
                FROM router.logical_requests WHERE row_id = %s""",
             (row_id,),
         ).fetchone() == (None, None)
-        connection.execute(
-            """UPDATE router.logical_requests
-               SET state = 'running', state_revision = 2
-               WHERE row_id = %s""",
-            (row_id,),
-        )
         with pytest.raises(psycopg.errors.CheckViolation):
             connection.execute(
                 """INSERT INTO router.logical_requests (
@@ -526,8 +531,8 @@ def test_concurrent_migration_runners_serialize(database_url: str) -> None:
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         results = list(executor.map(_migrate_current, [database_url, database_url]))
     assert results == [
-        (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13),
-        (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13),
+        (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14),
+        (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14),
     ]
 
 
@@ -609,6 +614,7 @@ def test_rollback_keeps_previous_schema_data(database_url: str) -> None:
             11,
             12,
             13,
+            14,
         )
         assert connection.execute(
             "SELECT stable_name FROM router.services WHERE id = %s", (SERVICE_ID,)
@@ -621,3 +627,161 @@ def test_rollback_keeps_previous_schema_data(database_url: str) -> None:
         assert connection.execute("SELECT to_regnamespace('router')").fetchone() == (
             None,
         )
+
+
+def test_execution_lifecycle_rollback_is_exact_and_reapplies(
+    database_url: str,
+) -> None:
+    """Remove all migration 0014 objects and apply the migration again."""
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        migrate(connection, target=13)
+        migrate(connection, target=14)
+        assert connection.execute(
+            "SELECT to_regclass('router.execution_stream_events')"
+        ).fetchone() == ("router.execution_stream_events",)
+        migrate(connection, target=13)
+        assert connection.execute(
+            """SELECT to_regclass('router.execution_stream_events'),
+                      to_regclass('router.execution_cancellations'),
+                      to_regclass('router.execution_cancellation_audit')"""
+        ).fetchone() == (None, None, None)
+        assert connection.execute(
+            """SELECT count(*) FROM information_schema.columns
+               WHERE table_schema = 'router' AND table_name = 'agent_runs'
+                 AND column_name IN (
+                     'status_location','cancel_location','events_location',
+                     'safe_error','expires_at','capture_enabled','capture_reason'
+                 )"""
+        ).fetchone() == (0,)
+        assert connection.execute(
+            "SELECT count(*) FROM pg_extension WHERE extname = 'pgcrypto'"
+        ).fetchone() == (0,)
+        migrate(connection, target=14)
+        assert applied_versions(connection)[-1] == 14  # noqa: PLR2004
+
+
+def test_execution_lifecycle_old_run_can_roll_back(database_url: str) -> None:
+    """Keep a conservative marker for a run that existed before migration 0014."""
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        migrate(connection, target=13)
+        seed_scope(connection)
+        connection.execute(
+            """INSERT INTO router.agent_runs (
+                   row_id, run_id, service_id, workspace_id,
+                   configuration_revision_id, fingerprint_version,
+                   fingerprint_sha256
+               ) VALUES (%s, %s, %s, %s, %s, 1, %s)""",
+            (
+                "0198a080-0000-7000-8000-000000000090",
+                "0198a080-0000-7000-8000-000000000091",
+                SERVICE_ID,
+                WORKSPACE_ID,
+                CONFIGURATION_ID,
+                bytes.fromhex("90" * 32),
+            ),
+        )
+        migrate(connection, target=14)
+        migrate(connection, target=13)
+        assert applied_versions(connection)[-1] == 13  # noqa: PLR2004
+
+
+@pytest.mark.parametrize("legacy_work", ["provider_attempt", "run_lease"])
+def test_execution_lifecycle_rejects_unjournaled_legacy_work(
+    database_url: str, legacy_work: str
+) -> None:
+    """Reject active identities that have no pre-0014 execution journal."""
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        migrate(connection, target=13)
+        seed_scope(connection)
+        if legacy_work == "provider_attempt":
+            insert_request(connection, REQUEST_ROW_ID, REQUEST_ID)
+            price_version_id = "0198a080-0000-7000-8000-000000000094"
+            connection.execute(
+                """INSERT INTO router.route_price_versions (
+                       id, provider_model_route_id, version_number,
+                       currency, status
+                   ) VALUES (%s, %s, 1, 'USD', 'current')""",
+                (price_version_id, FIXTURE_ROUTE_ID),
+            )
+            connection.execute(
+                """INSERT INTO router.provider_attempts (
+                       id, request_row_id, service_id, workspace_id,
+                       attempt_number, provider_model_route_id, route_generation,
+                       assignment_revision_id, price_version_id, state, finished_at
+                   ) VALUES (
+                       %s, %s, %s, %s, 1, %s,
+                       (SELECT generation FROM router.provider_model_routes
+                        WHERE id = %s),
+                       %s, %s, 'failed', transaction_timestamp()
+                   )""",
+                (
+                    "0198a080-0000-7000-8000-000000000095",
+                    REQUEST_ROW_ID,
+                    SERVICE_ID,
+                    WORKSPACE_ID,
+                    FIXTURE_ROUTE_ID,
+                    FIXTURE_ROUTE_ID,
+                    CONFIGURATION_ID,
+                    price_version_id,
+                ),
+            )
+        else:
+            run_row_id = "0198a080-0000-7000-8000-000000000096"
+            connection.execute(
+                """INSERT INTO router.agent_runs (
+                       row_id, run_id, service_id, workspace_id,
+                       configuration_revision_id, fingerprint_version,
+                       fingerprint_sha256
+                   ) VALUES (%s, %s, %s, %s, %s, 1, %s)""",
+                (
+                    run_row_id,
+                    "0198a080-0000-7000-8000-000000000097",
+                    SERVICE_ID,
+                    WORKSPACE_ID,
+                    CONFIGURATION_ID,
+                    bytes.fromhex("96" * 32),
+                ),
+            )
+            connection.execute(
+                """INSERT INTO router.control_epochs (epoch, fencing_evidence)
+                   VALUES (1, 'legacy-test')"""
+            )
+            connection.execute(
+                """INSERT INTO router.run_leases (
+                       run_row_id, owner_node_id, control_epoch, owner_epoch,
+                       lease_generation, expires_at
+                   ) VALUES (%s, %s, 1, 1, 1,
+                             transaction_timestamp() + interval '1 hour')""",
+                (run_row_id, "0198a080-0000-7000-8000-000000000098"),
+            )
+        with pytest.raises(
+            psycopg.errors.RaiseException,
+            match="non-admitted execution data",
+        ):
+            migrate(connection, target=14)
+        assert applied_versions(connection)[-1] == 13  # noqa: PLR2004
+
+
+def test_execution_lifecycle_new_run_blocks_lossy_rollback(database_url: str) -> None:
+    """Refuse to discard the explicit capture decision of a new agent run."""
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        migrate(connection)
+        seed_scope(connection)
+        connection.execute(
+            """INSERT INTO router.agent_runs (
+                   row_id, run_id, service_id, workspace_id,
+                   configuration_revision_id, fingerprint_version,
+                   fingerprint_sha256, capture_enabled, capture_reason
+               ) VALUES (%s, %s, %s, %s, %s, 1, %s, false, 'configured')""",
+            (
+                "0198a080-0000-7000-8000-000000000092",
+                "0198a080-0000-7000-8000-000000000093",
+                SERVICE_ID,
+                WORKSPACE_ID,
+                CONFIGURATION_ID,
+                bytes.fromhex("91" * 32),
+            ),
+        )
+        with pytest.raises(psycopg.errors.RaiseException, match="data loss"):
+            migrate(connection, target=13)
+        assert applied_versions(connection)[-1] == 14  # noqa: PLR2004

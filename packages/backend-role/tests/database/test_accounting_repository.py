@@ -35,6 +35,12 @@ from llmrouter_backend.authority import (
     Scope,
 )
 from llmrouter_backend.database import migrate
+from llmrouter_backend.execution import (
+    ExecutionKind,
+    ExecutionState,
+    ExecutionTarget,
+    PostgresExecutionRepository,
+)
 
 from .helpers import (
     CONFIGURATION_ID,
@@ -258,6 +264,40 @@ def test_replay_corrections_and_daily_rebuild_are_exact(database_url: str) -> No
                ) VALUES (%s, %s, %s, 'USD', 'usage', 10, 1.2, %s)""",
             (LEGACY_LEDGER_EVENT_ID, REQUEST_ROW_ID, BUDGET_ID, NOW),
         )
+    execution = PostgresExecutionRepository(database_url)
+    execution_context = RequestContext(
+        "late-accounting-execution",
+        PrincipalKind.SYSTEM,
+        "accounting-worker",
+        AuthorityClass.SYSTEM,
+        AuthorityPath.MACHINE,
+        None,
+        "model.create",
+        Scope(SERVICE_ID, WORKSPACE_ID),
+        NOW,
+        None,
+        True,
+    )
+    target = ExecutionTarget(ExecutionKind.MODEL, REQUEST_ID)
+    execution.transition(
+        execution_context,
+        target,
+        expected_revision=1,
+        new_state=ExecutionState.RUNNING,
+    )
+    execution.transition(
+        execution_context,
+        target,
+        expected_revision=2,
+        new_state=ExecutionState.SUCCEEDED,
+    )
+    with psycopg.connect(database_url) as connection:
+        lifecycle_before = connection.execute(
+            """SELECT state, state_revision, last_transition_at, terminal_at,
+                      partial_output, committed_effect
+               FROM router.logical_requests WHERE row_id = %s""",
+            (REQUEST_ROW_ID,),
+        ).fetchone()
     repository = PostgresAccountingRepository(database_url)
     assert not repository.ingest(_system("accounting.ingest"), event)
     assert repository.ingest(_system("accounting.ingest"), event)
@@ -339,6 +379,14 @@ def test_replay_corrections_and_daily_rebuild_are_exact(database_url: str) -> No
             {"input_token": -1},
         ),
     ]
+    with psycopg.connect(database_url) as connection:
+        lifecycle_after = connection.execute(
+            """SELECT state, state_revision, last_transition_at, terminal_at,
+                      partial_output, committed_effect
+               FROM router.logical_requests WHERE row_id = %s""",
+            (REQUEST_ROW_ID,),
+        ).fetchone()
+    assert lifecycle_after == lifecycle_before
 
 
 def test_service_scope_daily_aggregate_accepts_null_workspace(
@@ -858,6 +906,25 @@ def test_price_sync_preserves_active_configuration_and_last_good_price(
                WHERE provider_model_route_id = %s ORDER BY version_number""",
             (ROUTE_ID,),
         ).fetchall()
+        connection.commit()
+        PostgresExecutionRepository(database_url).transition(
+            RequestContext(
+                "accounting-execution",
+                PrincipalKind.SYSTEM,
+                "accounting-worker",
+                AuthorityClass.SYSTEM,
+                AuthorityPath.MACHINE,
+                None,
+                "model.create",
+                Scope(SERVICE_ID, WORKSPACE_ID),
+                NOW,
+                None,
+                True,
+            ),
+            ExecutionTarget(ExecutionKind.MODEL, REQUEST_ID),
+            expected_revision=1,
+            new_state=ExecutionState.RUNNING,
+        )
         connection.execute(
             """INSERT INTO router.provider_attempts (
                    id, request_row_id, service_id, workspace_id, attempt_number,
