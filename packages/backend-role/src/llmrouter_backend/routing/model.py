@@ -266,6 +266,7 @@ class AttemptPlan:
     recovery_only: bool
     recovery_failure: AttemptFailure | None
     prestart_reservation_id: str | None
+    request_terminal: bool
 
     def __post_init__(self) -> None:
         """Freeze adapter input and enforce all fixed request bounds."""
@@ -370,6 +371,7 @@ class AttemptPlan:
                 self.started,
                 self.dispatched,
                 self.recovery_only,
+                self.request_terminal,
             )
         ):
             message = "Routing state indicators must be Boolean values."

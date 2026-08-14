@@ -713,6 +713,11 @@ BEGIN
           AND reservation.candidate_id = snapshot.provider_model_route_id
           AND reservation.reservation_key = NEW.reservation_key
           AND NEW.reservation_key = claim.claim_id::text
+          AND NOT EXISTS (
+              SELECT 1 FROM router.routing_candidate_decisions AS decision
+              WHERE decision.request_row_id = claim.request_row_id
+                AND decision.attempt_id = claim.attempt_id
+          )
     ) THEN
         RAISE EXCEPTION 'attempt start does not match its claim and budget reservation'
             USING ERRCODE = '23514';
@@ -901,10 +906,18 @@ CREATE TABLE router.routing_candidate_decisions (
     request_row_id uuid NOT NULL,
     decision_sequence smallint NOT NULL CHECK (decision_sequence BETWEEN 1 AND 16),
     attempt_id uuid NOT NULL,
+    claim_id uuid,
+    claim_generation bigint CHECK (claim_generation > 0),
     attempt_number smallint NOT NULL CHECK (attempt_number BETWEEN 1 AND 8),
     candidate_ordinal smallint NOT NULL CHECK (candidate_ordinal BETWEEN 1 AND 8),
     route_snapshot_id uuid NOT NULL
         REFERENCES router.provider_route_execution_snapshots (id) ON DELETE RESTRICT,
+    connect_timeout_ms integer CHECK (connect_timeout_ms BETWEEN 1 AND 120000),
+    first_byte_timeout_ms integer CHECK (first_byte_timeout_ms BETWEEN 1 AND 120000),
+    idle_timeout_ms integer CHECK (idle_timeout_ms BETWEEN 1 AND 120000),
+    execution_timeout_ms integer CHECK (execution_timeout_ms BETWEEN 100 AND 120000),
+    logical_deadline timestamptz,
+    attempt_deadline timestamptz,
     attempt_state text NOT NULL CHECK (attempt_state IN (
         'succeeded', 'failed', 'interrupted', 'cancelled', 'uncertain'
     )),
@@ -938,6 +951,22 @@ CREATE TABLE router.routing_candidate_decisions (
     UNIQUE (request_row_id, attempt_id),
     UNIQUE (request_row_id, decision_sequence),
     CHECK (
+        migration_0015_backfilled OR (
+            claim_id IS NOT NULL
+            AND claim_generation IS NOT NULL
+            AND connect_timeout_ms IS NOT NULL
+            AND first_byte_timeout_ms IS NOT NULL
+            AND idle_timeout_ms IS NOT NULL
+            AND execution_timeout_ms IS NOT NULL
+            AND logical_deadline IS NOT NULL
+            AND attempt_deadline IS NOT NULL
+            AND connect_timeout_ms <= execution_timeout_ms
+            AND first_byte_timeout_ms <= execution_timeout_ms
+            AND idle_timeout_ms <= execution_timeout_ms
+            AND attempt_deadline <= logical_deadline
+        )
+    ),
+    CHECK (
         (attempt_state = 'succeeded'
          AND normalized_error_class IS NULL
          AND affected_scope IS NULL
@@ -958,6 +987,118 @@ CREATE TABLE router.routing_candidate_decisions (
 CREATE TRIGGER routing_candidate_decisions_append_only
 BEFORE UPDATE OR DELETE ON router.routing_candidate_decisions
 FOR EACH ROW EXECUTE FUNCTION router.reject_record_change();
+
+CREATE TABLE router.routing_request_terminal_decisions (
+    request_row_id uuid PRIMARY KEY
+        REFERENCES router.logical_requests (row_id) ON DELETE RESTRICT,
+    decision_id uuid NOT NULL UNIQUE,
+    attempt_id uuid NOT NULL UNIQUE,
+    claim_id uuid NOT NULL UNIQUE,
+    attempt_number smallint NOT NULL CHECK (attempt_number BETWEEN 1 AND 8),
+    candidate_ordinal smallint NOT NULL CHECK (candidate_ordinal BETWEEN 1 AND 8),
+    route_snapshot_id uuid NOT NULL
+        REFERENCES router.provider_route_execution_snapshots (id) ON DELETE RESTRICT,
+    connect_timeout_ms integer NOT NULL CHECK (connect_timeout_ms BETWEEN 1 AND 120000),
+    first_byte_timeout_ms integer NOT NULL CHECK (first_byte_timeout_ms BETWEEN 1 AND 120000),
+    idle_timeout_ms integer NOT NULL CHECK (idle_timeout_ms BETWEEN 1 AND 120000),
+    execution_timeout_ms integer NOT NULL CHECK (execution_timeout_ms BETWEEN 100 AND 120000),
+    logical_deadline timestamptz NOT NULL,
+    attempt_deadline timestamptz NOT NULL,
+    attempt_state text NOT NULL CHECK (attempt_state = 'failed'),
+    normalized_error_class text NOT NULL CHECK (normalized_error_class = 'timeout'),
+    affected_scope text NOT NULL CHECK (affected_scope = 'logical_request'),
+    affected_scope_id text NOT NULL CHECK (char_length(affected_scope_id) BETWEEN 1 AND 500),
+    fallback_decision text NOT NULL CHECK (fallback_decision = 'stop_request'),
+    safe_provider_code text CHECK (safe_provider_code IS NULL),
+    redacted_evidence jsonb NOT NULL CHECK (
+        router.valid_redacted_routing_evidence(redacted_evidence)
+    ),
+    occurred_at timestamptz NOT NULL,
+    CHECK (connect_timeout_ms <= execution_timeout_ms),
+    CHECK (first_byte_timeout_ms <= execution_timeout_ms),
+    CHECK (idle_timeout_ms <= execution_timeout_ms),
+    CHECK (attempt_deadline = logical_deadline)
+);
+
+CREATE TRIGGER routing_request_terminal_decisions_append_only
+BEFORE UPDATE OR DELETE ON router.routing_request_terminal_decisions
+FOR EACH ROW EXECUTE FUNCTION router.reject_record_change();
+
+CREATE FUNCTION router.validate_routing_request_terminal_decision()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    PERFORM 1 FROM router.logical_requests
+    WHERE row_id = NEW.request_row_id FOR UPDATE;
+    IF NEW.occurred_at <> transaction_timestamp() OR NOT EXISTS (
+        SELECT 1
+        FROM router.logical_requests AS request
+        JOIN router.provider_route_execution_snapshots AS snapshot
+          ON snapshot.request_row_id = request.row_id
+         AND snapshot.id = NEW.route_snapshot_id
+        WHERE request.row_id = NEW.request_row_id
+          AND request.state = 'running'
+          AND NOT request.partial_output
+          AND NOT request.committed_effect
+          AND NEW.candidate_ordinal = snapshot.candidate_ordinal
+          AND NEW.attempt_number = 1 + (
+              SELECT count(*) FROM router.provider_attempts AS attempt
+              WHERE attempt.request_row_id = request.row_id
+          )
+          AND NEW.logical_deadline = request.admitted_at + interval '15 minutes'
+          AND transaction_timestamp() + interval '100 milliseconds'
+              >= NEW.logical_deadline
+          AND NEW.affected_scope_id = request.request_id::text
+          AND NEW.redacted_evidence = jsonb_build_object(
+              'provider_status', NULL, 'retry_after_ms', NULL,
+              'detail_code', 'logical_deadline'
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM router.routing_attempt_claims AS claim
+              WHERE claim.request_row_id = request.row_id
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM router.provider_attempts AS prior_attempt
+              WHERE prior_attempt.request_row_id = request.row_id
+                AND prior_attempt.state <> 'started'
+                AND NOT prior_attempt.migration_0015_backfilled
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM router.accounting_facts AS fact
+                    LEFT JOIN router.budget_reservation_reconciliations AS reconciliation
+                      ON reconciliation.accounting_event_id = fact.event_id
+                     AND reconciliation.reservation_id =
+                         prior_attempt.budget_reservation_id
+                    WHERE fact.request_row_id = request.row_id
+                      AND fact.subject_kind = 'provider_attempt'
+                      AND fact.subject_id = prior_attempt.id
+                      AND fact.outcome = CASE prior_attempt.state
+                          WHEN 'succeeded' THEN 'succeeded'
+                          WHEN 'failed' THEN 'failed'
+                          WHEN 'interrupted' THEN 'interrupted'
+                          WHEN 'uncertain' THEN 'uncertain'
+                          WHEN 'cancelled' THEN 'failed'
+                      END
+                      AND fact.occurred_at >= prior_attempt.finished_at
+                      AND (
+                          prior_attempt.budget_reservation_id IS NULL
+                          OR reconciliation.reservation_id IS NOT NULL
+                      )
+                )
+          )
+    ) THEN
+        RAISE EXCEPTION 'request terminal decision does not match an expired admitted request'
+            USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER routing_request_terminal_decisions_guard
+BEFORE INSERT ON router.routing_request_terminal_decisions
+FOR EACH ROW EXECUTE FUNCTION router.validate_routing_request_terminal_decision();
 
 CREATE TABLE router.diagnostic_route_grants (
     grant_id uuid PRIMARY KEY,
@@ -1746,11 +1887,30 @@ BEGIN
     ) THEN
         IF NOT EXISTS (
             SELECT 1 FROM router.provider_attempts AS attempt
+            LEFT JOIN router.routing_attempt_starts AS attempt_start
+              ON attempt_start.attempt_id = attempt.id
+            LEFT JOIN router.routing_attempt_claims AS claim
+              ON claim.attempt_id = attempt.id
+             AND claim.claim_id = attempt_start.claim_id
             WHERE attempt.id = NEW.attempt_id
               AND attempt.request_row_id = NEW.request_row_id
+              AND attempt.migration_0015_backfilled = NEW.migration_0015_backfilled
               AND attempt.attempt_number = NEW.attempt_number
               AND attempt.candidate_ordinal = NEW.candidate_ordinal
               AND attempt.route_snapshot_id = NEW.route_snapshot_id
+              AND (
+                  NEW.migration_0015_backfilled OR (
+                      claim.claim_id = NEW.claim_id
+                      AND claim.claim_generation = NEW.claim_generation
+                      AND attempt_start.claim_generation <= NEW.claim_generation
+                      AND attempt.connect_timeout_ms = NEW.connect_timeout_ms
+                      AND attempt.first_byte_timeout_ms = NEW.first_byte_timeout_ms
+                      AND attempt.idle_timeout_ms = NEW.idle_timeout_ms
+                      AND attempt.execution_timeout_ms = NEW.execution_timeout_ms
+                      AND attempt.logical_deadline = NEW.logical_deadline
+                      AND attempt.attempt_deadline = NEW.attempt_deadline
+                  )
+              )
               AND attempt.state::text = NEW.attempt_state
               AND attempt.normalized_error_class IS NOT DISTINCT FROM NEW.normalized_error_class
               AND attempt.affected_scope IS NOT DISTINCT FROM NEW.affected_scope
@@ -1767,9 +1927,17 @@ BEGIN
         SELECT 1 FROM router.routing_attempt_claims AS claim
         WHERE claim.request_row_id = NEW.request_row_id
           AND claim.attempt_id = NEW.attempt_id
+          AND claim.claim_id = NEW.claim_id
+          AND claim.claim_generation = NEW.claim_generation
           AND claim.attempt_number = NEW.attempt_number
           AND claim.candidate_ordinal = NEW.candidate_ordinal
           AND claim.route_snapshot_id = NEW.route_snapshot_id
+          AND claim.connect_timeout_ms = NEW.connect_timeout_ms
+          AND claim.first_byte_timeout_ms = NEW.first_byte_timeout_ms
+          AND claim.idle_timeout_ms = NEW.idle_timeout_ms
+          AND claim.execution_timeout_ms = NEW.execution_timeout_ms
+          AND claim.logical_deadline = NEW.logical_deadline
+          AND claim.attempt_deadline = NEW.attempt_deadline
           AND NEW.attempt_state <> 'succeeded'
     ) THEN
         RAISE EXCEPTION 'pre-attempt routing decision does not match its claim'

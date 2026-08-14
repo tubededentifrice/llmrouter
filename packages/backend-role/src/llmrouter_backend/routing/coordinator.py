@@ -119,11 +119,8 @@ class RoutingCoordinator:
                             raise RoutingError(
                                 RoutingErrorCode.BUSY, plan.request_id
                             ) from error
-                    self._repository.reject_before_start(
-                        plan,
-                        recovery_result.failure,
-                        recovery_decision,
-                        now=self._clock(),
+                    self._complete_before_start(
+                        plan, recovery_result, recovery_decision
                     )
                     if recovery_decision is FallbackDecision.NEXT_CANDIDATE:
                         last_plan = plan
@@ -166,14 +163,13 @@ class RoutingCoordinator:
                     failure.error.error_class,
                     failure.error.affected_scope,
                 )
-                self._repository.reject_before_start(
-                    plan, failure, decision, now=self._clock()
-                )
+                failure_result = AdapterResult(AttemptOutcome.FAILED, failure)
+                self._complete_before_start(plan, failure_result, decision)
                 if decision is FallbackDecision.NEXT_CANDIDATE:
                     last_plan = plan
-                    last_failure = AdapterResult(AttemptOutcome.FAILED, failure)
+                    last_failure = failure_result
                     continue
-                return AdapterResult(AttemptOutcome.FAILED, failure)
+                return failure_result
             try:
                 budget = self._budget.reserve(plan)
             except Exception:  # noqa: BLE001
@@ -184,11 +180,8 @@ class RoutingCoordinator:
                     "budget_gate_failed",
                 )
                 assert failure_result.failure is not None
-                self._repository.reject_before_start(
-                    plan,
-                    failure_result.failure,
-                    FallbackDecision.STOP_REQUEST,
-                    now=self._clock(),
+                self._complete_before_start(
+                    plan, failure_result, FallbackDecision.STOP_REQUEST
                 )
                 return failure_result
             if not budget.permitted:
@@ -198,14 +191,13 @@ class RoutingCoordinator:
                     budget.failure.error.error_class,
                     budget.failure.error.affected_scope,
                 )
-                self._repository.reject_before_start(
-                    plan, budget.failure, decision, now=self._clock()
-                )
+                failure_result = AdapterResult(AttemptOutcome.FAILED, budget.failure)
+                self._complete_before_start(plan, failure_result, decision)
                 if decision is FallbackDecision.NEXT_CANDIDATE:
                     last_plan = plan
-                    last_failure = AdapterResult(AttemptOutcome.FAILED, budget.failure)
+                    last_failure = failure_result
                     continue
-                return AdapterResult(AttemptOutcome.FAILED, budget.failure)
+                return failure_result
             assert budget.reservation_id is not None
             try:
                 self._repository.start(
@@ -234,11 +226,8 @@ class RoutingCoordinator:
                         raise RoutingError(
                             RoutingErrorCode.BUSY, plan.request_id
                         ) from error
-                    self._repository.reject_before_start(
-                        plan,
-                        failure_result.failure,
-                        FallbackDecision.STOP_REQUEST,
-                        now=self._clock(),
+                    self._complete_before_start(
+                        plan, failure_result, FallbackDecision.STOP_REQUEST
                     )
                     return failure_result
             try:
@@ -300,6 +289,24 @@ class RoutingCoordinator:
             except Exception as error:
                 raise RoutingError(RoutingErrorCode.BUSY, plan.request_id) from error
         return accounting_result, decision
+
+    def _complete_before_start(
+        self,
+        plan: AttemptPlan,
+        result: AdapterResult,
+        decision: FallbackDecision,
+    ) -> None:
+        """Persist a no-start result and complete each non-fallback request."""
+        if not plan.request_terminal:
+            assert result.failure is not None
+            self._repository.reject_before_start(
+                plan, result.failure, decision, now=self._clock()
+            )
+        if decision is not FallbackDecision.NEXT_CANDIDATE:
+            try:
+                self._completion(plan, result)
+            except Exception as error:
+                raise RoutingError(RoutingErrorCode.BUSY, plan.request_id) from error
 
 
 def _fallback(

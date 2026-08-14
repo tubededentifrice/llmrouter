@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
@@ -102,6 +103,7 @@ def _plan(
         recovery_only=False,
         recovery_failure=None,
         prestart_reservation_id=None,
+        request_terminal=False,
     )
 
 
@@ -387,6 +389,76 @@ def test_exhausted_pending_fallback_replays_completion_after_failure() -> None:
     )
     assert completion_calls == 2  # noqa: PLR2004
     accounting.assert_not_called()
+
+
+def test_terminal_prestart_completion_failure_replays_from_durable_decision() -> None:
+    plan = _plan()
+    result = _failure(
+        plan, TerminalErrorClass.POLICY, ErrorScope.LOGICAL_REQUEST
+    )
+    assert result.failure is not None
+    repository = MagicMock()
+    repository.pending_accounting.side_effect = [None, (plan, result, True)]
+    repository.claim.return_value = plan
+    completion_calls = 0
+
+    def completion(_plan_value: AttemptPlan, _result: AdapterResult) -> None:
+        nonlocal completion_calls
+        completion_calls += 1
+        if completion_calls == 1:
+            raise RuntimeError
+
+    coordinator = _coordinator(
+        repository,
+        eligibility=lambda _plan_value: result.failure,
+        budget=MagicMock(),
+        adapter=lambda _kind: _Adapter(_success),
+        completion=completion,
+    )
+    repository.pending_accounting.side_effect = [None, (plan, result, True)]
+
+    with pytest.raises(RoutingError) as error:
+        coordinator.execute(_context(), request_id=plan.request_id, owner_id="worker")
+    assert error.value.code is RoutingErrorCode.BUSY
+
+    assert coordinator.execute(
+        _context(), request_id=plan.request_id, owner_id="worker"
+    ) == result
+    repository.reject_before_start.assert_called_once()
+    assert completion_calls == 2  # noqa: PLR2004
+
+
+def test_request_terminal_plan_completes_without_a_candidate_rejection() -> None:
+    base = _plan()
+    result = _failure(
+        base,
+        TerminalErrorClass.TIMEOUT,
+        ErrorScope.LOGICAL_REQUEST,
+        detail="logical_deadline",
+    )
+    assert result.failure is not None
+    plan = replace(
+        base,
+        recovery_only=True,
+        recovery_failure=result.failure,
+        request_terminal=True,
+    )
+    repository = MagicMock()
+    repository.claim.return_value = plan
+    completed: list[AdapterResult] = []
+    coordinator = _coordinator(
+        repository,
+        eligibility=lambda _plan_value: None,
+        budget=MagicMock(),
+        adapter=lambda _kind: _Adapter(_success),
+        completion=lambda _plan_value, terminal: completed.append(terminal),
+    )
+
+    assert coordinator.execute(
+        _context(), request_id=plan.request_id, owner_id="worker"
+    ) == result
+    repository.reject_before_start.assert_not_called()
+    assert completed == [result]
 
 
 def test_no_start_proof_releases_before_it_removes_the_claim() -> None:

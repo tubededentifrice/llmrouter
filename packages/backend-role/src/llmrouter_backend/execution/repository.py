@@ -1303,6 +1303,18 @@ def _finish_routing_attempts(  # noqa: PLR0913
         ),
     ).fetchall()
     for attempt in rows:
+        routing = connection.execute(
+            """SELECT attempt_start.claim_id, claim.claim_generation
+               FROM router.routing_attempt_starts AS attempt_start
+               JOIN router.routing_attempt_claims AS claim
+                 ON claim.claim_id = attempt_start.claim_id
+                AND claim.attempt_id = attempt_start.attempt_id
+               WHERE attempt_start.attempt_id = %s""",
+            (attempt["id"],),
+        ).fetchone()
+        if routing is None and not attempt["migration_0015_backfilled"]:
+            message = "The active routing claim is unavailable."
+            raise RuntimeError(message)
         sequence_row = connection.execute(
             """SELECT COALESCE(max(decision_sequence), 0) + 1 AS value
                FROM router.routing_candidate_decisions WHERE request_row_id = %s""",
@@ -1313,29 +1325,42 @@ def _finish_routing_attempts(  # noqa: PLR0913
             raise RuntimeError(message)
         connection.execute(
             """INSERT INTO router.routing_candidate_decisions (
-                   decision_id, request_row_id, decision_sequence, attempt_id,
-                   attempt_number, candidate_ordinal, route_snapshot_id,
+                   decision_id, request_row_id, decision_sequence, attempt_id, claim_id,
+                   claim_generation, attempt_number, candidate_ordinal,
+                   route_snapshot_id,
+                   connect_timeout_ms, first_byte_timeout_ms, idle_timeout_ms,
+                   execution_timeout_ms, logical_deadline, attempt_deadline,
                    attempt_state, normalized_error_class, affected_scope,
                    affected_scope_id, fallback_decision, safe_provider_code,
-                   redacted_evidence, occurred_at
-               ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'logical_request',%s,%s,NULL,
+                   redacted_evidence, occurred_at, migration_0015_backfilled
+               ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+                         'logical_request',%s,%s,NULL,
                          jsonb_build_object(
                            'provider_status', NULL, 'retry_after_ms', NULL,
                            'detail_code', %s::text
-                         ), transaction_timestamp())""",
+                         ), transaction_timestamp(), %s)""",
             (
                 uuid.uuid4(),
                 attempt["request_row_id"],
                 sequence_row["value"],
                 attempt["id"],
+                None if routing is None else routing["claim_id"],
+                None if routing is None else routing["claim_generation"],
                 attempt["attempt_number"],
                 attempt["candidate_ordinal"],
                 attempt["route_snapshot_id"],
+                attempt["connect_timeout_ms"],
+                attempt["first_byte_timeout_ms"],
+                attempt["idle_timeout_ms"],
+                attempt["execution_timeout_ms"],
+                attempt["logical_deadline"],
+                attempt["attempt_deadline"],
                 state,
                 error_class,
                 attempt["affected_scope_id"],
                 fallback_decision,
                 detail_code,
+                attempt["migration_0015_backfilled"],
             ),
         )
         connection.execute(

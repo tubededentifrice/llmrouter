@@ -6,7 +6,7 @@ from __future__ import annotations
 import concurrent.futures
 import uuid
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import psycopg
@@ -350,6 +350,99 @@ def test_workspace_disable_after_admission_still_allows_first_claim(
     assert not plan.recovery_only
     assert not plan.started
     assert plan.recovery_failure is None
+
+
+def test_terminal_prestart_decision_replays_and_cannot_start(
+    repositories: tuple[
+        PostgresAdmissionRepository,
+        PostgresExecutionRepository,
+        PostgresRoutingRepository,
+        PostgresBudgetRepository,
+    ],
+) -> None:
+    admission, execution, routing, budget = repositories
+    now = _now()
+    request_id = _admit_running(admission, execution, now=now, random_bits=28)
+    plan = routing.claim(_context(), request_id=request_id, owner_id="worker-one")
+    reservation = budget.reserve_candidate(
+        _budget_context(now),
+        request_row_id=plan.request_row_id,
+        candidate_id=plan.provider_model_route_id,
+        reservation_key=plan.reservation_key,
+        estimated_amount=Decimal("0.01"),
+        reserved_amount=Decimal("0.01"),
+        currency="USD",
+        maximum_cost=Decimal("1"),
+        more_candidates=False,
+        now=now,
+    )
+    assert reservation.reservation_id is not None
+    failure = AttemptFailure(
+        TerminalError(
+            TerminalErrorClass.POLICY,
+            ErrorScope.LOGICAL_REQUEST,
+            "The request cannot continue.",
+        ),
+        request_id,
+        SafeFailureEvidence(detail_code="request_policy"),
+    )
+    routing.reject_before_start(
+        plan, failure, FallbackDecision.STOP_REQUEST, now=now
+    )
+
+    replay = routing.pending_accounting(_context(), request_id=request_id)
+
+    assert replay is not None
+    replay_plan, replay_result, accounting_complete = replay
+    assert replace(
+        replay_plan, recovery_only=False, recovery_failure=None
+    ) == plan
+    assert replay_plan.recovery_failure is not None
+    assert replay_plan.recovery_failure.error.error_class is TerminalErrorClass.POLICY
+    assert replay_plan.recovery_failure.evidence.detail_code == "request_policy"
+    assert replay_result.outcome is AttemptOutcome.FAILED
+    assert replay_result.failure == replay_plan.recovery_failure
+    assert accounting_complete
+    with pytest.raises(psycopg.Error):
+        routing.start(plan, budget_reservation_id=reservation.reservation_id)
+
+
+def test_deadline_before_first_claim_is_durable_and_replayable(
+    database_url: str,
+    repositories: tuple[
+        PostgresAdmissionRepository,
+        PostgresExecutionRepository,
+        PostgresRoutingRepository,
+        PostgresBudgetRepository,
+    ],
+) -> None:
+    admission, execution, routing, _budget = repositories
+    admitted_at = _now() - timedelta(minutes=15, seconds=1)
+    request_id = _admit_running(
+        admission, execution, now=admitted_at, random_bits=29
+    )
+
+    first = routing.claim(_context(), request_id=request_id, owner_id="worker-one")
+    second = routing.claim(_context(), request_id=request_id, owner_id="worker-two")
+    replay = routing.pending_accounting(_context(), request_id=request_id)
+
+    assert first == second
+    assert first.request_terminal
+    assert first.recovery_only
+    assert first.recovery_failure is not None
+    assert first.recovery_failure.error.error_class is TerminalErrorClass.TIMEOUT
+    assert first.recovery_failure.evidence.detail_code == "logical_deadline"
+    assert replay is not None
+    assert replay[0] == first
+    assert replay[1] == AdapterResult(AttemptOutcome.FAILED, first.recovery_failure)
+    assert replay[2]
+    with psycopg.connect(database_url) as connection:
+        durable = connection.execute(
+            """SELECT count(*) FROM router.routing_request_terminal_decisions
+               WHERE request_row_id = %s""",
+            (first.request_row_id,),
+        ).fetchone()
+    assert durable == (1,)
 
 
 def test_diagnostic_grant_is_exact_single_use_and_credential_bound(

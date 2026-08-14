@@ -6,6 +6,7 @@ BEGIN
        OR EXISTS (SELECT 1 FROM router.routing_attempt_starts)
        OR EXISTS (SELECT 1 FROM router.routing_attempt_dispatches)
        OR EXISTS (SELECT 1 FROM router.routing_attempt_usage_reports)
+       OR EXISTS (SELECT 1 FROM router.routing_request_terminal_decisions)
        OR EXISTS (
            SELECT 1 FROM router.routing_candidate_decisions
            WHERE NOT migration_0015_backfilled
@@ -115,6 +116,11 @@ DROP TRIGGER routing_attempt_usage_append_only ON router.routing_attempt_usage_r
 DROP TRIGGER routing_attempt_usage_guard ON router.routing_attempt_usage_reports;
 DROP FUNCTION router.validate_routing_attempt_usage();
 DROP TABLE router.routing_attempt_usage_reports;
+DROP TRIGGER routing_request_terminal_decisions_guard ON router.routing_request_terminal_decisions;
+DROP FUNCTION router.validate_routing_request_terminal_decision();
+DROP TRIGGER routing_request_terminal_decisions_append_only
+ON router.routing_request_terminal_decisions;
+DROP TABLE router.routing_request_terminal_decisions;
 DROP TRIGGER routing_candidate_decisions_append_only ON router.routing_candidate_decisions;
 DROP TABLE router.routing_candidate_decisions;
 DROP TRIGGER routing_attempt_starts_guard ON router.routing_attempt_starts;

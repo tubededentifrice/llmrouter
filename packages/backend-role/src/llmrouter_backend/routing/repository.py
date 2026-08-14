@@ -1,5 +1,5 @@
 """Transactional durable provider routing operations."""
-# ruff: noqa: C901, D107, E501, EM101, PLR0912, PLR0915, PLR2004, S101, TRY003
+# ruff: noqa: C901, D107, E501, EM101, PLR0911, PLR0912, PLR0915, PLR2004, S101, TRY003
 
 from __future__ import annotations
 
@@ -216,7 +216,7 @@ class PostgresRoutingRepository:
     def pending_accounting(
         self, context: RequestContext, *, request_id: str
     ) -> tuple[AttemptPlan, AdapterResult, bool] | None:
-        """Return the latest exact terminal attempt and its accounting state."""
+        """Return the latest durable routing result and its accounting state."""
         _require_routing_authority(context)
         try:
             uuid.UUID(request_id)
@@ -225,44 +225,46 @@ class PostgresRoutingRepository:
                 RoutingErrorCode.NOT_FOUND, context.request_id
             ) from error
         with psycopg.connect(self._database_url, row_factory=dict_row) as connection:
-            terminal = connection.execute(
-                """SELECT attempt.id,
-                          EXISTS (
-                              SELECT 1 FROM router.accounting_facts AS fact
-                              LEFT JOIN router.budget_reservation_reconciliations AS reconciliation
-                                ON reconciliation.accounting_event_id = fact.event_id
-                               AND reconciliation.reservation_id = attempt.budget_reservation_id
-                              WHERE fact.request_row_id = request.row_id
-                                AND fact.subject_kind = 'provider_attempt'
-                                AND fact.subject_id = attempt.id
-                                AND fact.outcome = CASE attempt.state
-                                    WHEN 'succeeded' THEN 'succeeded'
-                                    WHEN 'failed' THEN 'failed'
-                                    WHEN 'interrupted' THEN 'interrupted'
-                                    WHEN 'uncertain' THEN 'uncertain'
-                                    WHEN 'cancelled' THEN 'failed'
-                                END
-                                AND fact.occurred_at >= attempt.finished_at
-                                AND (attempt.budget_reservation_id IS NULL
-                                     OR reconciliation.reservation_id IS NOT NULL)
-                          ) AS accounting_complete
-                   FROM router.logical_requests AS request
-                   JOIN router.provider_attempts AS attempt
-                     ON attempt.request_row_id = request.row_id
-                   WHERE request.request_id = %s
-                     AND request.service_id = %s
-                     AND request.workspace_id IS NOT DISTINCT FROM %s
-                     AND attempt.state <> 'started'
-                     AND NOT attempt.migration_0015_backfilled
-                   ORDER BY attempt.attempt_number DESC
-                   LIMIT 1""",
+            request = connection.execute(
+                """SELECT * FROM router.logical_requests
+                   WHERE request_id = %s AND service_id = %s
+                     AND workspace_id IS NOT DISTINCT FROM %s""",
                 (
                     request_id,
                     context.scope.service_id,
                     context.scope.workspace_id,
                 ),
             ).fetchone()
-            if terminal is None:
+            if request is None:
+                return None
+            request_terminal = connection.execute(
+                """SELECT * FROM router.routing_request_terminal_decisions
+                   WHERE request_row_id = %s""",
+                (request["row_id"],),
+            ).fetchone()
+            if request_terminal is not None:
+                snapshot = connection.execute(
+                    """SELECT * FROM router.provider_route_execution_snapshots
+                       WHERE id = %s""",
+                    (request_terminal["route_snapshot_id"],),
+                ).fetchone()
+                assert snapshot is not None
+                plan = _plan(
+                    request,
+                    snapshot,
+                    _decision_claim(request_terminal),
+                    recovery_only=True,
+                    recovery_failure=_decision_failure(request_terminal),
+                    request_terminal=True,
+                )
+                return plan, _decision_result(request_terminal), True
+            decision = connection.execute(
+                """SELECT * FROM router.routing_candidate_decisions
+                   WHERE request_row_id = %s AND NOT migration_0015_backfilled
+                   ORDER BY decision_sequence DESC LIMIT 1""",
+                (request["row_id"],),
+            ).fetchone()
+            if decision is None:
                 return None
             attempt = connection.execute(
                 """SELECT attempt.*, attempt_start.claim_id,
@@ -278,19 +280,29 @@ class PostgresRoutingRepository:
                      ON attempt_start.attempt_id = attempt.id
                    LEFT JOIN router.routing_attempt_usage_reports AS usage
                      ON usage.attempt_id = attempt.id
-                   WHERE attempt.id = %s""",
-                (terminal["id"],),
+                   WHERE attempt.id = %s AND attempt.state <> 'started'
+                     AND NOT attempt.migration_0015_backfilled""",
+                (decision["attempt_id"],),
             ).fetchone()
-            assert attempt is not None
-            request = connection.execute(
-                "SELECT * FROM router.logical_requests WHERE row_id = %s",
-                (attempt["request_row_id"],),
-            ).fetchone()
+            if attempt is None:
+                snapshot = connection.execute(
+                    """SELECT * FROM router.provider_route_execution_snapshots
+                       WHERE id = %s""",
+                    (decision["route_snapshot_id"],),
+                ).fetchone()
+                assert snapshot is not None
+                plan = _plan(
+                    request,
+                    snapshot,
+                    _decision_claim(decision),
+                    recovery_only=True,
+                    recovery_failure=_decision_failure(decision),
+                )
+                return plan, _decision_result(decision), True
             snapshot = connection.execute(
                 "SELECT * FROM router.provider_route_execution_snapshots WHERE id = %s",
                 (attempt["route_snapshot_id"],),
             ).fetchone()
-            assert request is not None
             assert snapshot is not None
             claim = {
                 "claim_id": attempt["claim_id"],
@@ -315,7 +327,36 @@ class PostgresRoutingRepository:
                 started=True,
                 dispatched=attempt["dispatched"],
             )
-            return plan, _terminal_result(attempt), terminal["accounting_complete"]
+            accounting_complete = connection.execute(
+                """SELECT EXISTS (
+                           SELECT 1 FROM router.accounting_facts AS fact
+                           LEFT JOIN router.budget_reservation_reconciliations AS reconciliation
+                             ON reconciliation.accounting_event_id = fact.event_id
+                            AND reconciliation.reservation_id = %s
+                           WHERE fact.request_row_id = %s
+                             AND fact.subject_kind = 'provider_attempt'
+                             AND fact.subject_id = %s
+                             AND fact.outcome = CASE %s
+                                 WHEN 'succeeded' THEN 'succeeded'
+                                 WHEN 'failed' THEN 'failed'
+                                 WHEN 'interrupted' THEN 'interrupted'
+                                 WHEN 'uncertain' THEN 'uncertain'
+                                 WHEN 'cancelled' THEN 'failed'
+                             END
+                             AND fact.occurred_at >= %s
+                             AND (%s IS NULL OR reconciliation.reservation_id IS NOT NULL)
+                       ) AS value""",
+                (
+                    attempt["budget_reservation_id"],
+                    request["row_id"],
+                    attempt["id"],
+                    attempt["state"],
+                    attempt["finished_at"],
+                    attempt["budget_reservation_id"],
+                ),
+            ).fetchone()
+            assert accounting_complete is not None
+            return plan, _terminal_result(attempt), accounting_complete["value"]
 
     def claim(
         self, context: RequestContext, *, request_id: str, owner_id: str
@@ -484,6 +525,26 @@ class PostgresRoutingRepository:
                     recovery_only=recovery_only,
                     recovery_failure=recovery_failure,
                 )
+            request_terminal = connection.execute(
+                """SELECT * FROM router.routing_request_terminal_decisions
+                   WHERE request_row_id = %s""",
+                (request["row_id"],),
+            ).fetchone()
+            if request_terminal is not None:
+                snapshot = connection.execute(
+                    """SELECT * FROM router.provider_route_execution_snapshots
+                       WHERE id = %s""",
+                    (request_terminal["route_snapshot_id"],),
+                ).fetchone()
+                assert snapshot is not None
+                return _plan(
+                    request,
+                    snapshot,
+                    _decision_claim(request_terminal),
+                    recovery_only=True,
+                    recovery_failure=_decision_failure(request_terminal),
+                    request_terminal=True,
+                )
             if request["state"] != "running":
                 raise RoutingError(RoutingErrorCode.NO_CANDIDATE, context.request_id)
             prior = connection.execute(
@@ -560,8 +621,45 @@ class PostgresRoutingRepository:
             if request["admitted_at"] + timedelta(minutes=15) <= database_now[
                 "value"
             ] + timedelta(milliseconds=100):
-                raise RoutingError(
-                    RoutingErrorCode.LOGICAL_DEADLINE, context.request_id
+                logical_deadline = request["admitted_at"] + timedelta(minutes=15)
+                terminal = connection.execute(
+                    """INSERT INTO router.routing_request_terminal_decisions (
+                           request_row_id, decision_id, attempt_id, claim_id,
+                           attempt_number, candidate_ordinal, route_snapshot_id,
+                           connect_timeout_ms, first_byte_timeout_ms, idle_timeout_ms,
+                           execution_timeout_ms, logical_deadline, attempt_deadline,
+                           attempt_state, normalized_error_class, affected_scope,
+                           affected_scope_id, fallback_decision, safe_provider_code,
+                           redacted_evidence, occurred_at
+                       ) VALUES (%s,%s,%s,%s,%s,%s,%s,100,100,100,100,%s,%s,
+                                 'failed','timeout','logical_request',%s,'stop_request',
+                                 NULL,jsonb_build_object(
+                                     'provider_status', NULL, 'retry_after_ms', NULL,
+                                     'detail_code', 'logical_deadline'
+                                 ),
+                                 transaction_timestamp())
+                       RETURNING *""",
+                    (
+                        request["row_id"],
+                        self._identity_factory(),
+                        attempt_id,
+                        claim_id,
+                        attempt_count["value"] + 1,
+                        ordinal,
+                        snapshot["id"],
+                        logical_deadline,
+                        logical_deadline,
+                        str(request["request_id"]),
+                    ),
+                ).fetchone()
+                assert terminal is not None
+                return _plan(
+                    request,
+                    snapshot,
+                    _decision_claim(terminal),
+                    recovery_only=True,
+                    recovery_failure=_decision_failure(terminal),
+                    request_terminal=True,
                 )
             controls = _controls(connection, request, snapshot["id"])
             execution_live = (
@@ -710,12 +808,20 @@ class PostgresRoutingRepository:
     ) -> None:
         """Record one safe candidate skip without a provider attempt."""
         del now
+        attempt_state = (
+            AttemptOutcome.CANCELLED.value
+            if decision is FallbackDecision.CANCELLED
+            else AttemptOutcome.FAILED.value
+        )
         with (
             psycopg.connect(self._database_url) as connection,
             connection.transaction(),
         ):
             replay = connection.execute(
-                """SELECT attempt_number, candidate_ordinal, route_snapshot_id::text,
+                """SELECT claim_id::text, claim_generation, attempt_number,
+                          candidate_ordinal, route_snapshot_id::text,
+                          connect_timeout_ms, first_byte_timeout_ms, idle_timeout_ms,
+                          execution_timeout_ms, logical_deadline, attempt_deadline,
                           attempt_state, normalized_error_class, affected_scope,
                           affected_scope_id, fallback_decision, safe_provider_code,
                           redacted_evidence
@@ -724,10 +830,18 @@ class PostgresRoutingRepository:
             ).fetchone()
             if replay is not None:
                 if replay == (
+                    plan.claim_id,
+                    plan.claim_generation,
                     plan.attempt_number,
                     plan.candidate_ordinal,
                     plan.route_snapshot_id,
-                    "failed",
+                    plan.timeouts.connect_ms,
+                    plan.timeouts.first_byte_ms,
+                    plan.timeouts.idle_ms,
+                    plan.timeouts.execution_ms,
+                    plan.logical_deadline,
+                    plan.attempt_deadline,
+                    attempt_state,
                     failure.error.error_class.value,
                     failure.error.affected_scope.value,
                     failure.affected_scope_id,
@@ -745,20 +859,31 @@ class PostgresRoutingRepository:
             sequence = sequence_row[0]
             connection.execute(
                 """INSERT INTO router.routing_candidate_decisions (
-                       decision_id, request_row_id, decision_sequence, attempt_id,
-                       attempt_number, candidate_ordinal, route_snapshot_id, attempt_state,
+                       decision_id, request_row_id, decision_sequence, attempt_id, claim_id,
+                       claim_generation, attempt_number, candidate_ordinal, route_snapshot_id,
+                       connect_timeout_ms, first_byte_timeout_ms, idle_timeout_ms,
+                       execution_timeout_ms, logical_deadline, attempt_deadline, attempt_state,
                        normalized_error_class, affected_scope, affected_scope_id,
                        fallback_decision, safe_provider_code, redacted_evidence, occurred_at
-                   ) VALUES (%s,%s,%s,%s,%s,%s,%s,'failed',%s,%s,%s,%s,%s,%s,
+                   ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
                              transaction_timestamp())""",
                 (
                     self._identity_factory(),
                     plan.request_row_id,
                     sequence,
                     plan.attempt_id,
+                    plan.claim_id,
+                    plan.claim_generation,
                     plan.attempt_number,
                     plan.candidate_ordinal,
                     plan.route_snapshot_id,
+                    plan.timeouts.connect_ms,
+                    plan.timeouts.first_byte_ms,
+                    plan.timeouts.idle_ms,
+                    plan.timeouts.execution_ms,
+                    plan.logical_deadline,
+                    plan.attempt_deadline,
+                    attempt_state,
                     failure.error.error_class.value,
                     failure.error.affected_scope.value,
                     failure.affected_scope_id,
@@ -964,20 +1089,30 @@ class PostgresRoutingRepository:
             sequence = sequence_row["value"]
             connection.execute(
                 """INSERT INTO router.routing_candidate_decisions (
-                       decision_id, request_row_id, decision_sequence, attempt_id,
-                       attempt_number, candidate_ordinal, route_snapshot_id, attempt_state,
+                       decision_id, request_row_id, decision_sequence, attempt_id, claim_id,
+                       claim_generation, attempt_number, candidate_ordinal, route_snapshot_id,
+                       connect_timeout_ms, first_byte_timeout_ms, idle_timeout_ms,
+                       execution_timeout_ms, logical_deadline, attempt_deadline, attempt_state,
                        normalized_error_class, affected_scope, affected_scope_id,
                        fallback_decision, safe_provider_code, redacted_evidence, occurred_at
-                   ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+                   ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
                              transaction_timestamp())""",
                 (
                     self._identity_factory(),
                     plan.request_row_id,
                     sequence,
                     plan.attempt_id,
+                    plan.claim_id,
+                    plan.claim_generation,
                     plan.attempt_number,
                     plan.candidate_ordinal,
                     plan.route_snapshot_id,
+                    plan.timeouts.connect_ms,
+                    plan.timeouts.first_byte_ms,
+                    plan.timeouts.idle_ms,
+                    plan.timeouts.execution_ms,
+                    plan.logical_deadline,
+                    plan.attempt_deadline,
                     result.outcome.value,
                     None if failure is None else failure.error.error_class.value,
                     None if failure is None else failure.error.affected_scope.value,
@@ -1160,6 +1295,52 @@ def _terminal_result(row: dict[str, Any]) -> AdapterResult:
     return AdapterResult(outcome, failure, usage)
 
 
+def _decision_failure(row: dict[str, Any]) -> AttemptFailure:
+    """Rebuild safe failure data from an append-only routing decision."""
+    evidence = row["redacted_evidence"]
+    if not isinstance(evidence, dict):
+        raise TypeError("Durable routing evidence is invalid.")
+    return AttemptFailure(
+        TerminalError(
+            TerminalErrorClass(row["normalized_error_class"]),
+            ErrorScope(row["affected_scope"]),
+            "The provider attempt did not complete.",
+            row["safe_provider_code"],
+        ),
+        row["affected_scope_id"],
+        SafeFailureEvidence(
+            provider_status=evidence.get("provider_status"),
+            retry_after_ms=evidence.get("retry_after_ms"),
+            detail_code=evidence.get("detail_code"),
+        ),
+    )
+
+
+def _decision_result(row: dict[str, Any]) -> AdapterResult:
+    """Rebuild a prestart or request-level durable result."""
+    return AdapterResult(AttemptOutcome(row["attempt_state"]), _decision_failure(row))
+
+
+def _decision_claim(row: dict[str, Any]) -> dict[str, Any]:
+    """Expose stored fixed plan values through the normal plan constructor."""
+    return {
+        "claim_id": row["claim_id"],
+        "claim_generation": row.get("claim_generation") or 1,
+        "attempt_id": row["attempt_id"],
+        "attempt_number": row["attempt_number"],
+        "candidate_ordinal": row["candidate_ordinal"],
+        "assignment_revision_id": None,
+        "route_snapshot_id": row["route_snapshot_id"],
+        "candidate_policy": {},
+        "connect_timeout_ms": row["connect_timeout_ms"],
+        "first_byte_timeout_ms": row["first_byte_timeout_ms"],
+        "idle_timeout_ms": row["idle_timeout_ms"],
+        "execution_timeout_ms": row["execution_timeout_ms"],
+        "logical_deadline": row["logical_deadline"],
+        "attempt_deadline": row["attempt_deadline"],
+    }
+
+
 def _store_usage(
     connection: psycopg.Connection[dict[str, Any]],
     plan: AttemptPlan,
@@ -1289,6 +1470,7 @@ def _plan(  # noqa: PLR0913
     recovery_only: bool = False,
     recovery_failure: AttemptFailure | None = None,
     prestart_reservation_id: str | None = None,
+    request_terminal: bool = False,
 ) -> AttemptPlan:
     prices = tuple(
         PriceComponent(
@@ -1346,4 +1528,5 @@ def _plan(  # noqa: PLR0913
         recovery_only,
         recovery_failure,
         prestart_reservation_id,
+        request_terminal,
     )
