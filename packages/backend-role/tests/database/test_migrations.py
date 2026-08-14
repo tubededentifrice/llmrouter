@@ -90,6 +90,7 @@ def test_migration_plan_has_reversible_contiguous_pairs() -> None:
         10,
         11,
         12,
+        13,
     ]
     assert all(migration.up_sql and migration.down_sql for migration in plan)
 
@@ -99,7 +100,19 @@ def test_migrate_empty_database(database_url: str) -> None:
     with psycopg.connect(database_url, autocommit=True) as connection:
         migrate(connection)
         assert applied_versions(connection) == (
-            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
         )
         table_count = connection.execute(
             """
@@ -513,8 +526,8 @@ def test_concurrent_migration_runners_serialize(database_url: str) -> None:
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         results = list(executor.map(_migrate_current, [database_url, database_url]))
     assert results == [
-        (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12),
-        (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12),
+        (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13),
+        (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13),
     ]
 
 
@@ -543,7 +556,19 @@ def test_rollback_keeps_previous_schema_data(database_url: str) -> None:
         ).fetchone() == (None,)
         migrate(connection)
         assert applied_versions(connection) == (
-            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
         )
         assert connection.execute(
             "SELECT stable_name FROM router.services WHERE id = %s", (SERVICE_ID,)

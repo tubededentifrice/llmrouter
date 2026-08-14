@@ -75,7 +75,7 @@ def _fingerprint(
     workspace_id: str | None = WORKSPACE_ID,
     attachments: tuple[AttachmentReference, ...] = (),
 ) -> FingerprintInput:
-    content: object = text
+    content: str | list[dict[str, str]] = text
     if attachments:
         content = [
             {
@@ -217,6 +217,35 @@ def test_atomic_create_replay_conflict_and_response_loss(
             (request_id,),
         ).fetchone()
     assert count == (1,)
+
+
+def test_configured_disabled_capture_is_not_spool_pressure(
+    database_url: str, repository: PostgresAdmissionRepository
+) -> None:
+    """Record configured disablement without a pressure reason."""
+    with psycopg.connect(database_url) as connection:
+        connection.execute(
+            """
+            INSERT INTO router.capture_policies (
+                id, scope_kind, service_id, workspace_id, policy,
+                revision, effective_at
+            ) VALUES (%s, 'workspace', %s, %s, 'disabled', 1, %s)
+            """,
+            (uuid.uuid4(), SERVICE_ID, WORKSPACE_ID, NOW),
+        )
+    receipt = repository.admit(_context(), _request(_uuidv7(NOW, 99)), now=NOW).receipt
+    assert not receipt.capture_enabled
+    assert receipt.capture_policy == "disabled"
+    assert receipt.capture_reason == "configured"
+    with psycopg.connect(database_url) as connection:
+        row = connection.execute(
+            """
+            SELECT capture_pressure_reason, capture_reason
+            FROM router.logical_requests WHERE request_id = %s
+            """,
+            (receipt.request_id,),
+        ).fetchone()
+    assert row == (None, "configured")
 
 
 def test_uuid_age_scope_authority_status_and_expired_binding(

@@ -114,6 +114,21 @@ class PostgresAdmissionRepository:
                     )
                     row_id = uuid.uuid4()
                     locations = _locations(request.kind, request.request_id, context)
+                    _lock_capture_configuration(connection, context)
+                    capture_policy, capture_reason, capture_expiry = (
+                        _resolve_capture_snapshot(
+                            connection, context, request, admitted_at=now
+                        )
+                    )
+                    if (
+                        request.captured_content_expires_at is not None
+                        and request.captured_content_expires_at != capture_expiry
+                    ):
+                        raise AdmissionError(
+                            AdmissionErrorCode.INVALID_REQUEST,
+                            context.request_id,
+                        )
+                    capture_enabled = capture_policy != "disabled"
                     row = connection.execute(
                         """
                         INSERT INTO router.logical_requests (
@@ -121,11 +136,12 @@ class PostgresAdmissionRepository:
                             assignment_id, exact_route_id, configuration_revision_id,
                             operation_name, contract_major, fingerprint_version,
                             fingerprint_sha256, data_profile, capture_enabled,
-                            capture_pressure_reason, admitted_at, last_transition_at,
+                            capture_pressure_reason, capture_policy, capture_reason,
+                            captured_content_expires_at, admitted_at, last_transition_at,
                             status_location, cancel_location, events_location
                         ) VALUES (
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s, %s, %s, %s
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                         ) RETURNING *
                         """,
                         (
@@ -142,8 +158,13 @@ class PostgresAdmissionRepository:
                             FINGERPRINT_VERSION,
                             digest,
                             request.fingerprint.data_profile,
-                            request.capture_enabled,
-                            None if request.capture_enabled else request.capture_reason,
+                            capture_enabled,
+                            "spool_pressure"
+                            if capture_reason == "spool_pressure"
+                            else None,
+                            capture_policy,
+                            capture_reason,
+                            capture_expiry,
                             now,
                             now,
                             *locations,
@@ -460,6 +481,103 @@ def _validated_attachments(
     return result
 
 
+def _resolve_capture_snapshot(
+    connection: Connection[Any],
+    context: RequestContext,
+    request: AdmissionRequest,
+    *,
+    admitted_at: datetime,
+) -> tuple[str, str, datetime | None]:
+    if request.capture_reason == "spool_pressure":
+        return "disabled", "spool_pressure", None
+    rows = connection.execute(
+        """
+        SELECT DISTINCT ON (scope_kind) scope_kind, policy,
+               minimum_policy, maximum_policy
+        FROM router.capture_policies
+        WHERE effective_at <= %s AND (
+            scope_kind = 'global'
+            OR (scope_kind = 'service' AND service_id = %s)
+            OR (scope_kind = 'workspace' AND service_id = %s AND workspace_id = %s)
+        )
+        ORDER BY scope_kind, revision DESC
+        """,
+        (
+            admitted_at,
+            context.scope.service_id,
+            context.scope.service_id,
+            context.scope.workspace_id,
+        ),
+    ).fetchall()
+    by_scope = {row["scope_kind"]: row for row in rows}
+    global_row = by_scope.get("global")
+    if global_row is None:
+        raise AdmissionError(AdmissionErrorCode.INVALID_REQUEST, context.request_id)
+    selected = (
+        by_scope["workspace"]
+        if context.scope.workspace_id is not None and "workspace" in by_scope
+        else by_scope.get("service", global_row)
+    )
+    order = {"disabled": 0, "metadata_only": 1, "complete": 2}
+    policy = selected["policy"]
+    if (
+        not order[global_row["minimum_policy"]]
+        <= order[policy]
+        <= order[global_row["maximum_policy"]]
+    ):
+        raise AdmissionError(AdmissionErrorCode.INVALID_REQUEST, context.request_id)
+    if policy == "disabled":
+        return policy, "configured", None
+    retention = connection.execute(
+        """
+        SELECT retention_days FROM router.retention_policies
+        WHERE data_class = 'captured_content' AND effective_at <= %s AND (
+            scope_kind = 'global'
+            OR (scope_kind = 'service' AND service_id = %s)
+            OR (scope_kind = 'workspace' AND service_id = %s AND workspace_id = %s)
+        )
+        ORDER BY CASE scope_kind
+            WHEN 'workspace' THEN 3 WHEN 'service' THEN 2 ELSE 1 END DESC,
+            revision DESC
+        LIMIT 1 FOR SHARE
+        """,
+        (
+            admitted_at,
+            context.scope.service_id,
+            context.scope.service_id,
+            context.scope.workspace_id,
+        ),
+    ).fetchone()
+    if retention is None:
+        raise AdmissionError(AdmissionErrorCode.INVALID_REQUEST, context.request_id)
+    return (
+        policy,
+        "configured",
+        admitted_at + timedelta(days=retention["retention_days"]),
+    )
+
+
+def _lock_capture_configuration(
+    connection: Connection[Any], context: RequestContext
+) -> None:
+    scopes: list[tuple[str, str | None, str | None]] = [("global", None, None)]
+    if context.scope.service_id is not None:
+        scopes.append(("service", context.scope.service_id, None))
+    if context.scope.workspace_id is not None:
+        scopes.append(
+            ("workspace", context.scope.service_id, context.scope.workspace_id)
+        )
+    for namespace in ("capture-policy", "retention-policy"):
+        for kind, service_id, workspace_id in scopes:
+            scope_key = ":".join(
+                (namespace, kind, service_id or "-", workspace_id or "-")
+            )
+            connection.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (scope_key,),
+            )
+
+
 def _locations(
     kind: RequestKind, request_id: str, context: RequestContext
 ) -> tuple[str, str | None, str | None]:
@@ -486,7 +604,9 @@ def _receipt(row: dict[str, Any]) -> AdmissionReceipt:
         cancel_url=row["cancel_location"],
         events_url=row["events_location"],
         capture_enabled=enabled,
-        capture_reason="configured" if enabled else "spool_pressure",
+        capture_reason=row["capture_reason"],
+        capture_policy=row["capture_policy"],
+        captured_content_expires_at=row["captured_content_expires_at"],
     )
 
 

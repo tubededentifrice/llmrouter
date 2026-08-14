@@ -1,5 +1,5 @@
 """Closed values for request fingerprinting and durable admission."""
-# ruff: noqa: C901, D105, EM101, PLR2004, TRY003
+# ruff: noqa: C901, D105, EM101, PLR0912, PLR2004, TRY003
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from types import MappingProxyType
+from typing import cast
 
 import rfc8785
 
@@ -188,6 +189,8 @@ class AdmissionRequest:
     exact_route_id: str | None = None
     capture_enabled: bool = True
     capture_reason: str = "configured"
+    capture_policy: str | None = None
+    captured_content_expires_at: datetime | None = None
 
     def __post_init__(self) -> None:
         validate_uuidv7(self.request_id)
@@ -207,10 +210,29 @@ class AdmissionRequest:
             _require_text(self.assignment)
         if self.exact_route_id is not None:
             _require_text(self.exact_route_id)
+        if self.capture_policy is None:
+            object.__setattr__(
+                self,
+                "capture_policy",
+                "complete" if self.capture_enabled else "disabled",
+            )
+        if self.capture_policy not in {"complete", "metadata_only", "disabled"}:
+            raise ValueError("The capture policy is not supported.")
         if self.capture_reason not in {"configured", "spool_pressure"}:
             raise ValueError("The capture reason is not supported.")
-        if self.capture_enabled != (self.capture_reason == "configured"):
+        if self.capture_enabled != (self.capture_policy != "disabled"):
             raise ValueError("The capture state and reason do not match.")
+        if (
+            self.capture_reason == "spool_pressure"
+            and self.capture_policy != "disabled"
+        ):
+            raise ValueError("Spool pressure can only disable capture.")
+        if self.captured_content_expires_at is not None and (
+            self.captured_content_expires_at.tzinfo is None
+            or self.captured_content_expires_at.utcoffset() is None
+            or self.capture_policy == "disabled"
+        ):
+            raise ValueError("The captured-content expiry is invalid.")
         target_name = self.fingerprint.execution.get("assignment")
         if target_name is None:
             target_name = self.fingerprint.execution.get("model")
@@ -248,6 +270,8 @@ class AdmissionReceipt:
     fingerprint_version: str = FINGERPRINT_NAME
     capture_enabled: bool = True
     capture_reason: str = "configured"
+    capture_policy: str = "complete"
+    captured_content_expires_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -443,11 +467,16 @@ def _validate_attachment_references(
                 digest = part.get("sha256")
                 media_type = part.get("media_type")
                 if not all(
-                    isinstance(item, str)
-                    for item in (identity, digest, media_type)
+                    isinstance(item, str) for item in (identity, digest, media_type)
                 ):
                     raise ValueError("An attachment content part is incomplete.")
-                referenced.add((identity, digest, media_type))
+                referenced.add(
+                    (
+                        cast("str", identity),
+                        cast("str", digest),
+                        cast("str", media_type),
+                    )
+                )
     declared = {
         (item.attachment_id, item.sha256, item.media_type) for item in attachments
     }
