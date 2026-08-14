@@ -98,6 +98,13 @@ def _service_context(operation: str, *, mutation: bool) -> RequestContext:
     )
 
 
+def _database_now(database_url: str) -> datetime:
+    with psycopg.connect(database_url) as connection:
+        row = connection.execute("SELECT transaction_timestamp()").fetchone()
+    assert row is not None and isinstance(row[0], datetime)
+    return row[0]
+
+
 @pytest.fixture
 def store() -> MemoryObjectStore:
     """Create one isolated deterministic object store."""
@@ -309,34 +316,179 @@ def test_wrong_manifest_and_expiry_takeover_are_fail_closed(
     with pytest.raises(ContentError) as wrong_manifest:
         repository.read(_context("content.read", mutation=False), CONTENT_ID, now=NOW)
     assert wrong_manifest.value.code is ContentErrorCode.INTEGRITY
+    worker_now = _database_now(database_url)
+    first_now = worker_now - timedelta(seconds=2)
     job_id = repository.enqueue_lifecycle_job(
-        "expiry", CONTENT_ID, {"content_id": CONTENT_ID}, now=NOW
+        "expiry", CONTENT_ID, {"content_id": CONTENT_ID}, now=first_now
     )
     assert (
         repository.enqueue_lifecycle_job(
-            "expiry", CONTENT_ID, {"content_id": CONTENT_ID}, now=NOW
+            "expiry", CONTENT_ID, {"content_id": CONTENT_ID}, now=first_now
         )
         == job_id
     )
     first = repository.claim_lifecycle_job(
-        NODE_ONE, now=NOW, lease_lifetime=timedelta(seconds=1)
+        NODE_ONE, now=first_now, lease_lifetime=timedelta(seconds=1)
     )
     assert first is not None and first.job_id == job_id
     second = repository.claim_lifecycle_job(
-        NODE_TWO, now=NOW + timedelta(seconds=2), lease_lifetime=timedelta(minutes=1)
+        NODE_TWO,
+        now=worker_now,
+        lease_lifetime=timedelta(minutes=1),
     )
     assert second is not None and second.generation > first.generation
     with pytest.raises(ContentError) as stale:
-        repository.run_lifecycle_job(first, now=NOW + timedelta(seconds=2))
+        repository.run_lifecycle_job(first, now=worker_now)
     assert stale.value.code is ContentErrorCode.STALE_LEASE
-    repository.run_lifecycle_job(second, now=NOW + timedelta(seconds=2))
+    repository.run_lifecycle_job(second, now=worker_now)
     with pytest.raises(ContentError) as gone:
         repository.read(
             _context("content.read", mutation=False),
             CONTENT_ID,
-            now=NOW + timedelta(seconds=2),
+            now=NOW,
         )
     assert gone.value.code is ContentErrorCode.NOT_FOUND
+
+
+def test_cleanup_fence_uses_database_time_and_exact_manifest_scope(
+    database_url: str,
+    repository: PostgresContentRepository,
+) -> None:
+    """Reject a fake clock and deletion of a manifest from a different scope."""
+    other_content_id = "0198a080-0000-7000-8000-000000000133"
+    for content_id in (CONTENT_ID, other_content_id):
+        repository.capture(
+            REQUEST_ROW_ID,
+            "model.response",
+            {"content_id": content_id},
+            content_id=content_id,
+            authenticated_control_values=(),
+            now=NOW,
+        )
+    worker_now = _database_now(database_url)
+    job_id = repository.enqueue_lifecycle_job(
+        "expiry", CONTENT_ID, {"content_id": CONTENT_ID}, now=worker_now
+    )
+    lease = repository.claim_lifecycle_job(NODE_ONE, now=worker_now)
+    assert lease is not None and lease.job_id == job_id
+
+    with psycopg.connect(database_url) as connection:
+        connection.execute(
+            """
+            SELECT
+                set_config('llmrouter.lifecycle_job_id', %s, true),
+                set_config('llmrouter.lifecycle_owner_node_id', %s, true),
+                set_config('llmrouter.lifecycle_generation', %s, true),
+                set_config('llmrouter.lifecycle_manifest_id', '', true)
+            """,
+            (lease.job_id, lease.owner_node_id, str(lease.generation)),
+        )
+        with pytest.raises(psycopg.errors.ObjectNotInPrerequisiteState):
+            connection.execute(
+                """
+                DELETE FROM router.content_segments
+                WHERE manifest_id = (
+                    SELECT manifest_id FROM router.captured_content WHERE id = %s
+                )
+                """,
+                (CONTENT_ID,),
+            )
+        connection.rollback()
+        row = connection.execute(
+            "SELECT manifest_id FROM router.captured_content WHERE id = %s",
+            (other_content_id,),
+        ).fetchone()
+        assert row is not None and isinstance(row[0], uuid.UUID)
+        other_manifest_id = row[0]
+        connection.execute(
+            """
+            SELECT
+                set_config('llmrouter.lifecycle_job_id', %s, true),
+                set_config('llmrouter.lifecycle_owner_node_id', %s, true),
+                set_config('llmrouter.lifecycle_generation', %s, true),
+                set_config('llmrouter.lifecycle_manifest_id', %s, true)
+            """,
+            (
+                lease.job_id,
+                lease.owner_node_id,
+                str(lease.generation),
+                str(other_manifest_id),
+            ),
+        )
+        with pytest.raises(psycopg.errors.ObjectNotInPrerequisiteState):
+            connection.execute(
+                "DELETE FROM router.content_segments WHERE manifest_id = %s",
+                (other_manifest_id,),
+            )
+        connection.rollback()
+        connection.execute(
+            """
+            SELECT
+                set_config('llmrouter.lifecycle_job_id', %s, true),
+                set_config('llmrouter.lifecycle_owner_node_id', %s, true),
+                set_config('llmrouter.lifecycle_generation', %s, true),
+                set_config('llmrouter.lifecycle_manifest_id', %s, true)
+            """,
+            (
+                lease.job_id,
+                lease.owner_node_id,
+                str(lease.generation),
+                str(other_manifest_id),
+            ),
+        )
+        with pytest.raises(psycopg.errors.ObjectNotInPrerequisiteState):
+            connection.execute(
+                "DELETE FROM router.content_manifests WHERE id = %s",
+                (other_manifest_id,),
+            )
+        connection.rollback()
+
+    stale_now = _database_now(database_url) - timedelta(minutes=2)
+    stale_job_id = repository.enqueue_lifecycle_job(
+        "delete",
+        other_content_id,
+        {"content_id": other_content_id},
+        now=stale_now,
+    )
+    stale_lease = repository.claim_lifecycle_job(
+        NODE_TWO, now=stale_now, lease_lifetime=timedelta(seconds=1)
+    )
+    assert stale_lease is not None and stale_lease.job_id == stale_job_id
+    with psycopg.connect(database_url) as connection:
+        connection.execute(
+            """
+            SELECT
+                set_config('llmrouter.lifecycle_job_id', %s, true),
+                set_config('llmrouter.lifecycle_owner_node_id', %s, true),
+                set_config('llmrouter.lifecycle_generation', %s, true),
+                set_config('llmrouter.lifecycle_manifest_id', '', true),
+                set_config('llmrouter.lifecycle_now', %s, true)
+            """,
+            (
+                stale_lease.job_id,
+                stale_lease.owner_node_id,
+                str(stale_lease.generation),
+                stale_now.isoformat(),
+            ),
+        )
+        with pytest.raises(psycopg.errors.ObjectNotInPrerequisiteState):
+            connection.execute(
+                """
+                UPDATE router.captured_content
+                SET lifecycle_state = 'deleting', deletion_started_at = %s
+                WHERE id = %s
+                """,
+                (stale_now, other_content_id),
+            )
+        connection.rollback()
+        assert connection.execute(
+            """
+            SELECT lifecycle_state, count(*) OVER ()
+            FROM router.captured_content
+            WHERE id IN (%s, %s) ORDER BY id
+            """,
+            (CONTENT_ID, other_content_id),
+        ).fetchall() == [("live", 2), ("live", 2)]
 
 
 def test_retention_nearest_replacement_preview_and_count_plus_days(
@@ -584,10 +736,11 @@ def test_capture_and_export_expiry_remove_objects_keys_and_manifests(
         authenticated_control_values=(),
         now=NOW,
     )
-    assert repository.expire_due_content(now=NOW + timedelta(days=8)) == 1
-    lease = repository.claim_lifecycle_job(NODE_ONE, now=NOW + timedelta(days=8))
+    cleanup_now = _database_now(database_url) + timedelta(days=8)
+    assert repository.expire_due_content(now=cleanup_now) == 1
+    lease = repository.claim_lifecycle_job(NODE_ONE, now=cleanup_now)
     assert lease is not None and lease.job_kind == "expiry"
-    repository.run_lifecycle_job(lease, now=NOW + timedelta(days=8))
+    repository.run_lifecycle_job(lease, now=cleanup_now)
     with psycopg.connect(database_url) as connection:
         assert connection.execute(
             "SELECT count(*) FROM router.captured_content"
@@ -614,10 +767,11 @@ def test_capture_and_export_expiry_remove_objects_keys_and_manifests(
     build = repository.claim_lifecycle_job(NODE_ONE, now=NOW)
     assert build is not None and build.job_kind == "export"
     repository.run_lifecycle_job(build, now=NOW)
-    assert repository.expire_due_exports(now=NOW + timedelta(hours=2)) == 1
-    expiry = repository.claim_lifecycle_job(NODE_ONE, now=NOW + timedelta(hours=2))
+    cleanup_now = _database_now(database_url) + timedelta(hours=2)
+    assert repository.expire_due_exports(now=cleanup_now) == 1
+    expiry = repository.claim_lifecycle_job(NODE_ONE, now=cleanup_now)
     assert expiry is not None and expiry.job_kind == "export_expiry"
-    repository.run_lifecycle_job(expiry, now=NOW + timedelta(hours=2))
+    repository.run_lifecycle_job(expiry, now=cleanup_now)
     with psycopg.connect(database_url) as connection:
         assert connection.execute(
             "SELECT count(*) FROM router.protected_exports WHERE id = %s",
@@ -648,7 +802,7 @@ def test_queued_export_build_finishes_after_expiry_cleanup(
         administrator_session_id="session-one",
         now=NOW,
     )
-    later = NOW + timedelta(hours=2)
+    later = _database_now(database_url) + timedelta(hours=2)
     assert repository.expire_due_exports(now=later) == 1
     build = repository.claim_lifecycle_job(NODE_ONE, now=later)
     assert build is not None and build.job_kind == "export"
@@ -723,12 +877,16 @@ def test_partial_object_delete_keeps_content_unreadable_for_retry(
         now=NOW,
     )
     job = repository.enqueue_lifecycle_job(
-        "expiry", CONTENT_ID, {"content_id": CONTENT_ID}, now=NOW
+        "expiry",
+        CONTENT_ID,
+        {"content_id": CONTENT_ID},
+        now=_database_now(database_url),
     )
-    lease = repository.claim_lifecycle_job(NODE_ONE, now=NOW)
+    worker_now = _database_now(database_url)
+    lease = repository.claim_lifecycle_job(NODE_ONE, now=worker_now)
     assert lease is not None and lease.job_id == job
     with pytest.raises(RuntimeError):
-        repository.run_lifecycle_job(lease, now=NOW)
+        repository.run_lifecycle_job(lease, now=worker_now)
     with pytest.raises(ContentError) as hidden:
         repository.read(_context("content.read", mutation=False), CONTENT_ID, now=NOW)
     assert hidden.value.code is ContentErrorCode.NOT_FOUND
@@ -738,11 +896,11 @@ def test_partial_object_delete_keeps_content_unreadable_for_retry(
             (CONTENT_ID,),
         ).fetchone() == ("deleting",)
     repository.retry_lifecycle_job(
-        lease, now=NOW, retry_at=NOW, safe_error="object delete failed"
+        lease, now=worker_now, retry_at=worker_now, safe_error="object delete failed"
     )
-    retry = repository.claim_lifecycle_job(NODE_TWO, now=NOW)
+    retry = repository.claim_lifecycle_job(NODE_TWO, now=worker_now)
     assert retry is not None and retry.job_id == job
-    repository.run_lifecycle_job(retry, now=NOW)
+    repository.run_lifecycle_job(retry, now=worker_now)
     with psycopg.connect(database_url) as connection:
         assert connection.execute(
             "SELECT count(*) FROM router.captured_content"
@@ -864,6 +1022,26 @@ def test_retention_preview_counts_rows_and_worker_deletes_by_audit_class(
             WHERE scope_kind = 'global' ORDER BY data_class, revision
             """
         ).fetchall()
+        connection.execute(
+            """
+            INSERT INTO router.retention_policies (
+                id, scope_kind, service_id, workspace_id, data_class,
+                retention_days, revision, effective_at
+            ) VALUES
+                (%s, 'workspace', %s, %s, 'agent_tool_audit', 7, 1, %s),
+                (%s, 'workspace', %s, %s, 'security_audit', 7, 1, %s)
+            """,
+            (
+                uuid.uuid4(),
+                SERVICE_ID,
+                WORKSPACE_ID,
+                NOW,
+                uuid.uuid4(),
+                SERVICE_ID,
+                WORKSPACE_ID,
+                NOW,
+            ),
+        )
     revision = hashlib.sha256(
         json.dumps(rows, separators=(",", ":")).encode()
     ).hexdigest()
@@ -874,16 +1052,23 @@ def test_retention_preview_counts_rows_and_worker_deletes_by_audit_class(
         now=NOW,
     )
     assert preview.effects[0].estimated_records == 1
+    worker_now = _database_now(database_url)
     job = repository.enqueue_retention_execution(
         RetentionDataClass.AGENT_TOOL_AUDIT,
         service_id=SERVICE_ID,
         workspace_id=WORKSPACE_ID,
-        now=NOW,
-        selection=RetentionSelection(RetentionDataClass.AGENT_TOOL_AUDIT, 7),
+        now=worker_now,
     )
-    lease = repository.claim_lifecycle_job(NODE_ONE, now=NOW)
+    lease = repository.claim_lifecycle_job(NODE_ONE, now=worker_now)
     assert lease is not None and lease.job_id == job
-    repository.run_lifecycle_job(lease, now=NOW)
+    repository.run_lifecycle_job(lease, now=worker_now)
+    later_job = repository.enqueue_retention_execution(
+        RetentionDataClass.AGENT_TOOL_AUDIT,
+        service_id=SERVICE_ID,
+        workspace_id=WORKSPACE_ID,
+        now=worker_now + timedelta(days=1),
+    )
+    assert later_job != job
     with psycopg.connect(database_url) as connection:
         assert connection.execute(
             "SELECT audit_class FROM router.audit_events WHERE action = 'retention.test'"
@@ -916,12 +1101,11 @@ def test_retention_preview_counts_rows_and_worker_deletes_by_audit_class(
         RetentionDataClass.SECURITY_AUDIT,
         service_id=SERVICE_ID,
         workspace_id=WORKSPACE_ID,
-        now=NOW,
-        selection=RetentionSelection(RetentionDataClass.SECURITY_AUDIT, 7),
+        now=worker_now,
     )
-    security_lease = repository.claim_lifecycle_job(NODE_ONE, now=NOW)
+    security_lease = repository.claim_lifecycle_job(NODE_ONE, now=worker_now)
     assert security_lease is not None and security_lease.job_id == security_job
-    repository.run_lifecycle_job(security_lease, now=NOW)
+    repository.run_lifecycle_job(security_lease, now=worker_now)
     with psycopg.connect(database_url) as connection:
         rows = connection.execute(
             """
@@ -969,17 +1153,26 @@ def test_configuration_revision_worker_keeps_count_age_and_references(
                     NOW - timedelta(days=30 if number < 4 else 1),
                 ),
             )
-    selection = RetentionSelection(RetentionDataClass.CONFIGURATION_REVISIONS, 7, 2)
+        connection.execute(
+            """
+            INSERT INTO router.retention_policies (
+                id, scope_kind, service_id, workspace_id, data_class,
+                retention_days, minimum_revision_count, revision, effective_at
+            ) VALUES (%s, 'workspace', %s, %s, 'configuration_revisions',
+                      7, 2, 1, %s)
+            """,
+            (uuid.uuid4(), SERVICE_ID, WORKSPACE_ID, NOW),
+        )
+    worker_now = _database_now(database_url)
     job = repository.enqueue_retention_execution(
         RetentionDataClass.CONFIGURATION_REVISIONS,
         service_id=SERVICE_ID,
         workspace_id=WORKSPACE_ID,
-        now=NOW,
-        selection=selection,
+        now=worker_now,
     )
-    lease = repository.claim_lifecycle_job(NODE_ONE, now=NOW)
+    lease = repository.claim_lifecycle_job(NODE_ONE, now=worker_now)
     assert lease is not None and lease.job_id == job
-    repository.run_lifecycle_job(lease, now=NOW)
+    repository.run_lifecycle_job(lease, now=worker_now)
     with psycopg.connect(database_url) as connection:
         rows = connection.execute(
             """
@@ -1025,6 +1218,12 @@ def test_direct_sql_rejects_content_identity_and_lifecycle_skips(
             connection.execute(
                 "UPDATE router.captured_content SET request_id = %s WHERE id = %s",
                 (uuid.uuid4(), CONTENT_ID),
+            )
+        connection.rollback()
+        connection.execute("SET LOCAL llmrouter.lifecycle_cleanup = 'on'")
+        with pytest.raises(psycopg.errors.ObjectNotInPrerequisiteState):
+            connection.execute(
+                "DELETE FROM router.captured_content WHERE id = %s", (CONTENT_ID,)
             )
         connection.rollback()
         with pytest.raises(psycopg.errors.ObjectNotInPrerequisiteState):

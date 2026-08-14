@@ -531,6 +531,46 @@ def test_concurrent_migration_runners_serialize(database_url: str) -> None:
     ]
 
 
+def test_content_retention_rollback_rejects_configuration_loss(
+    database_url: str,
+) -> None:
+    """Keep capture configuration when the old schema cannot represent it."""
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        migrate(connection)
+        seed_scope(connection)
+        connection.execute(
+            """
+            INSERT INTO router.capture_policies (
+                id, scope_kind, service_id, policy, revision, effective_at
+            ) VALUES (%s, 'service', %s, 'complete', 1, transaction_timestamp())
+            """,
+            (uuid.uuid4(), SERVICE_ID),
+        )
+        with pytest.raises(
+            psycopg.errors.RaiseException,
+            match="content lifecycle data loss",
+        ):
+            migrate(connection, target=12)
+        assert applied_versions(connection)[-1] == migration_plan()[-1].version
+        connection.execute(
+            "DELETE FROM router.capture_policies WHERE service_id = %s",
+            (SERVICE_ID,),
+        )
+        connection.execute(
+            """
+            UPDATE router.retention_limits
+            SET maximum_days = 30, revision = 2
+            WHERE data_class = 'diagnostic_logs'
+            """
+        )
+        with pytest.raises(
+            psycopg.errors.RaiseException,
+            match="content lifecycle data loss",
+        ):
+            migrate(connection, target=12)
+        assert applied_versions(connection)[-1] == migration_plan()[-1].version
+
+
 def test_rollback_keeps_previous_schema_data(database_url: str) -> None:
     """Remove runtime tables without removing prior control data."""
     with psycopg.connect(database_url, autocommit=True) as connection:

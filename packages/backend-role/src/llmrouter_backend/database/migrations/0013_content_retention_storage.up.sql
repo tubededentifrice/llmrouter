@@ -423,10 +423,108 @@ CREATE TABLE router.protected_exports (
     UNIQUE (actor_id, idempotency_key_digest)
 );
 
+CREATE FUNCTION router.has_current_content_lifecycle_fence(
+    accepted_job_kinds text[], expected_scope_key text DEFAULT NULL
+)
+RETURNS boolean
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    fenced boolean;
+BEGIN
+    EXECUTE $query$
+        SELECT EXISTS (
+            SELECT 1
+            FROM router.content_lifecycle_jobs AS job
+            WHERE job.id::text = current_setting('llmrouter.lifecycle_job_id', true)
+              AND job.owner_node_id::text =
+                  current_setting('llmrouter.lifecycle_owner_node_id', true)
+              AND job.lease_generation::text =
+                  current_setting('llmrouter.lifecycle_generation', true)
+              AND job.state = 'running'
+              AND job.lease_expires_at > transaction_timestamp()
+              AND job.job_kind = ANY($1)
+              AND ($2 IS NULL OR job.scope_key = $2)
+        )
+    $query$ INTO fenced USING accepted_job_kinds, expected_scope_key;
+    RETURN fenced;
+END;
+$$;
+
+CREATE FUNCTION router.has_current_content_manifest_fence(
+    expected_manifest_id uuid, allow_detached_parent boolean
+)
+RETURNS boolean
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    owned boolean;
+BEGIN
+    IF expected_manifest_id::text IS DISTINCT FROM nullif(
+        current_setting('llmrouter.lifecycle_manifest_id', true), ''
+    ) THEN
+        RETURN false;
+    END IF;
+    IF allow_detached_parent THEN
+        EXECUTE $query$
+            SELECT EXISTS (
+                SELECT 1
+                FROM router.content_manifest_cleanup_authorizations AS cleanup_auth
+                JOIN router.content_lifecycle_jobs AS job
+                  ON job.id = cleanup_auth.job_id
+                WHERE cleanup_auth.manifest_id = $1
+                  AND job.id::text =
+                      current_setting('llmrouter.lifecycle_job_id', true)
+                  AND job.owner_node_id::text =
+                      current_setting('llmrouter.lifecycle_owner_node_id', true)
+                  AND job.lease_generation = cleanup_auth.lease_generation
+                  AND job.lease_generation::text =
+                      current_setting('llmrouter.lifecycle_generation', true)
+                  AND job.scope_key = cleanup_auth.scope_key
+                  AND job.state = 'running'
+                  AND job.lease_expires_at > transaction_timestamp()
+            )
+        $query$ INTO owned USING expected_manifest_id;
+        RETURN owned;
+    END IF;
+    EXECUTE $query$
+        SELECT EXISTS (
+            SELECT 1
+            FROM router.content_lifecycle_jobs AS job
+            WHERE job.id::text = current_setting('llmrouter.lifecycle_job_id', true)
+              AND job.owner_node_id::text =
+                  current_setting('llmrouter.lifecycle_owner_node_id', true)
+              AND job.lease_generation::text =
+                  current_setting('llmrouter.lifecycle_generation', true)
+              AND job.state = 'running'
+              AND job.lease_expires_at > transaction_timestamp()
+              AND (
+                  (job.job_kind IN ('expiry', 'delete') AND EXISTS (
+                      SELECT 1 FROM router.captured_content AS content
+                      WHERE content.manifest_id = $1
+                        AND job.scope_key = content.id::text
+                  ))
+                  OR (job.job_kind = 'export_expiry' AND EXISTS (
+                      SELECT 1 FROM router.protected_exports AS export
+                      WHERE export.manifest_id = $1
+                        AND job.scope_key = export.id::text
+                  ))
+              )
+        )
+    $query$ INTO owned USING expected_manifest_id;
+    RETURN owned;
+END;
+$$;
+
 CREATE FUNCTION router.protect_content_record()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
+DECLARE
+    expected_scope_key text;
+    expected_manifest_id uuid;
 BEGIN
     IF TG_OP = 'INSERT' THEN
         IF TG_TABLE_NAME = 'captured_content' AND NOT EXISTS (
@@ -442,7 +540,26 @@ BEGIN
         RETURN NEW;
     END IF;
     IF TG_OP = 'DELETE' THEN
-        IF current_setting('llmrouter.lifecycle_cleanup', true) <> 'on' THEN
+        expected_scope_key := NULL;
+        expected_manifest_id := NULL;
+        IF TG_TABLE_NAME = 'captured_content' THEN
+            expected_scope_key := OLD.id::text;
+        ELSIF TG_TABLE_NAME = 'content_segments' THEN
+            expected_manifest_id := OLD.manifest_id;
+        ELSIF TG_TABLE_NAME = 'content_manifests' THEN
+            expected_manifest_id := OLD.id;
+        END IF;
+        IF expected_manifest_id IS NOT NULL AND NOT
+           router.has_current_content_manifest_fence(
+               expected_manifest_id,
+               TG_TABLE_NAME = 'content_manifests'
+           ) THEN
+            RAISE EXCEPTION 'content records require exact manifest cleanup'
+                USING ERRCODE = '55000';
+        ELSIF expected_manifest_id IS NULL AND NOT
+              router.has_current_content_lifecycle_fence(
+                  ARRAY['expiry', 'delete'], expected_scope_key
+              ) THEN
             RAISE EXCEPTION 'content records require fenced lifecycle cleanup'
                 USING ERRCODE = '55000';
         END IF;
@@ -464,11 +581,8 @@ BEGIN
            OR NEW.created_at <> OLD.created_at OR NEW.deleted_at IS DISTINCT FROM OLD.deleted_at
            OR OLD.lifecycle_state <> 'live' OR NEW.lifecycle_state <> 'deleting'
            OR NEW.deletion_started_at IS NULL
-           OR NOT EXISTS (
-               SELECT 1 FROM router.content_lifecycle_jobs AS job
-               WHERE job.job_kind IN ('expiry', 'delete')
-                 AND job.scope_key = OLD.id::text AND job.state = 'running'
-                 AND job.lease_expires_at > NEW.deletion_started_at
+           OR NOT router.has_current_content_lifecycle_fence(
+               ARRAY['expiry', 'delete'], OLD.id::text
            ) THEN
             RAISE EXCEPTION 'invalid captured-content lifecycle transition'
                 USING ERRCODE = '55000';
@@ -510,7 +624,9 @@ BEGIN
         RETURN NEW;
     END IF;
     IF TG_OP = 'DELETE' THEN
-        IF current_setting('llmrouter.lifecycle_cleanup', true) <> 'on' THEN
+        IF NOT router.has_current_content_lifecycle_fence(
+            ARRAY['export_expiry'], OLD.id::text
+        ) THEN
             RAISE EXCEPTION 'exports require fenced lifecycle cleanup'
                 USING ERRCODE = '55000';
         END IF;
@@ -545,11 +661,8 @@ BEGIN
        OR (OLD.state = 'expired' AND (
            OLD.deletion_started_at IS NOT NULL
            OR NEW.deletion_started_at IS NULL
-           OR NOT EXISTS (
-               SELECT 1 FROM router.content_lifecycle_jobs AS job
-               WHERE job.job_kind = 'export_expiry'
-                 AND job.scope_key = OLD.id::text AND job.state = 'running'
-                 AND job.lease_expires_at > NEW.deletion_started_at
+           OR NOT router.has_current_content_lifecycle_fence(
+               ARRAY['export_expiry'], OLD.id::text
            )
        )) THEN
         RAISE EXCEPTION 'invalid protected export transition' USING ERRCODE = '23514';
@@ -593,7 +706,9 @@ BEGIN
         RETURN NEW;
     END IF;
     IF TG_OP = 'DELETE' THEN
-        IF current_setting('llmrouter.lifecycle_cleanup', true) <> 'on' THEN
+        IF NOT router.has_current_content_lifecycle_fence(
+            ARRAY['export_expiry'], OLD.export_id::text
+        ) THEN
             RAISE EXCEPTION 'redemptions require fenced lifecycle cleanup'
                 USING ERRCODE = '55000';
         END IF;
@@ -652,6 +767,55 @@ CREATE TABLE router.content_lifecycle_jobs (
         OR (state <> 'running' AND owner_node_id IS NULL AND lease_expires_at IS NULL)
     )
 );
+
+CREATE TABLE router.content_manifest_cleanup_authorizations (
+    manifest_id uuid PRIMARY KEY,
+    job_id uuid NOT NULL,
+    lease_generation bigint NOT NULL CHECK (lease_generation > 0),
+    scope_key text NOT NULL CHECK (scope_key <> ''),
+    created_at timestamptz NOT NULL
+);
+
+CREATE FUNCTION router.protect_content_manifest_cleanup_authorization()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        IF NOT router.has_current_content_manifest_fence(NEW.manifest_id, false)
+           OR NEW.job_id::text <>
+              current_setting('llmrouter.lifecycle_job_id', true)
+           OR NEW.lease_generation::text <>
+              current_setting('llmrouter.lifecycle_generation', true)
+           OR NEW.scope_key IS DISTINCT FROM (
+              SELECT job.scope_key FROM router.content_lifecycle_jobs AS job
+              WHERE job.id = NEW.job_id
+           ) THEN
+            RAISE EXCEPTION 'manifest cleanup authorization is not exact'
+                USING ERRCODE = '55000';
+        END IF;
+        RETURN NEW;
+    END IF;
+    IF TG_OP = 'DELETE' THEN
+        IF NOT router.has_current_content_manifest_fence(OLD.manifest_id, true)
+           OR OLD.job_id::text <>
+              current_setting('llmrouter.lifecycle_job_id', true)
+           OR OLD.lease_generation::text <>
+              current_setting('llmrouter.lifecycle_generation', true) THEN
+            RAISE EXCEPTION 'manifest cleanup authorization needs its live worker'
+                USING ERRCODE = '55000';
+        END IF;
+        RETURN OLD;
+    END IF;
+    RAISE EXCEPTION 'manifest cleanup authorization is immutable'
+        USING ERRCODE = '55000';
+END;
+$$;
+
+CREATE TRIGGER content_manifest_cleanup_authorizations_guard
+BEFORE INSERT OR UPDATE OR DELETE
+ON router.content_manifest_cleanup_authorizations
+FOR EACH ROW EXECUTE FUNCTION router.protect_content_manifest_cleanup_authorization();
 
 CREATE INDEX content_lifecycle_jobs_due_idx
 ON router.content_lifecycle_jobs (available_at, id)
@@ -745,7 +909,7 @@ LANGUAGE plpgsql
 AS $$
 BEGIN
     IF TG_OP = 'DELETE'
-       AND current_setting('llmrouter.retention_cleanup', true) = 'on' THEN
+       AND router.has_current_content_lifecycle_fence(ARRAY['retention']) THEN
         RETURN OLD;
     END IF;
     RAISE EXCEPTION 'retained records require the retention worker'

@@ -4,6 +4,43 @@ BEGIN
        OR EXISTS (SELECT 1 FROM router.protected_exports)
        OR EXISTS (SELECT 1 FROM router.content_lifecycle_jobs)
        OR EXISTS (
+           SELECT 1 FROM router.capture_policies
+           WHERE id <> '00000000-0000-7000-8000-000000000013'::uuid
+              OR scope_kind <> 'global' OR policy <> 'complete'
+              OR minimum_policy <> 'disabled' OR maximum_policy <> 'complete'
+              OR revision <> 1
+       )
+       OR EXISTS (
+           SELECT 1
+           FROM router.retention_limits AS retention_limit
+           JOIN (VALUES
+               ('diagnostic_logs', 1, 36500, NULL::integer, NULL::integer),
+               ('captured_content', 1, 36500, NULL::integer, NULL::integer),
+               ('raw_accounting', 1, 36500, NULL::integer, NULL::integer),
+               ('agent_tool_audit', 7, 365, NULL::integer, NULL::integer),
+               ('daily_accounting', 1, 36500, NULL::integer, NULL::integer),
+               ('security_audit', 1, 36500, NULL::integer, NULL::integer),
+               ('configuration_revisions', 1, 36500, 1, 1000000)
+           ) AS expected(
+               data_class, minimum_days, maximum_days,
+               allowed_minimum_count, allowed_maximum_count
+           ) USING (data_class)
+           WHERE (
+               retention_limit.minimum_days,
+               retention_limit.maximum_days,
+               retention_limit.allowed_minimum_count,
+               retention_limit.allowed_maximum_count,
+               retention_limit.revision
+           ) IS DISTINCT FROM (
+               expected.minimum_days,
+               expected.maximum_days,
+               expected.allowed_minimum_count,
+               expected.allowed_maximum_count,
+               1::bigint
+           )
+       )
+       OR (SELECT count(*) FROM router.retention_limits) <> 7
+       OR EXISTS (
            SELECT 1 FROM router.logical_requests
            WHERE capture_policy = 'metadata_only'
               OR (capture_policy = 'disabled' AND capture_reason = 'configured')
@@ -18,9 +55,14 @@ DROP TABLE router.protected_exports;
 DROP TABLE router.captured_content;
 DROP TABLE router.content_segments;
 DROP TABLE router.content_manifests;
+DROP TRIGGER content_manifest_cleanup_authorizations_guard
+ON router.content_manifest_cleanup_authorizations;
+DROP FUNCTION router.protect_content_manifest_cleanup_authorization();
+DROP TABLE router.content_manifest_cleanup_authorizations;
 DROP FUNCTION router.protect_export_redemption();
 DROP FUNCTION router.protect_export_record();
 DROP FUNCTION router.protect_content_record();
+DROP FUNCTION router.has_current_content_manifest_fence(uuid, boolean);
 
 DROP TRIGGER content_lifecycle_jobs_fenced ON router.content_lifecycle_jobs;
 DROP FUNCTION router.protect_content_lifecycle_job();
@@ -46,6 +88,7 @@ BEFORE UPDATE OR DELETE ON router.configuration_revisions
 FOR EACH ROW EXECUTE FUNCTION router.reject_record_change();
 
 DROP FUNCTION router.protect_retained_record();
+DROP FUNCTION router.has_current_content_lifecycle_fence(text[], text);
 
 DROP TRIGGER logical_requests_configured_capture_snapshot ON router.logical_requests;
 DROP FUNCTION router.apply_configured_capture_snapshot();

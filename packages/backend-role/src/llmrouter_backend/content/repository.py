@@ -559,14 +559,18 @@ class PostgresContentRepository:
         workspace_id: str | None,
         now: datetime,
         limit: int = 1000,
-        selection: RetentionSelection | None = None,
     ) -> str:
         """Queue one bounded, fenced retention execution for one exact scope."""
         _require_aware(now)
         if (workspace_id is not None and service_id is None) or not 1 <= limit <= 1000:
             raise ValueError("The retention execution scope is invalid.")
         scope_key = ":".join(
-            (data_class.value, service_id or "global", workspace_id or "-")
+            (
+                data_class.value,
+                service_id or "global",
+                workspace_id or "-",
+                now.isoformat(),
+            )
         )
         return self.enqueue_lifecycle_job(
             "retention",
@@ -576,8 +580,6 @@ class PostgresContentRepository:
                 "service_id": service_id,
                 "workspace_id": workspace_id,
                 "limit": limit,
-                "retention_days": None if selection is None else selection.days,
-                "minimum_count": None if selection is None else selection.minimum_count,
             },
             now=now,
         )
@@ -1669,6 +1671,7 @@ class PostgresContentRepository:
             connection.transaction(),
         ):
             _lock_live_lease(connection, lease, now=now)
+            _set_worker_fence(connection, lease)
             row = connection.execute(
                 "SELECT * FROM router.captured_content WHERE id = %s FOR UPDATE",
                 (parsed_id,),
@@ -1700,18 +1703,31 @@ class PostgresContentRepository:
             connection.transaction(),
         ):
             _lock_live_lease(connection, lease, now=now)
-            connection.execute("SET LOCAL llmrouter.lifecycle_cleanup = 'on'")
+            _set_worker_fence(connection, lease, expected_manifest_id=manifest_id)
+            if manifest_id is not None:
+                connection.execute(
+                    """
+                    INSERT INTO router.content_manifest_cleanup_authorizations (
+                        manifest_id, job_id, lease_generation, scope_key, created_at
+                    ) VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (manifest_id, lease.job_id, lease.generation, lease.scope_key, now),
+                )
+                connection.execute(
+                    "DELETE FROM router.content_segments WHERE manifest_id = %s",
+                    (manifest_id,),
+                )
             connection.execute(
                 "DELETE FROM router.captured_content WHERE id = %s AND lifecycle_state = 'deleting'",
                 (parsed_id,),
             )
             if manifest_id is not None:
                 connection.execute(
-                    "DELETE FROM router.content_segments WHERE manifest_id = %s",
+                    "DELETE FROM router.content_manifests WHERE id = %s",
                     (manifest_id,),
                 )
                 connection.execute(
-                    "DELETE FROM router.content_manifests WHERE id = %s",
+                    "DELETE FROM router.content_manifest_cleanup_authorizations WHERE manifest_id = %s",
                     (manifest_id,),
                 )
 
@@ -1724,6 +1740,7 @@ class PostgresContentRepository:
             connection.transaction(),
         ):
             _lock_live_lease(connection, lease, now=now)
+            _set_worker_fence(connection, lease)
             row = connection.execute(
                 "SELECT * FROM router.protected_exports WHERE id = %s FOR UPDATE",
                 (export_id,),
@@ -1753,7 +1770,20 @@ class PostgresContentRepository:
             connection.transaction(),
         ):
             _lock_live_lease(connection, lease, now=now)
-            connection.execute("SET LOCAL llmrouter.lifecycle_cleanup = 'on'")
+            _set_worker_fence(connection, lease, expected_manifest_id=manifest_id)
+            if manifest_id is not None:
+                connection.execute(
+                    """
+                    INSERT INTO router.content_manifest_cleanup_authorizations (
+                        manifest_id, job_id, lease_generation, scope_key, created_at
+                    ) VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (manifest_id, lease.job_id, lease.generation, lease.scope_key, now),
+                )
+                connection.execute(
+                    "DELETE FROM router.content_segments WHERE manifest_id = %s",
+                    (manifest_id,),
+                )
             connection.execute(
                 "DELETE FROM router.export_redemptions WHERE export_id = %s",
                 (export_id,),
@@ -1764,11 +1794,11 @@ class PostgresContentRepository:
             )
             if manifest_id is not None:
                 connection.execute(
-                    "DELETE FROM router.content_segments WHERE manifest_id = %s",
+                    "DELETE FROM router.content_manifests WHERE id = %s",
                     (manifest_id,),
                 )
                 connection.execute(
-                    "DELETE FROM router.content_manifests WHERE id = %s",
+                    "DELETE FROM router.content_manifest_cleanup_authorizations WHERE manifest_id = %s",
                     (manifest_id,),
                 )
 
@@ -1806,15 +1836,7 @@ class PostgresContentRepository:
             selection = RetentionSelection(
                 data_class, row["retention_days"], row["minimum_revision_count"]
             )
-            requested_days = lease.payload.get("retention_days")
-            requested_count = lease.payload.get("minimum_count")
-            if isinstance(requested_days, int):
-                selection = RetentionSelection(
-                    data_class,
-                    requested_days,
-                    requested_count if isinstance(requested_count, int) else None,
-                )
-            connection.execute("SET LOCAL llmrouter.retention_cleanup = 'on'")
+            _set_worker_fence(connection, lease)
             _delete_retained_rows(
                 connection,
                 selection,
@@ -1978,6 +2000,30 @@ def _lock_live_lease(
     ).fetchone()
     if row is None:
         raise ContentError(ContentErrorCode.STALE_LEASE, lease.job_id)
+
+
+def _set_worker_fence(
+    connection: Connection[Any],
+    lease: LifecycleLease,
+    *,
+    expected_manifest_id: uuid.UUID | None = None,
+) -> None:
+    connection.execute(
+        "SELECT set_config('llmrouter.lifecycle_job_id', %s, true)",
+        (lease.job_id,),
+    )
+    connection.execute(
+        "SELECT set_config('llmrouter.lifecycle_owner_node_id', %s, true)",
+        (lease.owner_node_id,),
+    )
+    connection.execute(
+        "SELECT set_config('llmrouter.lifecycle_generation', %s, true)",
+        (str(lease.generation),),
+    )
+    connection.execute(
+        "SELECT set_config('llmrouter.lifecycle_manifest_id', %s, true)",
+        ("" if expected_manifest_id is None else str(expected_manifest_id),),
+    )
 
 
 def _enqueue_export_expiry(

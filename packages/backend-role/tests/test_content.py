@@ -47,6 +47,9 @@ def test_structured_control_fields_are_rejected_without_pattern_scanning() -> No
             }
         ]
     }
+    assert redact_authenticated_values(
+        {"message": "long-control short"}, ("long", "long-control")
+    ) == {"message": "[REDACTED] short"}
 
 
 def test_capture_snapshot_and_retention_limits_are_closed() -> None:

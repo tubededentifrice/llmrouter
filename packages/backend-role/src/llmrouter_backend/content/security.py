@@ -43,7 +43,12 @@ def redact_authenticated_values(
     document: JsonValue, authenticated_control_values: Sequence[str]
 ) -> JsonValue:
     """Remove only exact known control values from the captured document."""
-    values = tuple(value for value in authenticated_control_values if value)
+    values = tuple(
+        sorted(
+            {value for value in authenticated_control_values if value},
+            key=lambda item: (-len(item), item),
+        )
+    )
     return _redact(document, values)
 
 
