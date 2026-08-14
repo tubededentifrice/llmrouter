@@ -658,20 +658,15 @@ class PostgresExecutionRepository:
             PrincipalKind.SYSTEM,
         }:
             return
-        try:
-            with psycopg.connect(
-                self._database_url, row_factory=dict_row
-            ) as connection:
-                _insert_audit(
-                    connection,
-                    context,
-                    target,
-                    None,
-                    permission_result="denied",
-                    final_result="denied",
-                )
-        except psycopg.Error:
-            return
+        with psycopg.connect(self._database_url, row_factory=dict_row) as connection:
+            _insert_audit(
+                connection,
+                context,
+                target,
+                None,
+                permission_result="denied",
+                final_result="denied",
+            )
 
 
 def _target_columns(target: ExecutionTarget) -> tuple[str, str, str]:
@@ -1341,31 +1336,48 @@ def _insert_audit(  # noqa: PLR0913 -- Durable audit fields are explicit.
 
 def _evidence_values(value: object) -> tuple[AdapterStopEvidence, ...]:
     if not isinstance(value, list):
-        return ()
-    return tuple(
-        AdapterStopEvidence(
-            str(item["operation_id"]),
-            bool(item["supported"]),
-            bool(item["stop_requested"]),
-            bool(item["confirmed_stopped"]),
-            None if item.get("safe_code") is None else str(item["safe_code"]),
-        )
-        for item in value
-        if isinstance(item, dict)
-    )
+        message = "Stored adapter stop evidence must be an array."
+        raise TypeError(message)
+    result: list[AdapterStopEvidence] = []
+    required = {
+        "operation_id",
+        "supported",
+        "stop_requested",
+        "confirmed_stopped",
+        "safe_code",
+    }
+    for item in value:
+        if not isinstance(item, dict) or item.keys() != required:
+            message = "Stored adapter stop evidence is invalid."
+            raise ValueError(message)
+        operation_id = item["operation_id"]
+        safe_code = item["safe_code"]
+        flags = (item["supported"], item["stop_requested"], item["confirmed_stopped"])
+        if (
+            not isinstance(operation_id, str)
+            or not all(isinstance(flag, bool) for flag in flags)
+            or (safe_code is not None and not isinstance(safe_code, str))
+        ):
+            message = "Stored adapter stop evidence is invalid."
+            raise ValueError(message)
+        result.append(AdapterStopEvidence(operation_id, *flags, safe_code))
+    return tuple(result)
 
 
 def _call_stop(stop: AdapterStop, ordinal: int) -> AdapterStopEvidence:
     try:
-        return stop()
+        result = stop()
     except Exception:  # noqa: BLE001
-        return AdapterStopEvidence(
-            operation_id=f"adapter-stop-{ordinal}",
-            supported=False,
-            stop_requested=True,
-            confirmed_stopped=False,
-            safe_code="stop_failed",
-        )
+        result = None
+    if isinstance(result, AdapterStopEvidence):
+        return result
+    return AdapterStopEvidence(
+        operation_id=f"adapter-stop-{ordinal}",
+        supported=False,
+        stop_requested=True,
+        confirmed_stopped=False,
+        safe_code="stop_failed",
+    )
 
 
 def _require_read_authority(context: RequestContext, target: ExecutionTarget) -> None:

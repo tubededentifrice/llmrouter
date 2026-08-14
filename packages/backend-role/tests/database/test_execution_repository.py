@@ -1506,6 +1506,88 @@ def test_stream_envelope_rejects_null_required_values(
         )
 
 
+def test_database_rejects_malformed_core_stream_payload(
+    database_url: str, repository: PostgresExecutionRepository
+) -> None:
+    """Keep the durable journal valid when a writer bypasses the repository."""
+    repository.transition(
+        _context("model.create", mutation=True),
+        TARGET,
+        expected_revision=1,
+        new_state=ExecutionState.RUNNING,
+    )
+    with psycopg.connect(database_url) as connection:
+        occurred_at = connection.execute(
+            "SELECT date_trunc('milliseconds', transaction_timestamp())"
+        ).fetchone()
+        assert occurred_at is not None
+        wire_data = json.dumps(
+            {
+                "stream_version": "1",
+                "request_id": TARGET.public_id,
+                "sequence": 3,
+                "occurred_at": occurred_at[0]
+                .isoformat(timespec="milliseconds")
+                .replace("+00:00", "Z"),
+                "payload": {"output_index": 0, "content_type": "text/plain"},
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        with pytest.raises(psycopg.errors.CheckViolation):
+            connection.execute(
+                """INSERT INTO router.execution_stream_events (
+                       request_row_id, service_id, workspace_id, sequence, event_name,
+                       occurred_at, wire_data, wire_sha256
+                   ) VALUES (%s, %s, %s, 3, 'output.delta', %s, %s, %s)""",
+                (
+                    REQUEST_ROW_ID,
+                    SERVICE_ID,
+                    WORKSPACE_ID,
+                    occurred_at[0],
+                    wire_data,
+                    hashlib.sha256(wire_data.encode()).digest(),
+                ),
+            )
+
+
+def test_database_rejects_coerced_cancellation_proof(
+    database_url: str, repository: PostgresExecutionRepository
+) -> None:
+    """Do not accept text values as proof that active work stopped."""
+    del repository
+    evidence = [
+        {
+            "operation_id": "attempt-one",
+            "supported": True,
+            "stop_requested": True,
+            "confirmed_stopped": "true",
+            "safe_code": None,
+        }
+    ]
+    with (
+        pytest.raises(psycopg.errors.CheckViolation),
+        psycopg.connect(database_url) as connection,
+    ):
+        connection.execute(
+            """INSERT INTO router.execution_cancellations (
+                   request_row_id, service_id, workspace_id, actor_kind, actor_id,
+                   prior_state, reason_sha256, requested_at, reconcile_deadline,
+                   adapter_stop_evidence
+               ) VALUES (%s, %s, %s, 'service', %s, 'admitted', %s,
+                         transaction_timestamp(),
+                         transaction_timestamp() + interval '10 minutes', %s::jsonb)""",
+            (
+                REQUEST_ROW_ID,
+                SERVICE_ID,
+                WORKSPACE_ID,
+                SERVICE_ID,
+                bytes.fromhex("0f" * 32),
+                json.dumps(evidence),
+            ),
+        )
+
+
 def test_lifecycle_events_cannot_reuse_one_state_revision(
     database_url: str, repository: PostgresExecutionRepository
 ) -> None:

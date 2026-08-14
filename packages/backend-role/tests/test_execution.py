@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from typing import cast
 
 import pytest
 from llmrouter_backend.execution import (
+    AdapterStopEvidence,
     ExecutionError,
     ExecutionErrorCode,
     ExecutionKind,
@@ -159,6 +161,58 @@ def test_known_event_payload_validation_is_closed(  # noqa: D103
             event_name=event_name,
             occurred_at=NOW,
             payload=payload,
+        )
+
+
+@pytest.mark.parametrize(
+    ("event_name", "payload"),
+    [
+        (
+            "tool.call",
+            {
+                "tool_call_id": "call",
+                "tool_name": "lookup",
+                "arguments_delta": 1,
+                "complete": False,
+            },
+        ),
+        ("usage.updated", {"usage": [], "estimated": False}),
+        (
+            "tool.failed",
+            {"tool_call_id": "call", "error": "unsafe", "uncertain_effect": False},
+        ),
+    ],
+)
+def test_known_event_rejects_wrong_structured_field_types(
+    event_name: str, payload: dict[str, object]
+) -> None:
+    """Reject required core payload values with the wrong JSON type."""
+    with pytest.raises(ValueError):  # noqa: PT011
+        make_event(
+            TARGET,
+            sequence=2,
+            event_name=event_name,
+            occurred_at=NOW,
+            payload=payload,
+        )
+
+
+def test_sequence_and_stop_evidence_reject_boolean_integer_coercion() -> None:
+    """Keep JSON booleans separate from integer and evidence fields."""
+    with pytest.raises(ValueError, match="sequence"):
+        make_event(
+            TARGET,
+            sequence=True,
+            event_name="extension.test",
+            occurred_at=NOW,
+            payload={},
+        )
+    with pytest.raises(TypeError, match="booleans"):
+        AdapterStopEvidence(
+            operation_id="operation",
+            supported=True,
+            stop_requested=True,
+            confirmed_stopped=cast("bool", "true"),
         )
 
 

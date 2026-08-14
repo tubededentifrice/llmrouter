@@ -303,6 +303,86 @@ BEGIN
 END;
 $$;
 
+CREATE FUNCTION router.valid_execution_stream_payload(event_type text, payload jsonb)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE
+AS $$
+BEGIN
+    IF jsonb_typeof(payload) IS DISTINCT FROM 'object' THEN
+        RETURN false;
+    END IF;
+    RETURN COALESCE((CASE event_type
+        WHEN 'request.admitted' THEN
+            payload->>'state' = 'admitted'
+            AND jsonb_typeof(payload->'state_revision') = 'number'
+            AND payload->>'state_revision' ~ '^[1-9][0-9]*$'
+            AND jsonb_typeof(payload->'admission') = 'object'
+        WHEN 'request.running' THEN
+            jsonb_typeof(payload->'state_revision') = 'number'
+            AND payload->>'state_revision' ~ '^[1-9][0-9]*$'
+        WHEN 'request.waiting_for_tool' THEN
+            jsonb_typeof(payload->'state_revision') = 'number'
+            AND payload->>'state_revision' ~ '^[1-9][0-9]*$'
+            AND jsonb_typeof(payload->'tool_call_id') = 'string'
+            AND payload->>'tool_call_id' <> ''
+            AND jsonb_typeof(payload->'expires_at') = 'string'
+        WHEN 'output.delta' THEN
+            jsonb_typeof(payload->'output_index') = 'number'
+            AND payload->>'output_index' ~ '^(0|[1-9][0-9]*)$'
+            AND jsonb_typeof(payload->'content_type') = 'string'
+            AND payload->>'content_type' <> ''
+            AND jsonb_typeof(payload->'delta') = 'string'
+            AND octet_length(payload->>'delta') <= 262144
+        WHEN 'output.completed' THEN
+            jsonb_typeof(payload->'output_index') = 'number'
+            AND payload->>'output_index' ~ '^(0|[1-9][0-9]*)$'
+            AND jsonb_typeof(payload->'content_type') = 'string'
+            AND payload->>'content_type' <> ''
+        WHEN 'tool.call' THEN
+            jsonb_typeof(payload->'tool_call_id') = 'string'
+            AND payload->>'tool_call_id' <> ''
+            AND jsonb_typeof(payload->'tool_name') = 'string'
+            AND payload->>'tool_name' <> ''
+            AND jsonb_typeof(payload->'arguments_delta') = 'string'
+            AND jsonb_typeof(payload->'complete') = 'boolean'
+        WHEN 'tool.started' THEN
+            jsonb_typeof(payload->'tool_call_id') = 'string'
+            AND payload->>'tool_call_id' <> ''
+            AND jsonb_typeof(payload->'tool_kind') = 'string'
+            AND payload->>'tool_kind' IN ('shared','business')
+        WHEN 'tool.completed' THEN
+            jsonb_typeof(payload->'tool_call_id') = 'string'
+            AND payload->>'tool_call_id' <> ''
+            AND payload ? 'result_summary'
+        WHEN 'tool.failed' THEN
+            jsonb_typeof(payload->'tool_call_id') = 'string'
+            AND payload->>'tool_call_id' <> ''
+            AND jsonb_typeof(payload->'error') = 'object'
+            AND jsonb_typeof(payload->'uncertain_effect') = 'boolean'
+        WHEN 'usage.updated' THEN
+            jsonb_typeof(payload->'usage') = 'object'
+            AND jsonb_typeof(payload->'estimated') = 'boolean'
+        WHEN 'request.cancel_requested' THEN
+            jsonb_typeof(payload->'state_revision') = 'number'
+            AND payload->>'state_revision' ~ '^[1-9][0-9]*$'
+        WHEN 'request.terminal' THEN
+            jsonb_typeof(payload->'state') = 'string'
+            AND payload->>'state' IN (
+                'succeeded','failed','interrupted','cancelled','uncertain'
+            )
+            AND jsonb_typeof(payload->'state_revision') = 'number'
+            AND payload->>'state_revision' ~ '^[1-9][0-9]*$'
+            AND jsonb_typeof(payload->'partial_output') = 'boolean'
+            AND jsonb_typeof(payload->'committed_effects') = 'boolean'
+            AND (NOT payload ? 'error' OR jsonb_typeof(payload->'error') = 'object')
+        ELSE event_type ~ '^extension\.[a-z0-9][a-z0-9._-]{0,99}$'
+    END), false);
+EXCEPTION WHEN invalid_text_representation OR numeric_value_out_of_range THEN
+    RETURN false;
+END;
+$$;
+
 CREATE TABLE router.execution_stream_events (
     request_row_id uuid REFERENCES router.logical_requests (row_id) ON DELETE RESTRICT,
     run_row_id uuid REFERENCES router.agent_runs (row_id) ON DELETE RESTRICT,
@@ -329,6 +409,9 @@ CREATE TABLE router.execution_stream_events (
     FOREIGN KEY (workspace_id, service_id)
         REFERENCES router.workspaces (id, service_id) ON DELETE RESTRICT,
     CHECK ((request_row_id IS NULL) <> (run_row_id IS NULL)),
+    CHECK (router.valid_execution_stream_payload(
+        event_name, wire_data::jsonb->'payload'
+    )),
     UNIQUE NULLS NOT DISTINCT (request_row_id, run_row_id, sequence)
 );
 
@@ -584,6 +667,7 @@ BEGIN
        OR jsonb_typeof(envelope->'request_id') IS DISTINCT FROM 'string'
        OR (envelope->>'request_id')::uuid IS DISTINCT FROM execution.public_id
        OR jsonb_typeof(envelope->'sequence') IS DISTINCT FROM 'number'
+       OR envelope->>'sequence' !~ '^[1-9][0-9]*$'
        OR (envelope->>'sequence')::bigint IS DISTINCT FROM NEW.sequence
        OR jsonb_typeof(envelope->'occurred_at') IS DISTINCT FROM 'string'
        OR (envelope->>'occurred_at')::timestamptz IS DISTINCT FROM NEW.occurred_at
@@ -1000,6 +1084,45 @@ AFTER INSERT ON router.execution_stream_events
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION router.check_stream_event_applied();
 
+CREATE FUNCTION router.valid_adapter_stop_evidence(value jsonb)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE
+AS $$
+DECLARE
+    item jsonb;
+BEGIN
+    IF jsonb_typeof(value) IS DISTINCT FROM 'array' THEN
+        RETURN false;
+    END IF;
+    FOR item IN SELECT * FROM jsonb_array_elements(value)
+    LOOP
+        IF jsonb_typeof(item) IS DISTINCT FROM 'object'
+           OR NOT item ?& ARRAY[
+               'operation_id','supported','stop_requested','confirmed_stopped','safe_code'
+           ]
+           OR item - ARRAY[
+               'operation_id','supported','stop_requested','confirmed_stopped','safe_code'
+           ] <> '{}'::jsonb
+           OR jsonb_typeof(item->'operation_id') IS DISTINCT FROM 'string'
+           OR length(item->>'operation_id') NOT BETWEEN 1 AND 500
+           OR jsonb_typeof(item->'supported') IS DISTINCT FROM 'boolean'
+           OR jsonb_typeof(item->'stop_requested') IS DISTINCT FROM 'boolean'
+           OR jsonb_typeof(item->'confirmed_stopped') IS DISTINCT FROM 'boolean'
+           OR (item->'safe_code' <> 'null'::jsonb
+               AND jsonb_typeof(item->'safe_code') IS DISTINCT FROM 'string')
+           OR (item->'safe_code' <> 'null'::jsonb
+               AND length(item->>'safe_code') > 100)
+           OR ((item->>'confirmed_stopped')::boolean
+               AND (NOT (item->>'supported')::boolean
+                    OR NOT (item->>'stop_requested')::boolean)) THEN
+            RETURN false;
+        END IF;
+    END LOOP;
+    RETURN true;
+END;
+$$;
+
 CREATE TABLE router.execution_cancellations (
     request_row_id uuid REFERENCES router.logical_requests (row_id) ON DELETE RESTRICT,
     run_row_id uuid REFERENCES router.agent_runs (row_id) ON DELETE RESTRICT,
@@ -1012,7 +1135,7 @@ CREATE TABLE router.execution_cancellations (
     requested_at timestamptz NOT NULL,
     reconcile_deadline timestamptz NOT NULL,
     adapter_stop_evidence jsonb NOT NULL DEFAULT '[]'::jsonb
-        CHECK (jsonb_typeof(adapter_stop_evidence) = 'array'),
+        CHECK (router.valid_adapter_stop_evidence(adapter_stop_evidence)),
     evidence_updated_at timestamptz,
     final_state router.execution_state,
     completed_at timestamptz,
@@ -1151,7 +1274,7 @@ CREATE TABLE router.execution_cancellation_audit (
     action text NOT NULL CHECK (action IN ('model.cancel', 'tool.cancel', 'run.cancel')),
     prior_state router.execution_state,
     adapter_stop_evidence jsonb NOT NULL DEFAULT '[]'::jsonb
-        CHECK (jsonb_typeof(adapter_stop_evidence) = 'array'),
+        CHECK (router.valid_adapter_stop_evidence(adapter_stop_evidence)),
     final_result text NOT NULL CHECK (final_result IN (
         'denied', 'accepted', 'cancelled', 'pending', 'too_late', 'uncertain'
     )),

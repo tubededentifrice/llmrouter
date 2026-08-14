@@ -87,7 +87,7 @@ def make_event(  # noqa: PLR0913
     expires_at: datetime | None = None,
 ) -> StreamEvent:
     """Validate and encode one closed version-one envelope."""
-    if sequence < 1:
+    if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 1:
         msg = "A stream sequence must be positive."
         raise ValueError(msg)
     if occurred_at.tzinfo is None or occurred_at.utcoffset() is None:
@@ -184,7 +184,7 @@ def _millisecond_time(value: datetime) -> datetime:
     return utc.replace(microsecond=(utc.microsecond // 1000) * 1000)
 
 
-def _validate_payload_types(  # noqa: C901 -- Closed event variants need explicit checks.
+def _validate_payload_types(  # noqa: C901, PLR0912 -- Explicit closed event variants.
     event_name: str, payload: Mapping[str, object]
 ) -> None:
     revision = payload.get("state_revision")
@@ -229,6 +229,17 @@ def _validate_payload_types(  # noqa: C901 -- Closed event variants need explici
         "business",
     }:
         msg = "A tool kind is invalid."
+        raise ValueError(msg)
+    if event_name == "tool.call" and not isinstance(
+        payload.get("arguments_delta"), str
+    ):
+        msg = "A tool arguments delta must be text."
+        raise ValueError(msg)
+    if event_name == "usage.updated" and not isinstance(payload.get("usage"), dict):
+        msg = "A usage update must contain an object."
+        raise ValueError(msg)
+    if event_name == "tool.failed" and not isinstance(payload.get("error"), dict):
+        msg = "A tool failure must contain a safe error object."
         raise ValueError(msg)
 
 

@@ -57,6 +57,7 @@ $$;
 DROP TRIGGER execution_cancellations_scope ON router.execution_cancellations;
 DROP FUNCTION router.check_execution_cancellation_scope();
 DROP TABLE router.execution_cancellations;
+DROP FUNCTION router.valid_adapter_stop_evidence(jsonb);
 DROP TRIGGER logical_requests_journal_complete ON router.logical_requests;
 DROP TRIGGER agent_runs_journal_complete ON router.agent_runs;
 DROP FUNCTION router.check_execution_journal_complete();
@@ -70,6 +71,7 @@ DROP TRIGGER logical_requests_admission_event ON router.logical_requests;
 DROP TRIGGER agent_runs_admission_event ON router.agent_runs;
 DROP FUNCTION router.create_execution_admission_event();
 DROP TABLE router.execution_stream_events;
+DROP FUNCTION router.valid_execution_stream_payload(text, jsonb);
 
 DROP TRIGGER agent_runs_admission_state ON router.agent_runs;
 DROP TRIGGER logical_requests_admission_state ON router.logical_requests;

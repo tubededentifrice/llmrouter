@@ -246,6 +246,12 @@ class AdapterStopEvidence:
 
     def __post_init__(self) -> None:
         """Reject unsafe or internally inconsistent stop evidence."""
+        if not all(
+            isinstance(value, bool)
+            for value in (self.supported, self.stop_requested, self.confirmed_stopped)
+        ):
+            message = "Adapter stop evidence flags must be booleans."
+            raise TypeError(message)
         if (
             not self.operation_id
             or len(self.operation_id) > MAXIMUM_OPERATION_ID_CHARACTERS
