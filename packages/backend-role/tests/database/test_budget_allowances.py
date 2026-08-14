@@ -28,6 +28,15 @@ from llmrouter_backend.budgets import (
     ResetPeriod,
 )
 from llmrouter_backend.database import migrate
+from llmrouter_backend.execution import (
+    ErrorScope,
+    ExecutionKind,
+    ExecutionState,
+    ExecutionTarget,
+    PostgresExecutionRepository,
+    TerminalError,
+    TerminalErrorClass,
+)
 from llmrouter_backend.lifecycle import PostgresLifecycleRepository
 
 from .helpers import (
@@ -272,6 +281,30 @@ def test_old_central_reservation_reduces_allowance_capacity(database_url: str) -
                    estimated_amount, reserved_amount, created_at
                ) VALUES (%s, %s, %s, 'USD', 9, 10, %s)""",
             (uuid.uuid4(), REQUEST_ROW_ID, GLOBAL_SCOPE, NOW),
+        )
+        migrate(connection, target=14)
+        PostgresExecutionRepository(database_url).transition(
+            RequestContext(
+                "allowance-migration",
+                PrincipalKind.SYSTEM,
+                "allowance-migration",
+                AuthorityClass.SYSTEM,
+                AuthorityPath.MACHINE,
+                None,
+                "model.create",
+                Scope(SERVICE_ID, WORKSPACE_ID),
+                NOW,
+                None,
+                True,
+            ),
+            ExecutionTarget(ExecutionKind.MODEL, REQUEST_ID),
+            expected_revision=1,
+            new_state=ExecutionState.FAILED,
+            safe_error=TerminalError(
+                TerminalErrorClass.ROUTER_INTERNAL,
+                ErrorScope.LOGICAL_REQUEST,
+                "The legacy test request is closed before migration.",
+            ),
         )
         migrate(connection)
     repository = PostgresAllowanceRepository(database_url)

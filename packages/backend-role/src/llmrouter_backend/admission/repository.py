@@ -1,14 +1,16 @@
 """Fleet-wide PostgreSQL request admission and scoped status reads."""
-# ruff: noqa: ARG001, D107, E501, EM101, S101, TRY003
+# ruff: noqa: ARG001, D107, E501, EM101, PLR0913, S101, TRY003
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 import psycopg
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 
 from llmrouter_backend.authority import (
     Audience,
@@ -109,7 +111,7 @@ class PostgresAdmissionRepository:
                             context.request_id,
                         )
                     _require_active_scope(connection, context)
-                    target = _resolve_target(connection, context, request)
+                    target = _resolve_target(connection, context, request, now=now)
                     attachments = _validated_attachments(
                         connection, context, request, now=now
                     )
@@ -172,6 +174,17 @@ class PostgresAdmissionRepository:
                         ),
                     ).fetchone()
                     assert row is not None
+                    _snapshot_routing_chain(
+                        connection,
+                        request_row_id=row_id,
+                        request_id=request.request_id,
+                        service_id=context.scope.service_id,
+                        workspace_id=context.scope.workspace_id,
+                        assignment_revision_id=target[0],
+                        assignment_id=target[1],
+                        exact_route_id=target[2],
+                        admitted_at=now,
+                    )
                     for ordinal, attachment in enumerate(attachments, start=1):
                         connection.execute(
                             """
@@ -294,7 +307,11 @@ def _select_binding(
 
 
 def _resolve_target(
-    connection: Connection[Any], context: RequestContext, request: AdmissionRequest
+    connection: Connection[Any],
+    context: RequestContext,
+    request: AdmissionRequest,
+    *,
+    now: datetime,
 ) -> tuple[uuid.UUID, uuid.UUID | None, uuid.UUID | None]:
     if request.exact_route_id is not None:
         row = connection.execute(
@@ -329,9 +346,12 @@ def _resolve_target(
             )
             SELECT route.current_revision, route.id
             FROM router.provider_model_routes AS route
+            JOIN router.provider_instances AS instance
+              ON instance.id = route.provider_instance_id
             JOIN scope_revisions AS owner
               ON owner.revision_id = route.current_revision
             WHERE route.id = %s AND route.state = 'active'
+              AND instance.state = 'active'
               AND (route.owner_kind = 'global' OR route.owner_service_id IN (
                   SELECT id FROM service_chain
               ))
@@ -348,6 +368,12 @@ def _resolve_target(
                             'resource_id', route.id::text
                         ))
               )
+              AND router.provider_resource_is_enabled(
+                  'provider_model_route', route.id, %s, %s
+              )
+              AND router.provider_resource_is_enabled(
+                  'provider_instance', instance.id, %s, %s
+              )
             FOR SHARE OF route
             """,
             (
@@ -355,12 +381,23 @@ def _resolve_target(
                 context.scope.service_id,
                 context.scope.workspace_id,
                 request.exact_route_id,
+                context.scope.service_id,
+                context.scope.workspace_id,
+                context.scope.service_id,
+                context.scope.workspace_id,
             ),
         ).fetchone()
         if row is None or row["current_revision"] is None:
             raise AdmissionError(
                 AdmissionErrorCode.ASSIGNMENT_UNAVAILABLE, context.request_id
             )
+        _authorize_diagnostic_route(
+            connection,
+            context,
+            request=request,
+            route_revision_id=row["current_revision"],
+            now=now,
+        )
         return row["current_revision"], None, row["id"]
     row = connection.execute(
         """
@@ -404,6 +441,303 @@ def _resolve_target(
             AdmissionErrorCode.ASSIGNMENT_UNAVAILABLE, context.request_id
         )
     return row["configuration_revision_id"], row["id"], None
+
+
+def _authorize_diagnostic_route(
+    connection: Connection[Any],
+    context: RequestContext,
+    *,
+    request: AdmissionRequest,
+    route_revision_id: uuid.UUID,
+    now: datetime,
+) -> None:
+    """Consume one exact short-lived grant and write its permitted audit event."""
+    assert request.exact_route_id is not None
+    assert request.diagnostic_grant is not None
+    time_row = connection.execute("SELECT transaction_timestamp() AS value").fetchone()
+    assert time_row is not None
+    authorized_at = time_row["value"]
+    grant = connection.execute(
+        """
+        SELECT diagnostic_grant.grant_id
+        FROM router.diagnostic_route_grants AS diagnostic_grant
+        JOIN router.provider_model_routes AS route
+          ON route.id = diagnostic_grant.exact_route_id
+        JOIN router.provider_instances AS instance
+          ON instance.id = route.provider_instance_id
+        JOIN router.encrypted_credentials AS credential
+          ON credential.id = instance.credential_id
+        WHERE diagnostic_grant.grant_sha256 = %s
+          AND diagnostic_grant.service_id = %s
+          AND diagnostic_grant.workspace_id IS NOT DISTINCT FROM %s
+          AND diagnostic_grant.exact_route_id = %s
+          AND diagnostic_grant.route_configuration_revision_id = %s
+          AND diagnostic_grant.created_at <= %s
+          AND diagnostic_grant.expires_at > %s
+          AND route.current_revision = diagnostic_grant.route_configuration_revision_id
+          AND route.state = 'active' AND instance.state = 'active'
+          AND credential.state = 'active'
+          AND credential.id = diagnostic_grant.credential_id
+          AND credential.generation = diagnostic_grant.credential_generation
+          AND credential.current_revision = diagnostic_grant.credential_revision_id
+          AND router.active_request_scope(
+              diagnostic_grant.service_id, diagnostic_grant.workspace_id
+          )
+          AND router.provider_route_is_eligible(route.id, diagnostic_grant.service_id)
+          AND router.provider_resource_is_enabled(
+              'provider_model_route', route.id,
+              diagnostic_grant.service_id, diagnostic_grant.workspace_id
+          )
+          AND router.provider_resource_is_enabled(
+              'provider_instance', instance.id,
+              diagnostic_grant.service_id, diagnostic_grant.workspace_id
+          )
+        FOR UPDATE OF diagnostic_grant
+        """,
+        (
+            hashlib.sha256(request.diagnostic_grant.encode("ascii")).digest(),
+            context.scope.service_id,
+            context.scope.workspace_id,
+            request.exact_route_id,
+            route_revision_id,
+            authorized_at,
+            authorized_at,
+        ),
+    ).fetchone()
+    if (
+        grant is None
+        or connection.execute(
+            "SELECT 1 FROM router.diagnostic_route_authorizations WHERE grant_id = %s",
+            (None if grant is None else grant["grant_id"],),
+        ).fetchone()
+        is not None
+    ):
+        raise AdmissionError(
+            AdmissionErrorCode.DIAGNOSTIC_PERMISSION_REQUIRED,
+            request.request_id,
+        )
+    event_id = uuid.uuid4()
+    connection.execute(
+        """
+        INSERT INTO router.audit_events (
+            event_id, audit_class, actor_kind, actor_id, authority_class,
+            service_id, workspace_id, action, permission_result, safe_details,
+            occurred_at
+        ) VALUES (%s, 'security', %s, %s, %s, %s, %s,
+                  'diagnostic.route.use', 'permitted', %s, %s)
+        """,
+        (
+            event_id,
+            context.actor_kind.value,
+            context.actor_id,
+            context.authority_class.value,
+            context.scope.service_id,
+            context.scope.workspace_id,
+            Jsonb(
+                {
+                    "diagnostic_grant_id": str(grant["grant_id"]),
+                    "exact_route_id": request.exact_route_id,
+                    "request_id": request.request_id,
+                    "route_configuration_revision_id": str(route_revision_id),
+                }
+            ),
+            authorized_at,
+        ),
+    )
+    connection.execute(
+        """
+        INSERT INTO router.diagnostic_route_authorizations (
+            authorization_id, grant_id, request_id, service_id, workspace_id,
+            exact_route_id, route_configuration_revision_id,
+            authorized_by_kind, authorized_by_id, authorized_at,
+            use_audit_event_id
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            uuid.uuid4(),
+            grant["grant_id"],
+            request.request_id,
+            context.scope.service_id,
+            context.scope.workspace_id,
+            request.exact_route_id,
+            route_revision_id,
+            context.actor_kind.value,
+            context.actor_id,
+            authorized_at,
+            event_id,
+        ),
+    )
+
+
+def _snapshot_routing_chain(
+    connection: Connection[Any],
+    *,
+    request_row_id: uuid.UUID,
+    request_id: str,
+    service_id: str,
+    workspace_id: str | None,
+    assignment_revision_id: uuid.UUID,
+    assignment_id: uuid.UUID | None,
+    exact_route_id: uuid.UUID | None,
+    admitted_at: datetime,
+) -> None:
+    """Store the complete ordered route chain in the admission transaction."""
+    connection.execute(
+        """
+        WITH candidates AS (
+            SELECT provider_model_route_id
+            FROM router.assignment_candidates WHERE assignment_id = %s
+          UNION ALL
+            SELECT %s::uuid WHERE %s::uuid IS NULL
+        )
+        SELECT route.id
+        FROM candidates AS candidate
+        JOIN router.provider_model_routes AS route
+          ON route.id = candidate.provider_model_route_id
+        JOIN router.provider_instances AS instance
+          ON instance.id = route.provider_instance_id
+        JOIN router.encrypted_credentials AS credential
+          ON credential.id = instance.credential_id
+        FOR SHARE OF route, instance, credential
+        """,
+        (assignment_id, exact_route_id, assignment_id),
+    ).fetchall()
+    rows = connection.execute(
+        """
+        WITH candidates AS (
+            SELECT candidate.ordinal, candidate.provider_model_route_id,
+                   candidate.attempt_timeout_ms, candidate.candidate_policy
+            FROM router.assignment_candidates AS candidate
+            WHERE candidate.assignment_id = %(assignment_id)s
+              AND candidate.configuration_revision_id = %(assignment_revision_id)s
+          UNION ALL
+            SELECT 1, %(exact_route_id)s::uuid, 120000, '{}'::jsonb
+            WHERE %(assignment_id)s::uuid IS NULL
+        ), values AS (
+            SELECT %(request_row_id)s::uuid AS request_row_id,
+                   candidate.ordinal AS candidate_ordinal,
+                   %(assignment_revision_id)s::uuid AS assignment_revision_id,
+                   candidate.attempt_timeout_ms, candidate.candidate_policy,
+                   route.current_revision AS route_configuration_revision_id,
+                   route.id AS provider_model_route_id,
+                   route.generation AS route_generation,
+                   instance.id AS provider_instance_id,
+                   instance.generation AS provider_instance_generation,
+                   COALESCE(instance.current_revision, route.current_revision)
+                       AS instance_configuration_revision_id,
+                   credential.id AS credential_id,
+                   credential.generation AS credential_generation,
+                   credential.current_revision AS credential_revision_id,
+                   price.price_version_id, instance.adapter_type_id,
+                   instance.endpoint_origin, route.wire_model, route.capabilities,
+                   instance.settings AS instance_settings,
+                   route.settings AS route_settings, prices.typed_prices
+            FROM candidates AS candidate
+            JOIN router.provider_model_routes AS route
+              ON route.id = candidate.provider_model_route_id
+            JOIN router.provider_instances AS instance
+              ON instance.id = route.provider_instance_id
+            JOIN router.encrypted_credentials AS credential
+              ON credential.id = instance.credential_id
+                JOIN router.configuration_price_bindings AS price
+                  ON price.configuration_revision_id =
+                     %(assignment_revision_id)s::uuid
+                 AND price.provider_model_route_id = route.id
+            CROSS JOIN LATERAL (
+                SELECT jsonb_agg(jsonb_build_object(
+                    'unit', component.unit_name,
+                    'price', component.unit_price::text,
+                    'currency', version.currency,
+                    'raw_source_value', component.raw_source_value,
+                    'unit_quantity', component.unit_quantity::text
+                ) ORDER BY component.unit_name) AS typed_prices
+                FROM router.route_price_components AS component
+                JOIN router.route_price_versions AS version
+                  ON version.id = component.price_version_id
+                WHERE component.price_version_id = price.price_version_id
+            ) AS prices
+            WHERE route.state = 'active' AND instance.state = 'active'
+              AND credential.state = 'active'
+              AND router.provider_route_is_eligible(route.id, %(service_id)s)
+              AND router.provider_resource_is_enabled(
+                  'provider_model_route', route.id,
+                  %(service_id)s, %(workspace_id)s
+              )
+              AND router.provider_resource_is_enabled(
+                  'provider_instance', instance.id,
+                  %(service_id)s, %(workspace_id)s
+              )
+        ), documents AS (
+            SELECT values.*, jsonb_build_object(
+                'request_row_id', request_row_id,
+                'candidate_ordinal', candidate_ordinal,
+                'assignment_revision_id', assignment_revision_id,
+                'attempt_timeout_ms', attempt_timeout_ms,
+                'candidate_policy', candidate_policy,
+                'route_configuration_revision_id', route_configuration_revision_id,
+                'provider_model_route_id', provider_model_route_id,
+                'route_generation', route_generation,
+                'provider_instance_id', provider_instance_id,
+                'provider_instance_generation', provider_instance_generation,
+                'instance_configuration_revision_id', instance_configuration_revision_id,
+                'credential_id', credential_id,
+                'credential_generation', credential_generation,
+                'credential_revision_id', credential_revision_id,
+                'price_version_id', price_version_id,
+                'adapter_type_id', adapter_type_id,
+                'endpoint_origin', endpoint_origin,
+                'wire_model', wire_model,
+                'capabilities', capabilities,
+                'instance_settings', instance_settings,
+                'route_settings', route_settings,
+                'typed_prices', typed_prices
+            ) AS document
+            FROM values
+        )
+        INSERT INTO router.provider_route_execution_snapshots (
+            request_row_id, candidate_ordinal, assignment_revision_id,
+            attempt_timeout_ms, candidate_policy, content_sha256,
+            route_configuration_revision_id, provider_model_route_id,
+            route_generation, provider_instance_id, provider_instance_generation,
+            instance_configuration_revision_id, credential_id,
+            credential_generation, credential_revision_id, price_version_id,
+            adapter_type_id, endpoint_origin, wire_model, capabilities,
+            instance_settings, route_settings, typed_prices, created_at
+        )
+        SELECT request_row_id, candidate_ordinal, assignment_revision_id,
+               attempt_timeout_ms, candidate_policy,
+               sha256(convert_to(document::text, 'UTF8')),
+               route_configuration_revision_id, provider_model_route_id,
+               route_generation, provider_instance_id, provider_instance_generation,
+               instance_configuration_revision_id, credential_id,
+               credential_generation, credential_revision_id, price_version_id,
+               adapter_type_id, endpoint_origin, wire_model, capabilities,
+               instance_settings, route_settings, typed_prices, %(admitted_at)s
+        FROM documents
+        ORDER BY candidate_ordinal
+        RETURNING candidate_ordinal
+        """,
+        {
+            "request_row_id": request_row_id,
+            "service_id": service_id,
+            "workspace_id": workspace_id,
+            "assignment_revision_id": assignment_revision_id,
+            "assignment_id": assignment_id,
+            "exact_route_id": exact_route_id,
+            "admitted_at": admitted_at,
+        },
+    ).fetchall()
+    expected = 1
+    if assignment_id is not None:
+        expected_row = connection.execute(
+            "SELECT count(*) AS candidate_count FROM router.assignment_candidates WHERE assignment_id = %s",
+            (assignment_id,),
+        ).fetchone()
+        assert expected_row is not None
+        expected = expected_row["candidate_count"]
+    ordinals = sorted(row["candidate_ordinal"] for row in rows)
+    if len(rows) != expected or ordinals != list(range(1, expected + 1)):
+        raise AdmissionError(AdmissionErrorCode.ASSIGNMENT_UNAVAILABLE, request_id)
 
 
 def _require_active_scope(connection: Connection[Any], context: RequestContext) -> None:

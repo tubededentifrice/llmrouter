@@ -96,10 +96,10 @@ def seed_request_target(connection: Connection[Any]) -> None:
         """INSERT INTO router.provider_instances (
                id, owner_kind, adapter_type_id, credential_id, stable_name,
                endpoint_origin, settings_schema_name, settings_schema_major,
-               settings
+               settings, current_revision
            ) VALUES (%s, 'global', 'provider.fixture', %s, 'fixture-instance',
-                     'https://provider.example', 'provider.settings', 1, '{}')""",
-        (FIXTURE_INSTANCE_ID, FIXTURE_CREDENTIAL_ID),
+                     'https://provider.example', 'provider.settings', 1, '{}', %s)""",
+        (FIXTURE_INSTANCE_ID, FIXTURE_CREDENTIAL_ID, CONFIGURATION_ID),
     )
     connection.execute(
         """INSERT INTO router.provider_model_routes (

@@ -17,6 +17,7 @@ class AdmissionErrorCode(StrEnum):
     ATTACHMENT_INVALID = "attachment_invalid"
     ASSIGNMENT_UNAVAILABLE = "assignment_unavailable"
     WORKSPACE_UNAVAILABLE = "workspace_unavailable"
+    DIAGNOSTIC_PERMISSION_REQUIRED = "diagnostic_permission_required"
 
 
 class AdmissionError(RuntimeError):
@@ -43,6 +44,9 @@ class AdmissionError(RuntimeError):
             ),
             AdmissionErrorCode.WORKSPACE_UNAVAILABLE: (
                 "The selected workspace is not available."
+            ),
+            AdmissionErrorCode.DIAGNOSTIC_PERMISSION_REQUIRED: (
+                "The exact route requires a valid diagnostic grant."
             ),
         }
         super().__init__(messages[code])

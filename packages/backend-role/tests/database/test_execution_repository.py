@@ -31,6 +31,7 @@ from llmrouter_backend.execution import (
     PostgresExecutionRepository,
     make_event,
 )
+from llmrouter_backend.execution.repository import _finish_routing_attempts
 from psycopg.rows import dict_row
 
 from .helpers import (
@@ -279,25 +280,155 @@ def _insert_provider_attempt(
     connection: psycopg.Connection[object], *, attempt_id: str, attempt_number: int
 ) -> None:
     connection.execute(
+        """INSERT INTO router.active_configurations (
+               scope_kind, service_id, workspace_id, revision_id, revision_number
+           ) VALUES ('workspace', %s, %s, %s, 1)
+           ON CONFLICT DO NOTHING""",
+        (SERVICE_ID, WORKSPACE_ID, CONFIGURATION_ID),
+    )
+    connection.execute(
+        """INSERT INTO router.route_price_components (
+               price_version_id, component_kind, unit_name, unit_quantity,
+               unit_price, raw_source_value
+           ) VALUES (%s, 'usage', 'request', 1, 0, '0')
+           ON CONFLICT DO NOTHING""",
+        (PRICE_VERSION_ID,),
+    )
+    connection.execute(
+        """INSERT INTO router.configuration_price_bindings (
+               configuration_revision_id, provider_model_route_id, price_version_id
+           ) VALUES (%s, %s, %s)
+           ON CONFLICT DO NOTHING""",
+        (CONFIGURATION_ID, FIXTURE_ROUTE_ID, PRICE_VERSION_ID),
+    )
+    connection.execute(
+        """WITH values AS (
+               SELECT request.row_id AS request_row_id,
+                      candidate.ordinal AS candidate_ordinal,
+                      request.configuration_revision_id AS assignment_revision_id,
+                      candidate.attempt_timeout_ms, candidate.candidate_policy,
+                      route.current_revision AS route_configuration_revision_id,
+                      route.id AS provider_model_route_id,
+                      route.generation AS route_generation,
+                      instance.id AS provider_instance_id,
+                      instance.generation AS provider_instance_generation,
+                      COALESCE(instance.current_revision, route.current_revision)
+                          AS instance_configuration_revision_id,
+                      credential.id AS credential_id,
+                      credential.generation AS credential_generation,
+                      credential.current_revision AS credential_revision_id,
+                      price.price_version_id, instance.adapter_type_id,
+                      instance.endpoint_origin, route.wire_model, route.capabilities,
+                      instance.settings AS instance_settings,
+                      route.settings AS route_settings,
+                      prices.typed_prices
+               FROM router.logical_requests AS request
+               JOIN router.assignment_candidates AS candidate
+                 ON candidate.assignment_id = request.assignment_id
+                AND candidate.configuration_revision_id =
+                    request.configuration_revision_id
+               JOIN router.provider_model_routes AS route
+                 ON route.id = candidate.provider_model_route_id
+               JOIN router.provider_instances AS instance
+                 ON instance.id = route.provider_instance_id
+               JOIN router.encrypted_credentials AS credential
+                 ON credential.id = instance.credential_id
+               JOIN router.configuration_price_bindings AS price
+                 ON price.configuration_revision_id = route.current_revision
+                AND price.provider_model_route_id = route.id
+               CROSS JOIN LATERAL (
+                   SELECT jsonb_agg(jsonb_build_object(
+                       'unit', component.unit_name,
+                       'price', component.unit_price::text,
+                       'currency', version.currency,
+                       'raw_source_value', component.raw_source_value,
+                       'unit_quantity', component.unit_quantity::text
+                   ) ORDER BY component.unit_name) AS typed_prices
+                   FROM router.route_price_components AS component
+                   JOIN router.route_price_versions AS version
+                     ON version.id = component.price_version_id
+                   WHERE component.price_version_id = price.price_version_id
+               ) AS prices
+               WHERE request.row_id = %s
+           ), documents AS (
+               SELECT values.*, jsonb_build_object(
+                   'request_row_id', request_row_id,
+                   'candidate_ordinal', candidate_ordinal,
+                   'assignment_revision_id', assignment_revision_id,
+                   'attempt_timeout_ms', attempt_timeout_ms,
+                   'candidate_policy', candidate_policy,
+                   'route_configuration_revision_id', route_configuration_revision_id,
+                   'provider_model_route_id', provider_model_route_id,
+                   'route_generation', route_generation,
+                   'provider_instance_id', provider_instance_id,
+                   'provider_instance_generation', provider_instance_generation,
+                   'instance_configuration_revision_id',
+                       instance_configuration_revision_id,
+                   'credential_id', credential_id,
+                   'credential_generation', credential_generation,
+                   'credential_revision_id', credential_revision_id,
+                   'price_version_id', price_version_id,
+                   'adapter_type_id', adapter_type_id,
+                   'endpoint_origin', endpoint_origin,
+                   'wire_model', wire_model,
+                   'capabilities', capabilities,
+                   'instance_settings', instance_settings,
+                   'route_settings', route_settings,
+                   'typed_prices', typed_prices
+               ) AS document FROM values
+           )
+           INSERT INTO router.provider_route_execution_snapshots (
+               request_row_id, candidate_ordinal, assignment_revision_id,
+               attempt_timeout_ms, candidate_policy, content_sha256,
+               route_configuration_revision_id, provider_model_route_id,
+               route_generation, provider_instance_id, provider_instance_generation,
+               instance_configuration_revision_id, credential_id,
+               credential_generation, credential_revision_id, price_version_id,
+               adapter_type_id, endpoint_origin, wire_model, capabilities,
+               instance_settings, route_settings, typed_prices
+           )
+           SELECT request_row_id, candidate_ordinal, assignment_revision_id,
+                  attempt_timeout_ms, candidate_policy,
+                  sha256(convert_to(document::text, 'UTF8')),
+                  route_configuration_revision_id, provider_model_route_id,
+                  route_generation, provider_instance_id,
+                  provider_instance_generation, instance_configuration_revision_id,
+                  credential_id, credential_generation, credential_revision_id,
+                  price_version_id, adapter_type_id, endpoint_origin, wire_model,
+                  capabilities, instance_settings, route_settings, typed_prices
+           FROM documents ON CONFLICT DO NOTHING""",
+        (REQUEST_ROW_ID,),
+    )
+    connection.execute(
         """INSERT INTO router.provider_attempts (
                id, request_row_id, service_id, workspace_id, attempt_number,
-               provider_model_route_id, route_generation,
-               assignment_revision_id, price_version_id, state
-           ) VALUES (
-               %s, %s, %s, %s, %s, %s,
-               (SELECT generation FROM router.provider_model_routes WHERE id = %s),
-               %s, %s, 'started'
-           )""",
+               provider_model_route_id, route_generation, assignment_revision_id,
+               price_version_id, route_snapshot_id, candidate_ordinal,
+               provider_instance_id, provider_instance_generation, credential_id,
+               credential_generation, connect_timeout_ms, first_byte_timeout_ms,
+               idle_timeout_ms, execution_timeout_ms, logical_deadline,
+               attempt_deadline, state, started_at, migration_0015_backfilled
+           ) SELECT %s, request.row_id, request.service_id, request.workspace_id, %s,
+                    snapshot.provider_model_route_id, snapshot.route_generation,
+                    snapshot.assignment_revision_id, snapshot.price_version_id,
+                    snapshot.id, snapshot.candidate_ordinal,
+                    snapshot.provider_instance_id,
+                    snapshot.provider_instance_generation,
+                    snapshot.credential_id, snapshot.credential_generation,
+                    10000, 30000, 30000, 30000,
+                    request.admitted_at + interval '15 minutes',
+                    LEAST(transaction_timestamp() + interval '30 seconds',
+                          request.admitted_at + interval '15 minutes'),
+                    'started', transaction_timestamp(), true
+             FROM router.logical_requests AS request
+             JOIN router.provider_route_execution_snapshots AS snapshot
+               ON snapshot.request_row_id = request.row_id
+              AND snapshot.candidate_ordinal = 1
+             WHERE request.row_id = %s""",
         (
             attempt_id,
-            REQUEST_ROW_ID,
-            SERVICE_ID,
-            WORKSPACE_ID,
             attempt_number,
-            FIXTURE_ROUTE_ID,
-            FIXTURE_ROUTE_ID,
-            CONFIGURATION_ID,
-            PRICE_VERSION_ID,
+            REQUEST_ROW_ID,
         ),
     )
 
@@ -1148,12 +1279,14 @@ def test_cancellation_recomputes_active_work_after_adapter_callback(
         )
 
     def stop() -> AdapterStopEvidence:
-        with psycopg.connect(database_url) as connection:
-            connection.execute(
-                """UPDATE router.provider_attempts
-                   SET state = 'failed', finished_at = transaction_timestamp()
-                   WHERE request_row_id = %s AND state = 'started'""",
-                (REQUEST_ROW_ID,),
+        with psycopg.connect(database_url, row_factory=dict_row) as connection:
+            _finish_routing_attempts(
+                connection,
+                REQUEST_ROW_ID,
+                state="failed",
+                error_class="transport",
+                fallback_decision="stop_request",
+                detail_code="adapter_finished",
             )
         return AdapterStopEvidence(
             operation_id="attempt-ended",

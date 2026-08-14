@@ -1,4 +1,5 @@
 """Forward and rollback migration tests."""
+# ruff: noqa: FBT001
 
 from __future__ import annotations
 
@@ -8,6 +9,7 @@ import uuid
 import psycopg
 import pytest
 from llmrouter_backend.database import applied_versions, migrate, migration_plan
+from psycopg.types.json import Jsonb
 
 from .helpers import (
     CONFIGURATION_ID,
@@ -101,6 +103,7 @@ def test_migration_plan_has_reversible_contiguous_pairs() -> None:
         12,
         13,
         14,
+        15,
     ]
     assert all(migration.up_sql and migration.down_sql for migration in plan)
 
@@ -124,6 +127,7 @@ def test_migrate_empty_database(database_url: str) -> None:
             12,
             13,
             14,
+            15,
         )
         table_count = connection.execute(
             """
@@ -134,6 +138,77 @@ def test_migrate_empty_database(database_url: str) -> None:
         ).fetchone()
         assert table_count is not None
         assert table_count[0] >= _MINIMUM_FOUNDATION_TABLES
+
+
+def test_provider_routing_migration_rolls_back_and_reapplies(database_url: str) -> None:
+    """Apply, remove, and apply the provider routing schema without data."""
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        migrate(connection, target=15)
+        migrate(connection, target=14)
+        assert applied_versions(connection)[-1] == 14  # noqa: PLR2004
+        migrate(connection, target=15)
+        assert applied_versions(connection)[-1] == 15  # noqa: PLR2004
+
+
+@pytest.mark.parametrize(
+    ("value", "accepted"),
+    [
+        ({}, False),
+        ({"provider_status": None}, False),
+        (
+            {
+                "provider_status": None,
+                "retry_after_ms": None,
+                "detail_code": None,
+            },
+            True,
+        ),
+        (
+            {
+                "provider_status": 200.5,
+                "retry_after_ms": None,
+                "detail_code": None,
+            },
+            False,
+        ),
+        (
+            {
+                "provider_status": None,
+                "retry_after_ms": 10**100,
+                "detail_code": None,
+            },
+            False,
+        ),
+        (
+            {
+                "provider_status": None,
+                "retry_after_ms": "true",
+                "detail_code": None,
+            },
+            False,
+        ),
+        (
+            {
+                "provider_status": None,
+                "retry_after_ms": None,
+                "detail_code": None,
+                "extra": "unsafe",
+            },
+            False,
+        ),
+    ],
+)
+def test_routing_evidence_validator_is_closed(
+    database_url: str, value: object, accepted: bool
+) -> None:
+    """Reject missing, extra, malformed, or unbounded routing evidence."""
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        migrate(connection)
+        row = connection.execute(
+            "SELECT router.valid_redacted_routing_evidence(%s::jsonb)",
+            (Jsonb(value),),
+        ).fetchone()
+        assert row == (accepted,)
 
 
 def test_upgrade_previous_schema_without_data_loss(database_url: str) -> None:
@@ -311,7 +386,7 @@ def test_admission_upgrade_keeps_legacy_targetless_rows(database_url: str) -> No
                 CONFIGURATION_ID,
             ),
         )
-        migrate(connection)
+        migrate(connection, target=14)
         assert connection.execute(
             """SELECT assignment_id, exact_route_id
                FROM router.logical_requests WHERE row_id = %s""",
@@ -331,6 +406,11 @@ def test_admission_upgrade_keeps_legacy_targetless_rows(database_url: str) -> No
                    )""",
                 (SERVICE_ID, WORKSPACE_ID, CONFIGURATION_ID),
             )
+        with pytest.raises(
+            psycopg.errors.ObjectNotInPrerequisiteState,
+            match="cannot prove the historical route chain",
+        ):
+            migrate(connection, target=15)
         migrate(connection, target=8)
         assert connection.execute(
             "SELECT request_id FROM router.logical_requests WHERE row_id = %s",
@@ -531,8 +611,8 @@ def test_concurrent_migration_runners_serialize(database_url: str) -> None:
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         results = list(executor.map(_migrate_current, [database_url, database_url]))
     assert results == [
-        (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14),
-        (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14),
+        (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15),
+        (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15),
     ]
 
 
@@ -615,6 +695,7 @@ def test_rollback_keeps_previous_schema_data(database_url: str) -> None:
             12,
             13,
             14,
+            15,
         )
         assert connection.execute(
             "SELECT stable_name FROM router.services WHERE id = %s", (SERVICE_ID,)
@@ -784,4 +865,4 @@ def test_execution_lifecycle_new_run_blocks_lossy_rollback(database_url: str) ->
         )
         with pytest.raises(psycopg.errors.RaiseException, match="data loss"):
             migrate(connection, target=13)
-        assert applied_versions(connection)[-1] == 14  # noqa: PLR2004
+        assert applied_versions(connection)[-1] == 15  # noqa: PLR2004

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import hashlib
 import uuid
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime, timedelta
@@ -48,6 +49,8 @@ MODEL_ID = "0198a080-0000-7000-8000-000000000111"
 CREDENTIAL_ID = "0198a080-0000-7000-8000-000000000112"
 INSTANCE_ID = "0198a080-0000-7000-8000-000000000113"
 ROUTE_ID = "0198a080-0000-7000-8000-000000000114"
+PRICE_VERSION_ID = "0198a080-0000-7000-8000-000000000118"
+DIAGNOSTIC_GRANT = "A" * 43
 ATTACHMENT_ID = "0198a080-0000-7000-8000-000000000115"
 
 
@@ -155,10 +158,11 @@ def _seed_admission_target(connection: psycopg.Connection[object]) -> None:
     connection.execute(
         """INSERT INTO router.provider_instances (
                id, owner_kind, adapter_type_id, credential_id, stable_name,
-               endpoint_origin, settings_schema_name, settings_schema_major, settings
+               endpoint_origin, settings_schema_name, settings_schema_major, settings,
+               current_revision
            ) VALUES (%s, 'global', 'provider.test', %s, 'instance-test',
-                     'https://provider.example', 'provider.settings', 1, '{}')""",
-        (INSTANCE_ID, CREDENTIAL_ID),
+                     'https://provider.example', 'provider.settings', 1, '{}', %s)""",
+        (INSTANCE_ID, CREDENTIAL_ID, GLOBAL_CONFIGURATION_ID),
     )
     connection.execute(
         """INSERT INTO router.provider_model_routes (
@@ -174,6 +178,25 @@ def _seed_admission_target(connection: psycopg.Connection[object]) -> None:
                id, configuration_revision_id, stable_name
            ) VALUES (%s, %s, 'chat')""",
         (ASSIGNMENT_ID, GLOBAL_CONFIGURATION_ID),
+    )
+    connection.execute(
+        """INSERT INTO router.route_price_versions (
+               id, provider_model_route_id, version_number, currency, status, accepted_at
+           ) VALUES (%s, %s, 1, 'USD', 'current', %s)""",
+        (PRICE_VERSION_ID, ROUTE_ID, NOW),
+    )
+    connection.execute(
+        """INSERT INTO router.route_price_components (
+               price_version_id, component_kind, unit_name, unit_quantity,
+               unit_price, raw_source_value
+           ) VALUES (%s, 'usage', 'input_token', 1000, 0.001, '0.001')""",
+        (PRICE_VERSION_ID,),
+    )
+    connection.execute(
+        """INSERT INTO router.configuration_price_bindings (
+               configuration_revision_id, provider_model_route_id, price_version_id
+           ) VALUES (%s, %s, %s)""",
+        (GLOBAL_CONFIGURATION_ID, ROUTE_ID, PRICE_VERSION_ID),
     )
     connection.execute(
         """INSERT INTO router.assignment_candidates (
@@ -462,6 +485,60 @@ def test_exact_route_is_bound_to_active_configuration_and_blocks_lossy_rollback(
     database_url: str, repository: PostgresAdmissionRepository
 ) -> None:
     """Bind a validated diagnostic scope and retain its migration data."""
+    grant_id = uuid.uuid4()
+    audit_id = uuid.uuid4()
+    with psycopg.connect(database_url) as connection:
+        created_at = connection.execute("SELECT transaction_timestamp()").fetchone()[0]
+        expires_at = created_at + timedelta(minutes=5)
+        connection.execute(
+            """INSERT INTO router.audit_events (
+                   event_id, audit_class, actor_kind, actor_id, authority_class,
+                   service_id, workspace_id, action, permission_result,
+                   safe_details, occurred_at
+               ) VALUES (%s, 'security', 'service', %s, 'service',
+                         %s, %s, 'diagnostic.grant.create', 'permitted',
+                         jsonb_build_object(
+                             'diagnostic_grant_id', %s::uuid,
+                             'exact_route_id', %s::uuid,
+                             'route_configuration_revision_id', %s::uuid,
+                             'reason', 'test', 'expires_at', %s::timestamptz
+                         ), %s)""",
+            (
+                audit_id,
+                SERVICE_ID,
+                SERVICE_ID,
+                WORKSPACE_ID,
+                grant_id,
+                ROUTE_ID,
+                GLOBAL_CONFIGURATION_ID,
+                expires_at,
+                created_at,
+            ),
+        )
+        connection.execute(
+            """INSERT INTO router.diagnostic_route_grants (
+                   grant_id, grant_sha256, service_id, workspace_id, exact_route_id,
+                   route_configuration_revision_id, credential_id,
+                   credential_generation, credential_revision_id,
+                   created_by_kind, created_by_id, reason, created_at, expires_at,
+                   creation_audit_event_id
+               ) VALUES (%s, %s, %s, %s, %s, %s, %s, 1, %s, 'service', %s,
+                         'test', %s, %s, %s)""",
+            (
+                grant_id,
+                hashlib.sha256(DIAGNOSTIC_GRANT.encode()).digest(),
+                SERVICE_ID,
+                WORKSPACE_ID,
+                ROUTE_ID,
+                GLOBAL_CONFIGURATION_ID,
+                CREDENTIAL_ID,
+                CREDENTIAL_ID,
+                SERVICE_ID,
+                created_at,
+                expires_at,
+                audit_id,
+            ),
+        )
     fingerprint = FingerprintInput(
         "model.create",
         1,
@@ -481,17 +558,25 @@ def test_exact_route_is_bound_to_active_configuration_and_blocks_lossy_rollback(
             "exact_route_id": ROUTE_ID,
         },
     )
-    result = repository.admit(
-        _context(),
-        AdmissionRequest(
-            _uuidv7(NOW, 12),
-            RequestKind.MODEL,
-            fingerprint,
-            exact_route_id=ROUTE_ID,
-        ),
-        now=NOW,
+    request_id = _uuidv7(NOW, 12)
+    request = AdmissionRequest(
+        request_id,
+        RequestKind.MODEL,
+        fingerprint,
+        exact_route_id=ROUTE_ID,
+        diagnostic_grant=DIAGNOSTIC_GRANT,
     )
+    result = repository.admit(_context(), request, now=NOW)
     assert result.external_effects_permitted
+    replay = repository.admit(_context(), request, now=NOW + timedelta(minutes=6))
+    assert not replay.created
+    with psycopg.connect(database_url) as connection:
+        authorization_count = connection.execute(
+            """SELECT count(*) FROM router.diagnostic_route_authorizations
+               WHERE request_id = %s""",
+            (request_id,),
+        ).fetchone()
+    assert authorization_count == (1,)
     with (
         psycopg.connect(database_url) as connection,
         pytest.raises(psycopg.Error, match="cannot roll back without data loss"),

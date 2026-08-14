@@ -190,6 +190,7 @@ class AdmissionRequest:
     fingerprint: FingerprintInput
     assignment: str | None = None
     exact_route_id: str | None = None
+    diagnostic_grant: str | None = field(default=None, repr=False)
     capture_enabled: bool = True
     capture_reason: str = "configured"
     capture_policy: str | None = None
@@ -213,6 +214,17 @@ class AdmissionRequest:
             _require_text(self.assignment)
         if self.exact_route_id is not None:
             _require_text(self.exact_route_id)
+        if (self.exact_route_id is None) != (self.diagnostic_grant is None):
+            raise ValueError("An exact route requires one diagnostic grant.")
+        if self.diagnostic_grant is not None and (
+            not 43 <= len(self.diagnostic_grant) <= 200
+            or any(
+                character not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+                "0123456789_-"
+                for character in self.diagnostic_grant
+            )
+        ):
+            raise ValueError("The diagnostic grant is invalid.")
         if self.capture_policy is None:
             object.__setattr__(
                 self,

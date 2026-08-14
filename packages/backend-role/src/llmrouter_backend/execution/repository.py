@@ -1235,12 +1235,14 @@ def _close_active_work(
                 (row_id, int(owner_evidence[0].split(":", 1)[1])),
             )
         return
-    connection.execute(
-        """UPDATE router.provider_attempts
-           SET state = 'cancelled', finished_at = transaction_timestamp()
-           WHERE request_row_id = %s AND state = 'started'
-             AND id = ANY(%s::uuid[])""",
-        (row_id, list(evidence_ids)),
+    _finish_routing_attempts(
+        connection,
+        row_id,
+        state="cancelled",
+        error_class="cancelled",
+        fallback_decision="cancelled",
+        detail_code="cancel_confirmed",
+        attempt_ids=evidence_ids,
     )
 
 
@@ -1255,12 +1257,92 @@ def _mark_active_work_uncertain(
             (row_id,),
         )
         return
-    connection.execute(
-        """UPDATE router.provider_attempts
-           SET state = 'uncertain', finished_at = transaction_timestamp()
-           WHERE request_row_id = %s AND state = 'started'""",
-        (row_id,),
+    _finish_routing_attempts(
+        connection,
+        row_id,
+        state="uncertain",
+        error_class="uncertain_effect",
+        fallback_decision="commit_boundary",
+        detail_code="cancellation_unconfirmed",
     )
+
+
+def _finish_routing_attempts(  # noqa: PLR0913
+    connection: Connection[Any],
+    row_id: object,
+    *,
+    state: str,
+    error_class: str,
+    fallback_decision: str,
+    detail_code: str,
+    attempt_ids: set[str] | None = None,
+) -> None:
+    rows = connection.execute(
+        """UPDATE router.provider_attempts AS attempt
+           SET state = %s, finished_at = transaction_timestamp(),
+               normalized_error_class = %s, affected_scope = 'logical_request',
+               affected_scope_id = request.request_id::text,
+               retry_decision = %s, safe_provider_code = NULL,
+               redacted_evidence = jsonb_build_object(
+                   'provider_status', NULL, 'retry_after_ms', NULL,
+                   'detail_code', %s::text
+               )
+           FROM router.logical_requests AS request
+           WHERE attempt.request_row_id = %s AND attempt.state = 'started'
+             AND request.row_id = attempt.request_row_id
+             AND (%s::uuid[] IS NULL OR attempt.id = ANY(%s::uuid[]))
+           RETURNING attempt.*""",
+        (
+            state,
+            error_class,
+            fallback_decision,
+            detail_code,
+            row_id,
+            None if attempt_ids is None else list(attempt_ids),
+            None if attempt_ids is None else list(attempt_ids),
+        ),
+    ).fetchall()
+    for attempt in rows:
+        sequence_row = connection.execute(
+            """SELECT COALESCE(max(decision_sequence), 0) + 1 AS value
+               FROM router.routing_candidate_decisions WHERE request_row_id = %s""",
+            (attempt["request_row_id"],),
+        ).fetchone()
+        if sequence_row is None:
+            message = "The routing decision sequence is unavailable."
+            raise RuntimeError(message)
+        connection.execute(
+            """INSERT INTO router.routing_candidate_decisions (
+                   decision_id, request_row_id, decision_sequence, attempt_id,
+                   attempt_number, candidate_ordinal, route_snapshot_id,
+                   attempt_state, normalized_error_class, affected_scope,
+                   affected_scope_id, fallback_decision, safe_provider_code,
+                   redacted_evidence, occurred_at
+               ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'logical_request',%s,%s,NULL,
+                         jsonb_build_object(
+                           'provider_status', NULL, 'retry_after_ms', NULL,
+                           'detail_code', %s::text
+                         ), transaction_timestamp())""",
+            (
+                uuid.uuid4(),
+                attempt["request_row_id"],
+                sequence_row["value"],
+                attempt["id"],
+                attempt["attempt_number"],
+                attempt["candidate_ordinal"],
+                attempt["route_snapshot_id"],
+                state,
+                error_class,
+                attempt["affected_scope_id"],
+                fallback_decision,
+                detail_code,
+            ),
+        )
+        connection.execute(
+            """DELETE FROM router.routing_attempt_claims
+               WHERE request_row_id = %s AND attempt_id = %s""",
+            (attempt["request_row_id"], attempt["id"]),
+        )
 
 
 def _fence_run_lease(connection: Connection[Any], row_id: object) -> None:

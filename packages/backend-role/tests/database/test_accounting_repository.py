@@ -26,6 +26,7 @@ from llmrouter_backend.accounting import (
     UsageDelta,
     UsageUnit,
 )
+from llmrouter_backend.admission.repository import _snapshot_routing_chain
 from llmrouter_backend.authority import (
     Audience,
     AuthorityClass,
@@ -41,9 +42,9 @@ from llmrouter_backend.execution import (
     ExecutionTarget,
     PostgresExecutionRepository,
 )
+from psycopg.rows import dict_row
 
 from .helpers import (
-    CONFIGURATION_ID,
     REQUEST_ID,
     REQUEST_ROW_ID,
     SERVICE_ID,
@@ -566,22 +567,25 @@ def test_price_sync_preserves_active_configuration_and_last_good_price(
         )
         connection.execute(
             """
-            INSERT INTO router.provider_instances (
-                id, owner_kind, adapter_type_id, credential_id, stable_name,
-                endpoint_origin, settings_schema_name, settings_schema_major, settings
-            ) VALUES (%s, 'global', %s, %s, 'instance',
-                      'https://provider.example', 'provider.settings', 1, '{}')
-            """,
-            (INSTANCE_ID, ADAPTER_ID, CREDENTIAL_ID),
+                INSERT INTO router.provider_instances (
+                    id, owner_kind, adapter_type_id, credential_id, stable_name,
+                    endpoint_origin, settings_schema_name, settings_schema_major, settings,
+                    current_revision
+                ) VALUES (%s, 'global', %s, %s, 'instance',
+                          'https://provider.example', 'provider.settings', 1, '{}', %s)
+                """,
+            (INSTANCE_ID, ADAPTER_ID, CREDENTIAL_ID, GLOBAL_REVISION),
         )
         connection.execute(
             """
-            INSERT INTO router.provider_model_routes (
-                id, owner_kind, provider_instance_id, canonical_model_id,
-                provider_lookup_id, settings_schema_name, settings_schema_major, settings
-            ) VALUES (%s, 'global', %s, %s, 'wire-model', 'route.settings', 1, '{}')
-            """,
-            (ROUTE_ID, INSTANCE_ID, MODEL_ID),
+                INSERT INTO router.provider_model_routes (
+                    id, owner_kind, provider_instance_id, canonical_model_id,
+                    provider_lookup_id, settings_schema_name, settings_schema_major,
+                    settings, current_revision
+                ) VALUES (%s, 'global', %s, %s, 'wire-model', 'route.settings', 1,
+                          '{}', %s)
+                """,
+            (ROUTE_ID, INSTANCE_ID, MODEL_ID, GLOBAL_REVISION),
         )
         connection.execute(
             """
@@ -893,7 +897,31 @@ def test_price_sync_preserves_active_configuration_and_last_good_price(
     canonical_id = "0198a080-0000-7000-8000-000000000134"
     with psycopg.connect(database_url) as connection:
         seed_scope(connection)
-        insert_request(connection, REQUEST_ROW_ID, REQUEST_ID)
+        active_assignment = connection.execute(
+            """SELECT active.revision_id, assignment.id
+               FROM router.active_configurations AS active
+               JOIN router.assignment_definitions AS assignment
+                 ON assignment.configuration_revision_id = active.revision_id
+               WHERE active.scope_kind = 'global'
+                 AND assignment.stable_name = 'chat'"""
+        ).fetchone()
+        assert active_assignment is not None
+        connection.execute(
+            """INSERT INTO router.logical_requests (
+                   row_id, request_id, request_kind, service_id, workspace_id,
+                   assignment_id, configuration_revision_id, fingerprint_version,
+                   fingerprint_sha256, data_profile, capture_enabled
+               ) VALUES (%s, %s, 'model', %s, %s, %s, %s, 1,
+                         decode(repeat('03', 32), 'hex'), 'service-data', true)""",
+            (
+                REQUEST_ROW_ID,
+                REQUEST_ID,
+                SERVICE_ID,
+                WORKSPACE_ID,
+                active_assignment[1],
+                active_assignment[0],
+            ),
+        )
         connection.execute(
             """INSERT INTO router.budget_scopes (
                    id, scope_kind, service_id, workspace_id, currency, hard_limit
@@ -925,26 +953,61 @@ def test_price_sync_preserves_active_configuration_and_last_good_price(
             expected_revision=1,
             new_state=ExecutionState.RUNNING,
         )
-        connection.execute(
-            """INSERT INTO router.provider_attempts (
-                   id, request_row_id, service_id, workspace_id, attempt_number,
-                   provider_model_route_id, route_generation,
-                   assignment_revision_id, price_version_id, state,
-                   started_at, finished_at
-               ) VALUES (%s, %s, %s, %s, 1, %s, 1, %s, %s,
-                         'failed', %s, %s)""",
-            (
-                attempt_id,
-                REQUEST_ROW_ID,
-                SERVICE_ID,
-                WORKSPACE_ID,
-                ROUTE_ID,
-                CONFIGURATION_ID,
-                price_versions[-1][0],
-                NOW,
-                NOW,
-            ),
-        )
+        with psycopg.connect(database_url, row_factory=dict_row) as routing_connection:
+            admitted = routing_connection.execute(
+                """SELECT admitted_at, configuration_revision_id, assignment_id
+                   FROM router.logical_requests
+                   WHERE row_id = %s""",
+                (REQUEST_ROW_ID,),
+            ).fetchone()
+            assert admitted is not None
+            _snapshot_routing_chain(
+                routing_connection,
+                request_row_id=uuid.UUID(REQUEST_ROW_ID),
+                request_id=REQUEST_ID,
+                service_id=SERVICE_ID,
+                workspace_id=WORKSPACE_ID,
+                assignment_revision_id=admitted["configuration_revision_id"],
+                assignment_id=admitted["assignment_id"],
+                exact_route_id=None,
+                admitted_at=admitted["admitted_at"],
+            )
+            routing_connection.execute(
+                """INSERT INTO router.provider_attempts (
+                       id, request_row_id, service_id, workspace_id, attempt_number,
+                       provider_model_route_id, route_generation,
+                       assignment_revision_id, price_version_id, route_snapshot_id,
+                       candidate_ordinal, provider_instance_id,
+                       provider_instance_generation, credential_id,
+                       credential_generation, connect_timeout_ms,
+                       first_byte_timeout_ms, idle_timeout_ms, execution_timeout_ms,
+                       logical_deadline, attempt_deadline, state, started_at,
+                       finished_at, normalized_error_class, affected_scope,
+                       affected_scope_id, retry_decision, redacted_evidence,
+                       migration_0015_backfilled
+                   ) SELECT %s, request.row_id, request.service_id,
+                            request.workspace_id, 1, snapshot.provider_model_route_id,
+                            snapshot.route_generation, snapshot.assignment_revision_id,
+                            snapshot.price_version_id, snapshot.id,
+                            snapshot.candidate_ordinal, snapshot.provider_instance_id,
+                            snapshot.provider_instance_generation,
+                            snapshot.credential_id, snapshot.credential_generation,
+                            10000, 30000, 30000, snapshot.attempt_timeout_ms,
+                            request.admitted_at + interval '15 minutes',
+                            LEAST(%s + interval '30 seconds',
+                                  request.admitted_at + interval '15 minutes'),
+                            'failed', %s, %s, 'router_internal', 'attempt', %s,
+                            'stop_request', jsonb_build_object(
+                                'provider_status', NULL, 'retry_after_ms', NULL,
+                                'detail_code', 'legacy_accounting_fixture'
+                            ), true
+                     FROM router.logical_requests AS request
+                     JOIN router.provider_route_execution_snapshots AS snapshot
+                       ON snapshot.request_row_id = request.row_id
+                      AND snapshot.candidate_ordinal = 1
+                     WHERE request.row_id = %s""",
+                (attempt_id, NOW, NOW, NOW, attempt_id, REQUEST_ROW_ID),
+            )
         connection.execute(
             """INSERT INTO router.canonical_events (
                    event_id, source_node_id, source_sequence, event_class,
