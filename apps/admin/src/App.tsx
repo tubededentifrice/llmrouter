@@ -5,9 +5,12 @@ import {
   ContextItem,
   Icon,
   IconButton,
+  AccountMenu,
+  NavigationItem,
   PageHeading,
   StatCard,
   StatusPill,
+  WorkspaceSelector,
   type IconName,
 } from "@opendle/ui";
 
@@ -219,40 +222,46 @@ function Sidebar({
           <small>Control plane</small>
         </div>
       </div>
-      <button
+      <WorkspaceSelector
         className="scope-switcher"
-        type="button"
+        name="Global fleet"
+        detail="All services"
+        avatar="G"
+        end={<Icon name="chevron" size={16} />}
         onClick={() => {
           onNotify(
             "Scope switcher is available in the full administration flow.",
           );
         }}
-      >
-        <span className="scope-avatar">G</span>
-        <span className="scope-copy">
-          <strong>Global fleet</strong>
-          <small>All services</small>
-        </span>
-        <Icon name="chevron" size={16} />
-      </button>
+      />
       <nav className="primary-nav" aria-label="Administration navigation">
         <p className="nav-label">Manage</p>
         {navigation.slice(0, 4).map((item) => (
-          <NavItem
+          <NavigationItem
             key={item.id}
-            item={item}
+            className="nav-item"
             active={activeSection === item.id}
-            onSection={onSection}
+            icon={<Icon name={item.icon} size={18} />}
+            label={item.label}
+            count={item.count}
+            onClick={() => {
+              onSection(item.id);
+            }}
           />
         ))}
         <p className="nav-label nav-label-spaced">Observe</p>
         {navigation.slice(4).map((item) => (
-          <NavItem
+          <NavigationItem
             key={item.id}
-            item={item}
+            className="nav-item"
             active={activeSection === item.id}
-            onSection={onSection}
             alert={item.id === "operations"}
+            icon={<Icon name={item.icon} size={18} />}
+            label={item.label}
+            count={item.count}
+            onClick={() => {
+              onSection(item.id);
+            }}
           />
         ))}
       </nav>
@@ -264,51 +273,18 @@ function Sidebar({
             <small>Last checked 30 sec ago</small>
           </div>
         </div>
-        <button
+        <AccountMenu
           className="sidebar-account"
-          type="button"
+          avatar="VL"
+          name="Vincent L."
+          detail="Global administrator"
+          end={<Icon name="more" size={18} />}
           onClick={() => {
             onSection("security");
           }}
-        >
-          <span className="avatar">VL</span>
-          <span>
-            <strong>Vincent L.</strong>
-            <small>Global administrator</small>
-          </span>
-          <Icon name="more" size={18} />
-        </button>
+        />
       </div>
     </aside>
-  );
-}
-
-function NavItem({
-  item,
-  active,
-  alert,
-  onSection,
-}: {
-  item: (typeof navigation)[number];
-  active: boolean;
-  alert?: boolean;
-  onSection: (section: Section) => void;
-}) {
-  return (
-    <button
-      className="nav-item"
-      data-active={active}
-      type="button"
-      onClick={() => {
-        onSection(item.id);
-      }}
-    >
-      <Icon name={item.icon} size={18} />
-      <span>{item.label}</span>
-      {item.count ? (
-        <b className={alert ? "nav-alert" : undefined}>{item.count}</b>
-      ) : null}
-    </button>
   );
 }
 
@@ -323,7 +299,12 @@ function Topbar({
 }) {
   return (
     <header className="topbar">
-      <IconButton className="mobile-menu" aria-label="Open navigation" icon={<Icon name="menu" />} onClick={onMobileOpen} />
+      <IconButton
+        className="mobile-menu"
+        aria-label="Open navigation"
+        icon={<Icon name="menu" />}
+        onClick={onMobileOpen}
+      />
       <div className="breadcrumbs">
         <span>Global</span>
         <span className="breadcrumb-separator">/</span>
@@ -342,7 +323,12 @@ function Topbar({
         <IconButton
           className="topbar-icon"
           aria-label="View alerts"
-          icon={<><span className="notification-dot" /><Icon name="activity" size={18} /></>}
+          icon={
+            <>
+              <span className="notification-dot" />
+              <Icon name="activity" size={18} />
+            </>
+          }
           onClick={() => {
             onSection("operations");
           }}
@@ -930,20 +916,20 @@ function App() {
                 <Button
                   className="button button-quiet"
                   icon={<Icon name="eye" size={16} />}
-                  onClick={() =>
-                    notify("Runbook opened in the full administration flow.")
-                  }
+                  onClick={() => {
+                    notify("Runbook opened in the full administration flow.");
+                  }}
                 >
                   View runbook
                 </Button>
                 <Button
                   className="button button-primary"
                   icon={<Icon name="plus" size={17} />}
-                  onClick={() =>
+                  onClick={() => {
                     notify(
                       "Provider creation is ready for the next implementation step.",
-                    )
-                  }
+                    );
+                  }}
                 >
                   Add provider
                 </Button>
