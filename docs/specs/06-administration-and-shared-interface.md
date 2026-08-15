@@ -190,6 +190,15 @@ MUST show validation errors before it reports success and MUST show the new
 active revision and distribution state after success. It MUST NOT require a
 draft, approval, canary, or promotion workflow.
 
+## Interface starting point
+
+The visual administration prototype in [`apps/admin/`](../../apps/admin/) is
+the starting point and reference for the global and service administration
+application. It demonstrates the intended design direction and the graph,
+table, inspector, scope, status, and responsive interaction patterns. The
+prototype is not a complete product contract. Keep detailed interface work in
+the implementation task and in the application as it develops.
+
 ## Headless operational administration
 
 The versioned headless administration API MUST expose every operational action
