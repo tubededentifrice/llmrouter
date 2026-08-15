@@ -123,11 +123,12 @@ must not weaken service or workspace isolation.
 If a React application is added, each change must keep React Doctor at score
 100 with zero diagnostics. Add and run the React gate with the application.
 Use the shared [OpenDLE UI](https://github.com/tubededentifrice/opendle-ui)
-package for common tokens and primitives. The React app uses the local sibling
-dependency `file:../../../opendle-ui`. This dependency always uses the current
-shared worktree and is exempt from the 14-day age and exact-version checks.
-Build the shared package before the app checks. Keep router-specific views
-here. Do not copy a shared component into this repository.
+package for common tokens and primitives. The React app uses the Git dependency
+`git+https://github.com/tubededentifrice/opendle-ui.git#main`. This dependency
+always uses the current shared `main` branch and is exempt from the 14-day age
+and exact-version checks. The package includes built files for clean installs.
+Keep router-specific views here. Do not copy a shared component into this
+repository.
 
 ## Concurrent work and Git
 

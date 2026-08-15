@@ -8,7 +8,7 @@
     "build": "vite build"
   },
   "dependencies": {
-    "@opendle/ui": "file:../../../opendle-ui",
+    "@opendle/ui": "git+https://github.com/tubededentifrice/opendle-ui.git#main",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   }
