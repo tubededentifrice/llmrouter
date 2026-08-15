@@ -1,0 +1,49 @@
+# Local development front end.
+#
+# Local access uses http://127.0.0.1:5174. The same container is also joined
+# to the host Traefik network. Traefik routes the protected public hostname
+# to the container; it does not expose the application port on a public host
+# interface.
+
+name: llmrouter
+
+services:
+  admin-dev:
+    image: node:24.17.0-alpine@sha256:156b55f92e98ccd5ef49578a8cea0df4679826564bad1c9d4ef04462b9f0ded6
+    restart: unless-stopped
+    working_dir: /workspace
+    command: sh -lc "npm install --global npm@11.18.0 --no-audit --no-fund && npm ci --no-audit --no-fund && npm run dev --workspace @llmrouter/admin -- --host 0.0.0.0"
+    volumes:
+      - .:/workspace
+      - llmrouter-node-modules:/workspace/node_modules
+      - llmrouter-admin-node-modules:/workspace/apps/admin/node_modules
+    expose:
+      - "5173"
+    ports:
+      - "127.0.0.1:5174:5173"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:5173/"]
+      interval: 10s
+      timeout: 3s
+      start_period: 20s
+      retries: 3
+    networks:
+      - default
+      - traefik-proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-proxy"
+      - "traefik.http.routers.llmrouter-dev.rule=Host(`llmrouter.opendle.dev`)"
+      - "traefik.http.routers.llmrouter-dev.entrypoints=websecure"
+      - "traefik.http.routers.llmrouter-dev.tls=true"
+      - "traefik.http.routers.llmrouter-dev.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.llmrouter-dev.middlewares=badger@file"
+      - "traefik.http.services.llmrouter-dev.loadbalancer.server.port=5173"
+
+networks:
+  traefik-proxy:
+    external: true
+
+volumes:
+  llmrouter-admin-node-modules:
+  llmrouter-node-modules:

@@ -50,6 +50,27 @@ use.
 - [Research](docs/research/README.md) records source-service evidence.
 - [Repository checks](scripts/check-repository.sh) verify the base structure.
 
+## Development site
+
+Start the administration development site with:
+
+```bash
+docker compose -f docker-compose.dev.yml up -d
+```
+
+Use `http://127.0.0.1:5174` for local work and agent browser tests. The
+protected external site is [https://llmrouter.opendle.dev](https://llmrouter.opendle.dev).
+Pangolin and Traefik protect this external route. Agents MUST use the local
+URL directly. Do not use the protected external URL for agent tests.
+
+Useful commands:
+
+```bash
+docker compose -f docker-compose.dev.yml logs -f admin-dev
+docker compose -f docker-compose.dev.yml ps
+docker compose -f docker-compose.dev.yml down
+```
+
 ## Work process
 
 1. Use the repository `director` skill to complete one ready Beads task.

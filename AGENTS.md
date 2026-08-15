@@ -15,6 +15,15 @@ is necessary for security, reliability, or accounting.
 Do not put secrets, API credentials, private prompts, model responses, private
 runtime data, or unpublished third-party data in Git.
 
+## Development site access
+
+The administration development site runs at `http://127.0.0.1:5174` and is
+also available at `https://llmrouter.opendle.dev` through the protected
+Pangolin and Traefik route. Agents MUST use the localhost URL for browser
+tests, API checks, and local verification. The external URL is for the user
+and for protected access only. Do not bypass the protection or add public host
+port bindings.
+
 ## Working rules
 
 1. Read this file, `README.md`, and the applicable document indexes before a
