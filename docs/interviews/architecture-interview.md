@@ -397,8 +397,8 @@ the first stable release.
 Accepted answer: Use the Functional Source License, Version 1.1, ALv2 Future
 License (`FSL-1.1-ALv2`) for LLM Router and Ontology. Each version becomes
 available under Apache License 2.0 on the second anniversary of the date that
-version is made available. The exact copyright and licensor notice is pending
-the user's legal-name confirmation.
+version is made available. The license notice uses `Copyright 2026
+tubededentifrice`.
 
 Recommendation: Apache License 2.0. It is permissive and includes an explicit
 patent grant. It is longer than MIT and can be less familiar to small users.
@@ -408,8 +408,8 @@ patent grant. It is longer than MIT and can be less familiar to small users.
 - AGPL-3.0: It requires network users to share modified service source. Some
   companies will not adopt it.
 
-Resolved choice: `FSL-1.1-ALv2`. License-file application is pending the exact
-licensor name.
+Resolved choice: `FSL-1.1-ALv2`. The license file is applied with the selected
+licensor notice.
 
 ### 20. Compatibility promise
 

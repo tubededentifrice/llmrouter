@@ -1,6 +1,6 @@
 # Use FSL 1.1 with an Apache 2.0 future license
 
-- Status: accepted; license notice pending
+- Status: accepted; applied
 - Date: 2026-08-12
 - Decision owner: user
 
@@ -16,10 +16,9 @@ Select the Functional Source License, Version 1.1, ALv2 Future License
 (`FSL-1.1-ALv2`). Each released software version changes to Apache License 2.0
 on the second anniversary of the date that version is made available.
 
-Use the canonical license text without modification. Add the license grant
-only after the user gives the exact copyright and licensor name for the
-required notice. Use the same license for Ontology in a separate repository
-change.
+Use the canonical license text without modification. The license notice is
+`Copyright 2026 tubededentifrice`. Use the same license for Ontology in a
+separate repository change.
 
 The authoritative references are the [FSL site](https://fsl.software/) and the
 [SPDX license record](https://spdx.org/licenses/FSL-1.1-ALv2.html).
@@ -40,14 +39,12 @@ The authoritative references are the [FSL site](https://fsl.software/) and the
   version's two-year period.
 - Each version has its own change date.
 - Release records preserve the date that each version became available.
-- The repository has no FSL grant until the canonical license text and exact
-  notice are present.
+- The repository grants FSL under the canonical text and the notice above.
 
 ## Migration effect
 
-Existing files stay without a new license grant until the notice is complete.
-Ontology needs its own license file, notice, documentation, checks, commit,
-and push.
+Existing files are covered by the repository license notice. Ontology has its
+own license file and notice.
 
 ## Security effect
 

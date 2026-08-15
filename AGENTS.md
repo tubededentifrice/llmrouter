@@ -60,6 +60,14 @@ Keep root instructions limited to durable policy. Put reusable workflows in a
 skill, deterministic operations in `scripts/`, and directory-only rules in a
 nested `AGENTS.md`.
 
+Agents may improve these instructions, skills, scripts, and checks when they
+find repeated friction or a missing guard. Use progressive disclosure: keep
+durable rules here, workflows in skills, and detailed references in linked
+files. Test new tools for success, expected failure, and unsafe input. Do not
+weaken a check to make a task pass. Agents may delegate independent inspection
+or validation to subagents; the owner agent reviews the complete diff and owns
+Git actions.
+
 ## Specification and implementation
 
 Product behavior belongs in `docs/specs/`. Architecture choices belong in
@@ -114,6 +122,8 @@ must not weaken service or workspace isolation.
 
 If a React application is added, each change must keep React Doctor at score
 100 with zero diagnostics. Add and run the React gate with the application.
+Use the shared [OpenDLE UI](https://github.com/tubededentifrice/opendle-ui)
+package for common tokens and primitives. Keep router-specific views here.
 
 ## Concurrent work and Git
 

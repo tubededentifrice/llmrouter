@@ -7,6 +7,7 @@ repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 required_files=(
   "AGENTS.md"
   "README.md"
+  "LICENSE.md"
   "docs/architecture.md"
   "docs/product-direction.md"
   "docs/api/README.md"
@@ -226,5 +227,7 @@ fi
 
 git -C "${repository_root}" diff --check
 git -C "${repository_root}" diff --cached --check
+grep -Fqx "Copyright 2026 tubededentifrice" "${repository_root}/LICENSE.md"
+grep -Fq "FSL-1.1-ALv2" "${repository_root}/README.md"
 
 echo "Repository checks passed."

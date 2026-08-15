@@ -90,5 +90,4 @@ Future License (`FSL-1.1-ALv2`). Each software version becomes available under
 Apache License 2.0 on the second anniversary of the date that version is made
 available.
 
-The license file is pending the exact copyright and licensor name. Until that
-notice is added, this repository does not grant the selected license.
+See [`LICENSE.md`](LICENSE.md) for the complete terms.

@@ -29,6 +29,8 @@ __pycache__/
 runtime-data/
 data/
 .playwright-mcp/
+.agents/
+.codex/
 
 # Beads and Dolt runtime files
 .dolt/
