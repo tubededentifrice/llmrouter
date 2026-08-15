@@ -1,32 +1,30 @@
-@import url("https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap");
-
 :root {
-  color: #20272b;
-  background: #f3f1eb;
-  font-family: "DM Sans", "Segoe UI", sans-serif;
+  color: var(--od-color-foreground);
+  background: var(--od-color-background);
+  font-family: var(--od-font-body);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
-  --ink: #20272b;
-  --ink-soft: #4c575b;
-  --muted: #81898a;
-  --line: #dedfd9;
-  --line-soft: #ebebe5;
-  --canvas: #f3f1eb;
-  --surface: #fbfaf7;
-  --surface-strong: #ffffff;
-  --sidebar: #151b1e;
-  --sidebar-soft: #20282b;
-  --sidebar-muted: #899497;
-  --lime: #d7f36a;
-  --lime-soft: #eef7cb;
-  --blue: #8dbff4;
-  --blue-soft: #e7f2ff;
-  --purple: #9d89de;
-  --purple-soft: #f0ecff;
-  --amber: #efb55e;
-  --amber-soft: #fff2d8;
-  --focus: #496ef3;
-  --shadow: 0 18px 46px rgb(28 35 38 / 8%);
+  --ink: var(--od-color-foreground);
+  --ink-soft: var(--od-color-muted-strong);
+  --muted: var(--od-color-muted);
+  --line: var(--od-color-border);
+  --line-soft: color-mix(in srgb, var(--od-color-border) 65%, transparent);
+  --canvas: var(--od-color-background);
+  --surface: var(--od-color-surface);
+  --surface-strong: var(--od-color-surface-raised);
+  --sidebar: var(--od-color-sidebar);
+  --sidebar-soft: color-mix(in srgb, var(--od-color-sidebar) 80%, white);
+  --sidebar-muted: var(--od-color-sidebar-muted);
+  --lime: var(--od-color-lime);
+  --lime-soft: var(--od-color-lime-soft);
+  --blue: var(--od-color-blue);
+  --blue-soft: var(--od-color-blue-soft);
+  --purple: var(--od-color-purple);
+  --purple-soft: var(--od-color-purple-soft);
+  --amber: var(--od-color-amber);
+  --amber-soft: var(--od-color-amber-soft);
+  --focus: var(--od-color-focus);
+  --shadow: var(--od-shadow);
 }
 
 * {
@@ -64,7 +62,7 @@ p {
 }
 h1,
 h2 {
-  font-family: Manrope, "DM Sans", sans-serif;
+  font-family: var(--od-font-display), var(--od-font-body), sans-serif;
 }
 .sr-only {
   position: absolute;
@@ -104,7 +102,7 @@ h2 {
 }
 .brand-lockup strong {
   display: block;
-  font-family: Manrope, sans-serif;
+  font-family: var(--od-font-display), sans-serif;
   font-size: 14px;
   letter-spacing: -0.02em;
 }
@@ -381,7 +379,7 @@ h2 {
   border-radius: 5px;
   color: #637342;
   background: var(--lime-soft);
-  font-family: "DM Mono", monospace;
+  font-family: var(--od-font-mono), monospace;
   font-size: 8px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -425,7 +423,7 @@ h2 {
   border-radius: 4px;
   color: #8c9493;
   background: #fafaf7;
-  font-family: "DM Mono", monospace;
+  font-family: var(--od-font-mono), monospace;
   font-size: 8px;
   white-space: nowrap;
 }
@@ -696,14 +694,14 @@ h2 {
 .stat-card > strong {
   display: block;
   margin-top: 13px;
-  font-family: Manrope, sans-serif;
+  font-family: var(--od-font-display), sans-serif;
   font-size: 27px;
   letter-spacing: -0.05em;
 }
 .stat-unit {
   margin-left: 3px;
   color: var(--muted);
-  font-family: "DM Sans", sans-serif;
+  font-family: var(--od-font-body), sans-serif;
   font-size: 14px;
   font-weight: 600;
   letter-spacing: 0;
@@ -1093,7 +1091,7 @@ h2 {
 .graph-zoom {
   margin-left: auto;
   color: #a5acab;
-  font-family: "DM Mono", monospace;
+  font-family: var(--od-font-mono), monospace;
   font-size: 8px;
 }
 
@@ -1187,7 +1185,7 @@ h2 {
 }
 .detail-list strong {
   margin-top: 4px;
-  font-family: "DM Mono", monospace;
+  font-family: var(--od-font-mono), monospace;
   font-size: 9px;
   font-weight: 500;
 }
@@ -1208,7 +1206,7 @@ h2 {
   border-radius: 50%;
   color: var(--muted);
   background: var(--surface-strong);
-  font-family: "DM Mono", monospace;
+  font-family: var(--od-font-mono), monospace;
   font-size: 9px;
 }
 .chain-step.current > span:first-child {
@@ -1455,7 +1453,7 @@ h2 {
 }
 .activity-row time {
   color: #9ca4a2;
-  font-family: "DM Mono", monospace;
+  font-family: var(--od-font-mono), monospace;
   font-size: 8px;
   white-space: nowrap;
 }

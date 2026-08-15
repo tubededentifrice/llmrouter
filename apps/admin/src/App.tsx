@@ -1,5 +1,13 @@
 import { useReducer } from "react";
-import { Icon, StatusPill, type IconName } from "@opendle/ui";
+import {
+  ChainStep,
+  ContextItem,
+  Icon,
+  PageHeading,
+  StatCard,
+  StatusPill,
+  type IconName,
+} from "@opendle/ui";
 
 type Section =
   | "overview"
@@ -362,199 +370,104 @@ function Topbar({
   );
 }
 
-function PageHeading({
-  page,
-  onNotify,
-}: {
-  page: (typeof pageTitles)[Section];
-  onNotify: Notify;
-}) {
-  return (
-    <>
-      <div className="page-heading">
-        <div>
-          <p className="eyebrow">{page.eyebrow}</p>
-          <h1>{page.title}</h1>
-          <p className="page-description">{page.description}</p>
-        </div>
-        <div className="heading-actions">
-          <button
-            className="button button-quiet"
-            type="button"
-            onClick={() => {
-              onNotify("Runbook opened in the full administration flow.");
-            }}
-          >
-            <Icon name="eye" size={16} /> View runbook
-          </button>
-          <button
-            className="button button-primary"
-            type="button"
-            onClick={() => {
-              onNotify(
-                "Provider creation is ready for the next implementation step.",
-              );
-            }}
-          >
-            <Icon name="plus" size={17} /> Add provider
-          </button>
-        </div>
-      </div>
-      <section
-        className="context-strip"
-        aria-label="Current administration scope"
-      >
-        <ContextItem
-          icon="grid"
-          tone="context-lime"
-          label="Scope"
-          value="Global fleet"
-        />
-        <span className="context-divider" />
-        <ContextItem
-          icon="layers"
-          tone="context-blue"
-          label="Services"
-          value="3 active"
-        />
-        <span className="context-divider" />
-        <ContextItem
-          icon="activity"
-          tone="context-purple"
-          label="Revision"
-          value="router-2026.08.14"
-        />
-        <div className="context-spacer" />
-        <StatusPill tone="lime">Live and synced</StatusPill>
-        <span className="context-updated">Updated 30 sec ago</span>
-      </section>
-    </>
-  );
-}
-
-function ContextItem({
-  icon,
-  tone,
-  label,
-  value,
-}: {
-  icon: IconName;
-  tone: string;
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="context-item">
-      <span className={`context-icon ${tone}`}>
-        <Icon name={icon} size={16} />
-      </span>
-      <span>
-        <small>{label}</small>
-        <strong>{value}</strong>
-      </span>
-    </div>
-  );
-}
-
 function SummaryStats() {
   return (
     <section className="stat-grid" aria-label="Fleet summary">
       <StatCard
-        icon="activity"
+        icon={<Icon name="activity" size={17} />}
         tone="blue"
         label="Requests today"
         value="24,816"
-        trend="18.4%"
+        trendClassName="trend-up"
+        trend={
+          <>
+            <Icon name="arrow-up" size={14} /> 18.4%
+          </>
+        }
         note="vs last week"
-        spark="sparkline-blue"
+        visual={
+          <div className="sparkline sparkline-blue">
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+          </div>
+        }
       />
       <StatCard
-        icon="shield"
+        icon={<Icon name="shield" size={17} />}
         tone="lime"
         label="Success rate"
         value="99.82%"
-        trend="0.06%"
+        trendClassName="trend-up"
+        trend={
+          <>
+            <Icon name="arrow-up" size={14} /> 0.06%
+          </>
+        }
         note="vs last week"
-        spark="sparkline-lime"
+        visual={
+          <div className="sparkline sparkline-lime">
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+          </div>
+        }
       />
       <StatCard
-        icon="clock"
+        icon={<Icon name="clock" size={17} />}
         tone="purple"
         label="Average latency"
         value="842"
         unit="ms"
-        trend="12.1%"
+        trendClassName="trend-down"
+        trend={
+          <>
+            <Icon name="arrow-up" size={14} /> 12.1%
+          </>
+        }
         note="faster this week"
-        spark="sparkline-purple"
+        visual={
+          <div className="sparkline sparkline-purple">
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+          </div>
+        }
       />
       <StatCard
-        icon="database"
+        icon={<Icon name="database" size={17} />}
         tone="amber"
         label="Spend this month"
         value="$1,284"
         unit=".60"
+        trendClassName="trend-neutral"
         trend="68%"
         note="of $1,900 budget"
+        visual={
+          <div className="budget-meter">
+            <span />
+          </div>
+        }
       />
     </section>
-  );
-}
-
-function StatCard({
-  icon,
-  tone,
-  label,
-  value,
-  unit,
-  trend,
-  note,
-  spark,
-}: {
-  icon: IconName;
-  tone: string;
-  label: string;
-  value: string;
-  unit?: string;
-  trend: string;
-  note: string;
-  spark?: string;
-}) {
-  return (
-    <article className="stat-card">
-      <div className="stat-top">
-        <span className="stat-label">{label}</span>
-        <span className={`stat-icon stat-icon-${tone}`}>
-          <Icon name={icon} size={17} />
-        </span>
-      </div>
-      <strong>
-        {value}
-        {unit ? <span className="stat-unit">{unit}</span> : null}
-      </strong>
-      <span
-        className={`stat-trend ${tone === "amber" ? "trend-neutral" : tone === "purple" ? "trend-down" : "trend-up"}`}
-      >
-        {tone !== "amber" ? <Icon name="arrow-up" size={14} /> : null} {trend}{" "}
-        <em>{note}</em>
-      </span>
-      {spark ? (
-        <div className={`sparkline ${spark}`}>
-          <i />
-          <i />
-          <i />
-          <i />
-          <i />
-          <i />
-          <i />
-          <i />
-          <i />
-        </div>
-      ) : (
-        <div className="budget-meter">
-          <span />
-        </div>
-      )}
-    </article>
   );
 }
 
@@ -825,31 +738,6 @@ function Inspector({
   );
 }
 
-function ChainStep({
-  number,
-  title,
-  detail,
-  tone,
-  status,
-}: {
-  number: string;
-  title: string;
-  detail: string;
-  tone: "lime" | "slate";
-  status: string;
-}) {
-  return (
-    <div className={`chain-step ${tone === "lime" ? "current" : ""}`}>
-      <span>{number}</span>
-      <div>
-        <strong>{title}</strong>
-        <small>{detail}</small>
-      </div>
-      <StatusPill tone={tone}>{status}</StatusPill>
-    </div>
-  );
-}
-
 function RoutingWorkspace({
   viewMode,
   selectedNode,
@@ -1044,7 +932,67 @@ function App() {
           onSection={selectSection}
         />
         <main className="content">
-          <PageHeading page={page} onNotify={notify} />
+          <PageHeading
+            actions={
+              <>
+                <button
+                  className="button button-quiet"
+                  type="button"
+                  onClick={() =>
+                    notify("Runbook opened in the full administration flow.")
+                  }
+                >
+                  <Icon name="eye" size={16} /> View runbook
+                </button>
+                <button
+                  className="button button-primary"
+                  type="button"
+                  onClick={() =>
+                    notify(
+                      "Provider creation is ready for the next implementation step.",
+                    )
+                  }
+                >
+                  <Icon name="plus" size={17} /> Add provider
+                </button>
+              </>
+            }
+            className="page-heading"
+            description={page.description}
+            eyebrow={page.eyebrow}
+            title={page.title}
+          />
+          <section
+            className="context-strip"
+            aria-label="Current administration scope"
+          >
+            <ContextItem
+              className="context-item"
+              icon={<Icon name="grid" size={16} />}
+              iconClassName="context-icon context-lime"
+              label="Scope"
+              value="Global fleet"
+            />
+            <span className="context-divider" />
+            <ContextItem
+              className="context-item"
+              icon={<Icon name="layers" size={16} />}
+              iconClassName="context-icon context-blue"
+              label="Services"
+              value="3 active"
+            />
+            <span className="context-divider" />
+            <ContextItem
+              className="context-item"
+              icon={<Icon name="activity" size={16} />}
+              iconClassName="context-icon context-purple"
+              label="Revision"
+              value="router-2026.08.14"
+            />
+            <div className="context-spacer" />
+            <StatusPill tone="lime">Live and synced</StatusPill>
+            <span className="context-updated">Updated 30 sec ago</span>
+          </section>
           <SummaryStats />
           <RoutingWorkspace
             viewMode={state.viewMode}
