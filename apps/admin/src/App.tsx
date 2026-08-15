@@ -1,8 +1,10 @@
 import { useReducer } from "react";
 import {
+  Button,
   ChainStep,
   ContextItem,
   Icon,
+  IconButton,
   PageHeading,
   StatCard,
   StatusPill,
@@ -321,14 +323,7 @@ function Topbar({
 }) {
   return (
     <header className="topbar">
-      <button
-        className="mobile-menu"
-        type="button"
-        aria-label="Open navigation"
-        onClick={onMobileOpen}
-      >
-        <Icon name="menu" />
-      </button>
+      <IconButton className="mobile-menu" aria-label="Open navigation" icon={<Icon name="menu" />} onClick={onMobileOpen} />
       <div className="breadcrumbs">
         <span>Global</span>
         <span className="breadcrumb-separator">/</span>
@@ -344,17 +339,14 @@ function Topbar({
           />
           <kbd>⌘ K</kbd>
         </label>
-        <button
+        <IconButton
           className="topbar-icon"
-          type="button"
           aria-label="View alerts"
+          icon={<><span className="notification-dot" /><Icon name="activity" size={18} /></>}
           onClick={() => {
             onSection("operations");
           }}
-        >
-          <span className="notification-dot" />
-          <Icon name="activity" size={18} />
-        </button>
+        />
         <button
           className="topbar-avatar"
           type="button"
@@ -935,26 +927,26 @@ function App() {
           <PageHeading
             actions={
               <>
-                <button
+                <Button
                   className="button button-quiet"
-                  type="button"
+                  icon={<Icon name="eye" size={16} />}
                   onClick={() =>
                     notify("Runbook opened in the full administration flow.")
                   }
                 >
-                  <Icon name="eye" size={16} /> View runbook
-                </button>
-                <button
+                  View runbook
+                </Button>
+                <Button
                   className="button button-primary"
-                  type="button"
+                  icon={<Icon name="plus" size={17} />}
                   onClick={() =>
                     notify(
                       "Provider creation is ready for the next implementation step.",
                     )
                   }
                 >
-                  <Icon name="plus" size={17} /> Add provider
-                </button>
+                  Add provider
+                </Button>
               </>
             }
             className="page-heading"
