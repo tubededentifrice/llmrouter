@@ -4,6 +4,6 @@ import { defineConfig } from "vite";
 export default defineConfig({
   plugins: [react()],
   server: {
-    allowedHosts: ["llmrouter.opendle.dev"],
+    allowedHosts: ["llmrouter.opendle.dev", "llmrouter.opendle.com"],
   },
 });
