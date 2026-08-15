@@ -15,8 +15,8 @@ services:
     command: sh -lc "npm install --global npm@11.18.0 --no-audit --no-fund && npm ci --no-audit --no-fund && npm run dev --workspace @llmrouter/admin -- --host 0.0.0.0"
     volumes:
       - .:/workspace
-      - llmrouter-node-modules:/workspace/node_modules
-      - llmrouter-admin-node-modules:/workspace/apps/admin/node_modules
+      - llmrouter-node-modules-v2:/workspace/node_modules
+      - llmrouter-admin-node-modules-v2:/workspace/apps/admin/node_modules
     expose:
       - "5173"
     ports:
@@ -45,5 +45,5 @@ networks:
     external: true
 
 volumes:
-  llmrouter-admin-node-modules:
-  llmrouter-node-modules:
+  llmrouter-admin-node-modules-v2:
+  llmrouter-node-modules-v2:
