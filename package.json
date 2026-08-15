@@ -13,14 +13,15 @@
     "packages/typescript-*"
   ],
   "scripts": {
-    "build": "npm run build --workspaces --if-present",
+    "build": "npm run build:shared-ui && npm run build --workspaces --if-present",
     "format": "prettier --write apps packages/typescript-* eslint.config.mjs package.json tsconfig.json tsconfig.base.json scripts/check-react-doctor.mjs scripts/tests/fixtures/dependency-policy-invalid/package.json scripts/tests/fixtures/react-doctor-invalid.json",
     "format:check": "prettier --check apps packages/typescript-* eslint.config.mjs package.json tsconfig.json tsconfig.base.json scripts/check-react-doctor.mjs scripts/tests/fixtures/dependency-policy-invalid/package.json scripts/tests/fixtures/react-doctor-invalid.json",
     "lint": "eslint . --max-warnings 0",
-    "typecheck": "tsc --build",
+    "typecheck": "npm run build:shared-ui && tsc --build",
     "test": "vitest run",
     "security": "npm audit --audit-level=high",
-    "react-doctor": "react-doctor apps/admin --json --json-compact --fail-on warning"
+    "react-doctor": "react-doctor apps/admin --json --json-compact --fail-on warning",
+    "build:shared-ui": "npm --prefix ../opendle-ui run build"
   },
   "devDependencies": {
     "@eslint/js": "9.39.5",

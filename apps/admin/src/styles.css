@@ -606,7 +606,8 @@ h2 {
   color: var(--muted);
   font-size: 10px;
 }
-.status-pill {
+.status-pill,
+.od-status-pill {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -618,25 +619,30 @@ h2 {
   font-weight: 700;
   white-space: nowrap;
 }
-.status-dot {
+.status-dot,
+.od-status-dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: currentColor;
 }
-.status-lime {
+.status-lime,
+.od-status-lime {
   color: #68802d;
   background: var(--lime-soft);
 }
-.status-amber {
+.status-amber,
+.od-status-amber {
   color: #a56d20;
   background: var(--amber-soft);
 }
-.status-blue {
+.status-blue,
+.od-status-blue {
   color: #4d80b7;
   background: var(--blue-soft);
 }
-.status-slate {
+.status-slate,
+.od-status-slate {
   color: #697679;
   background: #edf0ee;
 }

@@ -1,26 +1,6 @@
 import { useReducer } from "react";
+import { Icon, StatusPill, type IconName } from "@opendle/ui";
 
-type IconName =
-  | "activity"
-  | "arrow-up"
-  | "chevron"
-  | "clock"
-  | "cloud"
-  | "database"
-  | "eye"
-  | "filter"
-  | "grid"
-  | "layers"
-  | "list"
-  | "lock"
-  | "menu"
-  | "more"
-  | "plus"
-  | "search"
-  | "server"
-  | "shield"
-  | "spark"
-  | "warning";
 type Section =
   | "overview"
   | "topology"
@@ -30,63 +10,6 @@ type Section =
   | "operations"
   | "security";
 type ViewMode = "graph" | "table";
-
-const iconPaths: Record<IconName, string> = {
-  activity: "M3 12h4l2-6 4 12 2-6h6",
-  "arrow-up": "M12 19V5m-5 5 5-5 5 5",
-  chevron: "m8 10 4 4 4-4",
-  clock: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 4v5l3 2",
-  cloud: "M7 18h10a4 4 0 0 0 .5-8A6 6 0 0 0 6 8a5 5 0 0 0 1 10",
-  database:
-    "M5 6c0-2 14-2 14 0v12c0 2-14 2-14 0V6Zm0 0c0 2 14 2 14 0M5 12c0 2 14 2 14 0",
-  eye: "M3 12s3-5 9-5 9 5 9 5-3 5-9 5-9-5 9-5Zm9 2a2 2 0 1 0 0-4 2 2 0 0 0 0 4",
-  filter: "M4 6h16M7 12h10m-7 6h4",
-  grid: "M4 4h6v6H4zm10 0h6v6h-6zM4 14h6v6H4zm10 0h6v6h-6z",
-  layers: "m12 4 8 4-8 4-8-4 8-4Zm-8 8 8 4 8-4m-16 4 8 4 8-4",
-  list: "M8 6h12M8 12h12M8 18h12M4 6h.1M4 12h.1M4 18h.1",
-  lock: "M5 10h14v10H5zM8 10V7a4 4 0 0 1 8 0v3",
-  menu: "M4 7h16M4 12h16M4 17h16",
-  more: "M5 12h.1M12 12h.1M19 12h.1",
-  plus: "M12 5v14M5 12h14",
-  search: "M11 17a6 6 0 1 0 0-12 6 6 0 0 0 0 12Zm5-1 4 4",
-  server: "M4 4h16v6H4zm0 10h16v6H4zM7 7h.1M7 17h.1",
-  shield: "M12 3 19 6v5c0 4-3 8-7 10-4-2-7-6-7-10V6l7-3Zm-3 9 2 2 4-4",
-  spark: "m12 3 2 5 5 2-5 2-2 5-2-5-5-2 5-2 2-5",
-  warning: "m12 4 9 16H3l9-16Zm0 5v4m0 3h.1",
-};
-
-function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
-  return (
-    <svg
-      aria-hidden="true"
-      height={size}
-      viewBox="0 0 24 24"
-      width={size}
-      fill="none"
-      stroke="currentColor"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth="1.8"
-    >
-      <path d={iconPaths[name]} />
-    </svg>
-  );
-}
-
-function StatusPill({
-  tone,
-  children,
-}: {
-  tone: "lime" | "amber" | "blue" | "slate";
-  children: React.ReactNode;
-}) {
-  return (
-    <span className={`status-pill status-${tone}`}>
-      <span className="status-dot" />
-      {children}
-    </span>
-  );
-}
 
 const navigation: {
   id: Section;

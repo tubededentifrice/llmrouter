@@ -16,6 +16,7 @@ EXACT_PYTHON = re.compile(
     r"==[A-Za-z0-9][A-Za-z0-9.!+_-]*(?:\s*;.+)?$"
 )
 EXACT_NPM = re.compile(r"^(?:[A-Za-z0-9_.-]+@)?[0-9]+\.[0-9]+\.[0-9]+$")
+SHARED_UI_PACKAGE = "@opendle/ui"
 CUTOFF = "2026-07-30T06:00:00Z"
 NODE_VERSION = "24.17.0"
 NPM_VERSION = "11.18.0"
@@ -60,6 +61,8 @@ def check_package_json(path: Path) -> list[str]:
     errors: list[str] = []
     for field in ("dependencies", "devDependencies", "optionalDependencies"):
         for name, version in document.get(field, {}).items():
+            if name == SHARED_UI_PACKAGE and version.startswith("file:"):
+                continue
             if not EXACT_NPM.fullmatch(version):
                 errors.append(f"{path}: Node dependency is not exact: {name}@{version}")
     if path == Path("package.json"):
