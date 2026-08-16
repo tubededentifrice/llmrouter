@@ -224,12 +224,43 @@ def _seed_admission_target(connection: psycopg.Connection[object]) -> None:
     )
 
 
+def _configured_distribution(
+    *, received_at: datetime = NOW, content_sha256: bytes = bytes.fromhex("55" * 32)
+) -> ConfigurationRevisionDistribution:
+    authenticator = RevisionAuthenticator(TEST_DISTRIBUTION_KEY)
+    distribution = ConfigurationRevisionDistribution(authenticator)
+    for workspace_id in (WORKSPACE_ID, None):
+        revision = NormalConfigurationRevision(
+            DistributionScope(SERVICE_ID, workspace_id),
+            GLOBAL_CONFIGURATION_ID,
+            1,
+            content_sha256,
+            received_at,
+        )
+        distribution.apply_normal(
+            authenticator.normal(
+                revision,
+                authentication_challenge=distribution.authentication_challenge,
+            ),
+            received_at=received_at,
+        )
+    return distribution
+
+
 @pytest.fixture
 def repository(database_url: str) -> PostgresAdmissionRepository:
     with psycopg.connect(database_url) as connection:
         migrate(connection)
         _seed_admission_target(connection)
-    return PostgresAdmissionRepository(database_url)
+    return PostgresAdmissionRepository(
+        database_url, distribution=_configured_distribution()
+    )
+
+
+def test_distribution_cannot_be_disabled(database_url: str) -> None:
+    """Require the fail-closed distribution boundary for every repository."""
+    with pytest.raises(TypeError):
+        PostgresAdmissionRepository(database_url, distribution=None)  # type: ignore[arg-type]
 
 
 def test_atomic_create_replay_conflict_and_response_loss(
@@ -492,13 +523,14 @@ def test_distributed_scope_disable_stale_boundary_and_revision_mismatch_fail_clo
 
     def configured(
         revision_id: str = GLOBAL_CONFIGURATION_ID,
+        content_sha256: bytes = bytes.fromhex("55" * 32),
     ) -> ConfigurationRevisionDistribution:
         result = ConfigurationRevisionDistribution(authenticator)
         revision = NormalConfigurationRevision(
             scope,
             revision_id,
             1,
-            bytes.fromhex("55" * 32),
+            content_sha256,
             NOW,
         )
         result.apply_normal(
@@ -528,6 +560,23 @@ def test_distributed_scope_disable_stale_boundary_and_revision_mismatch_fail_clo
     with pytest.raises(AdmissionError) as mismatch:
         mismatch_repository.admit(_context(), _request(_uuidv7(NOW, 43)), now=NOW)
     assert mismatch.value.code is AdmissionErrorCode.CONFIGURATION_UNAVAILABLE
+
+    digest_mismatch_repository = PostgresAdmissionRepository(
+        database_url,
+        distribution=configured(content_sha256=bytes.fromhex("44" * 32)),
+    )
+    digest_mismatch_id = _uuidv7(NOW, 45)
+    with pytest.raises(AdmissionError) as digest_mismatch:
+        digest_mismatch_repository.admit(
+            _context(), _request(digest_mismatch_id), now=NOW
+        )
+    assert digest_mismatch.value.code is AdmissionErrorCode.CONFIGURATION_UNAVAILABLE
+    with psycopg.connect(database_url) as connection:
+        stored = connection.execute(
+            "SELECT count(*) FROM router.logical_requests WHERE request_id = %s",
+            (digest_mismatch_id,),
+        ).fetchone()
+    assert stored == (0,)
 
     disabled_distribution = configured()
     disabled_distribution.apply_urgent(

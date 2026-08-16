@@ -57,15 +57,17 @@ class PostgresAdmissionRepository:
         self,
         database_url: str,
         *,
+        distribution: ConfigurationRevisionDistribution,
         maximum_initial_age: timedelta = DEFAULT_MAXIMUM_INITIAL_AGE,
         maximum_future_skew: timedelta = DEFAULT_MAXIMUM_FUTURE_SKEW,
-        distribution: ConfigurationRevisionDistribution | None = None,
     ) -> None:
-        """Use central state and optional authenticated node-local revisions."""
+        """Use central state and authenticated node-local revisions."""
         if not database_url:
             raise ValueError("The database URL must not be empty.")
         if maximum_initial_age <= timedelta(0) or maximum_future_skew < timedelta(0):
             raise ValueError("The UUIDv7 time limits are invalid.")
+        if not isinstance(distribution, ConfigurationRevisionDistribution):
+            raise TypeError("A configuration revision distribution is required.")
         self._database_url = database_url
         self._maximum_initial_age = maximum_initial_age
         self._maximum_future_skew = maximum_future_skew
@@ -134,7 +136,12 @@ class PostgresAdmissionRepository:
                     )
                     target = _resolve_target(connection, context, request, now=now)
                     _require_distributed_revision(
-                        distributed, str(target[0]), context.request_id
+                        distributed,
+                        str(target[0]),
+                        _configuration_revision_digest(
+                            connection, target[0], context.request_id
+                        ),
+                        context.request_id,
                     )
                     attachments = _validated_attachments(
                         connection, context, request, now=now
@@ -777,14 +784,12 @@ def _snapshot_routing_chain(
 
 def _enter_distribution_admission(
     stack: ExitStack,
-    distribution: ConfigurationRevisionDistribution | None,
+    distribution: ConfigurationRevisionDistribution,
     context: RequestContext,
     *,
     now: datetime,
     ancestor_service_ids: tuple[str, ...],
-) -> AdmissionDistributionSnapshot | None:
-    if distribution is None:
-        return None
+) -> AdmissionDistributionSnapshot:
     service_id = context.scope.service_id
     if service_id is None:
         raise AdmissionError(AdmissionErrorCode.INSUFFICIENT_SCOPE, context.request_id)
@@ -803,14 +808,13 @@ def _enter_distribution_admission(
 
 
 def _require_distributed_revision(
-    snapshot: AdmissionDistributionSnapshot | None,
+    snapshot: AdmissionDistributionSnapshot,
     revision_id: str,
+    content_sha256: bytes,
     request_id: str,
 ) -> None:
-    if snapshot is None:
-        return
     try:
-        snapshot.require_revision(revision_id)
+        snapshot.require_revision(revision_id, content_sha256)
     except ConfigurationDistributionError as error:
         raise AdmissionError(
             AdmissionErrorCode.CONFIGURATION_UNAVAILABLE, request_id
@@ -818,18 +822,29 @@ def _require_distributed_revision(
 
 
 def _require_distributed_credentials(
-    snapshot: AdmissionDistributionSnapshot | None,
+    snapshot: AdmissionDistributionSnapshot,
     credentials: tuple[CredentialGeneration, ...],
     request_id: str,
 ) -> None:
-    if snapshot is None:
-        return
     try:
         snapshot.require_credentials(credentials)
     except ConfigurationDistributionError as error:
         raise AdmissionError(
             AdmissionErrorCode.CONFIGURATION_UNAVAILABLE, request_id
         ) from error
+
+
+def _configuration_revision_digest(
+    connection: Connection[Any], revision_id: uuid.UUID, request_id: str
+) -> bytes:
+    row = connection.execute(
+        """SELECT content_sha256 FROM router.configuration_revisions
+           WHERE id = %s FOR SHARE""",
+        (revision_id,),
+    ).fetchone()
+    if row is None:
+        raise AdmissionError(AdmissionErrorCode.CONFIGURATION_UNAVAILABLE, request_id)
+    return bytes(row["content_sha256"])
 
 
 def _snapshot_credential_generations(

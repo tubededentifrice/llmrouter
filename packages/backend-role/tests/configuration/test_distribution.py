@@ -167,6 +167,19 @@ def test_normal_replay_does_not_extend_the_exact_24_hour_limit() -> None:
     assert status.stale
     assert status.safety_state is DistributionSafetyState.STALE
     assert status.received_at == NOW
+    rollback_after_boundary = distribution.status(scope, now=NOW + timedelta(hours=23))
+    assert rollback_after_boundary.stale
+    assert rollback_after_boundary.age == timedelta(hours=24)
+    with (
+        pytest.raises(ConfigurationDistributionError) as latched_stale,
+        distribution.admission(
+            scope,
+            now=NOW + timedelta(hours=23),
+            ancestor_service_ids=(SERVICE_ID,),
+        ),
+    ):
+        pass
+    assert latched_stale.value.code is DistributionErrorCode.CONFIGURATION_STALE
     with (
         pytest.raises(ConfigurationDistributionError) as stale,
         distribution.admission(
@@ -204,9 +217,14 @@ def test_urgent_watermark_and_replay_are_order_safe() -> None:
     urgent = _urgent(URGENT_SEQUENCE)
     signed = _signed_urgent(authenticator, distribution, urgent)
     distribution.apply_urgent(signed, received_at=NOW)
-    with pytest.raises(ConfigurationDistributionError) as duplicate:
-        distribution.apply_urgent(signed, received_at=NOW + timedelta(seconds=1))
-    assert duplicate.value.code is DistributionErrorCode.REVISION_ROLLBACK
+    distribution.apply_urgent(signed, received_at=NOW + timedelta(seconds=1))
+    changed = replace(urgent, admission_allowed=False)
+    with pytest.raises(ConfigurationDistributionError) as conflict:
+        distribution.apply_urgent(
+            _signed_urgent(authenticator, distribution, changed),
+            received_at=NOW + timedelta(seconds=1),
+        )
+    assert conflict.value.code is DistributionErrorCode.INVALID_REVISION
     with pytest.raises(ConfigurationDistributionError) as older:
         distribution.apply_urgent(
             _signed_urgent(authenticator, distribution, _urgent(2)),

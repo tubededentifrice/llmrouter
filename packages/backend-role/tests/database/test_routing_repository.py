@@ -53,6 +53,7 @@ from llmrouter_backend.routing import (
 from .helpers import SERVICE_ID, WORKSPACE_ID
 from .test_admission_repository import (
     ROUTE_ID,
+    _configured_distribution,
     _context,
     _request,
     _seed_admission_target,
@@ -73,7 +74,12 @@ def repositories(
         migrate(connection)
         _seed_admission_target(connection)
     return (
-        PostgresAdmissionRepository(database_url),
+        PostgresAdmissionRepository(
+            database_url,
+            distribution=_configured_distribution(
+                received_at=_now() - timedelta(hours=1)
+            ),
+        ),
         PostgresExecutionRepository(database_url),
         PostgresRoutingRepository(database_url),
         PostgresBudgetRepository(database_url),

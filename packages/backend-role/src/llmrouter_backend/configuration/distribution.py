@@ -359,6 +359,7 @@ class AdmissionDistributionSnapshot:
 
     scope: DistributionScope
     configuration_revision_id: str
+    configuration_content_sha256: bytes
     received_at: datetime
     urgent_sequence: int
     security_policy_revision: str | None
@@ -368,15 +369,22 @@ class AdmissionDistributionSnapshot:
         object.__setattr__(
             self, "revoked_credentials", frozenset(self.revoked_credentials)
         )
+        if (
+            not isinstance(self.configuration_content_sha256, bytes)
+            or len(self.configuration_content_sha256) != hashlib.sha256().digest_size
+        ):
+            raise ValueError("An admission configuration digest must be SHA-256.")
         if any(
             not isinstance(item, CredentialGeneration)
             for item in self.revoked_credentials
         ):
             raise TypeError("An admission credential revision is invalid.")
 
-    def require_revision(self, revision_id: str) -> None:
-        """Require the resolved target to use the distributed revision."""
-        if revision_id != self.configuration_revision_id:
+    def require_revision(self, revision_id: str, content_sha256: bytes) -> None:
+        """Require the resolved target to use the exact distributed content."""
+        if revision_id != self.configuration_revision_id or not hmac.compare_digest(
+            content_sha256, self.configuration_content_sha256
+        ):
             raise ConfigurationDistributionError(
                 DistributionErrorCode.CONFIGURATION_MISMATCH
             )
@@ -393,6 +401,8 @@ class AdmissionDistributionSnapshot:
 class _ActiveNormalRevision:
     revision: NormalConfigurationRevision
     received_at: datetime
+    maximum_age: timedelta = timedelta(0)
+    stale: bool = False
 
 
 class ConfigurationRevisionDistribution:
@@ -401,19 +411,11 @@ class ConfigurationRevisionDistribution:
     def __init__(
         self,
         authenticator: RevisionAuthenticator,
-        *,
-        authentication_challenge: bytes | None = None,
     ) -> None:
         if not isinstance(authenticator, RevisionAuthenticator):
             raise TypeError("A revision authenticator is required.")
         self._authenticator = authenticator
-        challenge = (
-            secrets.token_bytes(_AUTHENTICATION_TAG_BYTES)
-            if authentication_challenge is None
-            else authentication_challenge
-        )
-        _require_authentication_challenge(challenge)
-        self._authentication_challenge = bytes(challenge)
+        self._authentication_challenge = secrets.token_bytes(_AUTHENTICATION_TAG_BYTES)
         self._lock = RLock()
         self._normal: dict[DistributionScope, _ActiveNormalRevision] = {}
         self._urgent: UrgentConfigurationRevision | None = None
@@ -474,9 +476,15 @@ class ConfigurationRevisionDistribution:
             raise ConfigurationDistributionError(DistributionErrorCode.INVALID_REVISION)
         with self._lock:
             if self._urgent is not None and revision.sequence <= self._urgent.sequence:
-                raise ConfigurationDistributionError(
-                    DistributionErrorCode.REVISION_ROLLBACK
-                )
+                if revision.sequence < self._urgent.sequence:
+                    raise ConfigurationDistributionError(
+                        DistributionErrorCode.REVISION_ROLLBACK
+                    )
+                if revision != self._urgent:
+                    raise ConfigurationDistributionError(
+                        DistributionErrorCode.INVALID_REVISION
+                    )
+                return
             self._urgent = revision
 
     def status(
@@ -508,10 +516,8 @@ class ConfigurationRevisionDistribution:
                 raise ConfigurationDistributionError(
                     DistributionErrorCode.CONFIGURATION_UNAVAILABLE
                 )
-            if (
-                now < active.received_at
-                or now - active.received_at >= MAXIMUM_NORMAL_REVISION_AGE
-            ):
+            active = self._observe_age_locked(scope, active, now)
+            if active.stale:
                 raise ConfigurationDistributionError(
                     DistributionErrorCode.CONFIGURATION_STALE
                 )
@@ -538,6 +544,7 @@ class ConfigurationRevisionDistribution:
             yield AdmissionDistributionSnapshot(
                 scope=scope,
                 configuration_revision_id=active.revision.revision_id,
+                configuration_content_sha256=active.revision.content_sha256,
                 received_at=active.received_at,
                 urgent_sequence=0 if urgent is None else urgent.sequence,
                 security_policy_revision=(
@@ -571,9 +578,9 @@ class ConfigurationRevisionDistribution:
                 urgent_sequence=urgent_sequence,
                 security_policy_revision=policy_revision,
             )
-        clock_rollback = now < active.received_at
-        age = max(now - active.received_at, timedelta(0))
-        stale = clock_rollback or age >= MAXIMUM_NORMAL_REVISION_AGE
+        active = self._observe_age_locked(scope, active, now)
+        age = active.maximum_age
+        stale = active.stale
         applicable_services = frozenset(ancestor_service_ids) | {scope.service_id}
         blocked = urgent is not None and (
             not urgent.admission_allowed
@@ -600,6 +607,29 @@ class ConfigurationRevisionDistribution:
             urgent_sequence,
             policy_revision,
         )
+
+    def _observe_age_locked(
+        self,
+        scope: DistributionScope,
+        active: _ActiveNormalRevision,
+        now: datetime,
+    ) -> _ActiveNormalRevision:
+        observed_age = max(now - active.received_at, timedelta(0))
+        maximum_age = max(active.maximum_age, observed_age)
+        stale = (
+            active.stale
+            or now < active.received_at
+            or maximum_age >= MAXIMUM_NORMAL_REVISION_AGE
+        )
+        if maximum_age != active.maximum_age or stale != active.stale:
+            active = _ActiveNormalRevision(
+                active.revision,
+                active.received_at,
+                maximum_age,
+                stale,
+            )
+            self._normal[scope] = active
+        return active
 
 
 def _normal_message(
