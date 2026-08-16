@@ -123,18 +123,33 @@ must not weaken service or workspace isolation.
 If a React application is added, each change must keep React Doctor at score
 100 with zero diagnostics. Add and run the React gate with the application.
 Use the shared [OpenDLE UI](https://github.com/tubededentifrice/opendle-ui)
-package for common tokens and primitives. The React app uses the Git dependency
+package in `../opendle-ui` as the shared design system. The React app uses the
+Git dependency
 `git+https://github.com/tubededentifrice/opendle-ui.git#main`. This dependency
 always uses the current shared `main` branch and is exempt from the 14-day age
 and exact-version checks. The package includes built files for clean installs.
-Keep router-specific views here. Before you add a React component, token,
-typography rule, layout pattern, or interaction pattern, check `opendle-ui`.
-Use `opendle-ui` when the UI could be reused by another OpenDLE project, even
-when only this project uses it today. Add the shared component there first and
-update this repository to use it in the same change. Keep only router-specific
-data, copy, routes, domain state, and host composition here. Do not copy a
-shared component into this repository. If a local component becomes reusable,
-move it to `opendle-ui` before you continue.
+
+Build the Router interface on the existing mocks in `apps/admin/`. Before you
+change or add a frontend surface, inspect the applicable mocks and implemented
+UI patterns in `../llmrouter`, `../ontology`, and `../xbot`. Use them as the
+design baseline so the three projects keep one consistent visual language and
+interaction model. Do not replace the existing design with a new local design.
+
+Before you invent a component, token, typography rule, layout pattern,
+interaction pattern, or design principle, inspect the source and public exports
+in `../opendle-ui`. Put an item in `../opendle-ui` when it has any reasonable
+potential for reuse, even if no second project uses it yet. Add the shared item
+there first, and update this repository to use it in the same change. Keep
+shared design principles, tokens, typography, layout rules, interaction
+patterns, accessibility conventions, and reusable components in
+`../opendle-ui`. Keep only Router-specific data, copy, routes, domain state, and
+host composition here. Do not copy a shared item into this repository. If a
+local item gains reuse potential, move it to `../opendle-ui` before you
+continue.
+
+Use only semantic CSS class names that state the component, element, role, or
+state. Do not use helper or utility classes unless the specific case has a
+strong documented justification.
 
 ## Concurrent work and Git
 
