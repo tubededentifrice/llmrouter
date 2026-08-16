@@ -189,6 +189,67 @@ class PostgresLifecycleRepository:
             raise LifecycleError(LifecycleErrorCode.NOT_FOUND, context.request_id)
         return _service_record(row)
 
+    def get_administration_state(
+        self,
+        context: RequestContext,
+        service_id: str,
+        *,
+        workspace_id: str | None = None,
+    ) -> ServiceRecord | WorkspaceRecord:
+        """Read one exact service or workspace through human administration."""
+        parsed_service_id = _parse_uuid(
+            service_id,
+            LifecycleErrorCode.NOT_FOUND,
+            request_id=context.request_id,
+        )
+        parsed_workspace_id = (
+            None
+            if workspace_id is None
+            else _parse_uuid(
+                workspace_id,
+                LifecycleErrorCode.WORKSPACE_NOT_FOUND,
+                request_id=context.request_id,
+            )
+        )
+        _require_administration_state_read(
+            context,
+            service_id=str(parsed_service_id),
+            workspace_id=(
+                None if parsed_workspace_id is None else str(parsed_workspace_id)
+            ),
+        )
+        with psycopg.connect(self._database_url) as connection:
+            if parsed_workspace_id is not None:
+                row = _select_workspace(
+                    connection, parsed_service_id, parsed_workspace_id
+                )
+                if row is None:
+                    raise LifecycleError(
+                        LifecycleErrorCode.WORKSPACE_NOT_FOUND, context.request_id
+                    )
+                return _workspace_record(row)
+            row = connection.execute(
+                """
+                SELECT service.id::text, service.display_name,
+                       service.parent_service_id::text, service.state,
+                       service.state_revision::text,
+                       COALESCE(operation.operation_id::text, service.id::text)
+                FROM router.services AS service
+                LEFT JOIN LATERAL (
+                    SELECT operation_id
+                    FROM router.service_lifecycle_operations
+                    WHERE service_id = service.id
+                    ORDER BY created_at DESC, operation_id DESC
+                    LIMIT 1
+                ) AS operation ON true
+                WHERE service.id = %s
+                """,
+                (parsed_service_id,),
+            ).fetchone()
+        if row is None:
+            raise LifecycleError(LifecycleErrorCode.NOT_FOUND, context.request_id)
+        return _service_record(row)
+
     def change_service_state(  # noqa: PLR0913
         self,
         context: RequestContext,
@@ -794,6 +855,30 @@ def _require_global_read(context: RequestContext) -> None:
         and context.authority_path is AuthorityPath.GLOBAL_ADMINISTRATION
         and context.scope.kind is ScopeKind.GLOBAL
         and context.operation == "service.manage"
+    ):
+        raise LifecycleError(LifecycleErrorCode.INSUFFICIENT_SCOPE, context.request_id)
+
+
+def _require_administration_state_read(
+    context: RequestContext,
+    *,
+    service_id: str,
+    workspace_id: str | None,
+) -> None:
+    expected_kind = (
+        ScopeKind.WORKSPACE if workspace_id is not None else ScopeKind.SERVICE
+    )
+    if not (
+        context.actor_kind is PrincipalKind.ADMINISTRATOR
+        and context.authority_class
+        in {AuthorityClass.GLOBAL_ADMINISTRATOR, AuthorityClass.SERVICE}
+        and context.authority_path is AuthorityPath.GLOBAL_ADMINISTRATION
+        and context.machine_audience is None
+        and context.operation == "health.read"
+        and not context.mutation
+        and context.scope.kind is expected_kind
+        and context.scope.service_id == service_id
+        and context.scope.workspace_id == workspace_id
     ):
         raise LifecycleError(LifecycleErrorCode.INSUFFICIENT_SCOPE, context.request_id)
 

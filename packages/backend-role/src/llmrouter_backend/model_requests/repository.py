@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from collections.abc import Mapping
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
@@ -107,7 +108,11 @@ class PostgresModelRequestViews:
                 raise ExecutionError(ExecutionErrorCode.NOT_FOUND, context.request_id)
             attempts = _attempts(connection, request["row_id"])
             accounting = _accounting(connection, request["row_id"])
-            result = _retained_result(connection, request["row_id"])
+            result = (
+                None
+                if context.actor_kind is PrincipalKind.ADMINISTRATOR
+                else _retained_result(connection, request["row_id"])
+            )
         document: dict[str, object] = {
             "request_id": str(request["request_id"]),
             "state": str(request["state"]),
@@ -144,6 +149,52 @@ class PostgresModelRequestViews:
         if encoded_bytes > MAXIMUM_STATUS_BYTES:
             document.pop("result", None)
         return document
+
+    def list_status(
+        self,
+        context: RequestContext,
+        *,
+        cursor: str | None = None,
+        limit: int = 100,
+    ) -> tuple[tuple[dict[str, object], ...], str | None]:
+        """List a bounded content-free page in one administrator scope."""
+        _require_administrator_view_authority(context)
+        if not 1 <= limit <= 100:
+            raise ValueError("The request-status page size must be from 1 through 100.")
+        parsed_cursor = None if cursor is None else uuid.UUID(cursor)
+        clauses = [
+            "service_id = %s",
+            "workspace_id IS NOT DISTINCT FROM %s",
+            "request_kind = 'model'",
+            "(terminal_at IS NULL OR expires_at > transaction_timestamp())",
+        ]
+        parameters: list[object] = [
+            context.scope.service_id,
+            context.scope.workspace_id,
+        ]
+        if parsed_cursor is not None:
+            clauses.append("request_id < %s")
+            parameters.append(parsed_cursor)
+        parameters.append(limit + 1)
+        with psycopg.connect(self._database_url) as connection:
+            rows = connection.execute(
+                f"""SELECT request_id::text
+                    FROM router.logical_requests
+                    WHERE {" AND ".join(clauses)}
+                    ORDER BY request_id DESC
+                    LIMIT %s""",  # noqa: S608  # nosec B608 - Fixed clauses.
+                tuple(parameters),
+            ).fetchall()
+        visible = rows[:limit]
+        items = tuple(
+            self.status(
+                context,
+                ExecutionTarget(ExecutionKind.MODEL, str(row[0])),
+            )
+            for row in visible
+        )
+        next_cursor = str(visible[-1][0]) if len(rows) > limit and visible else None
+        return items, next_cursor
 
     def resume_point(
         self, context: RequestContext, target: ExecutionTarget
@@ -373,7 +424,7 @@ def _admission(row: Mapping[str, object]) -> dict[str, object]:
 
 
 def _require_view_authority(context: RequestContext, target: ExecutionTarget) -> None:
-    if not (
+    machine = (
         target.kind is ExecutionKind.MODEL
         and context.actor_kind is PrincipalKind.SERVICE
         and context.authority_class is AuthorityClass.SERVICE
@@ -383,8 +434,31 @@ def _require_view_authority(context: RequestContext, target: ExecutionTarget) ->
         and context.mutation == (context.operation == "model.cancel")
         and context.scope.service_id is not None
         and context.actor_id == context.scope.service_id
-    ):
+    )
+    administrator = (
+        target.kind is ExecutionKind.MODEL
+        and _administrator_view_is_authorized(context)
+    )
+    if not (machine or administrator):
         raise ExecutionError(ExecutionErrorCode.INSUFFICIENT_SCOPE, context.request_id)
+
+
+def _require_administrator_view_authority(context: RequestContext) -> None:
+    if not _administrator_view_is_authorized(context):
+        raise ExecutionError(ExecutionErrorCode.INSUFFICIENT_SCOPE, context.request_id)
+
+
+def _administrator_view_is_authorized(context: RequestContext) -> bool:
+    return (
+        context.actor_kind is PrincipalKind.ADMINISTRATOR
+        and context.authority_class
+        in {AuthorityClass.GLOBAL_ADMINISTRATOR, AuthorityClass.SERVICE}
+        and context.authority_path is AuthorityPath.GLOBAL_ADMINISTRATION
+        and context.machine_audience is None
+        and context.operation == "request_status.read"
+        and not context.mutation
+        and context.scope.service_id is not None
+    )
 
 
 def _require_resume_authority(context: RequestContext, target: ExecutionTarget) -> None:

@@ -104,6 +104,7 @@ def test_migration_plan_has_reversible_contiguous_pairs() -> None:
         13,
         14,
         15,
+        16,
     ]
     assert all(migration.up_sql and migration.down_sql for migration in plan)
 
@@ -128,6 +129,7 @@ def test_migrate_empty_database(database_url: str) -> None:
             13,
             14,
             15,
+            16,
         )
         table_count = connection.execute(
             """
@@ -148,6 +150,54 @@ def test_provider_routing_migration_rolls_back_and_reapplies(database_url: str) 
         assert applied_versions(connection)[-1] == 14  # noqa: PLR2004
         migrate(connection, target=15)
         assert applied_versions(connection)[-1] == 15  # noqa: PLR2004
+
+
+def test_administration_api_migration_rolls_back_and_reapplies(
+    database_url: str,
+) -> None:
+    """Apply, remove, and apply the administration idempotency schema."""
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        migrate(connection)
+        migrate(connection, target=15)
+        assert connection.execute(
+            "SELECT to_regclass('router.configuration_write_idempotency_bindings')"
+        ).fetchone() == (None,)
+        migrate(connection)
+        assert applied_versions(connection)[-1] == 16  # noqa: PLR2004
+
+
+def test_administration_api_rollback_rejects_idempotency_loss(
+    database_url: str,
+) -> None:
+    """Keep durable configuration replays when rollback would remove them."""
+    operation_id = "0198a080-0000-7000-8000-000000000098"
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        migrate(connection)
+        seed_scope(connection)
+        connection.execute(
+            """INSERT INTO router.audit_events (
+                   event_id, audit_class, actor_kind, actor_id, authority_class,
+                   action, permission_result, safe_details, occurred_at
+               ) VALUES (%s, 'global_administration', 'administrator', 'test',
+                         'global_administrator', 'configuration.publish',
+                         'permitted', '{}'::jsonb, now())""",
+            (operation_id,),
+        )
+        connection.execute(
+            """INSERT INTO router.configuration_write_idempotency_bindings (
+                   actor_id, operation, scope_key, idempotency_key,
+                   request_fingerprint, resource_id, active_revision,
+                   distribution_state, operation_id, created_at
+               ) VALUES ('test', 'assignment.manage', %s, 'migration-key-0001',
+                         decode(repeat('01', 32), 'hex'), 'configuration', %s,
+                         'distributing', %s, now())""",
+            (f"workspace:{SERVICE_ID}:{WORKSPACE_ID}", CONFIGURATION_ID, operation_id),
+        )
+        with pytest.raises(
+            psycopg.errors.ObjectNotInPrerequisiteState, match="data loss"
+        ):
+            migrate(connection, target=15)
+        assert applied_versions(connection)[-1] == 16  # noqa: PLR2004
 
 
 @pytest.mark.parametrize(
@@ -611,8 +661,8 @@ def test_concurrent_migration_runners_serialize(database_url: str) -> None:
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         results = list(executor.map(_migrate_current, [database_url, database_url]))
     assert results == [
-        (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15),
-        (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15),
+        (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16),
+        (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16),
     ]
 
 
@@ -696,6 +746,7 @@ def test_rollback_keeps_previous_schema_data(database_url: str) -> None:
             13,
             14,
             15,
+            16,
         )
         assert connection.execute(
             "SELECT stable_name FROM router.services WHERE id = %s", (SERVICE_ID,)
@@ -865,4 +916,4 @@ def test_execution_lifecycle_new_run_blocks_lossy_rollback(database_url: str) ->
         )
         with pytest.raises(psycopg.errors.RaiseException, match="data loss"):
             migrate(connection, target=13)
-        assert applied_versions(connection)[-1] == 15  # noqa: PLR2004
+        assert applied_versions(connection)[-1] == 16  # noqa: PLR2004

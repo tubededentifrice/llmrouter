@@ -23,6 +23,7 @@ profiles:
   budget_read: &budget_read {permission: budget.read, recent_auth: false, conformance_case: effective_configuration}
   budget_write: &budget_write {permission: budget.write, recent_auth: false, conformance_case: effective_configuration}
   accounting_read: &accounting_read {permission: accounting.read, recent_auth: false, conformance_case: effective_configuration}
+  request_status_read: &request_status_read {permission: request_status.read, recent_auth: false, conformance_case: administrator_grant}
   admin_session: &admin_session {permission: administrator.session, recent_auth: false, conformance_case: administrator_grant}
   service_read: &service_read {permission: service.manage, recent_auth: false, conformance_case: administrator_grant}
   service_write: &service_write {permission: service.manage, recent_auth: true, conformance_case: administrator_grant}
@@ -76,6 +77,18 @@ operations:
   createChatCompletion: *model_create
   createCompatibleResponse: *model_create
   getEffectiveConfiguration: *configuration_read
+  getScopedAdministrationState: *operation_read
+  listScopedAdministrationAssignments: {permission: assignment.manage, recent_auth: false, conformance_case: administrator_grant}
+  putScopedAdministrationAssignment: {permission: assignment.manage, recent_auth: true, conformance_case: administrator_grant}
+  listScopedAdministrationProviderInstances: {permission: provider_instance.manage, recent_auth: false, conformance_case: administrator_grant}
+  createScopedAdministrationProviderInstance: {permission: provider_instance.manage, recent_auth: true, conformance_case: administrator_grant}
+  putScopedAdministrationProviderInstance: {permission: provider_instance.manage, recent_auth: true, conformance_case: administrator_grant}
+  listScopedAdministrationProviderModelRoutes: {permission: provider_route.manage, recent_auth: false, conformance_case: administrator_grant}
+  createScopedAdministrationProviderModelRoute: {permission: provider_route.manage, recent_auth: true, conformance_case: administrator_grant}
+  putScopedAdministrationProviderModelRoute: {permission: provider_route.manage, recent_auth: true, conformance_case: administrator_grant}
+  getScopedAdministrationAccountingSummary: {permission: accounting.read, recent_auth: false, conformance_case: administrator_grant}
+  listScopedAdministrationModelRequests: *request_status_read
+  getScopedAdministrationModelRequest: *request_status_read
   getBusinessToolGateway: *configuration_read
   putBusinessToolGateway: *configuration_write
   createDiagnosticGrant: {permission: diagnostic.grant.create, recent_auth: false, conformance_case: effective_configuration}
@@ -200,7 +213,7 @@ artifact_sha256:
   docs/api/embed-protocol.md: 7b01be032006ef40a369501a03b1630db511bbc5912a3b61bab197267fc6bc21
   docs/api/embedding-protocol.md: 3dcf022e4663c7adace7e6b533e0e0770cc1420fbba39987ac0a330dbe008a18
   docs/api/errors.md: 0b25b51de943f8419d3f53985b9877dc05fcd97dd191fc3cf687845219b7ab1f
-  docs/api/openapi.yaml: 9378aa642de25da9dd3336e0260cd8b339a96868d02d822df733bc4a54b8c3dd
+  docs/api/openapi.yaml: 3c776ca01a4d787fde7c896263db59b044e921c79a70913ef5992fc953842b6c
   docs/api/request-fingerprint.md: ce37b2d9a12e0ef15c065a0e73f2107ac5c4dc446e09ead82c4b205cd7da587f
   docs/api/service-management.md: 501f672274ecb9599ee005d66b33938ead8757693608c8d5e36d9e19c5a76215
   docs/api/stream-protocol.md: 3245e7315826449a1017af56f1cebbafad97dec4e0e9bb8c1592d34d121021a2

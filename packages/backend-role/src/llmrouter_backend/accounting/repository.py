@@ -919,8 +919,10 @@ class PostgresAccountingRepository:
         )
         administrator = (
             context.actor_kind is PrincipalKind.ADMINISTRATOR
-            and context.authority_class is AuthorityClass.GLOBAL_ADMINISTRATOR
+            and context.authority_class
+            in {AuthorityClass.GLOBAL_ADMINISTRATOR, AuthorityClass.SERVICE}
             and context.authority_path is AuthorityPath.GLOBAL_ADMINISTRATION
+            and context.machine_audience is None
         )
         if not (machine or embed or administrator):
             raise AccountingError("The accounting read is not authorized.")

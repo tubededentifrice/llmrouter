@@ -29,7 +29,7 @@ function loadFixture(filename: string): Record<string, unknown> {
 
 describe("generated contract models", () => {
   it("contains every accepted component schema", () => {
-    expect(Object.keys(contractSchemas)).toHaveLength(128);
+    expect(Object.keys(contractSchemas)).toHaveLength(138);
   });
   for (const [schemaName, filename] of Object.entries(fixtures)) {
     it(`round trips the valid ${schemaName} fixture`, () => {

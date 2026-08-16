@@ -53,6 +53,9 @@ from llmrouter_backend.authority import (
     AuthorityPath,
     BrowserWriteProof,
     OperationPolicy,
+    RequestContext,
+    Scope,
+    authorize,
 )
 
 if TYPE_CHECKING:
@@ -731,6 +734,69 @@ class AdministratorAuthRepository:
                 raise RuntimeError(msg)
             raise AdministratorAuthError(denied_code, request_id)
         return principal
+
+    def authorize_session(  # noqa: PLR0913
+        self,
+        session_token: str,
+        *,
+        request_id: str,
+        now: datetime,
+        policy: OperationPolicy,
+        scope: Scope,
+        csrf_token: str | None = None,
+        origin: str | None = None,
+    ) -> RequestContext:
+        """Authorize one administrator route through the stored browser session."""
+        proof: BrowserWriteProof | None = None
+        if policy.mutation:
+            try:
+                self._prepare_browser_mutation(
+                    session_token,
+                    csrf_token or "",
+                    origin or "",
+                    request_id=request_id,
+                    now=now,
+                )
+            except AdministratorAuthError as error:
+                self._audit_failure(
+                    request_id=request_id,
+                    action=policy.operation,
+                    now=now,
+                    code=error.code,
+                )
+                raise
+            proof = BrowserWriteProof(
+                allowed_origin=self._exact_origin,
+                request_origin=origin or "",
+                session_csrf_token=csrf_token or "",
+                request_csrf_token=csrf_token or "",
+            )
+        try:
+            principal = self.authenticate_session(
+                session_token,
+                request_id=request_id,
+                now=now,
+                policy=policy,
+                service_id=scope.service_id,
+                workspace_id=scope.workspace_id,
+            )
+            return authorize(
+                principal,
+                policy,
+                scope,
+                request_id=request_id,
+                now=now,
+                browser_write_proof=proof,
+            )
+        except AdministratorAuthError as error:
+            if not policy.sensitive:
+                self._audit_failure(
+                    request_id=request_id,
+                    action=policy.operation,
+                    now=now,
+                    code=error.code,
+                )
+            raise
 
     def get_session(
         self,

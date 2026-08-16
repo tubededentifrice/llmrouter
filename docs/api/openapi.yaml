@@ -552,6 +552,211 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/EffectiveConfiguration'}
         default: {$ref: '#/components/responses/Error'}
+  /v1/admin/services/{service_id}/state:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+    get:
+      tags: [Administration]
+      operationId: getScopedAdministrationState
+      summary: Get one authorized service or workspace lifecycle state.
+      security: [{administratorSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceIdQuery'
+      responses:
+        '200':
+          description: Exact service or workspace state without retained content.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ScopedAdministrationState'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /v1/admin/services/{service_id}/assignments:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+    get:
+      tags: [Administration]
+      operationId: listScopedAdministrationAssignments
+      summary: List bounded effective assignments for one authorized scope.
+      security: [{administratorSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceIdQuery'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Bounded effective assignment page.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdministrationAssignmentPage'}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/admin/services/{service_id}/assignments/{assignment_name}:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+      - name: assignment_name
+        in: path
+        required: true
+        schema: {$ref: '#/components/schemas/AssignmentName'}
+    put:
+      tags: [Administration]
+      operationId: putScopedAdministrationAssignment
+      summary: Publish one complete ordered assignment fallback chain.
+      security: [{administratorSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceIdQuery'
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/Origin'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AdministrationPutAssignment'}
+      responses:
+        '200': {$ref: '#/components/responses/ConfigurationWrite'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+  /v1/admin/services/{service_id}/provider-instances:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+    get:
+      tags: [Administration]
+      operationId: listScopedAdministrationProviderInstances
+      summary: List bounded effective provider instances for one service.
+      security: [{administratorSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Bounded effective provider-instance page.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdministrationProviderInstancePage'}
+        default: {$ref: '#/components/responses/Error'}
+    post:
+      tags: [Administration]
+      operationId: createScopedAdministrationProviderInstance
+      summary: Create and publish one service-owned OpenRouter instance.
+      security: [{administratorSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/Origin'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AdministrationPutProviderInstance'}
+      responses:
+        '200': {$ref: '#/components/responses/ConfigurationWrite'}
+        '201': {$ref: '#/components/responses/ConfigurationWrite'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+  /v1/admin/services/{service_id}/provider-instances/{provider_instance_id}:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+      - name: provider_instance_id
+        in: path
+        required: true
+        schema: {$ref: '#/components/schemas/OpaqueId'}
+    put:
+      tags: [Administration]
+      operationId: putScopedAdministrationProviderInstance
+      summary: Replace, disable, or restore one service-owned OpenRouter instance.
+      security: [{administratorSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/Origin'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AdministrationPutProviderInstance'}
+      responses:
+        '200': {$ref: '#/components/responses/ConfigurationWrite'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+  /v1/admin/services/{service_id}/provider-model-routes:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+    get:
+      tags: [Administration]
+      operationId: listScopedAdministrationProviderModelRoutes
+      summary: List bounded effective provider-model routes for one service.
+      security: [{administratorSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Bounded effective provider-model route page.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdministrationProviderModelRoutePage'}
+        default: {$ref: '#/components/responses/Error'}
+    post:
+      tags: [Administration]
+      operationId: createScopedAdministrationProviderModelRoute
+      summary: Create and publish one service-owned provider-model route.
+      security: [{administratorSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/Origin'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AdministrationPutProviderModelRoute'}
+      responses:
+        '200': {$ref: '#/components/responses/ConfigurationWrite'}
+        '201': {$ref: '#/components/responses/ConfigurationWrite'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+  /v1/admin/services/{service_id}/provider-model-routes/{provider_model_route_id}:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+      - name: provider_model_route_id
+        in: path
+        required: true
+        schema: {$ref: '#/components/schemas/OpaqueId'}
+    put:
+      tags: [Administration]
+      operationId: putScopedAdministrationProviderModelRoute
+      summary: Replace, disable, or restore one service-owned provider-model route.
+      security: [{administratorSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/Origin'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AdministrationPutProviderModelRoute'}
+      responses:
+        '200': {$ref: '#/components/responses/ConfigurationWrite'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+  /v1/admin/services/{service_id}/accounting/summary:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+    get:
+      tags: [Administration]
+      operationId: getScopedAdministrationAccountingSummary
+      summary: Get one bounded accounting aggregate without captured content.
+      security: [{administratorSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceIdQuery'
+        - $ref: '#/components/parameters/From'
+        - $ref: '#/components/parameters/To'
+      responses:
+        '200':
+          description: Bounded scoped accounting summary.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AccountingSummary'}
+        default: {$ref: '#/components/responses/Error'}
   /v1/services/{service_id}/business-tool-gateway:
     parameters:
       - $ref: '#/components/parameters/ServiceId'
@@ -857,6 +1062,35 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/AccountingSummary'}
         default: {$ref: '#/components/responses/Error'}
+  /v1/admin/services/{service_id}/model-requests:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+    get:
+      tags: [Administration]
+      operationId: listScopedAdministrationModelRequests
+      summary: List bounded request status without retained model output.
+      security: [{administratorSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceIdQuery'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200': {$ref: '#/components/responses/RequestStatusPage'}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/admin/services/{service_id}/model-requests/{request_id}:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+      - $ref: '#/components/parameters/RequestId'
+    get:
+      tags: [Administration]
+      operationId: getScopedAdministrationModelRequest
+      summary: Get one request status without retained model output.
+      security: [{administratorSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceIdQuery'
+      responses:
+        '200': {$ref: '#/components/responses/RequestStatus'}
+        '404': {$ref: '#/components/responses/NotFound'}
   /v1/services/{service_id}/retention:
     parameters:
       - $ref: '#/components/parameters/ServiceId'
@@ -1847,6 +2081,11 @@ components:
       in: query
       required: false
       schema: {type: string, maxLength: 1000}
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema: {type: integer, minimum: 1, maximum: 100, default: 100}
   responses:
     Error:
       description: A documented error from the shared error catalog.
@@ -2803,6 +3042,64 @@ components:
       properties:
         items: {type: array, items: {$ref: '#/components/schemas/Assignment'}}
         next_cursor: {type: [string, 'null']}
+    AdministrationPutAssignment:
+      type: object
+      additionalProperties: false
+      required: [expected_revision, candidates, state, reason]
+      properties:
+        expected_revision: {oneOf: [{$ref: '#/components/schemas/OpaqueId'}, {type: 'null'}]}
+        state: {type: string, enum: [active, disabled, retired]}
+        candidates:
+          type: array
+          minItems: 1
+          maxItems: 8
+          items:
+            type: object
+            additionalProperties: false
+            required: [provider_model_route_id]
+            properties:
+              provider_model_route_id: {$ref: '#/components/schemas/OpaqueId'}
+              attempt_timeout_ms: {type: integer, minimum: 100, maximum: 120000}
+        required_capabilities:
+          type: array
+          maxItems: 32
+          uniqueItems: true
+          items: {type: string, minLength: 1, maxLength: 100}
+        reason: {type: string, minLength: 1, maxLength: 500}
+    AdministrationAssignment:
+      type: object
+      additionalProperties: false
+      required: [name, owner_scope, source_layer, state, inherited, active_revision, candidates]
+      properties:
+        name: {$ref: '#/components/schemas/AssignmentName'}
+        owner_scope: {type: string, enum: [global, service, workspace]}
+        source_layer: {$ref: '#/components/schemas/OpaqueId'}
+        state: {type: string, enum: [active, disabled, retired]}
+        inherited: {type: boolean}
+        active_revision: {$ref: '#/components/schemas/OpaqueId'}
+        candidates:
+          type: array
+          minItems: 1
+          maxItems: 8
+          items:
+            type: object
+            additionalProperties: false
+            required: [provider_model_route_id]
+            properties:
+              provider_model_route_id: {$ref: '#/components/schemas/OpaqueId'}
+              attempt_timeout_ms: {type: integer, minimum: 100, maximum: 120000}
+        required_capabilities:
+          type: array
+          maxItems: 32
+          uniqueItems: true
+          items: {type: string, minLength: 1, maxLength: 100}
+    AdministrationAssignmentPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/AdministrationAssignment'}}
+        next_cursor: {type: [string, 'null']}
     CreateDiagnosticGrant:
       type: object
       additionalProperties: false
@@ -2924,6 +3221,125 @@ components:
       required: [items]
       properties:
         items: {type: array, items: {$ref: '#/components/schemas/ProviderModelRoute'}}
+        next_cursor: {type: [string, 'null']}
+    AdministrationPutProviderInstance:
+      type: object
+      additionalProperties: false
+      required: [provider_catalog_id, display_name, endpoint, credential_id, state, expected_revision, settings, reason]
+      properties:
+        provider_catalog_id: {$ref: '#/components/schemas/OpaqueId'}
+        display_name: {type: string, minLength: 1, maxLength: 200}
+        endpoint: {type: string, format: uri}
+        credential_id: {$ref: '#/components/schemas/OpaqueId'}
+        state: {type: string, enum: [active, disabled, retired]}
+        settings: {$ref: '#/components/schemas/RegisteredDocument'}
+        expected_revision: {oneOf: [{$ref: '#/components/schemas/OpaqueId'}, {type: 'null'}]}
+        eligible_service_ids:
+          type: array
+          maxItems: 1000
+          uniqueItems: true
+          items: {$ref: '#/components/schemas/OpaqueId'}
+        reason: {type: string, minLength: 1, maxLength: 500}
+    AdministrationProviderInstance:
+      type: object
+      additionalProperties: false
+      required: [provider_instance_id, owner_scope, source_layer, provider_catalog_id, display_name, endpoint, credential_id, state, active_revision, inherited]
+      properties:
+        provider_instance_id: {$ref: '#/components/schemas/OpaqueId'}
+        owner_scope: {$ref: '#/components/schemas/OpaqueId'}
+        source_layer: {$ref: '#/components/schemas/OpaqueId'}
+        provider_catalog_id: {$ref: '#/components/schemas/OpaqueId'}
+        display_name: {type: string, minLength: 1, maxLength: 200}
+        endpoint: {type: string, format: uri}
+        credential_id: {$ref: '#/components/schemas/OpaqueId'}
+        state: {type: string, enum: [active, disabled, retired]}
+        active_revision: {$ref: '#/components/schemas/OpaqueId'}
+        inherited: {type: boolean}
+        settings: {$ref: '#/components/schemas/RegisteredDocument'}
+    AdministrationProviderInstancePage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/AdministrationProviderInstance'}}
+        next_cursor: {type: [string, 'null']}
+    AdministrationPutProviderModelRoute:
+      type: object
+      additionalProperties: false
+      required: [provider_instance_id, canonical_model_id, wire_model, capabilities, settings, price_authority, prices, synchronization_schedule, stale_after_seconds, state, expected_revision, reason]
+      allOf:
+        - if:
+            properties:
+              capabilities: {contains: {const: embedding}}
+            required: [capabilities]
+          then:
+            required: [embedding_model_space_id, embedding_dimensions]
+        - if:
+            properties:
+              price_authority:
+                properties: {mode: {const: manual}}
+                required: [mode]
+            required: [price_authority]
+          then:
+            properties:
+              prices: {minItems: 1}
+      properties:
+        provider_instance_id: {$ref: '#/components/schemas/OpaqueId'}
+        canonical_model_id: {$ref: '#/components/schemas/OpaqueId'}
+        wire_model: {type: string, minLength: 1, maxLength: 500}
+        capabilities: {type: array, uniqueItems: true, items: {type: string}}
+        settings: {$ref: '#/components/schemas/RegisteredDocument'}
+        embedding_model_space_id: {$ref: '#/components/schemas/OpaqueId'}
+        embedding_dimensions: {type: integer, minimum: 1, maximum: 4096}
+        price_authority: {$ref: '#/components/schemas/PriceAuthority'}
+        prices: {type: array, maxItems: 32, items: {$ref: '#/components/schemas/PriceComponent'}, description: A source-owned route can be empty until its first successful synchronization.}
+        synchronization_schedule: {type: string, minLength: 9, maxLength: 100, description: Five-field UTC cron schedule. The initial value is 0 0 * * 0.}
+        stale_after_seconds: {type: integer, minimum: 1, maximum: 31536000, description: A price becomes stale after this age. The initial value is 1209600 seconds.}
+        state: {type: string, enum: [active, disabled, retired]}
+        expected_revision: {oneOf: [{$ref: '#/components/schemas/OpaqueId'}, {type: 'null'}]}
+        eligible_service_ids:
+          type: array
+          maxItems: 1000
+          uniqueItems: true
+          items: {$ref: '#/components/schemas/OpaqueId'}
+        reason: {type: string, minLength: 1, maxLength: 500}
+    AdministrationProviderModelRoute:
+      type: object
+      additionalProperties: false
+      required: [provider_model_route_id, owner_scope, source_layer, provider_instance_id, canonical_model_id, wire_model, capabilities, settings, price_authority, prices, synchronization_schedule, stale_after_seconds, price_version, synchronization_state, state, active_revision, inherited]
+      allOf:
+        - if:
+            properties:
+              capabilities: {contains: {const: embedding}}
+            required: [capabilities]
+          then:
+            required: [embedding_model_space_id, embedding_dimensions]
+      properties:
+        provider_model_route_id: {$ref: '#/components/schemas/OpaqueId'}
+        owner_scope: {$ref: '#/components/schemas/OpaqueId'}
+        source_layer: {$ref: '#/components/schemas/OpaqueId'}
+        provider_instance_id: {$ref: '#/components/schemas/OpaqueId'}
+        canonical_model_id: {$ref: '#/components/schemas/OpaqueId'}
+        wire_model: {type: string, minLength: 1, maxLength: 500}
+        capabilities: {type: array, uniqueItems: true, items: {type: string}}
+        settings: {$ref: '#/components/schemas/RegisteredDocument'}
+        embedding_model_space_id: {$ref: '#/components/schemas/OpaqueId'}
+        embedding_dimensions: {type: integer, minimum: 1, maximum: 4096}
+        price_authority: {$ref: '#/components/schemas/PriceAuthority'}
+        prices: {type: array, maxItems: 32, items: {$ref: '#/components/schemas/PriceComponent'}}
+        synchronization_schedule: {type: string, minLength: 9, maxLength: 100}
+        stale_after_seconds: {type: integer, minimum: 1, maximum: 31536000}
+        price_version: {oneOf: [{$ref: '#/components/schemas/OpaqueId'}, {type: 'null'}]}
+        synchronization_state: {type: string, enum: [manual, current, stale, missing, failed]}
+        state: {type: string, enum: [active, disabled, retired]}
+        active_revision: {$ref: '#/components/schemas/OpaqueId'}
+        inherited: {type: boolean}
+    AdministrationProviderModelRoutePage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/AdministrationProviderModelRoute'}}
         next_cursor: {type: [string, 'null']}
     PriceComponent:
       type: object
@@ -3149,7 +3565,7 @@ components:
         identity_account_url: {type: string, format: uri}
     AdministratorOperation:
       type: string
-      enum: [service.manage, service_parent.manage, catalog.manage, provider_instance.manage, provider_route.manage, business_tool_gateway.approve, credential.manage, assignment.manage, budget.read, budget.write, accounting.read, retention.manage, grant.manage, audit.read, content.read, export.create, health.read, node.drain, circuit.probe, circuit.reset, high_availability.promote, high_availability.failback, backup.start, restore.validate, disaster_recovery.test]
+      enum: [service.manage, service_parent.manage, catalog.manage, provider_instance.manage, provider_route.manage, business_tool_gateway.approve, credential.manage, assignment.manage, budget.read, budget.write, accounting.read, request_status.read, retention.manage, grant.manage, audit.read, content.read, export.create, health.read, node.drain, circuit.probe, circuit.reset, high_availability.promote, high_availability.failback, backup.start, restore.validate, disaster_recovery.test]
     PutAdministratorGrant:
       type: object
       additionalProperties: false
@@ -3315,6 +3731,18 @@ components:
       properties:
         items: {type: array, items: {$ref: '#/components/schemas/ServiceAdministrationRecord'}}
         next_cursor: {type: [string, 'null']}
+    ScopedAdministrationState:
+      type: object
+      additionalProperties: false
+      required: [kind, service_id, display_name, state, revision]
+      properties:
+        kind: {type: string, enum: [service, workspace]}
+        service_id: {$ref: '#/components/schemas/OpaqueId'}
+        workspace_id: {$ref: '#/components/schemas/OpaqueId'}
+        display_name: {type: string, minLength: 1, maxLength: 200}
+        state: {type: string, enum: [active, disabled, retired]}
+        revision: {$ref: '#/components/schemas/OpaqueId'}
+        parent_service_id: {$ref: '#/components/schemas/OpaqueId'}
     RetentionValue:
       type: object
       additionalProperties: false

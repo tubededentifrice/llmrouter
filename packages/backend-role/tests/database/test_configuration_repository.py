@@ -282,16 +282,29 @@ def test_scoped_authority_rejects_forged_actor_path_audience_and_scope(
         operation="provider_instance.manage",
         mutation=True,
     )
-    with pytest.raises(ConfigurationError) as denied_write:
-        repository.publish(
-            administrator,
-            ConfigurationScope(service_id=SERVICE_ID),
-            ScopeConfiguration(),
-            expected_active_revision=None,
-            reason="Reject a cross-path scoped write.",
-            now=NOW,
-        )
-    assert denied_write.value.code is ConfigurationErrorCode.INSUFFICIENT_SCOPE
+    permitted = repository.publish(
+        administrator,
+        ConfigurationScope(service_id=SERVICE_ID),
+        ScopeConfiguration(),
+        expected_active_revision=None,
+        reason="Permit one exact-scope administrator write.",
+        now=NOW,
+    )
+    assert permitted.resource_id == SERVICE_ID
+    for denied_context in (
+        replace(administrator, operation="configuration.read"),
+        replace(administrator, scope=Scope(OTHER_SERVICE_ID)),
+    ):
+        with pytest.raises(ConfigurationError) as denied_write:
+            repository.publish(
+                denied_context,
+                ConfigurationScope(service_id=SERVICE_ID),
+                ScopeConfiguration(),
+                expected_active_revision=permitted.active_revision,
+                reason="Reject one invalid administrator write.",
+                now=NOW,
+            )
+        assert denied_write.value.code is ConfigurationErrorCode.INSUFFICIENT_SCOPE
 
 
 def test_service_eligibility_must_stay_in_the_owner_tree(
@@ -837,10 +850,14 @@ def test_legacy_revision_without_price_fields_remains_visible(
         reason="Restore the legacy route revision.",
         now=NOW + timedelta(seconds=3),
     )
-    restored = repository.effective(
-        _context("configuration.read", service_id=SERVICE_ID, mutation=False),
-        ConfigurationScope(service_id=SERVICE_ID),
-    ).provider_model_routes[0].value
+    restored = (
+        repository.effective(
+            _context("configuration.read", service_id=SERVICE_ID, mutation=False),
+            ConfigurationScope(service_id=SERVICE_ID),
+        )
+        .provider_model_routes[0]
+        .value
+    )
     assert rollback.active_revision != legacy_revision
     assert isinstance(restored, ProviderModelRoute)
     assert restored.price_authority.mode is PriceAuthorityMode.MANUAL

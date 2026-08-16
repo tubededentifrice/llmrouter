@@ -108,6 +108,16 @@ AssignmentCandidatesItem = TypedDict('AssignmentCandidatesItem', {
     'attempt_timeout_ms': 'NotRequired[int]',
 })
 
+AdministrationPutAssignmentCandidatesItem = TypedDict('AdministrationPutAssignmentCandidatesItem', {
+    'provider_model_route_id': 'OpaqueId',
+    'attempt_timeout_ms': 'NotRequired[int]',
+})
+
+AdministrationAssignmentCandidatesItem = TypedDict('AdministrationAssignmentCandidatesItem', {
+    'provider_model_route_id': 'OpaqueId',
+    'attempt_timeout_ms': 'NotRequired[int]',
+})
+
 PriceAuthorityOption1 = TypedDict('PriceAuthorityOption1', {
     'mode': 'NotRequired[Literal["manual"]]',
 })
@@ -739,6 +749,30 @@ AssignmentPage = TypedDict('AssignmentPage', {
     'next_cursor': 'NotRequired[str | None]',
 })
 
+AdministrationPutAssignment = TypedDict('AdministrationPutAssignment', {
+    'expected_revision': 'OpaqueId | None',
+    'state': 'Literal["active", "disabled", "retired"]',
+    'candidates': 'list[AdministrationPutAssignmentCandidatesItem]',
+    'required_capabilities': 'NotRequired[list[str]]',
+    'reason': 'str',
+})
+
+AdministrationAssignment = TypedDict('AdministrationAssignment', {
+    'name': 'AssignmentName',
+    'owner_scope': 'Literal["global", "service", "workspace"]',
+    'source_layer': 'OpaqueId',
+    'state': 'Literal["active", "disabled", "retired"]',
+    'inherited': 'bool',
+    'active_revision': 'OpaqueId',
+    'candidates': 'list[AdministrationAssignmentCandidatesItem]',
+    'required_capabilities': 'NotRequired[list[str]]',
+})
+
+AdministrationAssignmentPage = TypedDict('AdministrationAssignmentPage', {
+    'items': 'list[AdministrationAssignment]',
+    'next_cursor': 'NotRequired[str | None]',
+})
+
 CreateDiagnosticGrant = TypedDict('CreateDiagnosticGrant', {
     'workspace_id': 'NotRequired[OpaqueId]',
     'exact_route': 'OpaqueId',
@@ -819,6 +853,82 @@ ProviderModelRoute = TypedDict('ProviderModelRoute', {
 
 ProviderModelRoutePage = TypedDict('ProviderModelRoutePage', {
     'items': 'list[ProviderModelRoute]',
+    'next_cursor': 'NotRequired[str | None]',
+})
+
+AdministrationPutProviderInstance = TypedDict('AdministrationPutProviderInstance', {
+    'provider_catalog_id': 'OpaqueId',
+    'display_name': 'str',
+    'endpoint': 'str',
+    'credential_id': 'OpaqueId',
+    'state': 'Literal["active", "disabled", "retired"]',
+    'settings': 'RegisteredDocument',
+    'expected_revision': 'OpaqueId | None',
+    'eligible_service_ids': 'NotRequired[list[OpaqueId]]',
+    'reason': 'str',
+})
+
+AdministrationProviderInstance = TypedDict('AdministrationProviderInstance', {
+    'provider_instance_id': 'OpaqueId',
+    'owner_scope': 'OpaqueId',
+    'source_layer': 'OpaqueId',
+    'provider_catalog_id': 'OpaqueId',
+    'display_name': 'str',
+    'endpoint': 'str',
+    'credential_id': 'OpaqueId',
+    'state': 'Literal["active", "disabled", "retired"]',
+    'active_revision': 'OpaqueId',
+    'inherited': 'bool',
+    'settings': 'NotRequired[RegisteredDocument]',
+})
+
+AdministrationProviderInstancePage = TypedDict('AdministrationProviderInstancePage', {
+    'items': 'list[AdministrationProviderInstance]',
+    'next_cursor': 'NotRequired[str | None]',
+})
+
+AdministrationPutProviderModelRoute = TypedDict('AdministrationPutProviderModelRoute', {
+    'provider_instance_id': 'OpaqueId',
+    'canonical_model_id': 'OpaqueId',
+    'wire_model': 'str',
+    'capabilities': 'list[str]',
+    'settings': 'RegisteredDocument',
+    'embedding_model_space_id': 'NotRequired[OpaqueId]',
+    'embedding_dimensions': 'NotRequired[int]',
+    'price_authority': 'PriceAuthority',
+    'prices': 'list[PriceComponent]',
+    'synchronization_schedule': 'str',
+    'stale_after_seconds': 'int',
+    'state': 'Literal["active", "disabled", "retired"]',
+    'expected_revision': 'OpaqueId | None',
+    'eligible_service_ids': 'NotRequired[list[OpaqueId]]',
+    'reason': 'str',
+})
+
+AdministrationProviderModelRoute = TypedDict('AdministrationProviderModelRoute', {
+    'provider_model_route_id': 'OpaqueId',
+    'owner_scope': 'OpaqueId',
+    'source_layer': 'OpaqueId',
+    'provider_instance_id': 'OpaqueId',
+    'canonical_model_id': 'OpaqueId',
+    'wire_model': 'str',
+    'capabilities': 'list[str]',
+    'settings': 'RegisteredDocument',
+    'embedding_model_space_id': 'NotRequired[OpaqueId]',
+    'embedding_dimensions': 'NotRequired[int]',
+    'price_authority': 'PriceAuthority',
+    'prices': 'list[PriceComponent]',
+    'synchronization_schedule': 'str',
+    'stale_after_seconds': 'int',
+    'price_version': 'OpaqueId | None',
+    'synchronization_state': 'Literal["manual", "current", "stale", "missing", "failed"]',
+    'state': 'Literal["active", "disabled", "retired"]',
+    'active_revision': 'OpaqueId',
+    'inherited': 'bool',
+})
+
+AdministrationProviderModelRoutePage = TypedDict('AdministrationProviderModelRoutePage', {
+    'items': 'list[AdministrationProviderModelRoute]',
     'next_cursor': 'NotRequired[str | None]',
 })
 
@@ -953,7 +1063,7 @@ AdministratorSession = TypedDict('AdministratorSession', {
     'identity_account_url': 'str',
 })
 
-AdministratorOperation: TypeAlias = Literal["service.manage", "service_parent.manage", "catalog.manage", "provider_instance.manage", "provider_route.manage", "business_tool_gateway.approve", "credential.manage", "assignment.manage", "budget.read", "budget.write", "accounting.read", "retention.manage", "grant.manage", "audit.read", "content.read", "export.create", "health.read", "node.drain", "circuit.probe", "circuit.reset", "high_availability.promote", "high_availability.failback", "backup.start", "restore.validate", "disaster_recovery.test"]
+AdministratorOperation: TypeAlias = Literal["service.manage", "service_parent.manage", "catalog.manage", "provider_instance.manage", "provider_route.manage", "business_tool_gateway.approve", "credential.manage", "assignment.manage", "budget.read", "budget.write", "accounting.read", "request_status.read", "retention.manage", "grant.manage", "audit.read", "content.read", "export.create", "health.read", "node.drain", "circuit.probe", "circuit.reset", "high_availability.promote", "high_availability.failback", "backup.start", "restore.validate", "disaster_recovery.test"]
 
 PutAdministratorGrant = TypedDict('PutAdministratorGrant', {
     'issuer': 'str',
@@ -1072,6 +1182,16 @@ ServiceAdministrationRecord = TypedDict('ServiceAdministrationRecord', {
 ServiceAdministrationPage = TypedDict('ServiceAdministrationPage', {
     'items': 'list[ServiceAdministrationRecord]',
     'next_cursor': 'NotRequired[str | None]',
+})
+
+ScopedAdministrationState = TypedDict('ScopedAdministrationState', {
+    'kind': 'Literal["service", "workspace"]',
+    'service_id': 'OpaqueId',
+    'workspace_id': 'NotRequired[OpaqueId]',
+    'display_name': 'str',
+    'state': 'Literal["active", "disabled", "retired"]',
+    'revision': 'OpaqueId',
+    'parent_service_id': 'NotRequired[OpaqueId]',
 })
 
 RetentionValue = TypedDict('RetentionValue', {
@@ -1286,6 +1406,102 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
     ],
     "type": "object"
   },
+  "AdministrationAssignment": {
+    "additionalProperties": false,
+    "properties": {
+      "active_revision": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "candidates": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "attempt_timeout_ms": {
+              "maximum": 120000,
+              "minimum": 100,
+              "type": "integer"
+            },
+            "provider_model_route_id": {
+              "$ref": "#/components/schemas/OpaqueId"
+            }
+          },
+          "required": [
+            "provider_model_route_id"
+          ],
+          "type": "object"
+        },
+        "maxItems": 8,
+        "minItems": 1,
+        "type": "array"
+      },
+      "inherited": {
+        "type": "boolean"
+      },
+      "name": {
+        "$ref": "#/components/schemas/AssignmentName"
+      },
+      "owner_scope": {
+        "enum": [
+          "global",
+          "service",
+          "workspace"
+        ],
+        "type": "string"
+      },
+      "required_capabilities": {
+        "items": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 32,
+        "type": "array",
+        "uniqueItems": true
+      },
+      "source_layer": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "state": {
+        "enum": [
+          "active",
+          "disabled",
+          "retired"
+        ],
+        "type": "string"
+      }
+    },
+    "required": [
+      "name",
+      "owner_scope",
+      "source_layer",
+      "state",
+      "inherited",
+      "active_revision",
+      "candidates"
+    ],
+    "type": "object"
+  },
+  "AdministrationAssignmentPage": {
+    "additionalProperties": false,
+    "properties": {
+      "items": {
+        "items": {
+          "$ref": "#/components/schemas/AdministrationAssignment"
+        },
+        "type": "array"
+      },
+      "next_cursor": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "items"
+    ],
+    "type": "object"
+  },
   "AdministrationChange": {
     "additionalProperties": false,
     "properties": {
@@ -1308,6 +1524,529 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
       }
     },
     "required": [
+      "expected_revision",
+      "reason"
+    ],
+    "type": "object"
+  },
+  "AdministrationProviderInstance": {
+    "additionalProperties": false,
+    "properties": {
+      "active_revision": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "credential_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "display_name": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      },
+      "endpoint": {
+        "format": "uri",
+        "type": "string"
+      },
+      "inherited": {
+        "type": "boolean"
+      },
+      "owner_scope": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "provider_catalog_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "provider_instance_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "settings": {
+        "$ref": "#/components/schemas/RegisteredDocument"
+      },
+      "source_layer": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "state": {
+        "enum": [
+          "active",
+          "disabled",
+          "retired"
+        ],
+        "type": "string"
+      }
+    },
+    "required": [
+      "provider_instance_id",
+      "owner_scope",
+      "source_layer",
+      "provider_catalog_id",
+      "display_name",
+      "endpoint",
+      "credential_id",
+      "state",
+      "active_revision",
+      "inherited"
+    ],
+    "type": "object"
+  },
+  "AdministrationProviderInstancePage": {
+    "additionalProperties": false,
+    "properties": {
+      "items": {
+        "items": {
+          "$ref": "#/components/schemas/AdministrationProviderInstance"
+        },
+        "type": "array"
+      },
+      "next_cursor": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "items"
+    ],
+    "type": "object"
+  },
+  "AdministrationProviderModelRoute": {
+    "additionalProperties": false,
+    "allOf": [
+      {
+        "if": {
+          "properties": {
+            "capabilities": {
+              "contains": {
+                "const": "embedding"
+              }
+            }
+          },
+          "required": [
+            "capabilities"
+          ]
+        },
+        "then": {
+          "required": [
+            "embedding_model_space_id",
+            "embedding_dimensions"
+          ]
+        }
+      }
+    ],
+    "properties": {
+      "active_revision": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "canonical_model_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "capabilities": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array",
+        "uniqueItems": true
+      },
+      "embedding_dimensions": {
+        "maximum": 4096,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "embedding_model_space_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "inherited": {
+        "type": "boolean"
+      },
+      "owner_scope": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "price_authority": {
+        "$ref": "#/components/schemas/PriceAuthority"
+      },
+      "price_version": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "prices": {
+        "items": {
+          "$ref": "#/components/schemas/PriceComponent"
+        },
+        "maxItems": 32,
+        "type": "array"
+      },
+      "provider_instance_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "provider_model_route_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "settings": {
+        "$ref": "#/components/schemas/RegisteredDocument"
+      },
+      "source_layer": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "stale_after_seconds": {
+        "maximum": 31536000,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "state": {
+        "enum": [
+          "active",
+          "disabled",
+          "retired"
+        ],
+        "type": "string"
+      },
+      "synchronization_schedule": {
+        "maxLength": 100,
+        "minLength": 9,
+        "type": "string"
+      },
+      "synchronization_state": {
+        "enum": [
+          "manual",
+          "current",
+          "stale",
+          "missing",
+          "failed"
+        ],
+        "type": "string"
+      },
+      "wire_model": {
+        "maxLength": 500,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "provider_model_route_id",
+      "owner_scope",
+      "source_layer",
+      "provider_instance_id",
+      "canonical_model_id",
+      "wire_model",
+      "capabilities",
+      "settings",
+      "price_authority",
+      "prices",
+      "synchronization_schedule",
+      "stale_after_seconds",
+      "price_version",
+      "synchronization_state",
+      "state",
+      "active_revision",
+      "inherited"
+    ],
+    "type": "object"
+  },
+  "AdministrationProviderModelRoutePage": {
+    "additionalProperties": false,
+    "properties": {
+      "items": {
+        "items": {
+          "$ref": "#/components/schemas/AdministrationProviderModelRoute"
+        },
+        "type": "array"
+      },
+      "next_cursor": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "items"
+    ],
+    "type": "object"
+  },
+  "AdministrationPutAssignment": {
+    "additionalProperties": false,
+    "properties": {
+      "candidates": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "attempt_timeout_ms": {
+              "maximum": 120000,
+              "minimum": 100,
+              "type": "integer"
+            },
+            "provider_model_route_id": {
+              "$ref": "#/components/schemas/OpaqueId"
+            }
+          },
+          "required": [
+            "provider_model_route_id"
+          ],
+          "type": "object"
+        },
+        "maxItems": 8,
+        "minItems": 1,
+        "type": "array"
+      },
+      "expected_revision": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "reason": {
+        "maxLength": 500,
+        "minLength": 1,
+        "type": "string"
+      },
+      "required_capabilities": {
+        "items": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 32,
+        "type": "array",
+        "uniqueItems": true
+      },
+      "state": {
+        "enum": [
+          "active",
+          "disabled",
+          "retired"
+        ],
+        "type": "string"
+      }
+    },
+    "required": [
+      "expected_revision",
+      "candidates",
+      "state",
+      "reason"
+    ],
+    "type": "object"
+  },
+  "AdministrationPutProviderInstance": {
+    "additionalProperties": false,
+    "properties": {
+      "credential_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "display_name": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      },
+      "eligible_service_ids": {
+        "items": {
+          "$ref": "#/components/schemas/OpaqueId"
+        },
+        "maxItems": 1000,
+        "type": "array",
+        "uniqueItems": true
+      },
+      "endpoint": {
+        "format": "uri",
+        "type": "string"
+      },
+      "expected_revision": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "provider_catalog_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "reason": {
+        "maxLength": 500,
+        "minLength": 1,
+        "type": "string"
+      },
+      "settings": {
+        "$ref": "#/components/schemas/RegisteredDocument"
+      },
+      "state": {
+        "enum": [
+          "active",
+          "disabled",
+          "retired"
+        ],
+        "type": "string"
+      }
+    },
+    "required": [
+      "provider_catalog_id",
+      "display_name",
+      "endpoint",
+      "credential_id",
+      "state",
+      "expected_revision",
+      "settings",
+      "reason"
+    ],
+    "type": "object"
+  },
+  "AdministrationPutProviderModelRoute": {
+    "additionalProperties": false,
+    "allOf": [
+      {
+        "if": {
+          "properties": {
+            "capabilities": {
+              "contains": {
+                "const": "embedding"
+              }
+            }
+          },
+          "required": [
+            "capabilities"
+          ]
+        },
+        "then": {
+          "required": [
+            "embedding_model_space_id",
+            "embedding_dimensions"
+          ]
+        }
+      },
+      {
+        "if": {
+          "properties": {
+            "price_authority": {
+              "properties": {
+                "mode": {
+                  "const": "manual"
+                }
+              },
+              "required": [
+                "mode"
+              ]
+            }
+          },
+          "required": [
+            "price_authority"
+          ]
+        },
+        "then": {
+          "properties": {
+            "prices": {
+              "minItems": 1
+            }
+          }
+        }
+      }
+    ],
+    "properties": {
+      "canonical_model_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "capabilities": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array",
+        "uniqueItems": true
+      },
+      "eligible_service_ids": {
+        "items": {
+          "$ref": "#/components/schemas/OpaqueId"
+        },
+        "maxItems": 1000,
+        "type": "array",
+        "uniqueItems": true
+      },
+      "embedding_dimensions": {
+        "maximum": 4096,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "embedding_model_space_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "expected_revision": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "price_authority": {
+        "$ref": "#/components/schemas/PriceAuthority"
+      },
+      "prices": {
+        "description": "A source-owned route can be empty until its first successful synchronization.",
+        "items": {
+          "$ref": "#/components/schemas/PriceComponent"
+        },
+        "maxItems": 32,
+        "type": "array"
+      },
+      "provider_instance_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "reason": {
+        "maxLength": 500,
+        "minLength": 1,
+        "type": "string"
+      },
+      "settings": {
+        "$ref": "#/components/schemas/RegisteredDocument"
+      },
+      "stale_after_seconds": {
+        "description": "A price becomes stale after this age. The initial value is 1209600 seconds.",
+        "maximum": 31536000,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "state": {
+        "enum": [
+          "active",
+          "disabled",
+          "retired"
+        ],
+        "type": "string"
+      },
+      "synchronization_schedule": {
+        "description": "Five-field UTC cron schedule. The initial value is 0 0 * * 0.",
+        "maxLength": 100,
+        "minLength": 9,
+        "type": "string"
+      },
+      "wire_model": {
+        "maxLength": 500,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "provider_instance_id",
+      "canonical_model_id",
+      "wire_model",
+      "capabilities",
+      "settings",
+      "price_authority",
+      "prices",
+      "synchronization_schedule",
+      "stale_after_seconds",
+      "state",
       "expected_revision",
       "reason"
     ],
@@ -1468,6 +2207,7 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
       "budget.read",
       "budget.write",
       "accounting.read",
+      "request_status.read",
       "retention.manage",
       "grant.manage",
       "audit.read",
@@ -6478,6 +7218,51 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
     "required": [
       "expected_active_revision",
       "reason"
+    ],
+    "type": "object"
+  },
+  "ScopedAdministrationState": {
+    "additionalProperties": false,
+    "properties": {
+      "display_name": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      },
+      "kind": {
+        "enum": [
+          "service",
+          "workspace"
+        ],
+        "type": "string"
+      },
+      "parent_service_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "revision": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "service_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "state": {
+        "enum": [
+          "active",
+          "disabled",
+          "retired"
+        ],
+        "type": "string"
+      },
+      "workspace_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      }
+    },
+    "required": [
+      "kind",
+      "service_id",
+      "display_name",
+      "state",
+      "revision"
     ],
     "type": "object"
   },

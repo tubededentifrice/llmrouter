@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import uuid
 from collections.abc import Mapping, Sequence
@@ -59,6 +60,8 @@ if TYPE_CHECKING:
     from llmrouter_backend.authority import RequestContext
 
 _MAXIMUM_REASON_CHARACTERS = 500
+_MINIMUM_IDEMPOTENCY_KEY_CHARACTERS = 16
+_MAXIMUM_IDEMPOTENCY_KEY_CHARACTERS = 200
 _MAXIMUM_DESCENDANT_SCOPES = 10_000
 _MAXIMUM_OPAQUE_ID_CHARACTERS = 200
 _MAXIMUM_WIRE_MODEL_CHARACTERS = 500
@@ -89,17 +92,47 @@ class PostgresConfigurationRepository:
         reason: str,
         now: datetime,
         resource_id: str | None = None,
+        idempotency_key: str | None = None,
     ) -> ConfigurationWriteResult:
         """Validate and immediately publish one complete local layer."""
         _require_write_authority(context, scope)
         _require_reason(reason)
         _require_aware(now)
         _require_scope_identities(scope, context.request_id)
+        if idempotency_key is not None and not (
+            _MINIMUM_IDEMPOTENCY_KEY_CHARACTERS
+            <= len(idempotency_key)
+            <= _MAXIMUM_IDEMPOTENCY_KEY_CHARACTERS
+        ):
+            raise ConfigurationError(
+                ConfigurationErrorCode.INVALID_REQUEST, context.request_id
+            )
         expected = _parse_optional_uuid(expected_active_revision, context.request_id)
+        public_resource_id = resource_id or scope.source_layer
+        request_fingerprint = hashlib.sha256(
+            _canonical_json(
+                {
+                    "content": _encode_content(content),
+                    "expected_active_revision": expected_active_revision,
+                    "reason": reason,
+                    "resource_id": public_resource_id,
+                }
+            )
+        ).digest()
         revision_id = self._identity_factory()
         operation_id = self._identity_factory()
         with self._connect() as connection:
             _lock_scope(connection, scope)
+            if idempotency_key is not None:
+                replay = _configuration_replay(
+                    connection,
+                    context,
+                    scope,
+                    idempotency_key=idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                )
+                if replay is not None:
+                    return replay
             _require_active_scope(connection, scope, context.request_id)
             current = _active_revision(connection, scope, lock=True)
             _check_expected_revision(
@@ -199,8 +232,30 @@ class PostgresConfigurationRepository:
                 action="configuration.publish",
                 now=now,
             )
+            if idempotency_key is not None:
+                connection.execute(
+                    """
+                    INSERT INTO router.configuration_write_idempotency_bindings (
+                        actor_id, operation, scope_key, idempotency_key,
+                        request_fingerprint, resource_id, active_revision,
+                        distribution_state, operation_id, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        context.actor_id,
+                        context.operation,
+                        _scope_key(scope),
+                        idempotency_key,
+                        request_fingerprint,
+                        public_resource_id,
+                        revision_id,
+                        DistributionState.DISTRIBUTING.value,
+                        operation_id,
+                        now,
+                    ),
+                )
         return ConfigurationWriteResult(
-            resource_id=resource_id or scope.source_layer,
+            resource_id=public_resource_id,
             active_revision=str(revision_id),
             distribution_state=DistributionState.DISTRIBUTING,
             operation_id=str(operation_id),
@@ -378,6 +433,28 @@ class PostgresConfigurationRepository:
                     ConfigurationErrorCode.VALIDATION_FAILED,
                     context.request_id,
                 ) from error
+
+    def owned(
+        self, context: RequestContext, scope: ConfigurationScope
+    ) -> RevisionLayer | None:
+        """Return one exact local layer without inherited content."""
+        if context.mutation:
+            _require_write_authority(context, scope)
+        else:
+            _require_read_authority(context, scope)
+        _require_scope_identities(scope, context.request_id)
+        with self._connect() as connection:
+            _require_active_scope(
+                connection, scope, context.request_id, permit_disabled=True
+            )
+            current = _active_revision(connection, scope, lock=False)
+            if current is None:
+                return None
+            return RevisionLayer(
+                scope,
+                str(current[0]),
+                _revision_content(connection, current[0], context.request_id),
+            )
 
     def mark_distribution(  # noqa: PLR0913
         self,
@@ -645,6 +722,51 @@ def _active_revision(
         ),
     ).fetchone()
     return None if row is None else (row[0], int(row[1]))
+
+
+def _scope_key(scope: ConfigurationScope) -> str:
+    if scope.workspace_id is not None:
+        return f"workspace:{scope.service_id}:{scope.workspace_id}"
+    if scope.service_id is not None:
+        return f"service:{scope.service_id}"
+    return "global"
+
+
+def _configuration_replay(
+    connection: Connection[Any],
+    context: RequestContext,
+    scope: ConfigurationScope,
+    *,
+    idempotency_key: str,
+    request_fingerprint: bytes,
+) -> ConfigurationWriteResult | None:
+    row = connection.execute(
+        """
+        SELECT request_fingerprint, resource_id, active_revision::text,
+               distribution_state, operation_id::text
+        FROM router.configuration_write_idempotency_bindings
+        WHERE actor_id = %s AND operation = %s AND scope_key = %s
+          AND idempotency_key = %s
+        """,
+        (
+            context.actor_id,
+            context.operation,
+            _scope_key(scope),
+            idempotency_key,
+        ),
+    ).fetchone()
+    if row is None:
+        return None
+    if not hmac.compare_digest(bytes(row[0]), request_fingerprint):
+        raise ConfigurationError(
+            ConfigurationErrorCode.IDEMPOTENCY_CONFLICT, context.request_id
+        )
+    return ConfigurationWriteResult(
+        resource_id=str(row[1]),
+        active_revision=str(row[2]),
+        distribution_state=DistributionState(str(row[3])),
+        operation_id=str(row[4]),
+    )
 
 
 def _revision_content(
@@ -2076,7 +2198,20 @@ def _require_write_authority(
             and context.machine_audience is None
             and context.operation == "configuration.write"
         )
-        allowed = exact_scope and (service_machine or service_embed)
+        administrator = (
+            context.actor_kind is PrincipalKind.ADMINISTRATOR
+            and context.authority_class
+            in {AuthorityClass.GLOBAL_ADMINISTRATOR, AuthorityClass.SERVICE}
+            and context.authority_path is AuthorityPath.GLOBAL_ADMINISTRATION
+            and context.machine_audience is None
+            and context.operation
+            in {
+                "provider_instance.manage",
+                "provider_route.manage",
+                "assignment.manage",
+            }
+        )
+        allowed = exact_scope and (service_machine or service_embed or administrator)
     if not allowed:
         raise ConfigurationError(
             ConfigurationErrorCode.INSUFFICIENT_SCOPE, context.request_id
@@ -2121,8 +2256,23 @@ def _require_read_authority(context: RequestContext, scope: ConfigurationScope) 
             and context.machine_audience is None
             and context.operation == "configuration.read"
         )
+        administrator = (
+            context.actor_kind is PrincipalKind.ADMINISTRATOR
+            and context.authority_class
+            in {AuthorityClass.GLOBAL_ADMINISTRATOR, AuthorityClass.SERVICE}
+            and context.authority_path is AuthorityPath.GLOBAL_ADMINISTRATION
+            and context.machine_audience is None
+            and context.operation
+            in {
+                "provider_instance.manage",
+                "provider_route.manage",
+                "assignment.manage",
+            }
+        )
         allowed = (
-            exact_scope and not context.mutation and (service_machine or service_embed)
+            exact_scope
+            and not context.mutation
+            and (service_machine or service_embed or administrator)
         )
     if not allowed:
         raise ConfigurationError(

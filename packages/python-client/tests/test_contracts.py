@@ -9,7 +9,7 @@ from llmrouter_client import ContractValidationError, validate_contract
 from llmrouter_client.generated_models import CONTRACT_SCHEMA_NAMES
 
 ROOT = Path(__file__).parents[3]
-EXPECTED_SCHEMA_COUNT = 128
+EXPECTED_SCHEMA_COUNT = 138
 FIXTURES = {
     "ContractManifest": "contract-manifest.json",
     "ServiceToken": "service-token.json",

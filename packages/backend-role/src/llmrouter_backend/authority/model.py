@@ -81,6 +81,7 @@ ADMINISTRATOR_OPERATIONS = frozenset(
         "budget.read",
         "budget.write",
         "accounting.read",
+        "request_status.read",
         "retention.manage",
         "grant.manage",
         "audit.read",

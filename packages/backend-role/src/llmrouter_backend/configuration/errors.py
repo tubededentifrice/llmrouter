@@ -13,6 +13,7 @@ class ConfigurationErrorCode(StrEnum):
     INSUFFICIENT_SCOPE = "insufficient_scope"
     NOT_FOUND = "not_found"
     REVISION_CONFLICT = "configuration_revision_conflict"
+    IDEMPOTENCY_CONFLICT = "idempotency_conflict"
     VALIDATION_FAILED = "invalid_request"
     TERMINAL_STATE = "terminal_state"
 
