@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "prebuild": "npm run build:shared-ui --prefix ../..",
+    "predev": "npm run build:shared-ui --prefix ../..",
     "dev": "vite",
     "build": "vite build"
   },

@@ -18,10 +18,10 @@
     "format:check": "prettier --check apps packages/typescript-* eslint.config.mjs package.json tsconfig.json tsconfig.base.json scripts/check-react-doctor.mjs scripts/tests/fixtures/dependency-policy-invalid/package.json scripts/tests/fixtures/react-doctor-invalid.json",
     "lint": "eslint . --max-warnings 0",
     "typecheck": "npm run build:shared-ui && tsc --build",
-    "test": "vitest run",
+    "test": "npm run build:shared-ui && vitest run",
     "security": "npm audit --audit-level=high",
     "react-doctor": "react-doctor apps/admin --json --json-compact --fail-on warning",
-    "build:shared-ui": "node -e \"import('@opendle/ui').then(() => undefined)\""
+    "build:shared-ui": "node --input-type=module -e \"import('../opendle-ui/scripts/build-consumer.mjs').catch(() => import('@opendle/ui/scripts/build-consumer.mjs'))\""
   },
   "devDependencies": {
     "@eslint/js": "9.39.5",
