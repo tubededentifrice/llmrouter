@@ -1,10 +1,11 @@
 """Fleet-wide PostgreSQL request admission and scoped status reads."""
-# ruff: noqa: ARG001, D107, E501, EM101, PLR0913, S101, TRY003
+# ruff: noqa: ARG001, E501, EM101, PLR0913, S101, TRY003
 
 from __future__ import annotations
 
 import hashlib
 import uuid
+from contextlib import ExitStack
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -17,6 +18,13 @@ from llmrouter_backend.authority import (
     AuthorityClass,
     AuthorityPath,
     PrincipalKind,
+)
+from llmrouter_backend.configuration.distribution import (
+    AdmissionDistributionSnapshot,
+    ConfigurationDistributionError,
+    ConfigurationRevisionDistribution,
+    CredentialGeneration,
+    DistributionScope,
 )
 from llmrouter_backend.execution.model import TerminalError
 
@@ -51,7 +59,9 @@ class PostgresAdmissionRepository:
         *,
         maximum_initial_age: timedelta = DEFAULT_MAXIMUM_INITIAL_AGE,
         maximum_future_skew: timedelta = DEFAULT_MAXIMUM_FUTURE_SKEW,
+        distribution: ConfigurationRevisionDistribution | None = None,
     ) -> None:
+        """Use central state and optional authenticated node-local revisions."""
         if not database_url:
             raise ValueError("The database URL must not be empty.")
         if maximum_initial_age <= timedelta(0) or maximum_future_skew < timedelta(0):
@@ -59,6 +69,7 @@ class PostgresAdmissionRepository:
         self._database_url = database_url
         self._maximum_initial_age = maximum_initial_age
         self._maximum_future_skew = maximum_future_skew
+        self._distribution = distribution
 
     def admit(
         self,
@@ -77,7 +88,10 @@ class PostgresAdmissionRepository:
                 AdmissionErrorCode.INSUFFICIENT_SCOPE, context.request_id
             )
         digest = request.fingerprint.sha256()
-        with psycopg.connect(self._database_url, row_factory=dict_row) as connection:
+        with (
+            ExitStack() as distribution_stack,
+            psycopg.connect(self._database_url, row_factory=dict_row) as connection,
+        ):
             with connection.transaction():
                 _lock_identity(connection, context, request.request_id)
                 existing = _select_binding(connection, context, request.request_id)
@@ -110,8 +124,18 @@ class PostgresAdmissionRepository:
                             AdmissionErrorCode.REQUEST_IDENTITY_EXPIRED,
                             context.request_id,
                         )
-                    _require_active_scope(connection, context)
+                    ancestor_service_ids = _require_active_scope(connection, context)
+                    distributed = _enter_distribution_admission(
+                        distribution_stack,
+                        self._distribution,
+                        context,
+                        now=now,
+                        ancestor_service_ids=ancestor_service_ids,
+                    )
                     target = _resolve_target(connection, context, request, now=now)
+                    _require_distributed_revision(
+                        distributed, str(target[0]), context.request_id
+                    )
                     attachments = _validated_attachments(
                         connection, context, request, now=now
                     )
@@ -134,19 +158,21 @@ class PostgresAdmissionRepository:
                     capture_enabled = capture_policy != "disabled"
                     row = connection.execute(
                         """
-                        INSERT INTO router.logical_requests (
-                            row_id, request_id, request_kind, service_id, workspace_id,
-                            assignment_id, exact_route_id, configuration_revision_id,
-                            operation_name, contract_major, fingerprint_version,
-                            fingerprint_sha256, data_profile, capture_enabled,
-                            capture_pressure_reason, capture_policy, capture_reason,
-                            captured_content_expires_at, admitted_at, last_transition_at,
-                            status_location, cancel_location, events_location
-                        ) VALUES (
-                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-                        ) RETURNING *
-                        """,
+                            INSERT INTO router.logical_requests (
+                                row_id, request_id, request_kind, service_id,
+                                workspace_id, assignment_id, exact_route_id,
+                                configuration_revision_id, operation_name,
+                                contract_major, fingerprint_version,
+                                fingerprint_sha256, data_profile, capture_enabled,
+                                capture_pressure_reason, capture_policy,
+                                capture_reason, captured_content_expires_at,
+                                admitted_at, last_transition_at, status_location,
+                                cancel_location, events_location
+                            ) VALUES (
+                                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                            ) RETURNING *
+                            """,
                         (
                             row_id,
                             request.request_id,
@@ -173,7 +199,10 @@ class PostgresAdmissionRepository:
                             *locations,
                         ),
                     ).fetchone()
-                    assert row is not None
+                    if row is None:
+                        raise RuntimeError(
+                            "The durable admission insert did not return a row."
+                        )
                     _snapshot_routing_chain(
                         connection,
                         request_row_id=row_id,
@@ -185,14 +214,20 @@ class PostgresAdmissionRepository:
                         exact_route_id=target[2],
                         admitted_at=now,
                     )
+                    _require_distributed_credentials(
+                        distributed,
+                        _snapshot_credential_generations(connection, row_id),
+                        context.request_id,
+                    )
                     for ordinal, attachment in enumerate(attachments, start=1):
                         connection.execute(
                             """
-                            INSERT INTO router.request_attachments (
-                                request_row_id, service_id, workspace_id, attachment_id,
-                                ordinal, content_sha256, byte_length
-                            ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-                            """,
+                                INSERT INTO router.request_attachments (
+                                    request_row_id, service_id, workspace_id,
+                                    attachment_id, ordinal, content_sha256,
+                                    byte_length
+                                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                                """,
                             (
                                 row_id,
                                 context.scope.service_id,
@@ -740,7 +775,92 @@ def _snapshot_routing_chain(
         raise AdmissionError(AdmissionErrorCode.ASSIGNMENT_UNAVAILABLE, request_id)
 
 
-def _require_active_scope(connection: Connection[Any], context: RequestContext) -> None:
+def _enter_distribution_admission(
+    stack: ExitStack,
+    distribution: ConfigurationRevisionDistribution | None,
+    context: RequestContext,
+    *,
+    now: datetime,
+    ancestor_service_ids: tuple[str, ...],
+) -> AdmissionDistributionSnapshot | None:
+    if distribution is None:
+        return None
+    service_id = context.scope.service_id
+    if service_id is None:
+        raise AdmissionError(AdmissionErrorCode.INSUFFICIENT_SCOPE, context.request_id)
+    try:
+        return stack.enter_context(
+            distribution.admission(
+                DistributionScope(service_id, context.scope.workspace_id),
+                now=now,
+                ancestor_service_ids=ancestor_service_ids,
+            )
+        )
+    except ConfigurationDistributionError as error:
+        raise AdmissionError(
+            AdmissionErrorCode.CONFIGURATION_UNAVAILABLE, context.request_id
+        ) from error
+
+
+def _require_distributed_revision(
+    snapshot: AdmissionDistributionSnapshot | None,
+    revision_id: str,
+    request_id: str,
+) -> None:
+    if snapshot is None:
+        return
+    try:
+        snapshot.require_revision(revision_id)
+    except ConfigurationDistributionError as error:
+        raise AdmissionError(
+            AdmissionErrorCode.CONFIGURATION_UNAVAILABLE, request_id
+        ) from error
+
+
+def _require_distributed_credentials(
+    snapshot: AdmissionDistributionSnapshot | None,
+    credentials: tuple[CredentialGeneration, ...],
+    request_id: str,
+) -> None:
+    if snapshot is None:
+        return
+    try:
+        snapshot.require_credentials(credentials)
+    except ConfigurationDistributionError as error:
+        raise AdmissionError(
+            AdmissionErrorCode.CONFIGURATION_UNAVAILABLE, request_id
+        ) from error
+
+
+def _snapshot_credential_generations(
+    connection: Connection[Any], request_row_id: uuid.UUID
+) -> tuple[CredentialGeneration, ...]:
+    rows = connection.execute(
+        """
+        SELECT DISTINCT snapshot.credential_id::text AS credential_id,
+               snapshot.credential_generation,
+               credential.owner_service_id::text AS owner_service_id
+        FROM router.provider_route_execution_snapshots AS snapshot
+        JOIN router.encrypted_credentials AS credential
+          ON credential.id = snapshot.credential_id
+        WHERE snapshot.request_row_id = %s
+        ORDER BY snapshot.credential_id::text, snapshot.credential_generation
+        """,
+        (request_row_id,),
+    ).fetchall()
+    return tuple(
+        CredentialGeneration(
+            row["credential_id"],
+            int(row["credential_generation"]),
+            row["owner_service_id"],
+        )
+        for row in rows
+    )
+
+
+def _require_active_scope(
+    connection: Connection[Any], context: RequestContext
+) -> tuple[str, ...]:
     services = connection.execute(
         """WITH RECURSIVE service_chain AS (
                SELECT id, parent_service_id
@@ -750,7 +870,7 @@ def _require_active_scope(connection: Connection[Any], context: RequestContext) 
                FROM router.services AS parent
                JOIN service_chain AS child ON child.parent_service_id = parent.id
            )
-           SELECT service.state
+           SELECT service.id::text AS service_id, service.state
            FROM router.services AS service
            JOIN service_chain AS chain ON chain.id = service.id
            FOR SHARE OF service""",
@@ -760,8 +880,9 @@ def _require_active_scope(connection: Connection[Any], context: RequestContext) 
         raise AdmissionError(
             AdmissionErrorCode.ASSIGNMENT_UNAVAILABLE, context.request_id
         )
+    service_ids = tuple(service["service_id"] for service in services)
     if context.scope.workspace_id is None:
-        return
+        return service_ids
     workspace = connection.execute(
         """SELECT state FROM router.workspaces
            WHERE id = %s AND service_id = %s FOR SHARE""",
@@ -771,6 +892,7 @@ def _require_active_scope(connection: Connection[Any], context: RequestContext) 
         raise AdmissionError(
             AdmissionErrorCode.WORKSPACE_UNAVAILABLE, context.request_id
         )
+    return service_ids
 
 
 def _validated_attachments(

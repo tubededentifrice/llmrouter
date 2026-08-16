@@ -29,6 +29,14 @@ from llmrouter_backend.authority import (
     RequestContext,
     Scope,
 )
+from llmrouter_backend.configuration import (
+    ConfigurationRevisionDistribution,
+    CredentialGeneration,
+    DistributionScope,
+    NormalConfigurationRevision,
+    RevisionAuthenticator,
+    UrgentConfigurationRevision,
+)
 from llmrouter_backend.database import migrate
 from llmrouter_backend.execution import (
     ErrorScope,
@@ -52,6 +60,7 @@ ROUTE_ID = "0198a080-0000-7000-8000-000000000114"
 PRICE_VERSION_ID = "0198a080-0000-7000-8000-000000000118"
 DIAGNOSTIC_GRANT = "A" * 43
 ATTACHMENT_ID = "0198a080-0000-7000-8000-000000000115"
+TEST_DISTRIBUTION_KEY = b"test-only-distribution-authentication-key"
 
 
 def _uuidv7(at: datetime, random_bits: int = 1) -> str:
@@ -408,6 +417,140 @@ def test_disabled_service_ancestor_stops_descendant_admission(
     with pytest.raises(AdmissionError) as unavailable:
         repository.admit(_context(), _request(_uuidv7(NOW, 9)), now=NOW)
     assert unavailable.value.code is AdmissionErrorCode.ASSIGNMENT_UNAVAILABLE
+
+
+def test_distributed_revision_is_recorded_and_urgent_revocation_blocks_new_work(
+    database_url: str, repository: PostgresAdmissionRepository
+) -> None:
+    """Commit one distributed revision and apply exact urgent revocation."""
+    del repository
+    authenticator = RevisionAuthenticator(TEST_DISTRIBUTION_KEY)
+    distribution = ConfigurationRevisionDistribution(authenticator)
+    scope = DistributionScope(SERVICE_ID, WORKSPACE_ID)
+    revision = NormalConfigurationRevision(
+        scope,
+        GLOBAL_CONFIGURATION_ID,
+        1,
+        bytes.fromhex("55" * 32),
+        NOW,
+    )
+    distribution.apply_normal(
+        authenticator.normal(
+            revision,
+            authentication_challenge=distribution.authentication_challenge,
+        ),
+        received_at=NOW,
+    )
+    distributed = PostgresAdmissionRepository(database_url, distribution=distribution)
+    request_id = _uuidv7(NOW, 40)
+    created = distributed.admit(_context(), _request(request_id), now=NOW)
+    status = distributed.status(
+        _context("model.read", mutation=False), request_id, now=NOW
+    )
+    assert created.created
+    assert status.configuration_revision_id == GLOBAL_CONFIGURATION_ID
+
+    urgent = UrgentConfigurationRevision(
+        sequence=1,
+        disabled_service_ids=frozenset(),
+        disabled_workspace_scopes=frozenset(),
+        revoked_credentials=frozenset({CredentialGeneration(CREDENTIAL_ID, 1, None)}),
+        security_policy_revision="security-policy-1",
+        admission_allowed=True,
+        published_at=NOW,
+    )
+    distribution.apply_urgent(
+        authenticator.urgent(
+            urgent,
+            authentication_challenge=distribution.authentication_challenge,
+        ),
+        received_at=NOW,
+    )
+    replay = distributed.admit(
+        _context(), _request(request_id), now=NOW + timedelta(hours=1)
+    )
+    assert not replay.created
+    blocked_id = _uuidv7(NOW, 41)
+    with pytest.raises(AdmissionError) as blocked:
+        distributed.admit(_context(), _request(blocked_id), now=NOW)
+    assert blocked.value.code is AdmissionErrorCode.CONFIGURATION_UNAVAILABLE
+    with psycopg.connect(database_url) as connection:
+        stored = connection.execute(
+            "SELECT count(*) FROM router.logical_requests WHERE request_id = %s",
+            (blocked_id,),
+        ).fetchone()
+    assert stored == (0,)
+
+
+def test_distributed_scope_disable_stale_boundary_and_revision_mismatch_fail_closed(
+    database_url: str, repository: PostgresAdmissionRepository
+) -> None:
+    """Reject exact disabled, 24-hour-old, and mismatched configuration."""
+    del repository
+    authenticator = RevisionAuthenticator(TEST_DISTRIBUTION_KEY)
+    scope = DistributionScope(SERVICE_ID, WORKSPACE_ID)
+
+    def configured(
+        revision_id: str = GLOBAL_CONFIGURATION_ID,
+    ) -> ConfigurationRevisionDistribution:
+        result = ConfigurationRevisionDistribution(authenticator)
+        revision = NormalConfigurationRevision(
+            scope,
+            revision_id,
+            1,
+            bytes.fromhex("55" * 32),
+            NOW,
+        )
+        result.apply_normal(
+            authenticator.normal(
+                revision,
+                authentication_challenge=result.authentication_challenge,
+            ),
+            received_at=NOW,
+        )
+        return result
+
+    stale_repository = PostgresAdmissionRepository(
+        database_url, distribution=configured()
+    )
+    with pytest.raises(AdmissionError) as stale:
+        stale_repository.admit(
+            _context(),
+            _request(_uuidv7(NOW + timedelta(hours=24), 42)),
+            now=NOW + timedelta(hours=24),
+        )
+    assert stale.value.code is AdmissionErrorCode.CONFIGURATION_UNAVAILABLE
+
+    mismatch_repository = PostgresAdmissionRepository(
+        database_url,
+        distribution=configured("0198a080-0000-7000-8000-000000000119"),
+    )
+    with pytest.raises(AdmissionError) as mismatch:
+        mismatch_repository.admit(_context(), _request(_uuidv7(NOW, 43)), now=NOW)
+    assert mismatch.value.code is AdmissionErrorCode.CONFIGURATION_UNAVAILABLE
+
+    disabled_distribution = configured()
+    disabled_distribution.apply_urgent(
+        authenticator.urgent(
+            UrgentConfigurationRevision(
+                sequence=1,
+                disabled_service_ids=frozenset(),
+                disabled_workspace_scopes=frozenset({scope}),
+                revoked_credentials=frozenset(),
+                security_policy_revision="security-policy-1",
+                admission_allowed=True,
+                published_at=NOW,
+            ),
+            authentication_challenge=disabled_distribution.authentication_challenge,
+        ),
+        received_at=NOW,
+    )
+    disabled_repository = PostgresAdmissionRepository(
+        database_url, distribution=disabled_distribution
+    )
+    with pytest.raises(AdmissionError) as disabled:
+        disabled_repository.admit(_context(), _request(_uuidv7(NOW, 44)), now=NOW)
+    assert disabled.value.code is AdmissionErrorCode.CONFIGURATION_UNAVAILABLE
 
 
 def test_attachment_must_be_ready_immutable_current_and_in_scope(
