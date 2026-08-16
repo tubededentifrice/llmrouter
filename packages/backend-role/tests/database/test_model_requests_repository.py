@@ -16,7 +16,12 @@ from llmrouter_backend.authority import (
     ServicePrincipal,
 )
 from llmrouter_backend.database import migrate
-from llmrouter_backend.execution import ExecutionKind, ExecutionTarget
+from llmrouter_backend.execution import (
+    ExecutionKind,
+    ExecutionState,
+    ExecutionTarget,
+    PostgresExecutionRepository,
+)
 from llmrouter_backend.model_requests.repository import PostgresModelRequestViews
 
 from .helpers import (
@@ -98,3 +103,63 @@ def test_views_hide_other_scopes_and_return_bounded_zero_accounting(
     )
     assert point.state.value == "admitted"
     assert point.state_revision == 1
+
+
+def test_views_reconstruct_only_completed_retained_text(database_url: str) -> None:
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        migrate(connection)
+        seed_scope(connection)
+        insert_request(connection, REQUEST_ROW_ID, REQUEST_ID)
+
+    target = ExecutionTarget(ExecutionKind.MODEL, REQUEST_ID)
+    execution = PostgresExecutionRepository(database_url)
+    write = _context("model.create")
+    read = _context()
+    execution.transition(
+        write,
+        target,
+        expected_revision=1,
+        new_state=ExecutionState.RUNNING,
+    )
+    execution.append_event(
+        write,
+        target,
+        event_name="output.delta",
+        payload={
+            "output_index": 0,
+            "content_type": "text/plain",
+            "delta": "retained ",
+        },
+    )
+
+    views = PostgresModelRequestViews(database_url)
+    assert "result" not in views.status(read, target)
+
+    execution.append_event(
+        write,
+        target,
+        event_name="output.delta",
+        payload={
+            "output_index": 0,
+            "content_type": "text/plain",
+            "delta": "result",
+        },
+    )
+    execution.append_event(
+        write,
+        target,
+        event_name="output.completed",
+        payload={"output_index": 0, "content_type": "text/plain"},
+    )
+    execution.transition(
+        write,
+        target,
+        expected_revision=2,
+        new_state=ExecutionState.SUCCEEDED,
+    )
+
+    status = views.status(read, target)
+    assert status["state"] == "succeeded"
+    assert status["result"] == {
+        "outputs": [{"type": "text", "text": "retained result"}]
+    }

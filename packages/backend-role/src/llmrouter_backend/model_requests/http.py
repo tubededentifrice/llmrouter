@@ -159,6 +159,8 @@ async def stream_model_request(request: Request, request_id: str) -> Response:
                     yield event.sse()
                     if event.event_name == "request.terminal":
                         return
+                if await request.is_disconnected():
+                    return
                 status = await asyncio.to_thread(
                     service.execution_status,
                     scoped,
@@ -166,8 +168,15 @@ async def stream_model_request(request: Request, request_id: str) -> Response:
                     error_request_id=error_request_id,
                 )
                 if status.terminal:
-                    return
-                if await request.is_disconnected():
+                    pending = await asyncio.to_thread(
+                        service.events,
+                        scoped,
+                        request_id,
+                        after_sequence=cursor,
+                        error_request_id=error_request_id,
+                    )
+                    if pending:
+                        continue
                     return
                 elapsed = time.monotonic() - last_write
                 if elapsed >= KEEPALIVE_SECONDS:

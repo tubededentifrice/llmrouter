@@ -144,6 +144,7 @@ class _Execution:
         self.disconnects = 0
         self.cancel_evidence: tuple[AdapterStopEvidence, ...] = ()
         self.unavailable_after: int | None = None
+        self.terminal_on_status = False
 
     def add(self, request_id: str, scope: Scope) -> None:
         del scope
@@ -196,7 +197,16 @@ class _Execution:
 
     def status(self, context, target):
         del context
-        return self.statuses[target.public_id]
+        current = self.statuses[target.public_id]
+        if self.terminal_on_status and not current.terminal:
+            self.terminal_on_status = False
+            return self.transition(
+                None,
+                target,
+                expected_revision=current.state_revision,
+                new_state=ExecutionState.SUCCEEDED,
+            )
+        return current
 
     def transition(
         self,
@@ -326,8 +336,11 @@ class _Views:
     def __init__(self, execution: _Execution) -> None:
         self.execution = execution
         self.scopes: dict[str, Scope] = {}
+        self.scope_error: RuntimeError | None = None
 
     def resolve_scope(self, principal, request_id: str):
+        if self.scope_error is not None:
+            raise self.scope_error
         scope = self.scopes.get(request_id)
         if scope is None or scope.service_id != principal.service_id:
             return None
@@ -823,3 +836,89 @@ def test_body_reader_checks_one_chunk_before_copying_it() -> None:
     with pytest.raises(ModelRequestError) as captured:
         asyncio.run(model_request_http._bounded_body(request, "transport"))  # noqa: SLF001
     assert captured.value.code == "invalid_request"
+
+
+def test_invalid_diagnostic_grant_returns_one_safe_validation_error() -> None:
+    service, _, admission, _, routing, _ = _service()
+    body = json.loads(_body())
+    body.pop("assignment")
+    body["exact_route"] = "route-a"
+    body["exact_route_grant"] = "!" + ("G" * 42)
+
+    with pytest.raises(ModelRequestError) as captured:
+        service.create(
+            TOKEN,
+            REQUEST_ID,
+            json.dumps(body).encode(),
+            error_request_id="transport",
+        )
+
+    assert captured.value.code == "invalid_request"
+    assert captured.value.field_errors[0].path == "exact_route_grant"
+    assert admission.requests == {}
+    assert routing.calls == 0
+    assert "G" * 10 not in str(captured.value)
+
+
+def test_scope_lookup_failure_stays_in_the_safe_error_contract() -> None:
+    service, _, _, _, _, views = _service()
+    views.scope_error = RuntimeError("private database detail")
+
+    with pytest.raises(ModelRequestError) as captured:
+        service.authorize_existing(
+            TOKEN,
+            REQUEST_ID,
+            "model.read",
+            error_request_id="transport",
+        )
+
+    assert captured.value.code == "internal_error"
+    assert captured.value.retryable
+    assert "private database detail" not in str(captured.value)
+
+
+def test_stop_discovery_failure_does_not_precede_durable_cancellation() -> None:
+    def failed_stops(_context, _target):
+        raise RuntimeError("private stop detail")
+
+    service, _, _, execution, _, views = _service(
+        stops=failed_stops,
+        run_inline=False,
+    )
+    service.create(TOKEN, REQUEST_ID, _body(), error_request_id="transport-1")
+    views.scopes[REQUEST_ID] = Scope(SERVICE_ID, WORKSPACE_ID)
+    scoped = service.authorize_existing(
+        TOKEN,
+        REQUEST_ID,
+        "model.cancel",
+        error_request_id="transport-2",
+    )
+
+    status = service.cancel(
+        scoped,
+        REQUEST_ID,
+        b'{"reason":"test cancellation"}',
+        error_request_id="transport-3",
+    )
+
+    assert status["state"] == "cancel_requested"
+    assert execution.cancel_evidence == ()
+
+
+def test_stream_replays_terminal_event_committed_during_status_check() -> None:
+    service, _, _, execution, _, views = _service(run_inline=False)
+    service.create(TOKEN, REQUEST_ID, _body(), error_request_id="transport")
+    views.scopes[REQUEST_ID] = Scope(SERVICE_ID, WORKSPACE_ID)
+    execution.terminal_on_status = True
+    client = TestClient(_app(service))
+
+    stream = client.get(
+        f"/v1/model-requests/{REQUEST_ID}/events",
+        headers={
+            "Authorization": f"Bearer {TOKEN}",
+            "Accept": "text/event-stream; llmrouter-stream=1",
+        },
+    )
+
+    assert stream.status_code == 200
+    assert stream.text.count("event: request.terminal") == 1

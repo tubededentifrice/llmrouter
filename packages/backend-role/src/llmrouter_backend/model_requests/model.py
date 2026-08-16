@@ -275,7 +275,6 @@ class PreparedModelRequest:
 
     context: RequestContext
     scope: Scope
-    document: ModelRequestDocument = field(repr=False)
     adapter_request: ModelAdapterRequest = field(repr=False)
 
     def __repr__(self) -> str:
@@ -283,7 +282,7 @@ class PreparedModelRequest:
         return (
             "PreparedModelRequest("
             f"context={self.context!r}, scope={self.scope!r}, "
-            "document=[REDACTED], adapter_request=[REDACTED])"
+            "adapter_request=[REDACTED])"
         )
 
     __str__ = __repr__

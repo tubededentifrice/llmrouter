@@ -368,18 +368,21 @@ class ModelRequestService:
                 }
             ),
         )
-        admission_request = AdmissionRequest(
-            request_id,
-            RequestKind.MODEL,
-            fingerprint,
-            assignment=document.assignment,
-            exact_route_id=document.exact_route,
-            diagnostic_grant=(
-                None
-                if document.exact_route_grant is None
-                else document.exact_route_grant.get_secret_value()
-            ),
-        )
+        try:
+            admission_request = AdmissionRequest(
+                request_id,
+                RequestKind.MODEL,
+                fingerprint,
+                assignment=document.assignment,
+                exact_route_id=document.exact_route,
+                diagnostic_grant=(
+                    None
+                    if document.exact_route_grant is None
+                    else document.exact_route_grant.get_secret_value()
+                ),
+            )
+        except (TypeError, ValueError) as error:
+            raise _invalid_request(error_request_id, ("exact_route_grant",)) from error
         try:
             result = self._admission.admit(context, admission_request, now=now)
         except Exception as error:
@@ -387,7 +390,6 @@ class ModelRequestService:
         candidate = PreparedModelRequest(
             context,
             scope,
-            document,
             adapter_request,
         )
         self._schedule_if_resumable(request_id, candidate, error_request_id)
@@ -420,7 +422,10 @@ class ModelRequestService:
             validate_uuidv7(request_id)
         except ValueError as error:
             raise _not_found(error_request_id) from error
-        scope = self._views.resolve_scope(principal, request_id)
+        try:
+            scope = self._views.resolve_scope(principal, request_id)
+        except Exception as error:
+            raise _map_error(error, error_request_id) from error
         if scope is None:
             raise _not_found(error_request_id)
         context = _authorize(
@@ -493,18 +498,18 @@ class ModelRequestService:
         target = ExecutionTarget(ExecutionKind.MODEL, request_id)
         try:
             current = self._views.status(scoped.context, target)
-            stops = (
-                ()
-                if current.get("state")
-                in {
-                    "succeeded",
-                    "failed",
-                    "interrupted",
-                    "cancelled",
-                    "uncertain",
-                }
-                else tuple(self._active_stops(scoped.context, target))
-            )
+            stops: Sequence[AdapterStop] = ()
+            if current.get("state") not in {
+                "succeeded",
+                "failed",
+                "interrupted",
+                "cancelled",
+                "uncertain",
+            }:
+                try:
+                    stops = tuple(self._active_stops(scoped.context, target))
+                except Exception:  # noqa: BLE001 -- Durable cancellation stays primary.
+                    stops = ()
             self._execution.cancel(
                 scoped.context,
                 target,
