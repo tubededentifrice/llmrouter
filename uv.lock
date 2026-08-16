@@ -415,6 +415,7 @@ source = { editable = "packages/backend-role" }
 dependencies = [
     { name = "argon2-cffi" },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pycryptodome" },
     { name = "pyjwt" },
@@ -427,6 +428,7 @@ dependencies = [
 requires-dist = [
     { name = "argon2-cffi", specifier = "==25.1.0" },
     { name = "fastapi", specifier = "==0.140.13" },
+    { name = "httpx", specifier = "==0.28.1" },
     { name = "psycopg", extras = ["binary"], specifier = "==3.3.4" },
     { name = "pycryptodome", specifier = "==3.23.0" },
     { name = "pyjwt", specifier = "==2.13.0" },
