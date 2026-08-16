@@ -307,21 +307,22 @@ class RoutingCoordinator:
                         "dispatch_blocked",
                     )
                 else:
-                    result = (
-                        _execute_adapter(adapter, plan, now=self._clock())
-                        if dispatched
-                        else _recover_dispatched(adapter, plan)
-                    )
-                    if dispatched and health_decision is not None:
-                        result_health, result_permit = health_decision
-                        with suppress(Exception):
-                            result_health.record_plan_result(
-                                plan,
-                                result,
-                                result_permit,
-                                operation=context.operation,
-                            )
-                    elif not dispatched:
+                    try:
+                        result = (
+                            _execute_adapter(adapter, plan, now=self._clock())
+                            if dispatched
+                            else _recover_dispatched(adapter, plan)
+                        )
+                        if dispatched and health_decision is not None:
+                            result_health, result_permit = health_decision
+                            with suppress(Exception):
+                                result_health.record_plan_result(
+                                    plan,
+                                    result,
+                                    result_permit,
+                                    operation=context.operation,
+                                )
+                    finally:
                         self._abandon_health(health_decision)
             accounting_result, durable_decision = self._complete(plan, result)
             if durable_decision is not FallbackDecision.NEXT_CANDIDATE:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Protocol
@@ -94,19 +94,23 @@ class CircuitSettings:
 
 @dataclass(frozen=True, slots=True)
 class HealthScope:
-    """The exact route and operation scope for one health decision."""
+    """The exact provider, credential, route, and operation health scope."""
 
     provider_instance_id: str
+    provider_instance_generation: int
     provider_model_route_id: str
     route_generation: int
+    credential_id: str
+    credential_generation: int
     operation: str
     required_capabilities: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
-        """Require complete bounded provider and operation identities."""
+        """Require complete bounded provider, credential, and route identities."""
         _identities(
             self.provider_instance_id,
             self.provider_model_route_id,
+            self.credential_id,
             self.operation,
         )
         capabilities = frozenset(self.required_capabilities)
@@ -116,12 +120,16 @@ class HealthScope:
         if capabilities:
             _identities(*capabilities)
         object.__setattr__(self, "required_capabilities", capabilities)
-        if (
-            isinstance(self.route_generation, bool)
-            or not isinstance(self.route_generation, int)
-            or self.route_generation < 1
+        generations = (
+            self.provider_instance_generation,
+            self.route_generation,
+            self.credential_generation,
+        )
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 1
+            for value in generations
         ):
-            message = "The health route generation must be positive."
+            message = "Health scope generations must be positive."
             raise ValueError(message)
 
 
@@ -192,21 +200,27 @@ class FleetHintVerifier(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class HealthPermit:
-    """One route decision and its held half-open probe slots."""
+    """One owned health decision and its held half-open probe slots."""
 
     allowed: bool
     scope: HealthScope
     probe_keys: tuple[CircuitKey, ...] = ()
     reason: str | None = None
     next_probe_at: datetime | None = None
+    _decision_token: object | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
-        """Keep denied permits safe and allowed permits complete."""
+        """Keep denied permits safe and allowed permits owned."""
         if self.allowed and (self.reason is not None or self.next_probe_at is not None):
             message = "An allowed health permit cannot contain a denial."
             raise ValueError(message)
         if not self.allowed and (not self.reason or self.probe_keys):
             message = "A denied health permit must contain one safe reason."
+            raise ValueError(message)
+        if self.allowed != (self._decision_token is not None):
+            message = (
+                "An allowed health permit must contain one private decision token."
+            )
             raise ValueError(message)
         if self.next_probe_at is not None and not isinstance(
             self.next_probe_at, datetime

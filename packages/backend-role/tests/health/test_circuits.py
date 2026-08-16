@@ -15,7 +15,6 @@ from llmrouter_backend.health import (
     CircuitState,
     FleetHint,
     FleetHintVerifier,
-    HealthScope,
     LocalProviderHealth,
     ProviderFailureClass,
 )
@@ -43,21 +42,26 @@ class _Clock:
         self.now += value
 
 
-def _plan(
+def _plan(  # noqa: PLR0913
     *,
     instance: str = "instance-a",
     route: str = "route-a",
     generation: int = 1,
+    instance_generation: int = 1,
+    credential: str = "credential-a",
+    credential_generation: int = 1,
     required_capabilities: frozenset[str] = frozenset(),
 ) -> AttemptPlan:
     return cast(
         "AttemptPlan",
         SimpleNamespace(
             provider_instance_id=instance,
+            provider_instance_generation=instance_generation,
             provider_model_route_id=route,
             route_generation=generation,
             attempt_id="attempt-a",
-            credential_id="credential-a",
+            credential_id=credential,
+            credential_generation=credential_generation,
             candidate_policy={
                 "required_capabilities": tuple(sorted(required_capabilities))
             },
@@ -204,6 +208,32 @@ def test_capability_specific_health_does_not_suppress_an_unrelated_capability() 
     assert health.acquire_plan(text, operation="model.create").allowed
 
 
+def test_credential_and_instance_revisions_have_independent_health() -> None:
+    clock = _Clock()
+    health = _health(
+        clock,
+        settings=CircuitSettings(
+            window_size=1,
+            minimum_samples=1,
+            failure_threshold=1,
+            jitter_ratio=0,
+        ),
+    )
+    failed = _plan()
+    rotated_credential = _plan(credential_generation=2)
+    revised_instance = _plan(instance_generation=2)
+
+    _record(
+        health,
+        failed,
+        _failure(failed, TerminalErrorClass.AUTHENTICATION, ErrorScope.CREDENTIAL),
+    )
+
+    assert not health.acquire_plan(failed, operation="model.create").allowed
+    assert health.acquire_plan(rotated_credential, operation="model.create").allowed
+    assert health.acquire_plan(revised_instance, operation="model.create").allowed
+
+
 @pytest.mark.parametrize(
     ("error_class", "scope"),
     [
@@ -243,6 +273,52 @@ def test_mismatched_provider_evidence_does_not_change_health() -> None:
     )
 
     assert health.inspect() == ()
+
+
+def test_normal_health_decision_can_record_only_one_result() -> None:
+    clock = _Clock()
+    health = _health(
+        clock,
+        settings=CircuitSettings(
+            window_size=2,
+            minimum_samples=2,
+            failure_threshold=1,
+            jitter_ratio=0,
+        ),
+    )
+    plan = _plan()
+    failure = _failure(plan, TerminalErrorClass.TRANSPORT, ErrorScope.ATTEMPT)
+    permit = health.acquire_plan(plan, operation="model.create")
+
+    health.record_plan_result(plan, failure, permit, operation="model.create")
+    with pytest.raises(ValueError, match="no longer active"):
+        health.record_plan_result(plan, failure, permit, operation="model.create")
+
+    snapshot = health.inspect()[0]
+    assert snapshot.sample_count == snapshot.failure_count == 1
+    assert snapshot.local_state is CircuitState.CLOSED
+
+
+def test_abandoned_or_foreign_normal_decision_cannot_record_a_result() -> None:
+    clock = _Clock()
+    owner = _health(clock)
+    foreign = _health(clock)
+    plan = _plan()
+    failure = _failure(plan, TerminalErrorClass.TRANSPORT, ErrorScope.ATTEMPT)
+    abandoned = owner.acquire_plan(plan, operation="model.create")
+    owner.abandon(abandoned)
+
+    with pytest.raises(ValueError, match="no longer active"):
+        owner.record_plan_result(plan, failure, abandoned, operation="model.create")
+    assert owner.inspect() == ()
+
+    foreign_permit = owner.acquire_plan(plan, operation="model.create")
+    with pytest.raises(ValueError, match="no longer active"):
+        foreign.record_plan_result(
+            plan, failure, foreign_permit, operation="model.create"
+        )
+    assert foreign.inspect() == ()
+    owner.abandon(foreign_permit)
 
 
 @pytest.mark.parametrize(
@@ -388,6 +464,66 @@ def test_abandoned_probe_releases_concurrency_without_a_health_sample() -> None:
     assert health.inspect()[0].sample_count == 1
 
 
+def test_replayed_probe_abandon_does_not_release_another_probe_slot() -> None:
+    clock = _Clock()
+    health = _health(
+        clock,
+        settings=CircuitSettings(
+            window_size=1,
+            minimum_samples=1,
+            failure_threshold=1,
+            open_duration=timedelta(seconds=1),
+            jitter_ratio=0,
+        ),
+    )
+    plan = _plan()
+    _record(
+        health,
+        plan,
+        _failure(plan, TerminalErrorClass.TRANSPORT, ErrorScope.ATTEMPT),
+    )
+    clock.advance(timedelta(seconds=1))
+
+    first = health.acquire_plan(plan, operation="model.create")
+    health.abandon(first)
+    replacement = health.acquire_plan(plan, operation="model.create")
+    health.abandon(first)
+    with pytest.raises(ValueError, match="no longer active"):
+        health.record_plan_result(
+            plan,
+            AdapterResult(AttemptOutcome.SUCCEEDED),
+            first,
+            operation="model.create",
+        )
+    blocked = health.acquire_plan(plan, operation="model.create")
+
+    assert replacement.allowed
+    assert not blocked.allowed
+    assert blocked.reason == "half_open_probe_limit"
+
+
+def test_backoff_and_jitter_never_exceed_the_configured_maximum() -> None:
+    clock = _Clock()
+    settings = CircuitSettings(
+        window_size=1,
+        minimum_samples=1,
+        failure_threshold=1,
+        open_duration=timedelta(seconds=1),
+        maximum_backoff=timedelta(seconds=3),
+        jitter_ratio=0.5,
+    )
+    health = _health(clock, settings=settings)
+    plan = _plan()
+    failure = _failure(plan, TerminalErrorClass.TRANSPORT, ErrorScope.ATTEMPT)
+
+    for _index in range(20):
+        _record(health, plan, failure)
+        next_probe_at = health.inspect()[0].next_probe_at
+        assert next_probe_at is not None
+        assert next_probe_at - clock.now <= settings.maximum_backoff
+        clock.now = next_probe_at
+
+
 def _hint(key: CircuitKey, *, tag: bytes = b"v" * 16) -> FleetHint:
     return FleetHint(
         key,
@@ -402,10 +538,13 @@ def _hint(key: CircuitKey, *, tag: bytes = b"v" * 16) -> FleetHint:
 def test_only_authentic_fresh_exact_generation_hints_suppress() -> None:
     clock = _Clock()
     health = _health(clock, verifier=lambda hint: hint.authentication_tag == b"v" * 16)
-    exact_scope = HealthScope("instance-a", "route-a", 1, "model.create")
-    other_generation = HealthScope("instance-a", "route-a", 2, "model.create")
-    other_capability = HealthScope(
-        "instance-a", "route-a", 1, "model.create", frozenset({"vision"})
+    exact_scope = LocalProviderHealth.scope_for_plan(_plan(), operation="model.create")
+    other_generation = LocalProviderHealth.scope_for_plan(
+        _plan(generation=2), operation="model.create"
+    )
+    other_capability = LocalProviderHealth.scope_for_plan(
+        _plan(required_capabilities=frozenset({"vision"})),
+        operation="model.create",
     )
     key = CircuitKey(exact_scope, ProviderFailureClass.SERVER)
 
@@ -424,6 +563,26 @@ def test_only_authentic_fresh_exact_generation_hints_suppress() -> None:
     clock.advance(timedelta(seconds=56))
     assert health.acquire(exact_scope).allowed
     assert health.inspect() == ()
+
+
+def test_replayed_or_stale_hint_is_rejected_after_authentication() -> None:
+    clock = _Clock()
+
+    def verify(_hint_value: FleetHint) -> bool:
+        clock.advance(timedelta(seconds=60))
+        return True
+
+    health = _health(clock, verifier=cast("FleetHintVerifier", verify))
+    scope = LocalProviderHealth.scope_for_plan(_plan(), operation="model.create")
+    hint = _hint(CircuitKey(scope, ProviderFailureClass.SERVER))
+
+    assert not health.apply_fleet_hint(hint)
+    assert health.acquire(scope).allowed
+
+    clock.now = NOW
+    health = _health(clock, verifier=lambda _hint_value: True)
+    assert health.apply_fleet_hint(hint)
+    assert not health.apply_fleet_hint(hint)
 
 
 def test_hint_can_delay_but_cannot_close_a_local_circuit() -> None:

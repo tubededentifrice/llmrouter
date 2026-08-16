@@ -6,6 +6,7 @@ import threading
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from math import ceil, log2
 from typing import TYPE_CHECKING
 
 from llmrouter_backend.execution import ErrorScope, TerminalErrorClass
@@ -40,7 +41,7 @@ class _Circuit:
     last_state_change: datetime
     samples: deque[_Sample] = field(default_factory=deque)
     next_probe_at: datetime | None = None
-    active_probes: int = 0
+    active_probe_tokens: set[object] = field(default_factory=set)
     open_count: int = 0
 
 
@@ -65,6 +66,9 @@ class LocalProviderHealth:
         self._circuits: dict[CircuitKey, _Circuit] = {}
         self._scope_successes: dict[HealthScope, deque[_Sample]] = {}
         self._hints: dict[CircuitKey, FleetHint] = {}
+        self._active_decisions: dict[
+            object, tuple[HealthScope, tuple[CircuitKey, ...]]
+        ] = {}
         self._lock = threading.RLock()
 
     @property
@@ -106,6 +110,9 @@ class LocalProviderHealth:
         if not authentic:
             return False
         with self._lock:
+            now = self._now()
+            if hint.published_at > now or hint.expires_at <= now:
+                return False
             current = self._hints.get(hint.key)
             if current is not None and current.published_at >= hint.published_at:
                 return False
@@ -155,7 +162,7 @@ class LocalProviderHealth:
                 )
             if any(
                 circuit.state is CircuitState.HALF_OPEN
-                and circuit.active_probes >= self._settings.probe_limit
+                and len(circuit.active_probe_tokens) >= self._settings.probe_limit
                 for _key, circuit in matching
             ):
                 return HealthPermit(
@@ -164,21 +171,29 @@ class LocalProviderHealth:
                     reason="half_open_probe_limit",
                 )
             probe_keys: list[CircuitKey] = []
+            decision_token = object()
             for key, circuit in matching:
                 if circuit.state is CircuitState.OPEN:
                     self._transition(circuit, CircuitState.HALF_OPEN, now)
-                circuit.active_probes += 1
+                circuit.active_probe_tokens.add(decision_token)
                 probe_keys.append(key)
-            return HealthPermit(allowed=True, scope=scope, probe_keys=tuple(probe_keys))
+            owned_probe_keys = tuple(probe_keys)
+            self._active_decisions[decision_token] = (scope, owned_probe_keys)
+            return HealthPermit(
+                allowed=True,
+                scope=scope,
+                probe_keys=owned_probe_keys,
+                _decision_token=decision_token,
+            )
 
     def acquire_plan(self, plan: AttemptPlan, *, operation: str) -> HealthPermit:
         """Make one health decision from an immutable route snapshot."""
         return self.acquire(self.scope_for_plan(plan, operation=operation))
 
     def abandon(self, permit: HealthPermit) -> None:
-        """Release probe slots when no provider evidence was produced."""
+        """Consume one decision and release slots without a health sample."""
         with self._lock:
-            self._release_probe_slots(permit)
+            self._consume_decision(permit)
 
     def record_plan_result(
         self,
@@ -196,7 +211,9 @@ class LocalProviderHealth:
             raise ValueError(message)
         failure_class = _provider_failure_class(plan, result)
         with self._lock:
-            self._release_probe_slots(permit)
+            if not self._consume_decision(permit):
+                message = "The health decision permit is no longer active."
+                raise ValueError(message)
             if result.failure is None:
                 self._record_scope_success(scope, now)
                 for key, circuit in tuple(self._circuits.items()):
@@ -241,8 +258,11 @@ class LocalProviderHealth:
                 snapshots,
                 key=lambda item: (
                     item.key.scope.provider_instance_id,
+                    item.key.scope.provider_instance_generation,
                     item.key.scope.provider_model_route_id,
                     item.key.scope.route_generation,
+                    item.key.scope.credential_id,
+                    item.key.scope.credential_generation,
                     item.key.scope.operation,
                     tuple(sorted(item.key.scope.required_capabilities)),
                     item.key.failure_class.value,
@@ -262,11 +282,14 @@ class LocalProviderHealth:
             message = "The required health capabilities are invalid."
             raise TypeError(message)
         return HealthScope(
-            plan.provider_instance_id,
-            plan.provider_model_route_id,
-            plan.route_generation,
-            operation,
-            capabilities,
+            provider_instance_id=plan.provider_instance_id,
+            provider_instance_generation=plan.provider_instance_generation,
+            provider_model_route_id=plan.provider_model_route_id,
+            route_generation=plan.route_generation,
+            credential_id=plan.credential_id,
+            credential_generation=plan.credential_generation,
+            operation=operation,
+            required_capabilities=capabilities,
         )
 
     def _record_success(self, circuit: _Circuit, now: datetime) -> None:
@@ -299,13 +322,18 @@ class LocalProviderHealth:
 
     def _open(self, circuit: _Circuit, now: datetime) -> None:
         circuit.open_count += 1
+        open_seconds = self._settings.open_duration.total_seconds()
+        maximum_seconds = self._settings.maximum_backoff.total_seconds()
+        maximum_exponent = ceil(log2(maximum_seconds / open_seconds))
         base_seconds = min(
-            self._settings.open_duration.total_seconds()
-            * (2 ** (circuit.open_count - 1)),
-            self._settings.maximum_backoff.total_seconds(),
+            open_seconds * (2 ** min(circuit.open_count - 1, maximum_exponent)),
+            maximum_seconds,
         )
-        jitter_bound = base_seconds * self._settings.jitter_ratio
-        jitter_seconds = self._jitter(jitter_bound)
+        jitter_bound = min(
+            base_seconds * self._settings.jitter_ratio,
+            maximum_seconds - base_seconds,
+        )
+        jitter_seconds = self._jitter(jitter_bound) if jitter_bound else 0.0
         if not 0 <= jitter_seconds <= jitter_bound:
             message = "The health jitter source returned an unsafe value."
             raise ValueError(message)
@@ -317,14 +345,26 @@ class LocalProviderHealth:
         if circuit.state is not state:
             circuit.state = state
             circuit.last_state_change = now
-        if state is not CircuitState.HALF_OPEN:
-            circuit.active_probes = 0
+
+    def _consume_decision(self, permit: HealthPermit) -> bool:
+        token = permit._decision_token  # noqa: SLF001
+        if token is None:
+            return False
+        owned = self._active_decisions.get(token)
+        if owned != (permit.scope, permit.probe_keys):
+            return False
+        del self._active_decisions[token]
+        self._release_probe_slots(permit)
+        return True
 
     def _release_probe_slots(self, permit: HealthPermit) -> None:
+        token = permit._decision_token  # noqa: SLF001
+        if token is None:
+            return
         for key in permit.probe_keys:
             circuit = self._circuits.get(key)
-            if circuit is not None and circuit.active_probes > 0:
-                circuit.active_probes -= 1
+            if circuit is not None:
+                circuit.active_probe_tokens.discard(token)
 
     def _snapshot(self, key: CircuitKey, now: datetime) -> CircuitSnapshot:
         circuit = self._circuits.get(key)
@@ -338,7 +378,7 @@ class LocalProviderHealth:
             sample_started_at=None if not samples else samples[0].occurred_at,
             sample_ended_at=None if not samples else samples[-1].occurred_at,
             next_probe_at=(None if circuit is None else circuit.next_probe_at),
-            active_probes=(0 if circuit is None else circuit.active_probes),
+            active_probes=(0 if circuit is None else len(circuit.active_probe_tokens)),
             last_state_change=(
                 hint.published_at
                 if circuit is None and hint is not None

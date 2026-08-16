@@ -428,11 +428,15 @@ def test_health_component_snapshot_records_provider_result_without_replacement()
     replacement_health = MagicMock(spec=LocalProviderHealth)
     permit = HealthPermit(
         allowed=True,
+        _decision_token=object(),
         scope=HealthScope(
-            plan.provider_instance_id,
-            plan.provider_model_route_id,
-            plan.route_generation,
-            "model.create",
+            provider_instance_id=plan.provider_instance_id,
+            provider_instance_generation=plan.provider_instance_generation,
+            provider_model_route_id=plan.provider_model_route_id,
+            route_generation=plan.route_generation,
+            credential_id=plan.credential_id,
+            credential_generation=plan.credential_generation,
+            operation="model.create",
         ),
     )
     repository = MagicMock()
