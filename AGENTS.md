@@ -127,8 +127,14 @@ package for common tokens and primitives. The React app uses the Git dependency
 `git+https://github.com/tubededentifrice/opendle-ui.git#main`. This dependency
 always uses the current shared `main` branch and is exempt from the 14-day age
 and exact-version checks. The package includes built files for clean installs.
-Keep router-specific views here. Do not copy a shared component into this
-repository.
+Keep router-specific views here. Before you add a React component, token,
+typography rule, layout pattern, or interaction pattern, check `opendle-ui`.
+Use `opendle-ui` when the UI could be reused by another OpenDLE project, even
+when only this project uses it today. Add the shared component there first and
+update this repository to use it in the same change. Keep only router-specific
+data, copy, routes, domain state, and host composition here. Do not copy a
+shared component into this repository. If a local component becomes reusable,
+move it to `opendle-ui` before you continue.
 
 ## Concurrent work and Git
 
