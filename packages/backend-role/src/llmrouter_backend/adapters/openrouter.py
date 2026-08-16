@@ -97,6 +97,7 @@ _SAFE_PROVIDER_MESSAGE = "The provider attempt did not complete."
 @dataclass(slots=True)
 class _ActiveOperation:
     stop: threading.Event
+    submitted: bool = False
     response: httpx.Response | None = None
 
 
@@ -220,6 +221,8 @@ class OpenRouterAdapter:
                     ErrorScope.LOGICAL_REQUEST,
                     "invalid_adapter_request",
                 )
+            if active.stop.is_set():
+                return _stopped_before_submit(plan, progress)
             try:
                 lease = self._credentials(plan)
             except Exception:  # noqa: BLE001
@@ -260,6 +263,8 @@ class OpenRouterAdapter:
                         ErrorScope.CREDENTIAL,
                         "credential_invalid",
                     )
+                if active.stop.is_set():
+                    return _stopped_before_submit(plan, progress)
                 return self._send(
                     plan=plan,
                     request=request,
@@ -287,8 +292,10 @@ class OpenRouterAdapter:
             if active is not None:
                 active.stop.set()
                 response = active.response
+                confirmed_stopped = not active.submitted
             else:
                 response = None
+                confirmed_stopped = False
         safe_code = "local_transport_not_active"
         if response is not None:
             try:
@@ -297,13 +304,15 @@ class OpenRouterAdapter:
                 safe_code = "local_transport_close_failed"
             else:
                 safe_code = "local_transport_closed"
+        elif confirmed_stopped:
+            safe_code = "local_stop_before_submit"
         elif active is not None:
             safe_code = "local_stop_requested"
         return AdapterStopEvidence(
             plan.attempt_id,
             supported=True,
             stop_requested=True,
-            confirmed_stopped=False,
+            confirmed_stopped=confirmed_stopped,
             safe_code=safe_code,
         )
 
@@ -326,6 +335,17 @@ class OpenRouterAdapter:
         )
         url = f"{plan.endpoint.rstrip('/')}/chat/completions"
         try:
+            with self._active_lock:
+                if (
+                    self._active.get(plan.attempt_id) is not active
+                    or active.stop.is_set()
+                ):
+                    can_submit = False
+                else:
+                    active.submitted = True
+                    can_submit = True
+            if not can_submit:
+                raise _StoppedError
             progress(AdapterPhase.CONNECTED)
             with self._http.stream(
                 "POST",
@@ -339,7 +359,9 @@ class OpenRouterAdapter:
                         active.response = response
                 if active.stop.is_set():
                     raise _StoppedError
-                _validate_response_headers(response)
+                _validate_response_headers(
+                    response, validate_content_length=response.status_code < 400
+                )
                 progress(AdapterPhase.FIRST_BYTE)
                 if response.status_code >= 400:
                     progress(AdapterPhase.PROGRESS)
@@ -409,9 +431,26 @@ class OpenRouterAdapter:
                 "invalid_provider_response",
                 usage=_request_usage(),
             )
+        except RuntimeError:
+            if active.stop.is_set():
+                return _failure(
+                    plan,
+                    TerminalErrorClass.UNCERTAIN_EFFECT,
+                    ErrorScope.LOGICAL_REQUEST,
+                    "local_stop_unconfirmed",
+                    outcome=AttemptOutcome.UNCERTAIN,
+                    usage=_request_usage(),
+                )
+            return _failure(
+                plan,
+                TerminalErrorClass.ROUTER_INTERNAL,
+                ErrorScope.LOGICAL_REQUEST,
+                "adapter_runtime_error",
+                usage=_request_usage(),
+            )
 
     def _read_completion(self, plan: AttemptPlan, payload: bytes) -> AdapterResult:
-        root = _json_object(payload)
+        root = _json_object(payload, maximum_bytes=_MAXIMUM_BODY_BYTES)
         choices = root.get("choices")
         if not isinstance(choices, list) or len(choices) != 1:
             raise _InvalidResponseError
@@ -437,7 +476,7 @@ class OpenRouterAdapter:
             not isinstance(content, str)
             or not content
             or len(content.encode("utf-8")) > _MAXIMUM_OUTPUT_BYTES
-            or (finish_reason is not None and not isinstance(finish_reason, str))
+            or finish_reason not in {"stop", "length"}
         ):
             raise _InvalidResponseError
         for delta in _text_chunks(content):
@@ -460,6 +499,7 @@ class OpenRouterAdapter:
         output_events = 0
         emitted = False
         done = False
+        terminal = False
         usage: tuple[UsageComponent, ...] | None = None
         try:
             for data in _sse_data(response, active, progress):
@@ -468,22 +508,16 @@ class OpenRouterAdapter:
                 if data == b"[DONE]":
                     done = True
                     continue
-                root = _json_object(data)
+                root = _json_object(data, maximum_bytes=_MAXIMUM_EVENT_BYTES)
                 if "error" in root:
-                    return _failure(
-                        plan,
-                        TerminalErrorClass.PROVIDER_UNAVAILABLE,
-                        ErrorScope.PROVIDER_INSTANCE,
-                        "stream_provider_error",
-                        outcome=(
-                            AttemptOutcome.INTERRUPTED
-                            if emitted
-                            else AttemptOutcome.FAILED
-                        ),
-                        usage=_request_usage() if usage is None else usage,
+                    return _stream_provider_failure(
+                        plan, root["error"], emitted=emitted, usage=usage
                     )
                 if "usage" in root:
-                    usage = _usage(root.get("usage"), required=True)
+                    reported_usage = _usage(root.get("usage"), required=True)
+                    if usage is not None and usage != reported_usage:
+                        raise _InvalidResponseError
+                    usage = reported_usage
                 choices = root.get("choices")
                 if choices == [] and "usage" in root:
                     continue
@@ -513,12 +547,18 @@ class OpenRouterAdapter:
                     raise _InvalidResponseError
                 if finish_reason is not None and not isinstance(finish_reason, str):
                     raise _InvalidResponseError
+                if finish_reason is not None:
+                    if terminal or finish_reason not in {"stop", "length"}:
+                        raise _InvalidResponseError
+                    terminal = True
                 if content is None:
                     continue
                 if not isinstance(content, str):
                     raise _InvalidResponseError
                 if not content:
                     continue
+                if terminal and finish_reason is None:
+                    raise _InvalidResponseError
                 try:
                     encoded = content.encode("utf-8")
                 except UnicodeEncodeError as error:
@@ -562,7 +602,7 @@ class OpenRouterAdapter:
                     usage=_request_usage() if usage is None else usage,
                 )
             raise
-        if not done or not emitted or usage is None:
+        if not done or not terminal or not emitted or usage is None:
             if emitted:
                 return _failure(
                     plan,
@@ -819,7 +859,9 @@ def _wire_temperature(value: Decimal) -> int | float:
     return result
 
 
-def _validate_response_headers(response: httpx.Response) -> None:
+def _validate_response_headers(
+    response: httpx.Response, *, validate_content_length: bool
+) -> None:
     items = response.headers.multi_items()
     if (
         len(items) > _MAXIMUM_HEADER_COUNT
@@ -827,8 +869,12 @@ def _validate_response_headers(response: httpx.Response) -> None:
     ):
         raise _InvalidResponseError
     content_length = response.headers.get("content-length")
-    if content_length is not None and (
-        not content_length.isdecimal() or int(content_length) > _MAXIMUM_BODY_BYTES
+    if (
+        validate_content_length
+        and content_length is not None
+        and (
+            not content_length.isdecimal() or int(content_length) > _MAXIMUM_BODY_BYTES
+        )
     ):
         raise _InvalidResponseError
     if response.history:
@@ -862,9 +908,9 @@ def _read_bounded(
         if not chunk:
             continue
         saw_chunk = True
-        body.extend(chunk)
-        if len(body) > _MAXIMUM_BODY_BYTES:
+        if len(chunk) > _MAXIMUM_BODY_BYTES - len(body):
             raise _InvalidResponseError
+        body.extend(chunk)
         progress(AdapterPhase.PROGRESS)
     if not saw_chunk:
         progress(AdapterPhase.PROGRESS)
@@ -927,14 +973,15 @@ def _sse_data(
         yield b"\n".join(data_lines)
 
 
-def _json_object(payload: bytes) -> dict[str, object]:
-    if not payload or len(payload) > _MAXIMUM_EVENT_BYTES:
+def _json_object(payload: bytes, *, maximum_bytes: int) -> dict[str, object]:
+    if not payload or len(payload) > maximum_bytes:
         raise _InvalidResponseError
     try:
         value = json.loads(
             payload,
             object_pairs_hook=_unique_json_object,
             parse_constant=_invalid_json_constant,
+            parse_float=_strict_json_float,
         )
     except (
         UnicodeDecodeError,
@@ -959,6 +1006,13 @@ def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
 
 def _invalid_json_constant(_value: str) -> NoReturn:
     raise ValueError("The provider JSON contains a non-finite number.")
+
+
+def _strict_json_float(value: str) -> float:
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError("The provider JSON contains a non-finite number.")
+    return result
 
 
 def _mapping(value: object) -> Mapping[str, object] | None:
@@ -1040,7 +1094,7 @@ def _http_failure(plan: AttemptPlan, response: httpx.Response) -> AdapterResult:
         scope = ErrorScope.CREDENTIAL
     elif status == 403:
         error_class = TerminalErrorClass.POLICY
-        scope = ErrorScope.LOGICAL_REQUEST
+        scope = ErrorScope.PROVIDER_INSTANCE
     elif status == 402:
         error_class = TerminalErrorClass.BUDGET
         scope = ErrorScope.PROVIDER_INSTANCE
@@ -1050,10 +1104,7 @@ def _http_failure(plan: AttemptPlan, response: httpx.Response) -> AdapterResult:
     elif status == 429:
         error_class = TerminalErrorClass.RATE_LIMIT
         scope = ErrorScope.PROVIDER_INSTANCE
-    elif status in {400, 413, 422}:
-        error_class = TerminalErrorClass.INCOMPATIBLE_REQUEST
-        scope = ErrorScope.LOGICAL_REQUEST
-    elif status == 404:
+    elif status in {400, 404, 413, 422}:
         error_class = TerminalErrorClass.INCOMPATIBLE_REQUEST
         scope = ErrorScope.PROVIDER_MODEL_ROUTE
     elif 400 <= status < 500:
@@ -1061,7 +1112,7 @@ def _http_failure(plan: AttemptPlan, response: httpx.Response) -> AdapterResult:
         scope = ErrorScope.ATTEMPT
     elif 500 <= status < 600:
         error_class = TerminalErrorClass.PROVIDER_UNAVAILABLE
-        scope = ErrorScope.PROVIDER_INSTANCE
+        scope = ErrorScope.ATTEMPT
     else:
         error_class = TerminalErrorClass.TRANSPORT
         scope = ErrorScope.ATTEMPT
@@ -1074,6 +1125,84 @@ def _http_failure(plan: AttemptPlan, response: httpx.Response) -> AdapterResult:
         retry_after_ms=retry_after_ms,
         usage=(UsageComponent(UsageUnit.REQUEST, Decimal(1)),),
     )
+
+
+def _stream_provider_failure(
+    plan: AttemptPlan,
+    value: object,
+    *,
+    emitted: bool,
+    usage: tuple[UsageComponent, ...] | None,
+) -> AdapterResult:
+    error = _mapping(value)
+    if error is None:
+        raise _InvalidResponseError
+    status = error.get("code")
+    if (
+        not isinstance(status, int)
+        or isinstance(status, bool)
+        or not 400 <= status <= 599
+    ):
+        raise _InvalidResponseError
+    metadata = _mapping(error.get("metadata"))
+    error_type = None if metadata is None else metadata.get("error_type")
+    if error_type is not None and not isinstance(error_type, str):
+        raise _InvalidResponseError
+    error_class, scope = _provider_error_classification(status, error_type)
+    return _failure(
+        plan,
+        error_class,
+        scope,
+        "stream_provider_error",
+        outcome=AttemptOutcome.INTERRUPTED if emitted else AttemptOutcome.FAILED,
+        provider_status=status,
+        usage=_request_usage() if usage is None else usage,
+    )
+
+
+def _provider_error_classification(
+    status: int, error_type: str | None
+) -> tuple[TerminalErrorClass, ErrorScope]:
+    if error_type == "authentication" or status == 401:
+        return TerminalErrorClass.AUTHENTICATION, ErrorScope.CREDENTIAL
+    if error_type in {"permission_denied", "content_policy_violation", "refusal"}:
+        scope = (
+            ErrorScope.PROVIDER_INSTANCE
+            if error_type == "permission_denied"
+            else ErrorScope.PROVIDER_MODEL_ROUTE
+        )
+        return TerminalErrorClass.POLICY, scope
+    if error_type == "payment_required" or status == 402:
+        return TerminalErrorClass.BUDGET, ErrorScope.PROVIDER_INSTANCE
+    if error_type == "rate_limit_exceeded" or status == 429:
+        return TerminalErrorClass.RATE_LIMIT, ErrorScope.PROVIDER_INSTANCE
+    if error_type == "timeout" or status in {408, 504}:
+        return TerminalErrorClass.TIMEOUT, ErrorScope.ATTEMPT
+    if error_type in {
+        "provider_overloaded",
+        "provider_unavailable",
+        "server",
+        "unmapped",
+    }:
+        return TerminalErrorClass.PROVIDER_UNAVAILABLE, ErrorScope.ATTEMPT
+    if error_type in {
+        "context_length_exceeded",
+        "invalid_prompt",
+        "invalid_request",
+        "max_tokens_exceeded",
+        "not_found",
+        "payload_too_large",
+        "precondition_failed",
+        "string_too_long",
+        "token_limit_exceeded",
+        "unprocessable",
+    } or status in {400, 404, 412, 413, 422}:
+        return TerminalErrorClass.INCOMPATIBLE_REQUEST, ErrorScope.PROVIDER_MODEL_ROUTE
+    if status == 403:
+        return TerminalErrorClass.POLICY, ErrorScope.PROVIDER_INSTANCE
+    if 500 <= status < 600:
+        return TerminalErrorClass.PROVIDER_UNAVAILABLE, ErrorScope.ATTEMPT
+    return TerminalErrorClass.TRANSPORT, ErrorScope.ATTEMPT
 
 
 def _retry_after_ms(value: str | None) -> int | None:
@@ -1094,6 +1223,19 @@ def _preflight_failure(
 ) -> AdapterResult:
     _complete_preflight(progress)
     return _failure(plan, error_class, scope, detail_code)
+
+
+def _stopped_before_submit(
+    plan: AttemptPlan, progress: AdapterProgress
+) -> AdapterResult:
+    _complete_preflight(progress)
+    return _failure(
+        plan,
+        TerminalErrorClass.UNCERTAIN_EFFECT,
+        ErrorScope.LOGICAL_REQUEST,
+        "local_stop_before_submit",
+        outcome=AttemptOutcome.UNCERTAIN,
+    )
 
 
 def _complete_preflight(progress: AdapterProgress) -> None:

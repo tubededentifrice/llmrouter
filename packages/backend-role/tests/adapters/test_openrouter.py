@@ -428,7 +428,7 @@ def test_provider_error_uses_only_status_and_bounded_retry_evidence() -> None:
     reply = _Reply(
         body=private_error,
         status=429,
-        headers={"Retry-After": "3"},
+        headers={"Content-Length": str(8_388_609), "Retry-After": "3"},
     )
     with _server(reply) as server:
         adapter = _adapter(harness)
@@ -448,10 +448,22 @@ def test_provider_error_uses_only_status_and_bounded_retry_evidence() -> None:
     ("status", "error_class", "scope"),
     [
         (401, TerminalErrorClass.AUTHENTICATION, ErrorScope.CREDENTIAL),
-        (403, TerminalErrorClass.POLICY, ErrorScope.LOGICAL_REQUEST),
-        (400, TerminalErrorClass.INCOMPATIBLE_REQUEST, ErrorScope.LOGICAL_REQUEST),
-        (413, TerminalErrorClass.INCOMPATIBLE_REQUEST, ErrorScope.LOGICAL_REQUEST),
-        (422, TerminalErrorClass.INCOMPATIBLE_REQUEST, ErrorScope.LOGICAL_REQUEST),
+        (403, TerminalErrorClass.POLICY, ErrorScope.PROVIDER_INSTANCE),
+        (
+            400,
+            TerminalErrorClass.INCOMPATIBLE_REQUEST,
+            ErrorScope.PROVIDER_MODEL_ROUTE,
+        ),
+        (
+            413,
+            TerminalErrorClass.INCOMPATIBLE_REQUEST,
+            ErrorScope.PROVIDER_MODEL_ROUTE,
+        ),
+        (
+            422,
+            TerminalErrorClass.INCOMPATIBLE_REQUEST,
+            ErrorScope.PROVIDER_MODEL_ROUTE,
+        ),
         (
             404,
             TerminalErrorClass.INCOMPATIBLE_REQUEST,
@@ -459,7 +471,7 @@ def test_provider_error_uses_only_status_and_bounded_retry_evidence() -> None:
         ),
         (402, TerminalErrorClass.BUDGET, ErrorScope.PROVIDER_INSTANCE),
         (408, TerminalErrorClass.TIMEOUT, ErrorScope.ATTEMPT),
-        (500, TerminalErrorClass.PROVIDER_UNAVAILABLE, ErrorScope.PROVIDER_INSTANCE),
+        (500, TerminalErrorClass.PROVIDER_UNAVAILABLE, ErrorScope.ATTEMPT),
     ],
 )
 def test_http_status_uses_the_safe_failure_class_and_scope(
@@ -514,6 +526,39 @@ def test_refusal_is_policy_and_inconsistent_cached_usage_is_invalid() -> None:
     assert usage_result.failure is not None
     assert (
         usage_result.failure.error.error_class
+        is TerminalErrorClass.INVALID_PROVIDER_RESPONSE
+    )
+
+
+def test_completion_accepts_large_text_and_requires_terminal_finish() -> None:
+    large_text = "x" * 1_100_000
+    harness = _Harness(_request())
+    with _server(_Reply(body=_completion(content=large_text))) as server:
+        adapter = _adapter(harness)
+        result = adapter.execute(_plan(_endpoint(server)), harness.progress)
+        adapter.close()
+
+    assert result.outcome is AttemptOutcome.SUCCEEDED
+    assert "".join(event.text or "" for event in harness.events) == large_text
+
+    invalid_body = json.dumps(
+        {
+            "choices": [{"message": {"content": "not terminal"}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+        }
+    ).encode()
+    invalid_harness = _Harness(_request())
+    with _server(_Reply(body=invalid_body)) as server:
+        invalid_adapter = _adapter(invalid_harness)
+        invalid_result = invalid_adapter.execute(
+            _plan(_endpoint(server)), invalid_harness.progress
+        )
+        invalid_adapter.close()
+
+    assert invalid_result.outcome is AttemptOutcome.FAILED
+    assert invalid_result.failure is not None
+    assert (
+        invalid_result.failure.error.error_class
         is TerminalErrorClass.INVALID_PROVIDER_RESPONSE
     )
 
@@ -656,6 +701,41 @@ def test_closed_adapter_rejects_new_work_before_credential_or_network() -> None:
     assert server.captured == []
 
 
+def test_cancellation_during_preflight_does_not_start_provider_work() -> None:
+    request_started = threading.Event()
+    release_request = threading.Event()
+    harness = _Harness(_request())
+
+    def blocked_request_source(_plan: AttemptPlan) -> ModelAdapterRequest:
+        request_started.set()
+        assert release_request.wait(timeout=2)
+        return harness.request
+
+    with _server(_Reply(body=_completion())) as server:
+        plan = _plan(_endpoint(server))
+        adapter = OpenRouterAdapter(
+            requests=blocked_request_source,
+            credentials=harness.credential_source,
+            output=harness.output,
+            allow_loopback_test_endpoint=True,
+        )
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(adapter.execute, plan, harness.progress)
+            assert request_started.wait(timeout=1)
+            evidence = adapter.cancel(plan)
+            release_request.set()
+            result = future.result(timeout=2)
+        adapter.close()
+
+    assert evidence.stop_requested
+    assert evidence.confirmed_stopped
+    assert result.outcome is AttemptOutcome.UNCERTAIN
+    assert result.failure is not None
+    assert result.failure.evidence.detail_code == "local_stop_before_submit"
+    assert harness.credential_calls == 0
+    assert server.captured == []
+
+
 def test_cancellation_closes_only_the_attempt_transport_without_false_proof() -> None:
     release = threading.Event()
     chunks = (
@@ -712,6 +792,15 @@ def test_stream_rejects_oversized_delta_and_requires_done_and_final_usage() -> N
             ),
             AttemptOutcome.INTERRUPTED,
         ),
+        (
+            (
+                b'data: {"choices":[{"delta":{"content":"text"},'
+                b'"finish_reason":null}]}\n\n'
+                b'data: {"choices":[],"usage":{"prompt_tokens":1,'
+                b'"completion_tokens":1}}\n\ndata: [DONE]\n\n'
+            ),
+            AttemptOutcome.INTERRUPTED,
+        ),
     )
     for payload, outcome in cases:
         harness = _Harness(_request(ModelOperation.STREAM))
@@ -722,6 +811,61 @@ def test_stream_rejects_oversized_delta_and_requires_done_and_final_usage() -> N
             result = adapter.execute(_plan(_endpoint(server)), harness.progress)
             adapter.close()
         assert result.outcome is outcome
+
+
+@pytest.mark.parametrize(
+    ("prefix", "outcome"),
+    [
+        (b"", AttemptOutcome.FAILED),
+        (
+            (
+                b'data: {"choices":[{"delta":{"content":"partial"},'
+                b'"finish_reason":null}]}\n\n'
+            ),
+            AttemptOutcome.INTERRUPTED,
+        ),
+    ],
+)
+def test_stream_uses_safe_typed_provider_error(
+    prefix: bytes, outcome: AttemptOutcome
+) -> None:
+    error = (
+        b'data: {"error":{"code":429,"message":"unsafe detail",'
+        b'"metadata":{"error_type":"rate_limit_exceeded"}},'
+        b'"choices":[{"delta":{"content":""},"finish_reason":"error"}]}\n\n'
+    )
+    harness = _Harness(_request(ModelOperation.STREAM))
+    with _server(
+        _Reply(content_type="text/event-stream", chunks=(prefix + error,))
+    ) as server:
+        adapter = _adapter(harness)
+        result = adapter.execute(_plan(_endpoint(server)), harness.progress)
+        adapter.close()
+
+    assert result.outcome is outcome
+    assert result.failure is not None
+    assert result.failure.error.error_class is TerminalErrorClass.RATE_LIMIT
+    assert result.failure.error.affected_scope is ErrorScope.PROVIDER_INSTANCE
+    assert result.failure.evidence.provider_status == 429
+    assert "unsafe detail" not in repr(result)
+
+
+def test_stream_rejects_conflicting_usage_reports() -> None:
+    chunks = (
+        b'data: {"choices":[{"delta":{"content":"text"},"finish_reason":"stop"}]}\n\n',
+        b'data: {"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1}}\n\n',
+        b'data: {"choices":[],"usage":{"prompt_tokens":2,"completion_tokens":1}}\n\n',
+        b"data: [DONE]\n\n",
+    )
+    harness = _Harness(_request(ModelOperation.STREAM))
+    with _server(_Reply(content_type="text/event-stream", chunks=chunks)) as server:
+        adapter = _adapter(harness)
+        result = adapter.execute(_plan(_endpoint(server)), harness.progress)
+        adapter.close()
+
+    assert result.outcome is AttemptOutcome.INTERRUPTED
+    assert result.failure is not None
+    assert result.failure.evidence.detail_code == "invalid_stream_response"
 
 
 def test_stream_bounds_the_aggregate_output_event_count() -> None:
@@ -744,6 +888,7 @@ def test_stream_bounds_the_aggregate_output_event_count() -> None:
     "body",
     [
         b'{"choices":[],"usage":NaN}',
+        b'{"choices":[],"usage":{},"unknown":1e999}',
         b'{"choices":[],"choices":[],"usage":{}}',
         b'{"nested":' + (b"[" * 2_000) + b"0" + (b"]" * 2_000) + b"}",
     ],
