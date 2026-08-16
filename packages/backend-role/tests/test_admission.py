@@ -103,9 +103,7 @@ def test_fingerprint_is_immutable_and_rejects_transient_or_unknown_fields() -> N
 
 def test_message_attachments_must_match_the_validated_set() -> None:
     """Bind each message attachment to one validated immutable reference."""
-    reference = AttachmentReference(
-        "attachment-a", "11" * 32, "application/pdf", 10
-    )
+    reference = AttachmentReference("attachment-a", "11" * 32, "application/pdf", 10)
     content = [
         {
             "type": "file",

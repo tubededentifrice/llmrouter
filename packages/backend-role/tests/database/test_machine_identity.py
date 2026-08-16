@@ -802,7 +802,7 @@ def test_database_rejects_claim_confusion_and_authority_mutation(
                     "UPDATE router.service_bootstrap_generations "
                     "SET valid_until = %s WHERE service_id = %s"
                 ),
-                (NOW + timedelta(days=2), SERVICE_ID),
+                (datetime.now(UTC) + timedelta(days=365), SERVICE_ID),
             ),
         )
         for statement, parameters in invalid_statements:

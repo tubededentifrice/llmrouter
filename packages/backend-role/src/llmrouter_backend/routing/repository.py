@@ -1,5 +1,5 @@
 """Transactional durable provider routing operations."""
-# ruff: noqa: C901, D107, E501, EM101, PLR0911, PLR0912, PLR0915, PLR2004, S101, TRY003
+# ruff: noqa: C901, D107, E501, EM101, PLR0911, PLR0912, PLR0915, PLR2004, TRY003
 
 from __future__ import annotations
 
@@ -110,7 +110,9 @@ class PostgresRoutingRepository:
             time_row = connection.execute(
                 "SELECT transaction_timestamp() AS value"
             ).fetchone()
-            assert time_row is not None
+            if time_row is None:
+                message = "The scalar database query did not return a row."
+                raise RuntimeError(message)
             created_at = time_row["value"]
             expires_at = created_at + lifetime
             route = connection.execute(
@@ -248,7 +250,9 @@ class PostgresRoutingRepository:
                        WHERE id = %s""",
                     (request_terminal["route_snapshot_id"],),
                 ).fetchone()
-                assert snapshot is not None
+                if snapshot is None:
+                    message = "A required database row is missing."
+                    raise RuntimeError(message)
                 plan = _plan(
                     request,
                     snapshot,
@@ -290,7 +294,9 @@ class PostgresRoutingRepository:
                        WHERE id = %s""",
                     (decision["route_snapshot_id"],),
                 ).fetchone()
-                assert snapshot is not None
+                if snapshot is None:
+                    message = "A required database row is missing."
+                    raise RuntimeError(message)
                 plan = _plan(
                     request,
                     snapshot,
@@ -303,7 +309,9 @@ class PostgresRoutingRepository:
                 "SELECT * FROM router.provider_route_execution_snapshots WHERE id = %s",
                 (attempt["route_snapshot_id"],),
             ).fetchone()
-            assert snapshot is not None
+            if snapshot is None:
+                message = "A required database row is missing."
+                raise RuntimeError(message)
             claim = {
                 "claim_id": attempt["claim_id"],
                 "claim_generation": attempt["claim_generation"],
@@ -355,7 +363,9 @@ class PostgresRoutingRepository:
                     attempt["budget_reservation_id"],
                 ),
             ).fetchone()
-            assert accounting_complete is not None
+            if accounting_complete is None:
+                message = "The scalar database query did not return a row."
+                raise RuntimeError(message)
             return plan, _terminal_result(attempt), accounting_complete["value"]
 
     def claim(
@@ -413,11 +423,15 @@ class PostgresRoutingRepository:
                        WHERE id = %s""",
                     (existing_claim["route_snapshot_id"],),
                 ).fetchone()
-                assert snapshot is not None
+                if snapshot is None:
+                    message = "A required database row is missing."
+                    raise RuntimeError(message)
                 database_now = connection.execute(
                     "SELECT transaction_timestamp() AS value"
                 ).fetchone()
-                assert database_now is not None
+                if database_now is None:
+                    message = "The scalar database query did not return a row."
+                    raise RuntimeError(message)
                 work = connection.execute(
                     """SELECT EXISTS (
                            SELECT 1 FROM router.routing_attempt_starts
@@ -443,7 +457,9 @@ class PostgresRoutingRepository:
                         existing_claim["claim_id"],
                     ),
                 ).fetchone()
-                assert work is not None
+                if work is None:
+                    message = "A required database row is missing."
+                    raise RuntimeError(message)
                 started = work["started"]
                 dispatched = work["dispatched"]
                 prestart_reservation_id = None if started else work["reservation_id"]
@@ -536,7 +552,9 @@ class PostgresRoutingRepository:
                        WHERE id = %s""",
                     (request_terminal["route_snapshot_id"],),
                 ).fetchone()
-                assert snapshot is not None
+                if snapshot is None:
+                    message = "A required database row is missing."
+                    raise RuntimeError(message)
                 return _plan(
                     request,
                     snapshot,
@@ -558,7 +576,9 @@ class PostgresRoutingRepository:
                 "SELECT count(*) AS value FROM router.provider_attempts WHERE request_row_id = %s",
                 (request["row_id"],),
             ).fetchone()
-            assert attempt_count is not None
+            if attempt_count is None:
+                message = "The scalar database query did not return a row."
+                raise RuntimeError(message)
             if attempt_count["value"] >= 8:
                 raise RoutingError(RoutingErrorCode.NO_CANDIDATE, context.request_id)
             if prior is None:
@@ -617,7 +637,9 @@ class PostgresRoutingRepository:
             database_now = connection.execute(
                 "SELECT transaction_timestamp() AS value"
             ).fetchone()
-            assert database_now is not None
+            if database_now is None:
+                message = "The scalar database query did not return a row."
+                raise RuntimeError(message)
             if request["admitted_at"] + timedelta(minutes=15) <= database_now[
                 "value"
             ] + timedelta(milliseconds=100):
@@ -652,7 +674,9 @@ class PostgresRoutingRepository:
                         str(request["request_id"]),
                     ),
                 ).fetchone()
-                assert terminal is not None
+                if terminal is None:
+                    message = "A required database row is missing."
+                    raise RuntimeError(message)
                 return _plan(
                     request,
                     snapshot,
@@ -714,7 +738,9 @@ class PostgresRoutingRepository:
                     request["admitted_at"],
                 ),
             ).fetchone()
-            assert row is not None
+            if row is None:
+                message = "A required database row is missing."
+                raise RuntimeError(message)
             return _plan(
                 request,
                 snapshot,
@@ -855,7 +881,9 @@ class PostgresRoutingRepository:
                 "SELECT COALESCE(max(decision_sequence), 0) + 1 AS value FROM router.routing_candidate_decisions WHERE request_row_id=%s",
                 (plan.request_row_id,),
             ).fetchone()
-            assert sequence_row is not None
+            if sequence_row is None:
+                message = "The scalar database query did not return a row."
+                raise RuntimeError(message)
             sequence = sequence_row[0]
             connection.execute(
                 """INSERT INTO router.routing_candidate_decisions (
@@ -1085,7 +1113,9 @@ class PostgresRoutingRepository:
                 "SELECT COALESCE(max(decision_sequence), 0) + 1 AS value FROM router.routing_candidate_decisions WHERE request_row_id=%s",
                 (plan.request_row_id,),
             ).fetchone()
-            assert sequence_row is not None
+            if sequence_row is None:
+                message = "The scalar database query did not return a row."
+                raise RuntimeError(message)
             sequence = sequence_row["value"]
             connection.execute(
                 """INSERT INTO router.routing_candidate_decisions (
@@ -1225,7 +1255,9 @@ def _controls(
             route_snapshot_id,
         ),
     ).fetchone()
-    assert controls is not None
+    if controls is None:
+        message = "A required database row is missing."
+        raise RuntimeError(message)
     return controls
 
 

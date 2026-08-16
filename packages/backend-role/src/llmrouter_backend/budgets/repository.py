@@ -1057,9 +1057,7 @@ def _select_accounting_scope_id(
         scopes
         if candidate_kind is BudgetCandidateKind.PROVIDER_ROUTE
         else tuple(
-            scope
-            for scope in scopes
-            if scope.kind is not BudgetScopeKind.ASSIGNMENT
+            scope for scope in scopes if scope.kind is not BudgetScopeKind.ASSIGNMENT
         )
     )
     if not eligible:

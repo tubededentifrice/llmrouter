@@ -1,11 +1,12 @@
 """Central fenced budget allowance integration tests."""
-# ruff: noqa: ANN202, D103, FBT003, PLR0913, PLR2004
+# ruff: noqa: D103, FBT003, PLR0913, PLR2004
 
 from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 
 import psycopg
 import pytest
@@ -17,6 +18,7 @@ from llmrouter_backend.authority import (
     Scope,
 )
 from llmrouter_backend.budgets import (
+    AllowanceBatch,
     AllowanceFinal,
     AllowanceRequest,
     BudgetError,
@@ -149,7 +151,7 @@ def _issue_scoped(
     service_id: str = SERVICE_ID,
     workspace_id: str | None = WORKSPACE_ID,
     assignment_id: str | None = FIXTURE_ASSIGNMENT_ID,
-):
+) -> AllowanceBatch:
     return PostgresAllowanceRepository(database_url).issue(
         _system("budget.allowance.issue"),
         owner_node_id=NODE,
@@ -174,7 +176,7 @@ def _issue(
     amount: Decimal = Decimal(6),
     issued_at: datetime = NOW,
     lineage_id: str | None = None,
-):
+) -> AllowanceBatch:
     return repository.issue(
         _system("budget.allowance.issue"),
         owner_node_id=owner,
@@ -240,7 +242,7 @@ def test_issue_replays_exact_request_and_conflicts_on_changed_payload(
     repository = PostgresAllowanceRepository(database_url)
     key = "allowance-issue-replay"
     request = AllowanceRequest(GLOBAL_SCOPE, Decimal(4), Decimal(1))
-    arguments = {
+    arguments: dict[str, Any] = {
         "owner_node_id": NODE,
         "lease_generation": 1,
         "service_id": None,

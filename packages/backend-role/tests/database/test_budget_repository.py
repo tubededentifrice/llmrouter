@@ -7,6 +7,7 @@ import concurrent.futures
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 
 import psycopg
 import pytest
@@ -184,7 +185,7 @@ def _insert_hierarchy(
 
 
 def _record_direct_budget_operations(
-    connection: psycopg.Connection[object],
+    connection: psycopg.Connection[Any],
 ) -> None:
     rows = connection.execute(
         """SELECT budget.id::text, budget.hard_limit,

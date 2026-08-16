@@ -1,5 +1,5 @@
 """PostgreSQL content capture, retention, export, and lifecycle custody."""
-# ruff: noqa: D107, E501, EM101, PLC0415, PLR0913, PLR0915, PLR2004, S101, TC001, TRY003
+# ruff: noqa: D107, E501, EM101, PLC0415, PLR0913, PLR2004, TC001, TRY003
 
 from __future__ import annotations
 
@@ -197,8 +197,12 @@ class PostgresContentRepository:
         ):
             _lock_configuration_scope(connection, context, "capture-policy")
             if is_global:
-                assert minimum_policy is not None
-                assert maximum_policy is not None
+                if minimum_policy is None:
+                    message = "The minimum policy invariant was violated."
+                    raise RuntimeError(message)
+                if maximum_policy is None:
+                    message = "The maximum policy invariant was violated."
+                    raise RuntimeError(message)
                 configured_rows = connection.execute(
                     """
                     SELECT DISTINCT ON (scope_kind, service_id, workspace_id) policy
@@ -243,7 +247,9 @@ class PostgresContentRepository:
                     context.scope.workspace_id,
                 ),
             ).fetchone()
-            assert next_row is not None
+            if next_row is None:
+                message = "A required database row is missing."
+                raise RuntimeError(message)
             revision = int(next_row["next_revision"])
             connection.execute(
                 """
@@ -479,7 +485,9 @@ class PostgresContentRepository:
                         selection.data_class.value,
                     ),
                 ).fetchone()
-                assert next_revision_row is not None
+                if next_revision_row is None:
+                    message = "A required database row is missing."
+                    raise RuntimeError(message)
                 next_revision = next_revision_row["next_revision"]
                 connection.execute(
                     """
@@ -532,7 +540,9 @@ class PostgresContentRepository:
         if not ordered:
             raise ValueError("Revision evidence needs at least one revision.")
         count = selection.minimum_count
-        assert count is not None
+        if count is None:
+            message = "The scalar database query did not return a row."
+            raise RuntimeError(message)
         age_boundary = now - timedelta(days=selection.days)
         kept = [
             item
@@ -598,18 +608,9 @@ class PostgresContentRepository:
         _require_aware(now)
         if not content_type or len(content_type) > 200:
             raise ContentError(ContentErrorCode.INVALID, request_row_id)
-        try:
-            parsed_content_id = uuid.UUID(content_id)
-            parsed_request_row_id = uuid.UUID(request_row_id)
-            reject_structured_control_fields(value)
-            safe_value = redact_authenticated_values(
-                value, authenticated_control_values
-            )
-            plaintext = json.dumps(
-                safe_value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-            ).encode()
-        except (TypeError, ValueError) as error:
-            raise ContentError(ContentErrorCode.INVALID, request_row_id) from error
+        parsed_content_id, parsed_request_row_id, plaintext = _prepare_capture_value(
+            request_row_id, content_id, value, authenticated_control_values
+        )
         uploaded: tuple[str, str] | None = None
         try:
             with (
@@ -659,61 +660,15 @@ class PostgresContentRepository:
                     return _metadata(existing)
                 manifest_id: uuid.UUID | None = None
                 if policy is CapturePolicy.COMPLETE:
-                    manifest_id = self._identity_factory()
-                    context = _encryption_context(
+                    manifest_id, uploaded = self._capture_complete_segment(
+                        connection,
+                        request,
                         content_id=parsed_content_id,
-                        request=request,
                         content_type=content_type,
                         expires_at=expires_at,
-                        ordinal=1,
-                        plaintext_sha256=plaintext_digest.hex(),
-                    )
-                    envelope = self._cipher.encrypt(plaintext, context=context)
-                    ciphertext_digest = hashlib.sha256(envelope.ciphertext).hexdigest()
-                    object_key = (
-                        f"capture/{request['service_id']}/{manifest_id}/000001.bin"
-                    )
-                    self._object_store.put(
-                        object_key, envelope.ciphertext, sha256=ciphertext_digest
-                    )
-                    uploaded = (object_key, ciphertext_digest)
-                    segment = ObjectSegment(
-                        1,
-                        object_key,
-                        len(envelope.ciphertext),
-                        ciphertext_digest,
-                        envelope.encrypted_data_key,
-                        envelope.wrapping_key_id,
-                    )
-                    manifest = ObjectManifest.build(str(manifest_id), (segment,))
-                    connection.execute(
-                        """
-                        INSERT INTO router.content_manifests (
-                            id, segment_count, ciphertext_bytes, manifest_sha256, created_at
-                        ) VALUES (%s, 1, %s, %s, %s)
-                        """,
-                        (
-                            manifest_id,
-                            segment.ciphertext_bytes,
-                            bytes.fromhex(manifest.sha256),
-                            now,
-                        ),
-                    )
-                    connection.execute(
-                        """
-                        INSERT INTO router.content_segments (
-                            manifest_id, ordinal, object_key, ciphertext_bytes,
-                            ciphertext_sha256, encrypted_data_key, wrapping_key_id
-                        ) VALUES (%s, 1, %s, %s, %s, %s, %s)
-                        """,
-                        (
-                            manifest_id,
-                            object_key,
-                            segment.ciphertext_bytes,
-                            bytes.fromhex(ciphertext_digest),
-                            envelope.encrypted_data_key,
-                            envelope.wrapping_key_id,
-                        ),
+                        plaintext=plaintext,
+                        plaintext_digest=plaintext_digest,
+                        now=now,
                     )
                 row = connection.execute(
                     """
@@ -740,13 +695,84 @@ class PostgresContentRepository:
                         now,
                     ),
                 ).fetchone()
-                assert row is not None
+                if row is None:
+                    message = "A required database row is missing."
+                    raise RuntimeError(message)
                 result = _metadata(row)
             uploaded = None
             return result
         finally:
             if uploaded is not None:
                 self._object_store.delete(uploaded[0], sha256=uploaded[1])
+
+    def _capture_complete_segment(
+        self,
+        connection: Connection[Any],
+        request: Mapping[str, Any],
+        *,
+        content_id: uuid.UUID,
+        content_type: str,
+        expires_at: datetime,
+        plaintext: bytes,
+        plaintext_digest: bytes,
+        now: datetime,
+    ) -> tuple[uuid.UUID, tuple[str, str]]:
+        """Encrypt, upload, and record one complete-capture segment."""
+        manifest_id = self._identity_factory()
+        context = _encryption_context(
+            content_id=content_id,
+            request=request,
+            content_type=content_type,
+            expires_at=expires_at,
+            ordinal=1,
+            plaintext_sha256=plaintext_digest.hex(),
+        )
+        envelope = self._cipher.encrypt(plaintext, context=context)
+        ciphertext_digest = hashlib.sha256(envelope.ciphertext).hexdigest()
+        object_key = f"capture/{request['service_id']}/{manifest_id}/000001.bin"
+        self._object_store.put(
+            object_key, envelope.ciphertext, sha256=ciphertext_digest
+        )
+        uploaded = (object_key, ciphertext_digest)
+        segment = ObjectSegment(
+            1,
+            object_key,
+            len(envelope.ciphertext),
+            ciphertext_digest,
+            envelope.encrypted_data_key,
+            envelope.wrapping_key_id,
+        )
+        manifest = ObjectManifest.build(str(manifest_id), (segment,))
+        connection.execute(
+            """
+            INSERT INTO router.content_manifests (
+                id, segment_count, ciphertext_bytes, manifest_sha256, created_at
+            ) VALUES (%s, 1, %s, %s, %s)
+            """,
+            (
+                manifest_id,
+                segment.ciphertext_bytes,
+                bytes.fromhex(manifest.sha256),
+                now,
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO router.content_segments (
+                manifest_id, ordinal, object_key, ciphertext_bytes,
+                ciphertext_sha256, encrypted_data_key, wrapping_key_id
+            ) VALUES (%s, 1, %s, %s, %s, %s, %s)
+            """,
+            (
+                manifest_id,
+                object_key,
+                segment.ciphertext_bytes,
+                bytes.fromhex(ciphertext_digest),
+                envelope.encrypted_data_key,
+                envelope.wrapping_key_id,
+            ),
+        )
+        return manifest_id, uploaded
 
     def discover(
         self,
@@ -777,7 +803,7 @@ class PostgresContentRepository:
                 SELECT * FROM router.captured_content
                 WHERE lifecycle_state = 'live' AND expires_at > %s {cursor}
                 ORDER BY created_at DESC, id DESC LIMIT %s
-                """,  # noqa: S608 - cursor is a closed local constant.
+                """,  # noqa: S608 - cursor is a closed local constant.  # nosec B608
                 tuple(values),
             ).fetchall()
             _audit(
@@ -905,7 +931,9 @@ class PostgresContentRepository:
                     now,
                 ),
             ).fetchone()
-            assert row is not None
+            if row is None:
+                message = "A required database row is missing."
+                raise RuntimeError(message)
             connection.execute(
                 """
                 INSERT INTO router.content_lifecycle_jobs (
@@ -1145,7 +1173,9 @@ class PostgresContentRepository:
                     """,
                     (job_kind, scope_key),
                 ).fetchone()
-            assert row is not None
+            if row is None:
+                message = "A required database row is missing."
+                raise RuntimeError(message)
             if row["payload"] != payload:
                 raise ContentError(ContentErrorCode.CONFLICT, "lifecycle-job")
             return str(row["id"])
@@ -1196,7 +1226,9 @@ class PostgresContentRepository:
                 """,
                 (owner, generation, expires_at, now, row["id"]),
             ).fetchone()
-            assert claimed is not None
+            if claimed is None:
+                message = "A required database row is missing."
+                raise RuntimeError(message)
         return LifecycleLease(
             str(claimed["id"]),
             claimed["job_kind"],
@@ -2142,7 +2174,7 @@ def _scope_retention_revision(
         WHERE scope_kind = %s AND service_id IS NOT DISTINCT FROM %s
           AND workspace_id IS NOT DISTINCT FROM %s
         ORDER BY data_class, revision {lock_clause}
-        """,  # noqa: S608 - lock clause is a closed local constant.
+        """,  # noqa: S608 - lock clause is a closed local constant.  # nosec B608
         (
             context.scope.kind.value,
             context.scope.service_id,
@@ -2316,7 +2348,9 @@ def _retention_effect_count(
         ).fetchone()
     else:
         minimum_count = selection.minimum_count
-        assert minimum_count is not None
+        if minimum_count is None:
+            message = "The scalar database query did not return a row."
+            raise RuntimeError(message)
         row = connection.execute(
             """
             WITH ranked AS (
@@ -2343,7 +2377,9 @@ def _retention_effect_count(
                 new_cutoff,
             ),
         ).fetchone()
-    assert row is not None
+    if row is None:
+        message = "A required database row is missing."
+        raise RuntimeError(message)
     return int(row["records"]), int(row["bytes"])
 
 
@@ -2437,7 +2473,9 @@ def _delete_retained_rows(
         return len(identities)
     if selection.data_class is RetentionDataClass.CONFIGURATION_REVISIONS:
         count = selection.minimum_count
-        assert count is not None
+        if count is None:
+            message = "The scalar database query did not return a row."
+            raise RuntimeError(message)
         rows = connection.execute(
             """
             WITH ranked AS (
@@ -2512,6 +2550,26 @@ def _effect_document(effect: RetentionEffect) -> dict[str, object]:
         "estimated_bytes": effect.estimated_bytes,
         "evidence": effect.evidence,
     }
+
+
+def _prepare_capture_value(
+    request_row_id: str,
+    content_id: str,
+    value: JsonValue,
+    authenticated_control_values: Sequence[str],
+) -> tuple[uuid.UUID, uuid.UUID, bytes]:
+    """Parse identities and canonicalize one redacted capture value."""
+    try:
+        parsed_content_id = uuid.UUID(content_id)
+        parsed_request_row_id = uuid.UUID(request_row_id)
+        reject_structured_control_fields(value)
+        safe_value = redact_authenticated_values(value, authenticated_control_values)
+        plaintext = json.dumps(
+            safe_value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        ).encode()
+    except (TypeError, ValueError) as error:
+        raise ContentError(ContentErrorCode.INVALID, request_row_id) from error
+    return parsed_content_id, parsed_request_row_id, plaintext
 
 
 def _metadata(row: Mapping[str, Any]) -> CapturedContentMetadata:

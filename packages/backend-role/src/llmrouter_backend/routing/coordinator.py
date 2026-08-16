@@ -1,5 +1,5 @@
 """Provider-neutral routing and fallback coordination."""
-# ruff: noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915, S101, TRY300
+# ruff: noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915, TRY300
 
 from __future__ import annotations
 
@@ -101,7 +101,9 @@ class RoutingCoordinator:
                     error.code is RoutingErrorCode.NO_CANDIDATE
                     and last_failure is not None
                 ):
-                    assert last_plan is not None
+                    if last_plan is None:
+                        message = "The last plan invariant was violated."
+                        raise RuntimeError(message) from error
                     try:
                         self._completion(last_plan, last_failure)
                     except Exception as completion_error:
@@ -113,7 +115,9 @@ class RoutingCoordinator:
             if plan.recovery_only:
                 if not plan.started:
                     recovery_result = _recovery_failure_result(plan)
-                    assert recovery_result.failure is not None
+                    if recovery_result.failure is None:
+                        message = "The failure invariant was violated."
+                        raise RuntimeError(message)
                     recovery_decision = _decision(recovery_result)
                     if plan.prestart_reservation_id is not None:
                         try:
@@ -218,7 +222,7 @@ class RoutingCoordinator:
                 health_decision = (health, health_permit)
             try:
                 budget = self._budget.reserve(plan)
-            except Exception:  # noqa: BLE001
+            except Exception as reserve_error:
                 self._abandon_health(health_decision)
                 failure_result = _safe_result(
                     plan,
@@ -226,14 +230,18 @@ class RoutingCoordinator:
                     ErrorScope.LOGICAL_REQUEST,
                     "budget_gate_failed",
                 )
-                assert failure_result.failure is not None
+                if failure_result.failure is None:
+                    message = "The failure invariant was violated."
+                    raise RuntimeError(message) from reserve_error
                 self._complete_before_start(
                     plan, failure_result, FallbackDecision.STOP_REQUEST
                 )
                 return failure_result
             if not budget.permitted:
                 self._abandon_health(health_decision)
-                assert budget.failure is not None
+                if budget.failure is None:
+                    message = "The failure invariant was violated."
+                    raise RuntimeError(message)
                 decision = _fallback(
                     AttemptOutcome.FAILED,
                     budget.failure.error.error_class,
@@ -246,12 +254,14 @@ class RoutingCoordinator:
                     last_failure = failure_result
                     continue
                 return failure_result
-            assert budget.reservation_id is not None
+            if budget.reservation_id is None:
+                message = "The reservation id invariant was violated."
+                raise RuntimeError(message)
             try:
                 self._repository.start(
                     plan, budget_reservation_id=budget.reservation_id
                 )
-            except Exception:  # noqa: BLE001
+            except Exception as start_error:
                 try:
                     durable_start = self._repository.started(
                         plan, budget_reservation_id=budget.reservation_id
@@ -269,7 +279,9 @@ class RoutingCoordinator:
                         ErrorScope.LOGICAL_REQUEST,
                         "start_blocked",
                     )
-                    assert failure_result.failure is not None
+                    if failure_result.failure is None:
+                        message = "The failure invariant was violated."
+                        raise RuntimeError(message) from start_error
                     try:
                         self._budget.release(budget.reservation_id)
                     except Exception as error:
@@ -372,7 +384,9 @@ class RoutingCoordinator:
     ) -> None:
         """Persist a no-start result and complete each non-fallback request."""
         if not plan.request_terminal:
-            assert result.failure is not None
+            if result.failure is None:
+                message = "The failure invariant was violated."
+                raise RuntimeError(message)
             self._repository.reject_before_start(
                 plan, result.failure, decision, now=self._clock()
             )
@@ -403,7 +417,9 @@ def _decision(result: AdapterResult) -> FallbackDecision:
     """Derive the decision from the durable terminal result."""
     if result.outcome is AttemptOutcome.SUCCEEDED:
         return FallbackDecision.SUCCEEDED
-    assert result.failure is not None
+    if result.failure is None:
+        message = "The failure invariant was violated."
+        raise RuntimeError(message)
     return _fallback(
         result.outcome,
         result.failure.error.error_class,

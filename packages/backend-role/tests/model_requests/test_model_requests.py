@@ -1,5 +1,5 @@
 """Native model-request API contract tests."""
-# ruff: noqa: ANN001, ANN202, D103, EM101, FBT003, PLR0913, PLR2004, PT011, TRY003
+# ruff: noqa: D103, EM101, FBT003, PLR0913, PLR2004, PT011, TRY003
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import json
 import threading
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import pytest
 from fastapi import FastAPI, Request
@@ -18,20 +18,29 @@ from llmrouter_backend.admission import (
     AdmissionError,
     AdmissionErrorCode,
     AdmissionReceipt,
+    AdmissionRequest,
     AdmissionResult,
     RequestState,
 )
-from llmrouter_backend.authority import Audience, Scope, ServicePrincipal
+from llmrouter_backend.authority import (
+    Audience,
+    RequestContext,
+    Scope,
+    ServicePrincipal,
+)
 from llmrouter_backend.execution import (
+    AdapterStop,
     AdapterStopEvidence,
     CancellationResult,
     ExecutionAdmission,
     ExecutionError,
     ExecutionErrorCode,
+    ExecutionKind,
     ExecutionState,
     ExecutionStatus,
     ExecutionTarget,
     StreamEvent,
+    TerminalError,
     make_event,
 )
 from llmrouter_backend.model_requests import http as model_request_http
@@ -45,7 +54,10 @@ from llmrouter_backend.model_requests.model import (
     ModelRequestError,
     ResumePoint,
 )
-from llmrouter_backend.model_requests.service import ModelRequestService
+from llmrouter_backend.model_requests.service import (
+    ActiveStopSource,
+    ModelRequestService,
+)
 from llmrouter_backend.routing import AdapterResult, AttemptOutcome
 from llmrouter_backend.routing.errors import RoutingError, RoutingErrorCode
 
@@ -99,7 +111,9 @@ class _Authenticator:
         self.principal = principal
         self.calls = 0
 
-    def authenticate(self, token: str, *, request_id: str, now: datetime):
+    def authenticate(
+        self, token: str, *, request_id: str, now: datetime
+    ) -> ServicePrincipal:
         del request_id, now
         self.calls += 1
         if token != TOKEN:
@@ -113,8 +127,16 @@ class _Admission:
         self.requests: dict[tuple[str, str | None, str], object] = {}
         self.lock = threading.Lock()
 
-    def admit(self, context, request, *, now: datetime):
-        key = (context.scope.service_id, context.scope.workspace_id, request.request_id)
+    def admit(
+        self,
+        context: RequestContext,
+        request: AdmissionRequest,
+        *,
+        now: datetime,
+    ) -> AdmissionResult:
+        service_id = context.scope.service_id
+        assert service_id is not None
+        key = (service_id, context.scope.workspace_id, request.request_id)
         with self.lock:
             previous = self.requests.get(key)
             if previous is not None and previous != request.fingerprint:
@@ -148,7 +170,7 @@ class _Execution:
 
     def add(self, request_id: str, scope: Scope) -> None:
         del scope
-        target = ExecutionTarget("model", request_id)
+        target = ExecutionTarget(ExecutionKind.MODEL, request_id)
         admission = ExecutionAdmission(
             request_id,
             None,
@@ -195,7 +217,9 @@ class _Execution:
             )
         ]
 
-    def status(self, context, target):
+    def status(
+        self, context: RequestContext | None, target: ExecutionTarget
+    ) -> ExecutionStatus:
         del context
         current = self.statuses[target.public_id]
         if self.terminal_on_status and not current.terminal:
@@ -210,16 +234,16 @@ class _Execution:
 
     def transition(
         self,
-        context,
-        target,
+        context: RequestContext | None,
+        target: ExecutionTarget,
         *,
         expected_revision: int,
         new_state: ExecutionState,
-        safe_error=None,
-        owner_epoch=None,
-        tool_call_id=None,
-        tool_expires_at=None,
-    ):
+        safe_error: TerminalError | None = None,
+        owner_epoch: int | None = None,
+        tool_call_id: str | None = None,
+        tool_expires_at: datetime | None = None,
+    ) -> ExecutionStatus:
         del context, owner_epoch, tool_call_id, tool_expires_at
         current = self.statuses[target.public_id]
         assert current.state_revision == expected_revision
@@ -266,14 +290,14 @@ class _Execution:
 
     def append_event(
         self,
-        context,
-        target,
+        context: RequestContext | None,
+        target: ExecutionTarget,
         *,
         event_name: str,
         payload: dict[str, object],
-        expected_sequence=None,
-        owner_epoch=None,
-    ):
+        expected_sequence: int | None = None,
+        owner_epoch: int | None = None,
+    ) -> StreamEvent:
         del context, expected_sequence, owner_epoch
         sequence = len(self.events[target.public_id]) + 1
         event = make_event(
@@ -286,7 +310,13 @@ class _Execution:
         self.events[target.public_id].append(event)
         return event
 
-    def replay(self, context, target, *, after_sequence: int):
+    def replay(
+        self,
+        context: RequestContext | None,
+        target: ExecutionTarget,
+        *,
+        after_sequence: int,
+    ) -> tuple[StreamEvent, ...]:
         del context
         if self.unavailable_after == after_sequence:
             raise ExecutionError(
@@ -298,7 +328,14 @@ class _Execution:
             if event.sequence > after_sequence
         )
 
-    def cancel(self, context, target, *, reason: str, active_stops=()):
+    def cancel(
+        self,
+        context: RequestContext | None,
+        target: ExecutionTarget,
+        *,
+        reason: str,
+        active_stops: Sequence[AdapterStop] = (),
+    ) -> CancellationResult:
         del context, reason
         current = self.statuses[target.public_id]
         evidence = tuple(stop() for stop in active_stops)
@@ -313,7 +350,9 @@ class _Execution:
         )
         return CancellationResult(updated, False, NOW + timedelta(minutes=10), evidence)
 
-    def stream_disconnected(self, context, target):
+    def stream_disconnected(
+        self, context: RequestContext | None, target: ExecutionTarget
+    ) -> ExecutionStatus:
         del context
         self.disconnects += 1
         return self.statuses[target.public_id]
@@ -325,7 +364,13 @@ class _Routing:
         self.candidates = ("route-a", "route-b")
         self.attempted_routes: list[str] = []
 
-    def execute(self, context, *, request_id: str, owner_id: str):
+    def execute(
+        self,
+        context: RequestContext | None,
+        *,
+        request_id: str,
+        owner_id: str,
+    ) -> AdapterResult:
         del context, request_id, owner_id
         self.calls += 1
         self.attempted_routes.extend(self.candidates)
@@ -338,7 +383,9 @@ class _Views:
         self.scopes: dict[str, Scope] = {}
         self.scope_error: RuntimeError | None = None
 
-    def resolve_scope(self, principal, request_id: str):
+    def resolve_scope(
+        self, principal: ServicePrincipal, request_id: str
+    ) -> Scope | None:
         if self.scope_error is not None:
             raise self.scope_error
         scope = self.scopes.get(request_id)
@@ -352,7 +399,9 @@ class _Views:
             return None
         return scope
 
-    def status(self, context, target):
+    def status(
+        self, context: RequestContext | None, target: ExecutionTarget
+    ) -> dict[str, object]:
         status = self.execution.status(context, target)
         return {
             "request_id": target.public_id,
@@ -379,7 +428,9 @@ class _Views:
             },
         }
 
-    def resume_point(self, context, target):
+    def resume_point(
+        self, context: RequestContext | None, target: ExecutionTarget
+    ) -> ResumePoint:
         del context
         status = self.execution.status(None, target)
         return ResumePoint(status.state, status.state_revision)
@@ -388,11 +439,17 @@ class _Views:
 def _service(
     *,
     principal: ServicePrincipal | None = None,
-    stops: Callable[[Any, Any], Sequence[Callable[[], AdapterStopEvidence]]]
-    | None = None,
+    stops: ActiveStopSource | None = None,
     run_inline: bool = True,
     resume_running: bool = False,
-):
+) -> tuple[
+    ModelRequestService,
+    _Authenticator,
+    _Admission,
+    _Execution,
+    _Routing,
+    _Views,
+]:
     execution = _Execution()
     admission = _Admission(execution)
     routing = _Routing()
@@ -401,7 +458,7 @@ def _service(
 
     def submit(work: Callable[[], None]) -> None:
         if resume_running:
-            target = ExecutionTarget("model", REQUEST_ID)
+            target = ExecutionTarget(ExecutionKind.MODEL, REQUEST_ID)
             current = execution.status(None, target)
             execution.transition(
                 None,
@@ -492,13 +549,17 @@ def test_concurrent_create_and_equal_replays_claim_one_local_dispatch() -> None:
     routing = _Routing()
     views = _Views(execution)
     submitted: list[Callable[[], None]] = []
+
+    def record(work: Callable[[], None]) -> None:
+        submitted.append(work)
+
     service = ModelRequestService(
         authenticator=_Authenticator(_principal()),
         admission=admission,
         execution=execution,
         routing=routing,
         views=views,
-        submit=submitted.append,
+        submit=record,
         owner_id="test-owner",
         clock=lambda: NOW,
     )
@@ -545,7 +606,7 @@ def test_equal_replay_after_restart_resumes_durable_work(
     if durable_state is ExecutionState.RUNNING:
         execution.transition(
             None,
-            ExecutionTarget("model", REQUEST_ID),
+            ExecutionTarget(ExecutionKind.MODEL, REQUEST_ID),
             expected_revision=1,
             new_state=ExecutionState.RUNNING,
         )
@@ -573,7 +634,8 @@ def test_submit_failure_releases_claim_for_equal_replay_recovery() -> None:
     routing = _Routing()
     views = _Views(execution)
 
-    def fail_submit(_work: Callable[[], None]) -> None:
+    def fail_submit(work: Callable[[], None]) -> None:
+        del work
         raise RuntimeError("test submit failure")
 
     failed_process = ModelRequestService(
@@ -611,7 +673,13 @@ def test_submit_failure_releases_claim_for_equal_replay_recovery() -> None:
 
 def test_routing_fence_busy_preserves_running_state_for_equal_replay() -> None:
     class _BusyOnceRouting(_Routing):
-        def execute(self, context, *, request_id: str, owner_id: str):
+        def execute(
+            self,
+            context: RequestContext | None,
+            *,
+            request_id: str,
+            owner_id: str,
+        ) -> AdapterResult:
             if self.calls == 0:
                 self.calls += 1
                 raise RoutingError(RoutingErrorCode.BUSY, request_id)
@@ -655,13 +723,17 @@ def test_cancel_requested_equal_replay_does_not_schedule_work() -> None:
         error_request_id="transport-3",
     )
     submitted: list[Callable[[], None]] = []
+
+    def record(work: Callable[[], None]) -> None:
+        submitted.append(work)
+
     restarted = ModelRequestService(
         authenticator=_Authenticator(_principal()),
         admission=admission,
         execution=execution,
         routing=routing,
         views=views,
-        submit=submitted.append,
+        submit=record,
         owner_id="restarted-owner",
         clock=lambda: NOW,
     )
@@ -878,7 +950,8 @@ def test_scope_lookup_failure_stays_in_the_safe_error_contract() -> None:
 
 
 def test_stop_discovery_failure_does_not_precede_durable_cancellation() -> None:
-    def failed_stops(_context, _target):
+    def failed_stops(context: RequestContext, target: ExecutionTarget) -> tuple[()]:
+        del context, target
         raise RuntimeError("private stop detail")
 
     service, _, _, execution, _, views = _service(

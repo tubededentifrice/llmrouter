@@ -239,7 +239,7 @@ class PostgresExecutionRepository:
                            bool_or(expires_at IS NOT NULL
                                    AND expires_at <= transaction_timestamp()) AS expired
                     FROM router.execution_stream_events
-                    WHERE {target_columns[0]} = %s""",  # noqa: S608
+                    WHERE {target_columns[0]} = %s""",  # noqa: S608  # nosec B608
                 (row["row_id"],),
             ).fetchone()
             if bounds is None:
@@ -256,7 +256,7 @@ class PostgresExecutionRepository:
             events = connection.execute(
                 f"""SELECT * FROM router.execution_stream_events
                     WHERE {target_columns[0]} = %s AND sequence > %s
-                    ORDER BY sequence""",  # noqa: S608
+                    ORDER BY sequence""",  # noqa: S608  # nosec B608
                 (row["row_id"], after_sequence),
             ).fetchall()
             return tuple(_stored_event(target, event) for event in events)
@@ -693,7 +693,7 @@ def _select_target(
         f"""SELECT * FROM {table}
             WHERE {public_column} = %s AND service_id = %s
               AND workspace_id IS NOT DISTINCT FROM %s {kind_filter}
-              AND (terminal_at IS NULL OR expires_at > transaction_timestamp())""",  # noqa: S608
+              AND (terminal_at IS NULL OR expires_at > transaction_timestamp())""",  # noqa: S608  # nosec B608
         parameters,
     ).fetchone()
     return None if row is None else dict(row)
@@ -718,7 +718,7 @@ def _lock_target(
             WHERE {public_column} = %s AND service_id = %s
               AND workspace_id IS NOT DISTINCT FROM %s {kind_filter}
               AND (terminal_at IS NULL OR expires_at > transaction_timestamp())
-            FOR UPDATE""",  # noqa: S608
+            FOR UPDATE""",  # noqa: S608  # nosec B608
         parameters,
     ).fetchone()
     return None if row is None else dict(row)
@@ -902,7 +902,7 @@ def _transition_locked(  # noqa: C901, PLR0912, PLR0913
         connection.execute(
             f"""UPDATE router.execution_stream_events
                 SET expires_at = %s
-                WHERE {target_column} = %s AND expires_at IS NULL""",  # noqa: S608
+                WHERE {target_column} = %s AND expires_at IS NULL""",  # noqa: S608  # nosec B608
             (
                 transition_time
                 + timedelta(seconds=STREAM_REPLAY_AFTER_TERMINAL_SECONDS),
@@ -917,7 +917,7 @@ def _transition_locked(  # noqa: C901, PLR0912, PLR0913
                 expires_at = CASE WHEN %s THEN %s + interval '24 hours'
                                   ELSE expires_at END,
                 safe_error = %s
-            WHERE row_id = %s RETURNING *""",  # noqa: S608
+            WHERE row_id = %s RETURNING *""",  # noqa: S608  # nosec B608
         (
             new_state.value,
             next_revision,
@@ -949,7 +949,7 @@ def _set_commit_indicators(
             SET partial_output = partial_output OR %s,
                 committed_effect = committed_effect OR %s
             WHERE row_id = %s
-            RETURNING *""",  # noqa: S608
+            RETURNING *""",  # noqa: S608  # nosec B608
         (partial_output, committed_effect, row_id),
     ).fetchone()
     if row is None:
@@ -973,7 +973,7 @@ def _append_locked(  # noqa: PLR0913 -- Durable event fields are explicit.
     target_column, _, _ = _target_columns(target)
     latest = connection.execute(
         f"""SELECT sequence FROM router.execution_stream_events
-            WHERE {target_column} = %s ORDER BY sequence DESC LIMIT 1""",  # noqa: S608
+            WHERE {target_column} = %s ORDER BY sequence DESC LIMIT 1""",  # noqa: S608  # nosec B608
         (row["row_id"],),
     ).fetchone()
     sequence = 1 if latest is None else int(latest["sequence"]) + 1
@@ -991,7 +991,7 @@ def _append_locked(  # noqa: PLR0913 -- Durable event fields are explicit.
     if expected_sequence is not None and expected_sequence < sequence:
         existing = connection.execute(
             f"""SELECT * FROM router.execution_stream_events
-                WHERE {target_column} = %s AND sequence = %s""",  # noqa: S608
+                WHERE {target_column} = %s AND sequence = %s""",  # noqa: S608  # nosec B608
             (row["row_id"], expected_sequence),
         ).fetchone()
         if existing is not None:
@@ -1032,7 +1032,7 @@ def _append_locked(  # noqa: PLR0913 -- Durable event fields are explicit.
         f"""INSERT INTO router.execution_stream_events (
                 {target_column}, service_id, workspace_id, sequence, event_name,
                 occurred_at, wire_data, wire_sha256, owner_epoch, expires_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",  # noqa: S608
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",  # noqa: S608  # nosec B608
         (
             row["row_id"],
             row["service_id"],
@@ -1109,7 +1109,7 @@ def _insert_cancellation(  # noqa: PLR0913 -- Durable audit inputs are explicit.
                 prior_state, reason_sha256, requested_at, reconcile_deadline
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, transaction_timestamp(),
                       transaction_timestamp() + interval '{CANCELLATION_RECONCILIATION_SECONDS} seconds')
-            RETURNING *""",  # noqa: E501, S608
+            RETURNING *""",  # noqa: E501, S608  # nosec B608
         (
             row["row_id"],
             row["service_id"],
@@ -1131,7 +1131,7 @@ def _select_cancellation(
 ) -> dict[str, Any] | None:
     target_column, _, _ = _target_columns(target)
     row = connection.execute(
-        f"SELECT * FROM router.execution_cancellations "  # noqa: S608
+        f"SELECT * FROM router.execution_cancellations "  # noqa: S608  # nosec B608
         f"WHERE {target_column} = %s FOR UPDATE",
         (row_id,),
     ).fetchone()
@@ -1148,7 +1148,7 @@ def _update_cancellation_evidence(
 ) -> None:
     target_column, _, _ = _target_columns(target)
     current = connection.execute(
-        f"SELECT adapter_stop_evidence FROM router.execution_cancellations "  # noqa: S608
+        f"SELECT adapter_stop_evidence FROM router.execution_cancellations "  # noqa: S608  # nosec B608
         f"WHERE {target_column} = %s FOR UPDATE",
         (row_id,),
     ).fetchone()
@@ -1163,7 +1163,7 @@ def _update_cancellation_evidence(
                 final_state = %s,
                 completed_at = CASE WHEN %s::router.execution_state IS NULL
                                     THEN NULL ELSE transaction_timestamp() END
-            WHERE {target_column} = %s""",  # noqa: E501, S608
+            WHERE {target_column} = %s""",  # noqa: E501, S608  # nosec B608
         (
             Jsonb(combined),
             None if final_state is None else final_state.value,

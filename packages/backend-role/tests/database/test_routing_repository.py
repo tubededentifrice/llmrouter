@@ -392,17 +392,13 @@ def test_terminal_prestart_decision_replays_and_cannot_start(
         request_id,
         SafeFailureEvidence(detail_code="request_policy"),
     )
-    routing.reject_before_start(
-        plan, failure, FallbackDecision.STOP_REQUEST, now=now
-    )
+    routing.reject_before_start(plan, failure, FallbackDecision.STOP_REQUEST, now=now)
 
     replay = routing.pending_accounting(_context(), request_id=request_id)
 
     assert replay is not None
     replay_plan, replay_result, accounting_complete = replay
-    assert replace(
-        replay_plan, recovery_only=False, recovery_failure=None
-    ) == plan
+    assert replace(replay_plan, recovery_only=False, recovery_failure=None) == plan
     assert replay_plan.recovery_failure is not None
     assert replay_plan.recovery_failure.error.error_class is TerminalErrorClass.POLICY
     assert replay_plan.recovery_failure.evidence.detail_code == "request_policy"
@@ -424,9 +420,7 @@ def test_deadline_before_first_claim_is_durable_and_replayable(
 ) -> None:
     admission, execution, routing, _budget = repositories
     admitted_at = _now() - timedelta(minutes=15, seconds=1)
-    request_id = _admit_running(
-        admission, execution, now=admitted_at, random_bits=29
-    )
+    request_id = _admit_running(admission, execution, now=admitted_at, random_bits=29)
 
     first = routing.claim(_context(), request_id=request_id, owner_id="worker-one")
     second = routing.claim(_context(), request_id=request_id, owner_id="worker-two")

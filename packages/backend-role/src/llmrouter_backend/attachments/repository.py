@@ -411,7 +411,7 @@ def _select_scoped(
             WHERE attachment.id = %s AND attachment.service_id = %s
               AND attachment.workspace_id IS NOT DISTINCT FROM %s
               AND attachment.byte_length BETWEEN 1 AND 26214400
-            {lock}""",  # noqa: S608 - lock is a closed local constant.
+            {lock}""",  # noqa: S608 - lock is a closed local constant.  # nosec B608
         (attachment_id, context.scope.service_id, context.scope.workspace_id),
     ).fetchone()
     return None if row is None else dict(row)

@@ -680,7 +680,9 @@ def test_exact_route_is_bound_to_active_configuration_and_blocks_lossy_rollback(
     grant_id = uuid.uuid4()
     audit_id = uuid.uuid4()
     with psycopg.connect(database_url) as connection:
-        created_at = connection.execute("SELECT transaction_timestamp()").fetchone()[0]
+        timestamp_row = connection.execute("SELECT transaction_timestamp()").fetchone()
+        assert timestamp_row is not None
+        created_at = timestamp_row[0]
         expires_at = created_at + timedelta(minutes=5)
         connection.execute(
             """INSERT INTO router.audit_events (

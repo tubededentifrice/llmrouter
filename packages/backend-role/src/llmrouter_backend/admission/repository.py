@@ -1,5 +1,5 @@
 """Fleet-wide PostgreSQL request admission and scoped status reads."""
-# ruff: noqa: ARG001, E501, EM101, PLR0913, S101, TRY003
+# ruff: noqa: ARG001, E501, EM101, PLR0913, TRY003
 
 from __future__ import annotations
 
@@ -494,10 +494,13 @@ def _authorize_diagnostic_route(
     now: datetime,
 ) -> None:
     """Consume one exact short-lived grant and write its permitted audit event."""
-    assert request.exact_route_id is not None
-    assert request.diagnostic_grant is not None
+    if request.exact_route_id is None or request.diagnostic_grant is None:
+        message = "The diagnostic admission request is incomplete."
+        raise RuntimeError(message)
     time_row = connection.execute("SELECT transaction_timestamp() AS value").fetchone()
-    assert time_row is not None
+    if time_row is None:
+        message = "The scalar database query did not return a row."
+        raise RuntimeError(message)
     authorized_at = time_row["value"]
     grant = connection.execute(
         """
@@ -775,7 +778,9 @@ def _snapshot_routing_chain(
             "SELECT count(*) AS candidate_count FROM router.assignment_candidates WHERE assignment_id = %s",
             (assignment_id,),
         ).fetchone()
-        assert expected_row is not None
+        if expected_row is None:
+            message = "A required database row is missing."
+            raise RuntimeError(message)
         expected = expected_row["candidate_count"]
     ordinals = sorted(row["candidate_ordinal"] for row in rows)
     if len(rows) != expected or ordinals != list(range(1, expected + 1)):

@@ -335,11 +335,14 @@ def test_database_rejects_content_without_ready_state_and_expiry_without_erasure
             (NOW + timedelta(hours=1), created.attachment_id),
         )
 
-    assert repository.content(
-        _context(operation="attachment.read", mutation=False),
-        created.attachment_id,
-        now=NOW,
-    ).value == CONTENT
+    assert (
+        repository.content(
+            _context(operation="attachment.read", mutation=False),
+            created.attachment_id,
+            now=NOW,
+        ).value
+        == CONTENT
+    )
 
 
 def test_database_rejects_status_deletion_and_pending_request_reference(
