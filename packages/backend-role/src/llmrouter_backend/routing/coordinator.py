@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from datetime import datetime
 
     from llmrouter_backend.authority import RequestContext
+    from llmrouter_backend.health import HealthPermit, LocalProviderHealth
 
     from .model import (
         AccountingHook,
@@ -56,6 +57,7 @@ class RoutingCoordinator:
         accounting: AccountingHook,
         completion: CompletionHook,
         clock: Callable[[], datetime],
+        health: LocalProviderHealth | None = None,
     ) -> None:
         """Use explicit controls and adapter lookup for each immutable plan."""
         self._repository = repository
@@ -65,6 +67,7 @@ class RoutingCoordinator:
         self._accounting = accounting
         self._completion = completion
         self._clock = clock
+        self._health = health
 
     def execute(
         self, context: RequestContext, *, request_id: str, owner_id: str
@@ -170,9 +173,53 @@ class RoutingCoordinator:
                     last_failure = failure_result
                     continue
                 return failure_result
+            health_decision: tuple[LocalProviderHealth, HealthPermit] | None = None
+            health = self._health
+            if health is not None:
+                try:
+                    health_permit = health.acquire_plan(
+                        plan, operation=context.operation
+                    )
+                except Exception:  # noqa: BLE001
+                    failure_result = _safe_result(
+                        plan,
+                        TerminalErrorClass.ROUTER_INTERNAL,
+                        ErrorScope.LOGICAL_REQUEST,
+                        "health_gate_failed",
+                    )
+                    self._complete_before_start(
+                        plan, failure_result, FallbackDecision.STOP_REQUEST
+                    )
+                    return failure_result
+                if health_permit is None:
+                    failure_result = _safe_result(
+                        plan,
+                        TerminalErrorClass.ROUTER_INTERNAL,
+                        ErrorScope.LOGICAL_REQUEST,
+                        "health_gate_failed",
+                    )
+                    self._complete_before_start(
+                        plan, failure_result, FallbackDecision.STOP_REQUEST
+                    )
+                    return failure_result
+                if not health_permit.allowed:
+                    failure_result = _safe_result(
+                        plan,
+                        TerminalErrorClass.PROVIDER_UNAVAILABLE,
+                        ErrorScope.PROVIDER_MODEL_ROUTE,
+                        health_permit.reason or "health_circuit_open",
+                    )
+                    self._complete_before_start(
+                        plan, failure_result, FallbackDecision.NEXT_CANDIDATE
+                    )
+                    last_plan = plan
+                    last_failure = failure_result
+                    continue
+                health_decision = (health, health_permit)
             try:
                 budget = self._budget.reserve(plan)
             except Exception:  # noqa: BLE001
+                self._abandon_health(health_decision)
                 failure_result = _safe_result(
                     plan,
                     TerminalErrorClass.ROUTER_INTERNAL,
@@ -185,6 +232,7 @@ class RoutingCoordinator:
                 )
                 return failure_result
             if not budget.permitted:
+                self._abandon_health(health_decision)
                 assert budget.failure is not None
                 decision = _fallback(
                     AttemptOutcome.FAILED,
@@ -209,10 +257,12 @@ class RoutingCoordinator:
                         plan, budget_reservation_id=budget.reservation_id
                     )
                 except Exception:  # noqa: BLE001
+                    self._abandon_health(health_decision)
                     raise RoutingError(RoutingErrorCode.BUSY, plan.request_id) from None
                 if durable_start:
                     pass
                 else:
+                    self._abandon_health(health_decision)
                     failure_result = _safe_result(
                         plan,
                         TerminalErrorClass.ROUTER_INTERNAL,
@@ -233,6 +283,7 @@ class RoutingCoordinator:
             try:
                 adapter = self._adapter(plan.adapter_type)
             except Exception:  # noqa: BLE001
+                self._abandon_health(health_decision)
                 failure_result = _safe_result(
                     plan,
                     TerminalErrorClass.ROUTER_INTERNAL,
@@ -248,6 +299,7 @@ class RoutingCoordinator:
                     with suppress(Exception):
                         dispatched = self._repository.dispatch(plan, owner_id=owner_id)
                 if dispatched is None:
+                    self._abandon_health(health_decision)
                     result = _safe_result(
                         plan,
                         TerminalErrorClass.ROUTER_INTERNAL,
@@ -260,6 +312,17 @@ class RoutingCoordinator:
                         if dispatched
                         else _recover_dispatched(adapter, plan)
                     )
+                    if dispatched and health_decision is not None:
+                        result_health, result_permit = health_decision
+                        with suppress(Exception):
+                            result_health.record_plan_result(
+                                plan,
+                                result,
+                                result_permit,
+                                operation=context.operation,
+                            )
+                    elif not dispatched:
+                        self._abandon_health(health_decision)
             accounting_result, durable_decision = self._complete(plan, result)
             if durable_decision is not FallbackDecision.NEXT_CANDIDATE:
                 return accounting_result
@@ -289,6 +352,16 @@ class RoutingCoordinator:
             except Exception as error:
                 raise RoutingError(RoutingErrorCode.BUSY, plan.request_id) from error
         return accounting_result, decision
+
+    @staticmethod
+    def _abandon_health(
+        decision: tuple[LocalProviderHealth, HealthPermit] | None,
+    ) -> None:
+        """Release a half-open slot when no new provider evidence exists."""
+        if decision is not None:
+            health, permit = decision
+            with suppress(Exception):
+                health.abandon(permit)
 
     def _complete_before_start(
         self,

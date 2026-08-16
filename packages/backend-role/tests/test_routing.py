@@ -1,5 +1,5 @@
 """Provider-neutral routing coordinator and adapter boundary tests."""
-# ruff: noqa: ANN401, ARG002, D103, FBT003, FURB157, TC002
+# ruff: noqa: ANN401, ARG002, D103, FBT003, FURB157
 
 from __future__ import annotations
 
@@ -18,6 +18,12 @@ from llmrouter_backend.execution import (
     ErrorScope,
     TerminalError,
     TerminalErrorClass,
+)
+from llmrouter_backend.health import (
+    CircuitSettings,
+    HealthPermit,
+    HealthScope,
+    LocalProviderHealth,
 )
 from llmrouter_backend.routing import (
     AdapterPhase,
@@ -304,6 +310,7 @@ def _coordinator(  # noqa: PLR0913
     adapter: Callable[[str], _Adapter],
     accounting: Callable[[AttemptPlan, AdapterResult], None] = lambda _p, _r: None,
     completion: Callable[[AttemptPlan, AdapterResult], None] = lambda _p, _r: None,
+    health: LocalProviderHealth | None = None,
 ) -> RoutingCoordinator:
     repository.pending_accounting.return_value = None
     return RoutingCoordinator(
@@ -314,11 +321,188 @@ def _coordinator(  # noqa: PLR0913
         accounting=cast("AccountingHook", accounting),
         completion=cast("CompletionHook", completion),
         clock=lambda: NOW,
+        health=health,
     )
 
 
 def _context() -> RequestContext:
     return cast("RequestContext", object())
+
+
+def _health_context() -> RequestContext:
+    context = MagicMock(spec=RequestContext)
+    context.operation = "model.create"
+    return cast("RequestContext", context)
+
+
+def _open_health(
+    plan: AttemptPlan,
+    *,
+    clock: Callable[[], datetime] = lambda: NOW,
+) -> LocalProviderHealth:
+    health = LocalProviderHealth(
+        settings=CircuitSettings(
+            window_size=1,
+            minimum_samples=1,
+            failure_threshold=1,
+            open_duration=timedelta(seconds=1),
+            jitter_ratio=0,
+        ),
+        clock=clock,
+        jitter=lambda _bound: 0,
+    )
+    permit = health.acquire_plan(plan, operation="model.create")
+    health.record_plan_result(
+        plan,
+        _failure(plan, TerminalErrorClass.TRANSPORT, ErrorScope.ATTEMPT),
+        permit,
+        operation="model.create",
+    )
+    return health
+
+
+def test_open_health_circuit_suppresses_before_budget_and_falls_back() -> None:
+    plan = _plan()
+    health = _open_health(plan)
+    repository = MagicMock()
+    repository.claim.side_effect = [
+        plan,
+        RoutingError(RoutingErrorCode.NO_CANDIDATE, plan.request_id),
+    ]
+    budget = MagicMock()
+    completed: list[AdapterResult] = []
+    coordinator = _coordinator(
+        repository,
+        eligibility=lambda _plan_value: None,
+        budget=budget,
+        adapter=lambda _kind: _Adapter(_success),
+        completion=lambda _plan_value, result: completed.append(result),
+        health=health,
+    )
+
+    result = coordinator.execute(
+        _health_context(), request_id=plan.request_id, owner_id="worker"
+    )
+
+    assert result.failure is not None
+    assert result.failure.error.error_class is TerminalErrorClass.PROVIDER_UNAVAILABLE
+    assert result.failure.error.affected_scope is ErrorScope.PROVIDER_MODEL_ROUTE
+    assert result.failure.evidence.detail_code == "local_circuit_open"
+    assert completed == [result]
+    budget.reserve.assert_not_called()
+
+
+def test_missing_health_decision_fails_before_budget_or_dispatch() -> None:
+    plan = _plan()
+    health = MagicMock(spec=LocalProviderHealth)
+    health.acquire_plan.return_value = None
+    repository = MagicMock()
+    repository.claim.return_value = plan
+    budget = MagicMock()
+    adapter = _Adapter(_success)
+    coordinator = _coordinator(
+        repository,
+        eligibility=lambda _plan_value: None,
+        budget=budget,
+        adapter=lambda _kind: adapter,
+        health=cast("LocalProviderHealth", health),
+    )
+
+    result = coordinator.execute(
+        _health_context(), request_id=plan.request_id, owner_id="worker"
+    )
+
+    assert result.failure is not None
+    assert result.failure.error.error_class is TerminalErrorClass.ROUTER_INTERNAL
+    assert result.failure.evidence.detail_code == "health_gate_failed"
+    budget.reserve.assert_not_called()
+    repository.dispatch.assert_not_called()
+    assert adapter.execute_calls == 0
+
+
+def test_health_component_snapshot_records_provider_result_without_replacement() -> (
+    None
+):
+    plan = _plan()
+    first_health = MagicMock(spec=LocalProviderHealth)
+    replacement_health = MagicMock(spec=LocalProviderHealth)
+    permit = HealthPermit(
+        allowed=True,
+        scope=HealthScope(
+            plan.provider_instance_id,
+            plan.provider_model_route_id,
+            plan.route_generation,
+            "model.create",
+        ),
+    )
+    repository = MagicMock()
+    repository.claim.return_value = plan
+    repository.dispatch.return_value = True
+    repository.finish.side_effect = lambda _plan, result, *_args, **_kwargs: result
+    budget = MagicMock()
+    budget.reserve.return_value = BudgetDecision(True, "reservation")
+    adapter = _Adapter(_success)
+    coordinator = _coordinator(
+        repository,
+        eligibility=lambda _plan_value: None,
+        budget=budget,
+        adapter=lambda _kind: adapter,
+        health=cast("LocalProviderHealth", first_health),
+    )
+
+    def acquire(*_args: object, **_kwargs: object) -> HealthPermit:
+        coordinator._health = cast(  # noqa: SLF001
+            "LocalProviderHealth", replacement_health
+        )
+        return permit
+
+    first_health.acquire_plan.side_effect = acquire
+
+    result = coordinator.execute(
+        _health_context(), request_id=plan.request_id, owner_id="worker"
+    )
+
+    assert result.outcome is AttemptOutcome.SUCCEEDED
+    first_health.record_plan_result.assert_called_once_with(
+        plan, result, permit, operation="model.create"
+    )
+    replacement_health.record_plan_result.assert_not_called()
+
+
+def test_half_open_probe_uses_policy_budget_and_accounting_controls() -> None:
+    plan = _plan()
+    current = [NOW]
+    health = _open_health(plan, clock=lambda: current[0])
+    current[0] += timedelta(seconds=1)
+    repository = MagicMock()
+    repository.claim.return_value = plan
+    repository.dispatch.return_value = True
+    repository.finish.side_effect = lambda _plan, result, *_args, **_kwargs: result
+    eligibility = MagicMock(return_value=None)
+    budget = MagicMock()
+    budget.reserve.return_value = BudgetDecision(True, "reservation")
+    accounting = MagicMock()
+    adapter = _Adapter(_success)
+    coordinator = _coordinator(
+        repository,
+        eligibility=eligibility,
+        budget=budget,
+        adapter=lambda _kind: adapter,
+        accounting=accounting,
+        health=health,
+    )
+
+    result = coordinator.execute(
+        _health_context(), request_id=plan.request_id, owner_id="worker"
+    )
+
+    assert result.outcome is AttemptOutcome.SUCCEEDED
+    eligibility.assert_called_once_with(plan)
+    budget.reserve.assert_called_once_with(plan)
+    repository.start.assert_called_once_with(plan, budget_reservation_id="reservation")
+    accounting.assert_called_once_with(plan, result)
+    assert adapter.execute_calls == 1
+    assert health.inspect()[0].local_state.value == "closed"
 
 
 def test_last_prestart_candidate_failure_is_preserved() -> None:
@@ -393,9 +577,7 @@ def test_exhausted_pending_fallback_replays_completion_after_failure() -> None:
 
 def test_terminal_prestart_completion_failure_replays_from_durable_decision() -> None:
     plan = _plan()
-    result = _failure(
-        plan, TerminalErrorClass.POLICY, ErrorScope.LOGICAL_REQUEST
-    )
+    result = _failure(plan, TerminalErrorClass.POLICY, ErrorScope.LOGICAL_REQUEST)
     assert result.failure is not None
     repository = MagicMock()
     repository.pending_accounting.side_effect = [None, (plan, result, True)]
@@ -421,9 +603,10 @@ def test_terminal_prestart_completion_failure_replays_from_durable_decision() ->
         coordinator.execute(_context(), request_id=plan.request_id, owner_id="worker")
     assert error.value.code is RoutingErrorCode.BUSY
 
-    assert coordinator.execute(
-        _context(), request_id=plan.request_id, owner_id="worker"
-    ) == result
+    assert (
+        coordinator.execute(_context(), request_id=plan.request_id, owner_id="worker")
+        == result
+    )
     repository.reject_before_start.assert_called_once()
     assert completion_calls == 2  # noqa: PLR2004
 
@@ -454,9 +637,10 @@ def test_request_terminal_plan_completes_without_a_candidate_rejection() -> None
         completion=lambda _plan_value, terminal: completed.append(terminal),
     )
 
-    assert coordinator.execute(
-        _context(), request_id=plan.request_id, owner_id="worker"
-    ) == result
+    assert (
+        coordinator.execute(_context(), request_id=plan.request_id, owner_id="worker")
+        == result
+    )
     repository.reject_before_start.assert_not_called()
     assert completed == [result]
 
