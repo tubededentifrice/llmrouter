@@ -100,7 +100,9 @@ Use these local addresses:
 
 The protected external site is
 [https://llmrouter.opendle.dev](https://llmrouter.opendle.dev). Agents MUST use
-the local URLs. Do not use the protected external URL for agent tests.
+the local URLs. Do not use the protected external URL for agent tests. The
+administration container joins the existing `traefik-proxy` network. Traefik
+applies the existing Pangolin resource policy before it forwards a request.
 
 The [administration embed example](apps/embed-example/README.md) proves the
 service-scoped frame from a distinct localhost origin. It keeps the host

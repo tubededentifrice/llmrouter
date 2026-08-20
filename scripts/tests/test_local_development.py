@@ -94,6 +94,31 @@ def test_local_development_contract_rejects_unsafe_compose(
         module.main()
 
 
+@pytest.mark.parametrize(
+    "route_configuration",
+    [
+        "networks:\n      - default\n      - traefik-proxy\n    labels:",
+        "traefik.http.routers.llmrouter-dev.middlewares=badger@file",
+        "traefik.docker.network=traefik-proxy",
+        "traefik-proxy:\n    external: true",
+    ],
+)
+def test_local_development_contract_rejects_incomplete_protected_route(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    route_configuration: str,
+) -> None:
+    """Require authentication and the shared proxy network for the public host."""
+    unsafe = tmp_path / "docker-compose.dev.yml"
+    source = COMPOSE_PATH.read_text(encoding="utf-8")
+    assert route_configuration in source
+    unsafe.write_text(source.replace(route_configuration, "", 1), encoding="utf-8")
+    module = _check_module()
+    monkeypatch.setattr(module, "COMPOSE_PATH", unsafe)
+    with pytest.raises(SystemExit, match="protected development route"):
+        module.main()
+
+
 def test_local_start_script_rejects_a_public_address() -> None:
     """Keep the wrapper public-binding failure explicit and early."""
     script = (REPOSITORY_ROOT / "scripts/local-development.sh").read_text(

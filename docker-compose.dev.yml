@@ -176,6 +176,19 @@ services:
     ports:
       - "127.0.0.1:5174:5173"
       - "127.0.0.1:5175:5173"
+    networks:
+      - default
+      - traefik-proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-proxy"
+      - "traefik.http.routers.llmrouter-dev.rule=Host(`llmrouter.opendle.dev`)"
+      - "traefik.http.routers.llmrouter-dev.entrypoints=websecure"
+      - "traefik.http.routers.llmrouter-dev.tls=true"
+      - "traefik.http.routers.llmrouter-dev.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.llmrouter-dev.middlewares=badger@file"
+      - "traefik.http.routers.llmrouter-dev.service=llmrouter-dev"
+      - "traefik.http.services.llmrouter-dev.loadbalancer.server.port=5173"
     healthcheck:
       test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:5173/"]
       interval: 3s
@@ -232,6 +245,10 @@ secrets:
     file: .local-development/administrator-session
   administrator_csrf:
     file: .local-development/administrator-csrf
+
+networks:
+  traefik-proxy:
+    external: true
 
 volumes:
   llmrouter-admin-node-modules:

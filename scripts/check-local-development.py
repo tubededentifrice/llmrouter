@@ -65,6 +65,21 @@ def main() -> None:
     }
     if any(value not in text for value in required_runtime):
         raise SystemExit("The complete local runtime is not configured.")
+    required_proxy = {
+        "networks:\n      - default\n      - traefik-proxy\n    labels:",
+        "traefik.enable=true",
+        "traefik.docker.network=traefik-proxy",
+        "traefik.http.routers.llmrouter-dev.rule=Host(`llmrouter.opendle.dev`)",
+        "traefik.http.routers.llmrouter-dev.entrypoints=websecure",
+        "traefik.http.routers.llmrouter-dev.tls=true",
+        "traefik.http.routers.llmrouter-dev.tls.certresolver=letsencrypt",
+        "traefik.http.routers.llmrouter-dev.middlewares=badger@file",
+        "traefik.http.routers.llmrouter-dev.service=llmrouter-dev",
+        "traefik.http.services.llmrouter-dev.loadbalancer.server.port=5173",
+        "traefik-proxy:\n    external: true",
+    }
+    if any(value not in text for value in required_proxy):
+        raise SystemExit("The protected development route is not configured.")
     required_secrets = {
         "credential-wrapping-key",
         "idempotency-digest-key",
