@@ -1,0 +1,15 @@
+{
+  "service_id": "service-test",
+  "workspace_id": "workspace-test",
+  "permissions": ["health.read"],
+  "expires_at": "2026-08-20T12:05:00Z",
+  "state": {
+    "kind": "workspace",
+    "service_id": "service-test",
+    "workspace_id": "workspace-test",
+    "display_name": "Workspace test",
+    "state": "active",
+    "revision": "workspace-revision-test",
+    "parent_service_id": null
+  }
+}

@@ -9,7 +9,13 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from llmrouter_backend.authority import Audience, ServicePrincipal
+from llmrouter_backend.administration import AdministrationService
+from llmrouter_backend.authority import (
+    Audience,
+    AuthorityPath,
+    PrincipalKind,
+    ServicePrincipal,
+)
 from llmrouter_backend.embed_sessions import (
     CreatedSession,
     EmbedSessionError,
@@ -108,6 +114,27 @@ class FakeRepository:
             service_id=SERVICE_ID,
             allowed_workspace_ids=frozenset({WORKSPACE_ID}),
         )
+
+
+class FakeAdministrationService(AdministrationService):
+    """Return one content-free frame snapshot without global authority."""
+
+    def __init__(self) -> None:
+        self.contexts = None
+
+    def embed_snapshot(
+        self, contexts, service_id, *, workspace_id, start, end
+    ) -> dict[str, object]:
+        self.contexts = contexts
+        assert service_id == SERVICE_ID
+        assert workspace_id == WORKSPACE_ID
+        assert start < end
+        return {
+            "service_id": service_id,
+            "workspace_id": workspace_id,
+            "permissions": sorted(contexts),
+            "configuration": {"providers": [], "routes": [], "assignments": []},
+        }
 
 
 def _workspace_scope():
@@ -213,6 +240,31 @@ def test_frame_cookie_authentication_uses_service_boundary() -> None:
             now=NOW,
         )
     assert captured.value.code == "invalid_token"
+
+
+def test_frame_read_uses_only_embed_authority_and_exact_workspace() -> None:
+    """A frame cookie cannot become global or cross-workspace authority."""
+    service = EmbedSessionService(FakeAuthenticator(_principal()), FakeRepository())
+    context = service.authorize_session(
+        "c" * 43,
+        "configuration.read",
+        _workspace_scope(),
+        request_origin=FRAME_ORIGIN,
+        request_id="request-frame-read",
+        now=NOW,
+    )
+    assert context.authority_path is AuthorityPath.EMBED
+    assert context.actor_kind is PrincipalKind.EMBED
+    assert context.scope == _workspace_scope()
+    with pytest.raises(EmbedSessionError):
+        service.authorize_session(
+            "c" * 43,
+            "accounting.read",
+            _workspace_scope(),
+            request_origin=FRAME_ORIGIN,
+            request_id="request-permission",
+            now=NOW,
+        )
 
 
 def test_workspace_token_cannot_create_service_wide_session() -> None:
@@ -360,3 +412,33 @@ def test_http_errors_do_not_echo_bootstrap_input() -> None:
     )
     assert response.status_code == 404
     assert secret not in response.text
+
+
+def test_embed_snapshot_route_uses_only_hidden_cookie_and_exact_scope() -> None:
+    """The frame read does not accept the administrator cookie or another scope."""
+    service = EmbedSessionService(FakeAuthenticator(_principal()), FakeRepository())
+    administration = FakeAdministrationService()
+    app = FastAPI()
+    app.include_router(router)
+    install_embed_session_service(app, service)
+    app.state.administration_service = administration
+    client = TestClient(app, base_url=FRAME_ORIGIN)
+    response = client.get(
+        "/v1/embed/administration/snapshot",
+        params={"service_id": SERVICE_ID, "workspace_id": WORKSPACE_ID},
+        headers={"cookie": f"__Host-llmrouter-embed={'c' * 43}"},
+    )
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json()["configuration"]["providers"] == []
+    assert set(administration.contexts) == {"configuration.read"}
+    assert all(
+        context.authority_path is AuthorityPath.EMBED
+        for context in administration.contexts.values()
+    )
+    denied = client.get(
+        "/v1/embed/administration/snapshot",
+        params={"service_id": SERVICE_ID, "workspace_id": "other-workspace"},
+        headers={"cookie": f"__Host-llmrouter-admin={'c' * 43}"},
+    )
+    assert denied.status_code == 401

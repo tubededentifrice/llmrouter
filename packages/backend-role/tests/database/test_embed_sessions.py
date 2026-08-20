@@ -217,7 +217,10 @@ def test_real_machine_identity_creates_exact_embed_authority(
         request_id="embed-create",
         now=NOW,
     )
-    assert created.frame_url == f"{FRAME_ORIGIN}/service-administration"
+    assert created.frame_url.startswith(
+        f"{FRAME_ORIGIN}/service-administration?session_id={created.session_id}"
+    )
+    assert "host_origin=https%3A%2F%2Fhost.example" in created.frame_url
     with pytest.raises(EmbedSessionError) as service_wide:
         service.create(
             token.access_token.value,

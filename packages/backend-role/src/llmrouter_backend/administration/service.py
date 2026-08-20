@@ -702,6 +702,102 @@ class AdministrationService:
             "corrections": format(result.corrections, "f"),
         }
 
+    def embed_snapshot(
+        self,
+        contexts: dict[str, RequestContext],
+        service_id: str,
+        *,
+        workspace_id: str | None,
+        start: datetime,
+        end: datetime,
+    ) -> dict[str, object]:
+        """Return only the bounded records that an embed grant permits."""
+        scope = Scope(service_id, workspace_id)
+        for operation, context in contexts.items():
+            if (
+                context.operation != operation
+                or context.authority_path is not AuthorityPath.EMBED
+                or context.actor_kind is not PrincipalKind.EMBED
+                or context.scope != scope
+            ):
+                raise ValueError("The embed request context is invalid.")
+        result: dict[str, object] = {
+            "service_id": service_id,
+            "workspace_id": workspace_id,
+            "permissions": sorted(contexts),
+        }
+        health_context = contexts.get("health.read")
+        if health_context is not None:
+            value = self._lifecycle.get_administration_state(
+                health_context, service_id, workspace_id=workspace_id
+            )
+            if isinstance(value, WorkspaceRecord):
+                state = ServiceStateDocument(
+                    kind="workspace",
+                    service_id=service_id,
+                    workspace_id=value.workspace_id,
+                    display_name=value.display_name,
+                    state=value.state.value,
+                    revision=value.state_revision,
+                )
+            else:
+                state = ServiceStateDocument(
+                    kind="service",
+                    service_id=value.service_id,
+                    display_name=value.display_name,
+                    state=value.state.value,
+                    revision=value.revision,
+                    parent_service_id=value.parent_service_id,
+                )
+            result["state"] = state.model_dump(mode="json")
+        configuration_context = contexts.get("configuration.read")
+        if configuration_context is not None:
+            effective = self._configuration.effective(
+                configuration_context, ConfigurationScope(service_id, workspace_id)
+            )
+            result["configuration"] = {
+                "providers": [
+                    _embed_provider_instance(item)
+                    for item in effective.provider_instances
+                ],
+                "routes": [
+                    _effective_route(item) for item in effective.provider_model_routes
+                ],
+                "assignments": [
+                    _effective_assignment(item) for item in effective.assignments
+                ],
+            }
+        request_context = contexts.get("request_status.read")
+        if request_context is not None:
+            items, _cursor = self._requests.list_status(request_context, limit=100)
+            result["requests"] = list(items)
+        accounting_context = contexts.get("accounting.read")
+        if accounting_context is not None:
+            if (
+                start.tzinfo is None
+                or end.tzinfo is None
+                or end <= start
+                or end - start > timedelta(days=7)
+            ):
+                raise ValueError("The embed accounting range is invalid.")
+            summary = self._accounting.summary(
+                accounting_context, scope, start=start, end=end
+            )
+            result["accounting"] = {
+                "from": start.isoformat(),
+                "to": end.isoformat(),
+                "currency": summary.currency,
+                "logical_requests": summary.logical_requests,
+                "attempts": summary.attempts,
+                "usage": [
+                    {"unit": item.unit.value, "quantity": format(item.quantity, "f")}
+                    for item in summary.usage
+                ],
+                "cost": format(summary.cost, "f"),
+                "corrections": format(summary.corrections, "f"),
+            }
+        return result
+
     def _effective(
         self,
         session_token: str,
@@ -886,6 +982,13 @@ def _effective_provider_instance(item: EffectiveItem) -> dict[str, object]:
     }
 
 
+def _embed_provider_instance(item: EffectiveItem) -> dict[str, object]:
+    """Return provider state without a credential reference."""
+    document = _effective_provider_instance(item)
+    document.pop("credential_id", None)
+    return document
+
+
 def _price_document(value: PriceComponent) -> dict[str, str]:
     return {
         "unit": value.unit.value,
@@ -900,7 +1003,11 @@ def _effective_route(item: EffectiveItem) -> dict[str, object]:
     value = item.value
     if not isinstance(value, ProviderModelRoute):
         raise RuntimeError("Stored provider route configuration is invalid.")
-    return {
+    price_authority: dict[str, object] = {"mode": value.price_authority.mode.value}
+    if value.price_authority.source_name is not None:
+        price_authority["source_name"] = value.price_authority.source_name
+        price_authority["lookup_identifier"] = value.price_authority.lookup_identifier
+    document: dict[str, object] = {
         "provider_model_route_id": value.provider_model_route_id,
         "owner_scope": item.owner_scope,
         "source_layer": item.source_layer,
@@ -909,11 +1016,7 @@ def _effective_route(item: EffectiveItem) -> dict[str, object]:
         "wire_model": value.wire_model,
         "capabilities": sorted(value.capabilities),
         "settings": _registered_document(value.settings),
-        "price_authority": {
-            "mode": value.price_authority.mode.value,
-            "source_name": value.price_authority.source_name,
-            "lookup_identifier": value.price_authority.lookup_identifier,
-        },
+        "price_authority": price_authority,
         "prices": [_price_document(price) for price in value.prices],
         "synchronization_schedule": value.synchronization_schedule,
         "stale_after_seconds": value.stale_after_seconds,
@@ -927,6 +1030,10 @@ def _effective_route(item: EffectiveItem) -> dict[str, object]:
         "active_revision": item.active_revision,
         "inherited": item.inherited,
     }
+    if value.embedding_model_space_id is not None:
+        document["embedding_model_space_id"] = value.embedding_model_space_id
+        document["embedding_dimensions"] = value.embedding_dimensions
+    return document
 
 
 def _effective_assignment(item: EffectiveItem) -> dict[str, object]:

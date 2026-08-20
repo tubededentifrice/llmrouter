@@ -145,6 +145,24 @@ def _machine_context(operation: str) -> RequestContext:
     )
 
 
+def _embed_context(
+    operation: str, *, workspace_id: str | None = None
+) -> RequestContext:
+    return RequestContext(
+        f"embed-{operation}",
+        PrincipalKind.EMBED,
+        "embed-session",
+        AuthorityClass.SERVICE,
+        AuthorityPath.EMBED,
+        None,
+        operation,
+        Scope(SERVICE_ID, workspace_id),
+        NOW,
+        None,
+        False,
+    )
+
+
 def test_configuration_write_idempotency_is_durable_and_conflict_safe(
     database_url: str,
 ) -> None:
@@ -246,6 +264,12 @@ def test_human_repository_reads_are_exact_scope_and_content_free(
     assert page == (status,)
     assert cursor is None
 
+    embed_status = views.status(
+        _embed_context("request_status.read", workspace_id=WORKSPACE_ID), target
+    )
+    assert embed_status == status
+    assert "result" not in embed_status
+
     with pytest.raises(ExecutionError) as hidden:
         views.status(
             _administrator_context(
@@ -282,6 +306,10 @@ def test_state_and_accounting_reads_apply_sql_scope_and_bounds(
     )
     assert isinstance(service, ServiceRecord)
     assert service.service_id == SERVICE_ID
+    embedded_service = lifecycle.get_administration_state(
+        _embed_context("health.read"), SERVICE_ID
+    )
+    assert embedded_service == service
     with pytest.raises(LifecycleError):
         lifecycle.get_administration_state(
             _administrator_context("health.read", service_id=OTHER_SERVICE_ID),

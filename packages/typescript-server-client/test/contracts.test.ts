@@ -16,6 +16,7 @@ const fixtures = {
   Attachment: "attachment.json",
   ModelRequest: "model-request.json",
   EffectiveConfiguration: "effective-configuration.json",
+  EmbedAdministrationSnapshot: "embed-administration-snapshot.json",
   AdministratorGrant: "administration-grant.json",
   Health: "health.json",
   BusinessToolCall: "business-tool-call.json",
@@ -29,7 +30,11 @@ function loadFixture(filename: string): Record<string, unknown> {
 
 describe("generated contract models", () => {
   it("contains every accepted component schema", () => {
-    expect(Object.keys(contractSchemas)).toHaveLength(138);
+    expect(Object.keys(contractSchemas)).toHaveLength(146);
+    expect(contractSchemas).toHaveProperty("EmbedBootstrap");
+    expect(contractSchemas).toHaveProperty("EmbedBootstrapRequest");
+    expect(contractSchemas).toHaveProperty("EmbedAdministrationSnapshot");
+    expect(contractSchemas).toHaveProperty("EmbedRequestStatus");
   });
   for (const [schemaName, filename] of Object.entries(fixtures)) {
     it(`round trips the valid ${schemaName} fixture`, () => {
@@ -69,6 +74,15 @@ describe("generated contract models", () => {
     expect(() => validateContract("BusinessToolCall", toolCall)).toThrow(
       "format",
     );
+  });
+
+  it("forbids retained result content in embedded request status", () => {
+    expect(contractSchemas.EmbedRequestStatus).toMatchObject({
+      allOf: [
+        { $ref: "#/components/schemas/RequestStatus" },
+        { not: { required: ["result"] } },
+      ],
+    });
   });
 
   it("enforces composition, unique items, and nested closed objects", () => {

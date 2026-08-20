@@ -1060,6 +1060,70 @@ EmbedBootstrap = TypedDict('EmbedBootstrap', {
     'theme': 'EmbedBootstrapTheme',
 })
 
+EmbedAdministrationState = TypedDict('EmbedAdministrationState', {
+    'kind': 'Literal["service", "workspace"]',
+    'service_id': 'OpaqueId',
+    'workspace_id': 'OpaqueId | None',
+    'display_name': 'str',
+    'state': 'Literal["active", "disabled", "retired"]',
+    'revision': 'OpaqueId',
+    'parent_service_id': 'OpaqueId | None',
+})
+
+EmbedProviderInstance = TypedDict('EmbedProviderInstance', {
+    'provider_instance_id': 'OpaqueId',
+    'owner_scope': 'OpaqueId',
+    'source_layer': 'OpaqueId',
+    'provider_catalog_id': 'OpaqueId',
+    'display_name': 'str',
+    'endpoint': 'str',
+    'state': 'Literal["active", "disabled", "retired"]',
+    'active_revision': 'OpaqueId',
+    'inherited': 'bool',
+    'settings': 'RegisteredDocument',
+})
+
+EmbedProviderModelRoute = TypedDict('EmbedProviderModelRoute', {
+    'provider_model_route_id': 'OpaqueId',
+    'owner_scope': 'OpaqueId',
+    'source_layer': 'OpaqueId',
+    'provider_instance_id': 'OpaqueId',
+    'canonical_model_id': 'OpaqueId',
+    'wire_model': 'str',
+    'capabilities': 'list[str]',
+    'settings': 'RegisteredDocument',
+    'embedding_model_space_id': 'NotRequired[OpaqueId]',
+    'embedding_dimensions': 'NotRequired[int]',
+    'price_authority': 'PriceAuthority',
+    'prices': 'list[PriceComponent]',
+    'synchronization_schedule': 'str',
+    'stale_after_seconds': 'int',
+    'price_version': 'OpaqueId | None',
+    'synchronization_state': 'Literal["manual", "current", "stale", "missing", "failed"] | None',
+    'state': 'Literal["active", "disabled", "retired"]',
+    'active_revision': 'OpaqueId',
+    'inherited': 'bool',
+})
+
+EmbedAdministrationConfiguration = TypedDict('EmbedAdministrationConfiguration', {
+    'providers': 'list[EmbedProviderInstance]',
+    'routes': 'list[EmbedProviderModelRoute]',
+    'assignments': 'list[AdministrationAssignment]',
+})
+
+EmbedRequestStatus: TypeAlias = dict[str, JsonValue]
+
+EmbedAdministrationSnapshot = TypedDict('EmbedAdministrationSnapshot', {
+    'service_id': 'OpaqueId',
+    'workspace_id': 'OpaqueId | None',
+    'permissions': 'list[Literal["configuration.read", "accounting.read", "request_status.read", "health.read"]]',
+    'expires_at': 'Timestamp',
+    'state': 'NotRequired[EmbedAdministrationState]',
+    'configuration': 'NotRequired[EmbedAdministrationConfiguration]',
+    'requests': 'NotRequired[list[EmbedRequestStatus]]',
+    'accounting': 'NotRequired[AccountingSummary]',
+})
+
 AdministratorSessionStart = TypedDict('AdministratorSessionStart', {
     'purpose': 'Literal["login", "recent_authentication"]',
     'return_path': 'str',
@@ -4483,6 +4547,157 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
     ],
     "type": "object"
   },
+  "EmbedAdministrationConfiguration": {
+    "additionalProperties": false,
+    "properties": {
+      "assignments": {
+        "items": {
+          "$ref": "#/components/schemas/AdministrationAssignment"
+        },
+        "maxItems": 10000,
+        "type": "array"
+      },
+      "providers": {
+        "items": {
+          "$ref": "#/components/schemas/EmbedProviderInstance"
+        },
+        "maxItems": 10000,
+        "type": "array"
+      },
+      "routes": {
+        "items": {
+          "$ref": "#/components/schemas/EmbedProviderModelRoute"
+        },
+        "maxItems": 10000,
+        "type": "array"
+      }
+    },
+    "required": [
+      "providers",
+      "routes",
+      "assignments"
+    ],
+    "type": "object"
+  },
+  "EmbedAdministrationSnapshot": {
+    "additionalProperties": false,
+    "properties": {
+      "accounting": {
+        "$ref": "#/components/schemas/AccountingSummary"
+      },
+      "configuration": {
+        "$ref": "#/components/schemas/EmbedAdministrationConfiguration"
+      },
+      "expires_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "permissions": {
+        "items": {
+          "enum": [
+            "configuration.read",
+            "accounting.read",
+            "request_status.read",
+            "health.read"
+          ],
+          "type": "string"
+        },
+        "minItems": 1,
+        "type": "array",
+        "uniqueItems": true
+      },
+      "requests": {
+        "items": {
+          "$ref": "#/components/schemas/EmbedRequestStatus"
+        },
+        "maxItems": 100,
+        "type": "array"
+      },
+      "service_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "state": {
+        "$ref": "#/components/schemas/EmbedAdministrationState"
+      },
+      "workspace_id": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "service_id",
+      "workspace_id",
+      "permissions",
+      "expires_at"
+    ],
+    "type": "object"
+  },
+  "EmbedAdministrationState": {
+    "additionalProperties": false,
+    "properties": {
+      "display_name": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      },
+      "kind": {
+        "enum": [
+          "service",
+          "workspace"
+        ],
+        "type": "string"
+      },
+      "parent_service_id": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "revision": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "service_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "state": {
+        "enum": [
+          "active",
+          "disabled",
+          "retired"
+        ],
+        "type": "string"
+      },
+      "workspace_id": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "kind",
+      "service_id",
+      "workspace_id",
+      "display_name",
+      "state",
+      "revision",
+      "parent_service_id"
+    ],
+    "type": "object"
+  },
   "EmbedBootstrap": {
     "additionalProperties": false,
     "properties": {
@@ -4582,6 +4797,223 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
       "host_origin"
     ],
     "type": "object"
+  },
+  "EmbedProviderInstance": {
+    "additionalProperties": false,
+    "properties": {
+      "active_revision": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "display_name": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      },
+      "endpoint": {
+        "format": "uri",
+        "type": "string"
+      },
+      "inherited": {
+        "type": "boolean"
+      },
+      "owner_scope": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "provider_catalog_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "provider_instance_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "settings": {
+        "$ref": "#/components/schemas/RegisteredDocument"
+      },
+      "source_layer": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "state": {
+        "enum": [
+          "active",
+          "disabled",
+          "retired"
+        ],
+        "type": "string"
+      }
+    },
+    "required": [
+      "provider_instance_id",
+      "owner_scope",
+      "source_layer",
+      "provider_catalog_id",
+      "display_name",
+      "endpoint",
+      "state",
+      "active_revision",
+      "inherited",
+      "settings"
+    ],
+    "type": "object"
+  },
+  "EmbedProviderModelRoute": {
+    "additionalProperties": false,
+    "allOf": [
+      {
+        "if": {
+          "properties": {
+            "capabilities": {
+              "contains": {
+                "const": "embedding"
+              }
+            }
+          },
+          "required": [
+            "capabilities"
+          ]
+        },
+        "then": {
+          "required": [
+            "embedding_model_space_id",
+            "embedding_dimensions"
+          ]
+        }
+      }
+    ],
+    "properties": {
+      "active_revision": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "canonical_model_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "capabilities": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array",
+        "uniqueItems": true
+      },
+      "embedding_dimensions": {
+        "maximum": 4096,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "embedding_model_space_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "inherited": {
+        "type": "boolean"
+      },
+      "owner_scope": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "price_authority": {
+        "$ref": "#/components/schemas/PriceAuthority"
+      },
+      "price_version": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "prices": {
+        "items": {
+          "$ref": "#/components/schemas/PriceComponent"
+        },
+        "maxItems": 32,
+        "type": "array"
+      },
+      "provider_instance_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "provider_model_route_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "settings": {
+        "$ref": "#/components/schemas/RegisteredDocument"
+      },
+      "source_layer": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "stale_after_seconds": {
+        "maximum": 31536000,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "state": {
+        "enum": [
+          "active",
+          "disabled",
+          "retired"
+        ],
+        "type": "string"
+      },
+      "synchronization_schedule": {
+        "maxLength": 100,
+        "minLength": 9,
+        "type": "string"
+      },
+      "synchronization_state": {
+        "oneOf": [
+          {
+            "enum": [
+              "manual",
+              "current",
+              "stale",
+              "missing",
+              "failed"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "wire_model": {
+        "maxLength": 500,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "provider_model_route_id",
+      "owner_scope",
+      "source_layer",
+      "provider_instance_id",
+      "canonical_model_id",
+      "wire_model",
+      "capabilities",
+      "settings",
+      "price_authority",
+      "prices",
+      "synchronization_schedule",
+      "stale_after_seconds",
+      "price_version",
+      "synchronization_state",
+      "state",
+      "active_revision",
+      "inherited"
+    ],
+    "type": "object"
+  },
+  "EmbedRequestStatus": {
+    "allOf": [
+      {
+        "$ref": "#/components/schemas/RequestStatus"
+      },
+      {
+        "not": {
+          "required": [
+            "result"
+          ]
+        }
+      }
+    ],
+    "description": "Bounded request status with retained output content forbidden."
   },
   "EmbedSession": {
     "additionalProperties": false,

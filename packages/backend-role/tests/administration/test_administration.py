@@ -23,6 +23,7 @@ from llmrouter_backend.authority import (
     AuthorityPath,
     PrincipalKind,
     RequestContext,
+    Scope,
 )
 from llmrouter_backend.configuration import (
     ConfigurationWriteResult,
@@ -38,7 +39,7 @@ from llmrouter_backend.credential_store import (
 from llmrouter_backend.lifecycle import LifecycleState, ServiceRecord
 
 if TYPE_CHECKING:
-    from llmrouter_backend.authority import OperationPolicy, Scope
+    from llmrouter_backend.authority import OperationPolicy
     from llmrouter_backend.configuration import ConfigurationScope, ScopeConfiguration
     from llmrouter_backend.credential_store import (
         CredentialAction,
@@ -260,6 +261,42 @@ def administration() -> tuple[TestClient, FakeAuthority, FakeCredentials]:
     app.include_router(router)
     install_administration_service(app, service)
     return TestClient(app), authority, credentials
+
+
+def test_embed_snapshot_rejects_non_embed_context() -> None:
+    service = AdministrationService(
+        authority=FakeAuthority(),
+        configuration=FakeConfiguration(),
+        credentials=FakeCredentials(),
+        lifecycle=FakeLifecycle(),
+        requests=FakeRequests(),
+        accounting=FakeAccounting(),
+        now=lambda: NOW,
+        identity_factory=lambda: uuid.UUID(int=40),
+    )
+    scope = Scope(SERVICE_ID)
+    context = RequestContext(
+        request_id="request-1",
+        actor_kind=PrincipalKind.ADMINISTRATOR,
+        actor_id="administrator-1",
+        authority_class=AuthorityClass.GLOBAL_ADMINISTRATOR,
+        authority_path=AuthorityPath.GLOBAL_ADMINISTRATION,
+        machine_audience=None,
+        operation="health.read",
+        scope=scope,
+        authorized_at=NOW,
+        recent_authentication_at=NOW,
+        mutation=False,
+    )
+
+    with pytest.raises(ValueError, match="embed request context"):
+        service.embed_snapshot(
+            {"health.read": context},
+            SERVICE_ID,
+            workspace_id=None,
+            start=NOW,
+            end=NOW,
+        )
 
 
 def _headers(*, mutation: bool = False) -> dict[str, str]:

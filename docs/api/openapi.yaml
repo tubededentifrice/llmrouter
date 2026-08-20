@@ -1244,6 +1244,35 @@ paths:
               schema: {$ref: '#/components/schemas/EmbedBootstrap'}
         '400': {$ref: '#/components/responses/BadRequest'}
         '404': {$ref: '#/components/responses/NotFound'}
+  /v1/embed/administration/snapshot:
+    get:
+      tags: [Administration]
+      operationId: getEmbedAdministrationSnapshot
+      summary: Get the bounded read-only administration state for one embed session.
+      description: >-
+        Uses only the Secure, HttpOnly, host-only embed-session cookie. The
+        Router checks expiry, revocation, the exact Router frame origin, every
+        granted read permission, and the exact service and optional workspace
+        scope before record lookup. The response never contains provider
+        credentials or retained request content.
+      security:
+        - embedSession: []
+      parameters:
+        - name: service_id
+          in: query
+          required: true
+          schema: {$ref: '#/components/schemas/OpaqueId'}
+        - $ref: '#/components/parameters/WorkspaceIdQuery'
+      responses:
+        '200':
+          description: The bounded sections permitted by the current embed session.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/EmbedAdministrationSnapshot'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
   /v1/admin/session-starts:
     post:
       tags: [Authentication]
@@ -2065,6 +2094,14 @@ components:
       type: apiKey
       in: cookie
       name: __Host-llmrouter-admin
+    embedSession:
+      type: apiKey
+      in: cookie
+      name: __Host-llmrouter-embed
+      description: >-
+        Write-only browser authority set during bootstrap. It is valid only
+        from the exact Router frame origin bound to the unexpired,
+        non-revoked embed session and cannot authorize global administration.
   parameters:
     ServiceId:
       name: service_id
@@ -3613,6 +3650,97 @@ components:
             mode: {type: string, enum: [light, dark, system]}
             density: {type: string, enum: [comfortable, compact]}
             corner_style: {type: string, enum: [square, rounded]}
+    EmbedAdministrationState:
+      type: object
+      additionalProperties: false
+      required: [kind, service_id, workspace_id, display_name, state, revision, parent_service_id]
+      properties:
+        kind: {type: string, enum: [service, workspace]}
+        service_id: {$ref: '#/components/schemas/OpaqueId'}
+        workspace_id: {oneOf: [{$ref: '#/components/schemas/OpaqueId'}, {type: 'null'}]}
+        display_name: {type: string, minLength: 1, maxLength: 200}
+        state: {type: string, enum: [active, disabled, retired]}
+        revision: {$ref: '#/components/schemas/OpaqueId'}
+        parent_service_id: {oneOf: [{$ref: '#/components/schemas/OpaqueId'}, {type: 'null'}]}
+    EmbedProviderInstance:
+      type: object
+      additionalProperties: false
+      required: [provider_instance_id, owner_scope, source_layer, provider_catalog_id, display_name, endpoint, state, active_revision, inherited, settings]
+      properties:
+        provider_instance_id: {$ref: '#/components/schemas/OpaqueId'}
+        owner_scope: {$ref: '#/components/schemas/OpaqueId'}
+        source_layer: {$ref: '#/components/schemas/OpaqueId'}
+        provider_catalog_id: {$ref: '#/components/schemas/OpaqueId'}
+        display_name: {type: string, minLength: 1, maxLength: 200}
+        endpoint: {type: string, format: uri}
+        state: {type: string, enum: [active, disabled, retired]}
+        active_revision: {$ref: '#/components/schemas/OpaqueId'}
+        inherited: {type: boolean}
+        settings: {$ref: '#/components/schemas/RegisteredDocument'}
+    EmbedProviderModelRoute:
+      type: object
+      additionalProperties: false
+      required: [provider_model_route_id, owner_scope, source_layer, provider_instance_id, canonical_model_id, wire_model, capabilities, settings, price_authority, prices, synchronization_schedule, stale_after_seconds, price_version, synchronization_state, state, active_revision, inherited]
+      allOf:
+        - if:
+            properties:
+              capabilities: {contains: {const: embedding}}
+            required: [capabilities]
+          then:
+            required: [embedding_model_space_id, embedding_dimensions]
+      properties:
+        provider_model_route_id: {$ref: '#/components/schemas/OpaqueId'}
+        owner_scope: {$ref: '#/components/schemas/OpaqueId'}
+        source_layer: {$ref: '#/components/schemas/OpaqueId'}
+        provider_instance_id: {$ref: '#/components/schemas/OpaqueId'}
+        canonical_model_id: {$ref: '#/components/schemas/OpaqueId'}
+        wire_model: {type: string, minLength: 1, maxLength: 500}
+        capabilities: {type: array, uniqueItems: true, items: {type: string}}
+        settings: {$ref: '#/components/schemas/RegisteredDocument'}
+        embedding_model_space_id: {$ref: '#/components/schemas/OpaqueId'}
+        embedding_dimensions: {type: integer, minimum: 1, maximum: 4096}
+        price_authority: {$ref: '#/components/schemas/PriceAuthority'}
+        prices: {type: array, maxItems: 32, items: {$ref: '#/components/schemas/PriceComponent'}}
+        synchronization_schedule: {type: string, minLength: 9, maxLength: 100}
+        stale_after_seconds: {type: integer, minimum: 1, maximum: 31536000}
+        price_version: {oneOf: [{$ref: '#/components/schemas/OpaqueId'}, {type: 'null'}]}
+        synchronization_state:
+          oneOf:
+            - {type: string, enum: [manual, current, stale, missing, failed]}
+            - {type: 'null'}
+        state: {type: string, enum: [active, disabled, retired]}
+        active_revision: {$ref: '#/components/schemas/OpaqueId'}
+        inherited: {type: boolean}
+    EmbedAdministrationConfiguration:
+      type: object
+      additionalProperties: false
+      required: [providers, routes, assignments]
+      properties:
+        providers: {type: array, maxItems: 10000, items: {$ref: '#/components/schemas/EmbedProviderInstance'}}
+        routes: {type: array, maxItems: 10000, items: {$ref: '#/components/schemas/EmbedProviderModelRoute'}}
+        assignments: {type: array, maxItems: 10000, items: {$ref: '#/components/schemas/AdministrationAssignment'}}
+    EmbedRequestStatus:
+      allOf:
+        - $ref: '#/components/schemas/RequestStatus'
+        - not: {required: [result]}
+      description: Bounded request status with retained output content forbidden.
+    EmbedAdministrationSnapshot:
+      type: object
+      additionalProperties: false
+      required: [service_id, workspace_id, permissions, expires_at]
+      properties:
+        service_id: {$ref: '#/components/schemas/OpaqueId'}
+        workspace_id: {oneOf: [{$ref: '#/components/schemas/OpaqueId'}, {type: 'null'}]}
+        permissions:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {type: string, enum: [configuration.read, accounting.read, request_status.read, health.read]}
+        expires_at: {$ref: '#/components/schemas/Timestamp'}
+        state: {$ref: '#/components/schemas/EmbedAdministrationState'}
+        configuration: {$ref: '#/components/schemas/EmbedAdministrationConfiguration'}
+        requests: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/EmbedRequestStatus'}}
+        accounting: {$ref: '#/components/schemas/AccountingSummary'}
     AdministratorSessionStart:
       type: object
       additionalProperties: false

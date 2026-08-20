@@ -8,6 +8,7 @@ import secrets
 import uuid
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlencode
 
 import psycopg
 
@@ -154,10 +155,14 @@ class EmbedSessionRepository:
                     session_id=session_id,
                     now=now,
                 )
+        frame_query = urlencode(
+            {"session_id": session_id, "host_origin": document.allowed_origin}
+        )
+        frame_url = f"{self._frame_url}?{frame_query}"
         return CreatedSession(
             session_id=str(session_id),
             bootstrap_token=bootstrap_token,
-            frame_url=self._frame_url,
+            frame_url=frame_url,
             expires_at=expires_at,
         )
 

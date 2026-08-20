@@ -868,7 +868,12 @@ def _require_administration_state_read(
     expected_kind = (
         ScopeKind.WORKSPACE if workspace_id is not None else ScopeKind.SERVICE
     )
-    if not (
+    exact_scope = (
+        context.scope.kind is expected_kind
+        and context.scope.service_id == service_id
+        and context.scope.workspace_id == workspace_id
+    )
+    administrator = (
         context.actor_kind is PrincipalKind.ADMINISTRATOR
         and context.authority_class
         in {AuthorityClass.GLOBAL_ADMINISTRATOR, AuthorityClass.SERVICE}
@@ -876,10 +881,16 @@ def _require_administration_state_read(
         and context.machine_audience is None
         and context.operation == "health.read"
         and not context.mutation
-        and context.scope.kind is expected_kind
-        and context.scope.service_id == service_id
-        and context.scope.workspace_id == workspace_id
-    ):
+    )
+    embed = (
+        context.actor_kind is PrincipalKind.EMBED
+        and context.authority_class is AuthorityClass.SERVICE
+        and context.authority_path is AuthorityPath.EMBED
+        and context.machine_audience is None
+        and context.operation == "health.read"
+        and not context.mutation
+    )
+    if not (exact_scope and (administrator or embed)):
         raise LifecycleError(LifecycleErrorCode.INSUFFICIENT_SCOPE, context.request_id)
 
 

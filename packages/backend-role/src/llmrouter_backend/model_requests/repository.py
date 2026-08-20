@@ -110,7 +110,8 @@ class PostgresModelRequestViews:
             accounting = _accounting(connection, request["row_id"])
             result = (
                 None
-                if context.actor_kind is PrincipalKind.ADMINISTRATOR
+                if context.actor_kind
+                in {PrincipalKind.ADMINISTRATOR, PrincipalKind.EMBED}
                 else _retained_result(connection, request["row_id"])
             )
         document: dict[str, object] = {
@@ -449,7 +450,7 @@ def _require_administrator_view_authority(context: RequestContext) -> None:
 
 
 def _administrator_view_is_authorized(context: RequestContext) -> bool:
-    return (
+    administrator = (
         context.actor_kind is PrincipalKind.ADMINISTRATOR
         and context.authority_class
         in {AuthorityClass.GLOBAL_ADMINISTRATOR, AuthorityClass.SERVICE}
@@ -459,6 +460,16 @@ def _administrator_view_is_authorized(context: RequestContext) -> bool:
         and not context.mutation
         and context.scope.service_id is not None
     )
+    embed = (
+        context.actor_kind is PrincipalKind.EMBED
+        and context.authority_class is AuthorityClass.SERVICE
+        and context.authority_path is AuthorityPath.EMBED
+        and context.machine_audience is None
+        and context.operation == "request_status.read"
+        and not context.mutation
+        and context.scope.service_id is not None
+    )
+    return administrator or embed
 
 
 def _require_resume_authority(context: RequestContext, target: ExecutionTarget) -> None:

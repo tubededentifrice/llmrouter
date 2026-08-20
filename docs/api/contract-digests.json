@@ -14,7 +14,7 @@
     },
     {
       "path": "docs/api/embed-protocol.md",
-      "sha256": "bc2e0a535ca52aad38fe9d84aaab21fa5b55b417d15a1b615df12af14213bd6c"
+      "sha256": "4cf8b7514f6159b6b3affedc15157bfe2192dfbc643c83d53595a5031c4d0355"
     },
     {
       "path": "docs/api/embedding-protocol.md",
@@ -26,7 +26,7 @@
     },
     {
       "path": "docs/api/openapi.yaml",
-      "sha256": "ea90b947c9305befd97b1a1fc72add8eecd552edefb8e3641ff78bded735e224"
+      "sha256": "3064a2c1c1a6bdbf7c34a63975873e189559edba857f6dac3c38e23993dcd1a6"
     },
     {
       "path": "docs/api/request-fingerprint.md",
@@ -110,8 +110,14 @@
     "DiagnosticGrant": "16178d92e0d3361b740ecc78b74c18b9ed46b3c8c65fdd2e455639af9facd364",
     "EffectiveConfiguration": "adf6ddfa3b660137e24b229db3948d7dfe08f44c5ddfe5c24874c3f95a056b64",
     "EffectiveItem": "84eb5fc14227b73241580285fe5ba2b504827db8798c9560d58f3fb77f974c61",
+    "EmbedAdministrationConfiguration": "8092980e3b371358fc3ab834b26670563357f2a4b6893c97c72fe1378ed24886",
+    "EmbedAdministrationSnapshot": "30a95ed3bc65f43281ef4283fc67d23ab0184066589bebcbfc65fd9a09d91202",
+    "EmbedAdministrationState": "edfbe2100172f0d99beb8e1346cb20c7b750eb564d29ec113611ef4165327a1f",
     "EmbedBootstrap": "4ae494fd67e17d90c3cc479e6b470002e578e8e0fe46505d9502f4cb0a68c1ff",
     "EmbedBootstrapRequest": "04e5dbcfe4885a265b701ad811a24e65a1b4c2e60ae3c608300e043ff3c1f334",
+    "EmbedProviderInstance": "d0ca27e314a40f80009af7e7fc8d368ee03af510d1116690a4b68eb1f1ecec67",
+    "EmbedProviderModelRoute": "038691416312ac4f8b1a097d6a916ee02a4c2b2c8378c0c0b9a2dd2858fd87f7",
+    "EmbedRequestStatus": "44fb52908efd45fff13e3d44831f7eb0d80e9f64bdf6a1bf82ad149ad034e06a",
     "EmbedSession": "4b2d8b056e156cc2323aa2f38659627320c10c6ff898b9b513bc0a1b0900fc37",
     "EmbedSessionRequest": "e337b3e226115ceaea9e99f8b350ba0c3567f3648fa5ba6dee3d173224fb1b80",
     "EmbeddingAccounting": "0fc839055750986f76007bb7bdb224e7b5208cc30e95e8844e79d301f32b0ac4",
@@ -185,6 +191,6 @@
   },
   "contract_set": "llmrouter-v1",
   "generator_version": 1,
-  "source_sha256": "ea90b947c9305befd97b1a1fc72add8eecd552edefb8e3641ff78bded735e224",
+  "source_sha256": "3064a2c1c1a6bdbf7c34a63975873e189559edba857f6dac3c38e23993dcd1a6",
   "version": "1.0.0"
 }

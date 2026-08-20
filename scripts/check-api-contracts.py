@@ -232,6 +232,8 @@ def check_operation_contracts(
             expected_security: set[str] = set()
         elif path.startswith("/v1/admin/"):
             expected_security = {"administratorSession"}
+        elif path.startswith("/v1/embed/"):
+            expected_security = {"embedSession"}
         else:
             expected_security = {"bearerToken"}
         if security_names != expected_security:

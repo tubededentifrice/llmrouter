@@ -6,10 +6,16 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from datetime import UTC, datetime, timedelta
+from http.cookies import CookieError, SimpleCookie
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import ValidationError
+
+from llmrouter_backend.administration.service import AdministrationService
+from llmrouter_backend.authority import RequestContext, Scope
 
 from .model import (
     MAXIMUM_BODY_BYTES,
@@ -106,6 +112,61 @@ async def redeem_embed_session(request: Request, session_id: str) -> Response:
         return _error(error, request_id)
 
 
+@router.get("/embed/administration/snapshot", response_model=None)
+async def read_embed_administration_snapshot(request: Request) -> Response:
+    """Read one bounded administration snapshot through embed authority only."""
+    request_id = str(uuid.uuid4())
+    try:
+        service_id = _query(request, "service_id", request_id)
+        workspace_id = _optional_query(request, "workspace_id", request_id)
+        scope = Scope(service_id, workspace_id)
+        session_service = _service(request, request_id)
+        token = _embed_cookie(request, request_id)
+        origin = _request_origin(request, request_id)
+        principal = await asyncio.to_thread(
+            session_service.authenticate_session,
+            token,
+            request_origin=origin,
+            request_id=request_id,
+        )
+        contexts: dict[str, RequestContext] = {}
+        for operation in (
+            "health.read",
+            "configuration.read",
+            "request_status.read",
+            "accounting.read",
+        ):
+            if operation in principal.operations:
+                contexts[operation] = await asyncio.to_thread(
+                    session_service.authorize_session,
+                    token,
+                    operation,
+                    scope,
+                    request_origin=origin,
+                    request_id=request_id,
+                )
+        if not contexts:
+            raise EmbedSessionError("insufficient_scope", request_id)  # noqa: TRY301
+        current = datetime.now(UTC)
+        administration = getattr(request.app.state, "administration_service", None)
+        if not isinstance(administration, AdministrationService):
+            raise EmbedSessionError(  # noqa: TRY301
+                "temporarily_unavailable", request_id
+            )
+        result = await asyncio.to_thread(
+            administration.embed_snapshot,
+            contexts,
+            service_id,
+            workspace_id=workspace_id,
+            start=current - timedelta(days=7),
+            end=current,
+        )
+        result["expires_at"] = principal.expires_at.isoformat().replace("+00:00", "Z")
+        return _json(result)
+    except Exception as error:
+        return _error(error, request_id)
+
+
 @router.delete(
     "/services/{service_id}/administration/embed-sessions/{session_id}",
     response_model=None,
@@ -146,6 +207,64 @@ def _bearer(request: Request, request_id: str) -> str:
     if not value.startswith("Bearer ") or len(value) <= 7:
         raise EmbedSessionError("invalid_token", request_id)
     return value[7:]
+
+
+def _embed_cookie(request: Request, request_id: str) -> str:
+    values = request.headers.getlist("cookie")
+    if len(values) != 1 or len(values[0]) > 4_096:
+        raise EmbedSessionError("invalid_token", request_id)
+    if (
+        sum(
+            part.strip().startswith(f"{SESSION_COOKIE}=")
+            for part in values[0].split(";")
+        )
+        != 1
+    ):
+        raise EmbedSessionError("invalid_token", request_id)
+    try:
+        cookie = SimpleCookie()
+        cookie.load(values[0])
+    except CookieError as error:
+        raise EmbedSessionError("invalid_token", request_id) from error
+    match = cookie.get(SESSION_COOKIE)
+    if match is None or not _valid_secret(match.value):
+        raise EmbedSessionError("invalid_token", request_id)
+    return match.value
+
+
+def _valid_secret(value: str) -> bool:
+    return (
+        len(value) == 43
+        and value.isascii()
+        and all(character.isalnum() or character in "_-" for character in value)
+    )
+
+
+def _request_origin(request: Request, request_id: str) -> str:
+    origin = f"{request.url.scheme}://{request.url.netloc}"
+    try:
+        parsed = urlsplit(origin)
+        if parsed.hostname is None or parsed.username is not None:
+            raise ValueError  # noqa: TRY301
+    except ValueError as error:
+        raise EmbedSessionError("invalid_request", request_id) from error
+    return origin
+
+
+def _query(request: Request, name: str, request_id: str) -> str:
+    values = request.query_params.getlist(name)
+    if len(values) != 1 or not values[0] or len(values[0]) > 200:
+        raise EmbedSessionError("invalid_request", request_id)
+    return values[0]
+
+
+def _optional_query(request: Request, name: str, request_id: str) -> str | None:
+    values = request.query_params.getlist(name)
+    if not values:
+        return None
+    if len(values) != 1 or not values[0] or len(values[0]) > 200:
+        raise EmbedSessionError("invalid_request", request_id)
+    return values[0]
 
 
 def _header(request: Request, name: str, request_id: str) -> str:

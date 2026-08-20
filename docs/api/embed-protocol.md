@@ -117,6 +117,18 @@ The frame cannot read the cookie. A mutation from the embedded view MUST use
 this origin-bound cookie authority and MUST fail before lookup when the exact
 Router frame origin is absent or different.
 
+After bootstrap, the frame reads its current bounded view with
+`GET /v1/embed/administration/snapshot`. It supplies the exact `service_id`
+and optional `workspace_id` as query parameters. This route accepts only the
+Secure, HttpOnly, host-only `__Host-llmrouter-embed` cookie. It validates the
+cookie expiry, revocation, exact Router frame origin, permission, service, and
+workspace before record lookup. The response contains only the sections for
+the granted `health.read`, `configuration.read`, `request_status.read`, and
+`accounting.read` operations. Request status is content-free, accounting is
+limited to seven days, and provider credential references are absent. The
+route does not accept the administrator cookie, a bearer token, or global
+administration authority.
+
 The host backend can revoke a session with
 `DELETE /v1/services/{service_id}/administration/embed-sessions/{session_id}`.
 The bearer token needs the same `host_backend` audience and

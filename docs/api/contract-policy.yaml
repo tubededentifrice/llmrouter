@@ -115,6 +115,7 @@ operations:
   createAdministrationEmbedSession: {permission: admin_embed.create, recent_auth: false, conformance_case: effective_configuration}
   revokeAdministrationEmbedSession: {permission: admin_embed.create, recent_auth: false, conformance_case: effective_configuration}
   bootstrapAdministrationEmbedSession: {permission: admin_embed.bootstrap, recent_auth: false, conformance_case: effective_configuration}
+  getEmbedAdministrationSnapshot: {permission: exact granted embed read permission, recent_auth: false, conformance_case: embed_administration_snapshot}
   startAdministratorSession: *admin_session
   completeAdministratorSession: *admin_session
   getAdministratorSession: *admin_session
@@ -192,11 +193,15 @@ conformance_cases:
   embedding_admission: {fixture: docs/api/fixtures/embedding-admission.json, schema: EmbeddingAdmissionReceipt}
   embedding_status: {fixture: docs/api/fixtures/embedding-status.json, schema: EmbeddingRequestStatus}
   effective_configuration: {fixture: docs/api/fixtures/effective-configuration.json, schema: EffectiveConfiguration}
+  embed_administration_snapshot: {fixture: docs/api/fixtures/embed-administration-snapshot.json, schema: EmbedAdministrationSnapshot}
   administrator_grant: {fixture: docs/api/fixtures/administration-grant.json, schema: AdministratorGrant}
   health: {fixture: docs/api/fixtures/health.json, schema: Health}
   business_tool_gateway: {fixture: docs/api/fixtures/business-tool-call.json, schema: BusinessToolCall}
 
 readable_contracts:
+  docs/api/embed-protocol.md:
+    required_markers: [llmrouter-admin-embed, frame.ready, host.bootstrap, frame_nonce, /v1/embed/administration/snapshot, __Host-llmrouter-embed]
+    operation_ids: [createAdministrationEmbedSession, revokeAdministrationEmbedSession, bootstrapAdministrationEmbedSession, getEmbedAdministrationSnapshot]
   docs/api/README.md:
     required_markers: [/v1/contracts, /v1/model-requests, '/v1/services/{service_id}/workspaces/{workspace_id}/embedding-requests', /v1/admin/captured-content]
   docs/api/embedding-protocol.md:
@@ -212,10 +217,10 @@ artifact_sha256:
   docs/api/README.md: 66bbe674dd11683474140f54e1e51ce1a2fac649ee3b8ba84deed195b78f89d4
   docs/api/business-tool-gateway.md: 8622f79febd1e7499a38eec3d6735929555edb974321b6a792f1eb36f8fdca76
   docs/api/cross-service-conformance.md: 350f8eb8e79cf4dee699d0bc948f1aaeabda722ca48d47c691f8e3684598ea82
-  docs/api/embed-protocol.md: bc2e0a535ca52aad38fe9d84aaab21fa5b55b417d15a1b615df12af14213bd6c
+  docs/api/embed-protocol.md: 4cf8b7514f6159b6b3affedc15157bfe2192dfbc643c83d53595a5031c4d0355
   docs/api/embedding-protocol.md: 3dcf022e4663c7adace7e6b533e0e0770cc1420fbba39987ac0a330dbe008a18
   docs/api/errors.md: 0b25b51de943f8419d3f53985b9877dc05fcd97dd191fc3cf687845219b7ab1f
-  docs/api/openapi.yaml: ea90b947c9305befd97b1a1fc72add8eecd552edefb8e3641ff78bded735e224
+  docs/api/openapi.yaml: 3064a2c1c1a6bdbf7c34a63975873e189559edba857f6dac3c38e23993dcd1a6
   docs/api/request-fingerprint.md: ce37b2d9a12e0ef15c065a0e73f2107ac5c4dc446e09ead82c4b205cd7da587f
   docs/api/service-management.md: 501f672274ecb9599ee005d66b33938ead8757693608c8d5e36d9e19c5a76215
   docs/api/stream-protocol.md: 3245e7315826449a1017af56f1cebbafad97dec4e0e9bb8c1592d34d121021a2

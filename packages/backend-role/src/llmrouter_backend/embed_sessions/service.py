@@ -11,6 +11,7 @@ from llmrouter_backend.authority import (
     EmbedPrincipal,
     OperationPolicy,
     PrincipalKind,
+    RequestContext,
     SafeAuthorityError,
     Scope,
     ScopeKind,
@@ -130,6 +131,40 @@ class EmbedSessionService:
             request_id=request_id,
             now=now or datetime.now(UTC),
         )
+
+    def authorize_session(  # noqa: PLR0913
+        self,
+        session_token: str,
+        operation: str,
+        scope: Scope,
+        *,
+        request_origin: str,
+        request_id: str,
+        now: datetime | None = None,
+    ) -> RequestContext:
+        """Authorize one frame read through the embed authority path."""
+        current = now or datetime.now(UTC)
+        try:
+            principal = self.authenticate_session(
+                session_token,
+                request_origin=request_origin,
+                request_id=request_id,
+                now=current,
+            )
+            return authorize(
+                principal,
+                OperationPolicy(
+                    operation=operation,
+                    authority_path=AuthorityPath.EMBED,
+                    principal_kinds=frozenset({PrincipalKind.EMBED}),
+                    scope_kind=scope.kind,
+                ),
+                scope,
+                request_id=request_id,
+                now=current,
+            )
+        except SafeAuthorityError as error:
+            raise EmbedSessionError(error.code.value, request_id) from error
 
     def revoke(
         self,
