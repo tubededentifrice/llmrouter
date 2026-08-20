@@ -87,6 +87,36 @@ class IdentityState:
 
 
 @dataclass(frozen=True, slots=True)
+class ProviderSessionState:
+    """Current provider session state and its rotated opaque tokens."""
+
+    active: bool
+    access_token: str
+    refresh_token: str
+    access_expires_at: datetime
+    checked_at: datetime
+
+    def __post_init__(self) -> None:
+        """Require bounded opaque tokens and aware ordered times."""
+        if (
+            not self.access_token
+            or not self.refresh_token
+            or len(self.access_token) > 8192
+            or len(self.refresh_token) > 8192
+        ):
+            msg = "Provider session tokens are required."
+            raise ValueError(msg)
+        for value in (self.access_expires_at, self.checked_at):
+            if value.tzinfo is None or value.utcoffset() is None:
+                msg = "Provider session times need a time zone."
+                raise ValueError(msg)
+
+    def __repr__(self) -> str:
+        """Do not expose identity-provider tokens in diagnostics."""
+        return "ProviderSessionState([REDACTED])"
+
+
+@dataclass(frozen=True, slots=True)
 class VerifiedIdentity:
     """One fully validated Pocket ID identity token result."""
 
@@ -118,6 +148,8 @@ class OIDCTokenResponse:
     id_token: str
     token_type: str
     access_token: str | None = None
+    refresh_token: str | None = None
+    expires_in: int | None = None
 
     def __repr__(self) -> str:
         """Do not expose identity-provider tokens in diagnostics."""

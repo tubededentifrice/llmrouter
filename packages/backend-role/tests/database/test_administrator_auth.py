@@ -25,6 +25,8 @@ from llmrouter_backend.admin_auth import (
     OIDCConfiguration,
     OIDCTokenResponse,
     OIDCTokenVerifier,
+    ProviderSessionInvalid,
+    ProviderSessionState,
     TrustedGrantPurpose,
     administrator_session_cookie,
 )
@@ -87,6 +89,9 @@ class FakeIdentityService:
         self.active = True
         self.checked_at = NOW
         self.token_type = "id-token"
+        self.reject_provider_session = False
+        self.rotate_provider_session = False
+        self.account_state_unavailable = False
 
     def available(self) -> bool:
         if not self.is_available:
@@ -113,13 +118,41 @@ class FakeIdentityService:
             },
             self.private_key,
         )
-        return OIDCTokenResponse(id_token=token, token_type="Bearer")
+        return OIDCTokenResponse(
+            id_token=token,
+            token_type="Bearer",
+            access_token="provider-access-token",
+            refresh_token="provider-refresh-token",
+            expires_in=300,
+        )
 
     def account_state(self, *, issuer: str, subject: str) -> IdentityState:
-        if not self.is_available:
+        if not self.is_available or self.account_state_unavailable:
             raise IdentityServiceUnavailable
         assert issuer == ISSUER and subject == self.subject
         return IdentityState(self.active, self.generation, self.checked_at)
+
+    def provider_session_state(
+        self,
+        *,
+        access_token: str,
+        refresh_token: str,
+        access_expires_at: datetime,
+        now: datetime,
+    ) -> ProviderSessionState:
+        if self.reject_provider_session:
+            raise ProviderSessionInvalid
+        return ProviderSessionState(
+            active=self.active,
+            access_token=(
+                "rotated-access" if self.rotate_provider_session else access_token
+            ),
+            refresh_token=(
+                "rotated-refresh" if self.rotate_provider_session else refresh_token
+            ),
+            access_expires_at=access_expires_at,
+            checked_at=now,
+        )
 
 
 @pytest.fixture
@@ -187,7 +220,9 @@ def _bootstrap(
         now=NOW,
         expires_at=NOW + timedelta(minutes=10),
     )
-    token = parse_qs(urlsplit(trusted.url).query)["token"][0]
+    assert urlsplit(trusted.url).query == ""
+    assert urlsplit(trusted.url).fragment.startswith("token=")
+    token = parse_qs(urlsplit(trusted.url).fragment)["token"][0]
     state, _ = _start(repository, identity, trusted_token=token)
     session = repository.complete_authorization(
         "code", state, request_id="callback-request", now=NOW
@@ -552,7 +587,7 @@ def test_trusted_url_and_callback_are_atomic_under_concurrency(
         now=NOW,
         expires_at=NOW + timedelta(minutes=5),
     )
-    token = parse_qs(urlsplit(trusted.url).query)["token"][0]
+    token = parse_qs(urlsplit(trusted.url).fragment)["token"][0]
     state, _ = _start(repository, identity, trusted_token=token)
 
     def complete(index: int) -> str:
@@ -582,7 +617,7 @@ def test_two_distinct_starts_can_redeem_one_trusted_url_only_once(
         now=NOW,
         expires_at=NOW + timedelta(minutes=5),
     )
-    token = parse_qs(urlsplit(trusted.url).query)["token"][0]
+    token = parse_qs(urlsplit(trusted.url).fragment)["token"][0]
     first_state, first_nonce = _start(repository, identity, trusted_token=token)
     second_state, second_nonce = _start(repository, identity, trusted_token=token)
     identity.nonce = first_nonce
@@ -652,7 +687,7 @@ def test_trusted_callback_failure_and_success_have_distinct_audits(
         now=NOW,
         expires_at=NOW + timedelta(minutes=5),
     )
-    token = parse_qs(urlsplit(trusted.url).query)["token"][0]
+    token = parse_qs(urlsplit(trusted.url).fragment)["token"][0]
     failed_state, _ = _start(repository, identity, trusted_token=token)
     identity.token_type = "access-token"
     with pytest.raises(AdministratorAuthError):
@@ -1137,12 +1172,45 @@ def test_recovery_generation_invalidates_the_old_session(
     assert revoked_at == NOW + timedelta(minutes=1)
 
 
-def test_session_expiry_logout_cookie_and_migration_workspace_controls(
+@pytest.mark.parametrize("failure", ["invalid", "after_rotation"])
+def test_provider_session_failure_revokes_and_clears_tokens(
+    database_url: str,
+    auth_repository: tuple[AdministratorAuthRepository, FakeIdentityService],
+    failure: str,
+) -> None:
+    repository, identity = auth_repository
+    session, _ = _bootstrap(repository, identity, frozenset({"health.read"}))
+    identity.checked_at = NOW + timedelta(minutes=6)
+    identity.reject_provider_session = failure == "invalid"
+    identity.rotate_provider_session = failure == "after_rotation"
+    identity.account_state_unavailable = failure == "after_rotation"
+    with pytest.raises(AdministratorAuthError) as rejected:
+        repository.authenticate_session(
+            session,
+            request_id=f"provider-{failure}",
+            now=NOW + timedelta(minutes=6),
+            policy=_policy("health.read"),
+        )
+    assert rejected.value.code == "invalid_token"
+    with psycopg.connect(database_url) as connection:
+        row = connection.execute(
+            """
+            SELECT revoked_at IS NOT NULL,
+                   provider_access_token_ciphertext IS NULL,
+                   provider_refresh_token_ciphertext IS NULL,
+                   provider_access_expires_at IS NULL
+            FROM router.administrator_sessions
+            """
+        ).fetchone()
+    assert row == (True, True, True, True)
+
+
+def test_expired_session_is_revoked_and_provider_tokens_are_cleared(
     database_url: str,
     auth_repository: tuple[AdministratorAuthRepository, FakeIdentityService],
 ) -> None:
     repository, identity = auth_repository
-    session, csrf = _bootstrap(repository, identity, frozenset({"health.read"}))
+    session, _ = _bootstrap(repository, identity, frozenset({"health.read"}))
     with pytest.raises(AdministratorAuthError) as expired:
         repository.authenticate_session(
             session,
@@ -1151,6 +1219,25 @@ def test_session_expiry_logout_cookie_and_migration_workspace_controls(
             policy=_policy("health.read"),
         )
     assert expired.value.code == "invalid_token"
+    with psycopg.connect(database_url) as connection:
+        row = connection.execute(
+            """
+            SELECT revoked_at IS NOT NULL,
+                   provider_access_token_ciphertext IS NULL,
+                   provider_refresh_token_ciphertext IS NULL,
+                   provider_access_expires_at IS NULL
+            FROM router.administrator_sessions
+            """
+        ).fetchone()
+    assert row == (True, True, True, True)
+
+
+def test_session_expiry_logout_cookie_and_migration_workspace_controls(
+    database_url: str,
+    auth_repository: tuple[AdministratorAuthRepository, FakeIdentityService],
+) -> None:
+    repository, identity = auth_repository
+    session, csrf = _bootstrap(repository, identity, frozenset({"health.read"}))
     cookie = administrator_session_cookie(session)
     assert cookie.startswith("__Host-llmrouter-admin=")
     assert "Secure" in cookie and "HttpOnly" in cookie and "SameSite=Lax" in cookie

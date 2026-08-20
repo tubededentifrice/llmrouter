@@ -107,6 +107,7 @@ def test_migration_plan_has_reversible_contiguous_pairs() -> None:
         16,
         17,
         18,
+        19,
     ]
     assert all(migration.up_sql and migration.down_sql for migration in plan)
 
@@ -134,6 +135,7 @@ def test_migrate_empty_database(database_url: str) -> None:
             16,
             17,
             18,
+            19,
         )
         table_count = connection.execute(
             """
@@ -825,6 +827,7 @@ def test_rollback_keeps_previous_schema_data(database_url: str) -> None:
             16,
             17,
             18,
+            19,
         )
         assert connection.execute(
             "SELECT stable_name FROM router.services WHERE id = %s", (SERVICE_ID,)
@@ -837,6 +840,62 @@ def test_rollback_keeps_previous_schema_data(database_url: str) -> None:
         assert connection.execute("SELECT to_regnamespace('router')").fetchone() == (
             None,
         )
+
+
+def test_provider_session_rollback_revokes_and_removes_tokens(
+    database_url: str,
+) -> None:
+    """Do not keep a usable session when provider token checks are removed."""
+    administrator_id = "0198a080-0000-7000-8000-000000000191"
+    session_id = "0198a080-0000-7000-8000-000000000192"
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        migrate(connection)
+        connection.execute(
+            """
+            INSERT INTO router.administrators (id, issuer, subject)
+            VALUES (%s, 'https://auth.opendle.dev', 'rollback-person')
+            """,
+            (administrator_id,),
+        )
+        connection.execute(
+            """
+            INSERT INTO router.administrator_sessions (
+                id, administrator_id, token_digest, csrf_digest, exact_origin,
+                authenticated_at, account_checked_at, last_used_at,
+                idle_expires_at, absolute_expires_at,
+                provider_access_token_ciphertext,
+                provider_refresh_token_ciphertext, provider_access_expires_at
+            ) VALUES (%s, %s, %s, %s, 'https://llmrouter.opendle.dev', now(),
+                      now(), now(), now() + interval '15 minutes',
+                      now() + interval '8 hours', %s, %s, now() + interval '5 minutes')
+            """,
+            (
+                session_id,
+                administrator_id,
+                bytes(32),
+                bytes([1]) * 32,
+                bytes(41),
+                bytes([1]) * 41,
+            ),
+        )
+        migrate(connection, target=18)
+        assert connection.execute(
+            """
+            SELECT revoked_at IS NOT NULL
+            FROM router.administrator_sessions WHERE id = %s
+            """,
+            (session_id,),
+        ).fetchone() == (True,)
+        migrate(connection)
+        assert connection.execute(
+            """
+            SELECT revoked_at IS NOT NULL,
+                   provider_access_token_ciphertext IS NULL,
+                   provider_refresh_token_ciphertext IS NULL
+            FROM router.administrator_sessions WHERE id = %s
+            """,
+            (session_id,),
+        ).fetchone() == (True, True, True)
 
 
 def test_execution_lifecycle_rollback_is_exact_and_reapplies(

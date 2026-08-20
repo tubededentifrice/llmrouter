@@ -61,6 +61,7 @@ def main() -> None:
     digest_key = _secret_bytes(Path("/run/secrets/machine_digest_key"))
     current = datetime.now(UTC)
     with psycopg.connect(database_url) as connection:
+        _clear_expired_administrator_sessions(connection, current)
         _seed_scopes(connection)
         has_generation = connection.execute(
             "SELECT EXISTS (SELECT 1 FROM router.service_bootstrap_generations "
@@ -115,6 +116,36 @@ def main() -> None:
     )
     _write_secret(STATE_DIRECTORY / "data-plane-token", data_token.access_token.value)
     print("Local development identities are ready.")
+
+
+def _clear_expired_administrator_sessions(
+    connection: psycopg.Connection[Any], current: datetime
+) -> None:
+    """Remove provider secrets from expired administrator sessions."""
+    provider_columns_ready = connection.execute(
+        """
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'router'
+              AND table_name = 'administrator_sessions'
+              AND column_name = 'provider_refresh_token_ciphertext'
+        )
+        """
+    ).fetchone() == (True,)
+    if not provider_columns_ready:
+        return
+    connection.execute(
+        """
+        UPDATE router.administrator_sessions
+        SET revoked_at = COALESCE(revoked_at, %s),
+            provider_access_token_ciphertext = NULL,
+            provider_refresh_token_ciphertext = NULL,
+            provider_access_expires_at = NULL
+        WHERE revoked_at IS NULL
+          AND (idle_expires_at <= %s OR absolute_expires_at <= %s)
+        """,
+        (current, current, current),
+    )
 
 
 def _seed_budget(database_url: str, current: datetime) -> None:

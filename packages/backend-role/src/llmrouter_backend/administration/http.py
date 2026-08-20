@@ -39,6 +39,7 @@ if TYPE_CHECKING:
 router = APIRouter(prefix="/v1", tags=["Administration"])
 
 _ADMINISTRATION_COOKIE = "__Host-llmrouter-admin"
+_LOCAL_ADMINISTRATION_COOKIE = "__Host-llmrouter-local-admin"
 _MAXIMUM_BODY_BYTES = 1_048_576
 _MAXIMUM_HEADER_CHARACTERS = 2_048
 _MINIMUM_IDEMPOTENCY_CHARACTERS = 16
@@ -441,6 +442,15 @@ async def _document[ModelT: BaseModel](
 
 
 def _session(request: Request, request_id: str) -> str:
+    dual = bool(getattr(request.app.state, "dual_administrator_authority", False))
+    local = (
+        request.url.scheme == "http"
+        and request.url.hostname == "127.0.0.1"
+        and request.url.port == 5174
+    )
+    cookie_name = (
+        _LOCAL_ADMINISTRATION_COOKIE if dual and local else _ADMINISTRATION_COOKIE
+    )
     values = request.headers.getlist("cookie")
     if len(values) != 1 or len(values[0]) > 4_096:
         raise _AuthenticationError("invalid_token", request_id)
@@ -450,19 +460,16 @@ def _session(request: Request, request_id: str) -> str:
     except CookieError as error:
         raise _AuthenticationError("invalid_token", request_id) from error
     if (
-        sum(
-            part.strip().startswith(f"{_ADMINISTRATION_COOKIE}=")
-            for part in values[0].split(";")
-        )
+        sum(part.strip().startswith(f"{cookie_name}=") for part in values[0].split(";"))
         != 1
     ):
         raise _AuthenticationError("invalid_token", request_id)
-    matches = [
-        item.value for key, item in cookie.items() if key == _ADMINISTRATION_COOKIE
-    ]
+    matches = [item.value for key, item in cookie.items() if key == cookie_name]
     if len(matches) != 1 or not _valid_secret(matches[0]):
         raise _AuthenticationError("invalid_token", request_id)
-    return matches[0]
+    if not dual:
+        return matches[0]
+    return f"{'local' if local else 'oidc'}:{matches[0]}"
 
 
 def _valid_secret(value: str) -> bool:

@@ -32,6 +32,7 @@ WORKSPACE_ID = "0198a080-0000-7000-8000-000000000102"
 OTHER_WORKSPACE_ID = "0198a080-0000-7000-8000-000000000103"
 BASE_URL = "http://127.0.0.1:8010"
 ADMIN_ORIGIN = "http://127.0.0.1:5174"
+ADMIN_BASE_URL = ADMIN_ORIGIN
 STATE_DIRECTORY = Path(__file__).resolve().parents[1] / ".local-development"
 STATE_PATH = STATE_DIRECTORY / "e2e-state.json"
 
@@ -52,9 +53,9 @@ def _prepare() -> None:
     admin_csrf = _secret(STATE_DIRECTORY / "administrator-csrf")
     data_token = _secret(STATE_DIRECTORY / "data-plane-token")
     admin = httpx.Client(
-        base_url=BASE_URL,
+        base_url=ADMIN_BASE_URL,
         headers={
-            "Cookie": f"__Host-llmrouter-admin={admin_session}",
+            "Cookie": f"__Host-llmrouter-local-admin={admin_session}",
             "Origin": ADMIN_ORIGIN,
             "X-CSRF-Token": admin_csrf,
         },
@@ -280,8 +281,8 @@ def _resume() -> None:
     end = datetime.now(UTC) + timedelta(seconds=1)
     start = end - timedelta(days=1)
     summary = httpx.get(
-        f"{BASE_URL}/v1/admin/services/{SERVICE_ID}/accounting/summary",
-        headers={"Cookie": f"__Host-llmrouter-admin={admin_session}"},
+        f"{ADMIN_BASE_URL}/v1/admin/services/{SERVICE_ID}/accounting/summary",
+        headers={"Cookie": f"__Host-llmrouter-local-admin={admin_session}"},
         params={
             "workspace_id": WORKSPACE_ID,
             "from": start.isoformat(),

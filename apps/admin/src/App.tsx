@@ -25,9 +25,13 @@ import {
   AdministrationApiError,
   activateLocalAdministrator,
   configurationRevisionForScope,
+  consumeTrustedGrantToken,
   createFetchAdministrationClient,
+  endAdministratorSession,
   errorMessage,
   inspectLocalAdministratorSession,
+  startPocketIDAdministratorSession,
+  startPocketIDRecentAuthentication,
   type AccountingSummary,
   type AdministrationClient,
   type AdministrationSnapshot,
@@ -39,7 +43,12 @@ import {
   type ScopeSelection,
 } from "./api.js";
 
+const initialTrustedGrantToken =
+  typeof window === "undefined" ? undefined : consumeTrustedGrantToken();
+
 type Section = "configuration" | "assignments" | "requests" | "accounting";
+type SessionAction =
+  "idle" | "sign_in_pending" | "sign_out_pending" | "recent_pending" | "error";
 export interface Notice {
   readonly tone: "success" | "error";
   readonly message: string;
@@ -1663,29 +1672,84 @@ export function LocalAdministratorActivation({
 
 function ActivatedAdministrationApp({
   csrfToken,
+  authenticationMode,
+  identityAccountUrl,
+  onSignOut,
+  onRecentAuthentication,
+  sessionAction = "idle",
 }: {
   readonly csrfToken: string;
+  readonly authenticationMode: "local" | "oidc";
+  readonly identityAccountUrl?: string;
+  readonly onSignOut: () => Promise<void>;
+  readonly onRecentAuthentication: () => Promise<void>;
+  readonly sessionAction?: SessionAction;
 }) {
   const client = useMemo(
-    () => createFetchAdministrationClient({ csrfToken }),
-    [csrfToken],
+    () =>
+      createFetchAdministrationClient({
+        csrfToken,
+        onRecentAuthenticationRequired: onRecentAuthentication,
+      }),
+    [csrfToken, onRecentAuthentication],
   );
-  return <App client={client} />;
+  return (
+    <>
+      {authenticationMode === "oidc" ? (
+        <nav
+          className="administrator-session-actions"
+          aria-label="Administrator account"
+        >
+          {identityAccountUrl === undefined ? null : (
+            <a href={identityAccountUrl}>Manage Pocket ID account</a>
+          )}
+          <Button
+            type="button"
+            disabled={sessionAction.endsWith("_pending")}
+            onClick={() => void onSignOut()}
+          >
+            {sessionAction === "sign_out_pending" ? "Signing out…" : "Sign out"}
+          </Button>
+          {sessionAction === "error" ? (
+            <p role="alert">The Pocket ID action failed. Try again.</p>
+          ) : null}
+          {sessionAction === "recent_pending" ? (
+            <p role="status">Pocket ID verification is opening…</p>
+          ) : null}
+        </nav>
+      ) : null}
+      <App client={client} />
+    </>
+  );
 }
 
 export type LocalSessionGate =
   | { readonly state: "checking" }
   | { readonly state: "required" }
-  | { readonly state: "active"; readonly csrfToken: string }
+  | { readonly state: "oidc_required" }
+  | {
+      readonly state: "active";
+      readonly csrfToken: string;
+      readonly authenticationMode: "local" | "oidc";
+      readonly identityAccountUrl?: string;
+    }
   | { readonly state: "unavailable" }
   | { readonly state: "failed" };
 
 export function LocalAdministrationGateView({
   session,
   onActivate,
+  onSignIn,
+  onSignOut,
+  onRecentAuthentication,
+  sessionAction = "idle",
 }: {
   readonly session: LocalSessionGate;
   readonly onActivate: (secret: string) => Promise<void>;
+  readonly onSignIn?: () => Promise<void>;
+  readonly onSignOut?: () => Promise<void>;
+  readonly onRecentAuthentication?: () => Promise<void>;
+  readonly sessionAction?: SessionAction;
 }) {
   if (session.state === "checking")
     return (
@@ -1697,6 +1761,30 @@ export function LocalAdministrationGateView({
     );
   if (session.state === "required")
     return <LocalAdministratorActivation onActivate={onActivate} />;
+  if (session.state === "oidc_required")
+    return (
+      <main className="entry-state">
+        <Card>
+          <PageHeading
+            eyebrow="OpenDLE Identity"
+            title="Administrator sign-in"
+            description="Use your Pocket ID passkey to start a bounded Router session."
+          />
+          <Button
+            type="button"
+            disabled={sessionAction.endsWith("_pending")}
+            onClick={() => void onSignIn?.()}
+          >
+            {sessionAction === "sign_in_pending"
+              ? "Opening Pocket ID…"
+              : "Sign in with Pocket ID"}
+          </Button>
+          {sessionAction === "error" ? (
+            <p role="alert">Pocket ID is not available. Try again.</p>
+          ) : null}
+        </Card>
+      </main>
+    );
   if (session.state === "failed")
     return (
       <main className="entry-state">
@@ -1706,7 +1794,20 @@ export function LocalAdministrationGateView({
       </main>
     );
   if (session.state === "active")
-    return <ActivatedAdministrationApp csrfToken={session.csrfToken} />;
+    return (
+      <ActivatedAdministrationApp
+        csrfToken={session.csrfToken}
+        authenticationMode={session.authenticationMode}
+        {...(session.identityAccountUrl === undefined
+          ? {}
+          : { identityAccountUrl: session.identityAccountUrl })}
+        onSignOut={() => onSignOut?.() ?? Promise.resolve()}
+        onRecentAuthentication={() =>
+          onRecentAuthentication?.() ?? Promise.resolve()
+        }
+        sessionAction={sessionAction}
+      />
+    );
   return <App />;
 }
 
@@ -1714,6 +1815,7 @@ export function LocalAdministrationApp() {
   const [session, setSession] = useState<LocalSessionGate>({
     state: "checking",
   });
+  const [sessionAction, setSessionAction] = useState<SessionAction>("idle");
   useEffect(() => {
     let mounted = true;
     void inspectLocalAdministratorSession()
@@ -1730,9 +1832,46 @@ export function LocalAdministrationApp() {
   return (
     <LocalAdministrationGateView
       session={session}
+      sessionAction={sessionAction}
       onActivate={async (secret) => {
         const csrfToken = await activateLocalAdministrator(secret);
-        setSession({ state: "active", csrfToken });
+        setSession({
+          state: "active",
+          csrfToken,
+          authenticationMode: "local",
+        });
+      }}
+      onSignIn={async () => {
+        setSessionAction("sign_in_pending");
+        try {
+          const authorizationUrl = await startPocketIDAdministratorSession(
+            initialTrustedGrantToken,
+          );
+          window.location.assign(authorizationUrl);
+        } catch {
+          setSessionAction("error");
+        }
+      }}
+      onSignOut={async () => {
+        if (session.state !== "active") return;
+        setSessionAction("sign_out_pending");
+        try {
+          await endAdministratorSession(session.csrfToken);
+          setSessionAction("idle");
+          setSession({ state: "oidc_required" });
+        } catch {
+          setSessionAction("error");
+        }
+      }}
+      onRecentAuthentication={async () => {
+        setSessionAction("recent_pending");
+        try {
+          const authorizationUrl = await startPocketIDRecentAuthentication();
+          window.location.assign(authorizationUrl);
+        } catch (error) {
+          setSessionAction("error");
+          throw error;
+        }
       }}
     />
   );

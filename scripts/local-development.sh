@@ -30,21 +30,22 @@ validate_environment() {
 
 validate_secret() {
   local target="$1"
+  local mode="${2:-600}"
   [[ -f "${target}" && ! -L "${target}" ]] || fail "A local secret path is unsafe."
   [[ "$(stat -c %h "${target}")" == "1" ]] || fail "A local secret path is unsafe."
-  chmod 600 "${target}"
+  chmod "${mode}" "${target}"
 }
 
 install_secret() {
   local target="$1"
   local length="$2"
+  local mode="${3:-600}"
   local temporary
   if [[ -e "${target}" ]]; then
-    validate_secret "${target}"
+    validate_secret "${target}" "${mode}"
     return
   fi
   temporary="$(mktemp "${state_directory}/.secret.XXXXXX")"
-  chmod 600 "${temporary}"
   if [[ "${length}" == "0" ]]; then
     : >"${temporary}"
   else
@@ -53,13 +54,14 @@ install_secret() {
       fail "A local secret could not be created."
     fi
   fi
+  chmod "${mode}" "${temporary}"
   if ! ln "${temporary}" "${target}" 2>/dev/null; then
     rm -f "${temporary}"
-    validate_secret "${target}"
+    validate_secret "${target}" "${mode}"
     return
   fi
   rm -f "${temporary}"
-  validate_secret "${target}"
+  validate_secret "${target}" "${mode}"
 }
 
 prepare_state_directory() {
@@ -79,12 +81,30 @@ prepare_secrets() {
   install_secret "${state_directory}/canonical-replay-key" 32
   install_secret "${state_directory}/administrator-session" 32
   install_secret "${state_directory}/administrator-csrf" 32
+  install_secret "${state_directory}/administrator-digest-key" 32
+  install_secret "${state_directory}/administrator-encryption-key" 32
+  install_secret "${state_directory}/pocket-id-client-id" 0 400
+  install_secret "${state_directory}/pocket-id-client-secret" 0 400
+  install_secret "${state_directory}/pocket-id-account-api-key" 0 400
   install_secret "${state_directory}/example-host-token" 0
   install_secret "${state_directory}/data-plane-token" 0
 }
 
 compose() {
-  env -u OPENROUTER_API_KEY docker compose \
+  local public_admin_auth=0
+  local configured=0
+  local target
+  for target in pocket-id-client-id pocket-id-client-secret pocket-id-account-api-key; do
+    if [[ -s "${state_directory}/${target}" ]]; then
+      configured=$((configured + 1))
+    fi
+  done
+  if [[ "${configured}" == "3" ]]; then
+    public_admin_auth=1
+  elif [[ "${configured}" != "0" ]]; then
+    fail "The Pocket ID client configuration is incomplete."
+  fi
+  env -u OPENROUTER_API_KEY LLMROUTER_PUBLIC_ADMIN_AUTH="${public_admin_auth}" docker compose \
     --project-directory "${repository_root}" -f "${compose_file}" "$@"
 }
 

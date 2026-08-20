@@ -2,9 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import {
   AdministrationApiError,
   activateLocalAdministrator,
+  consumeTrustedGrantToken,
   createFetchAdministrationClient,
   errorMessage,
   inspectLocalAdministratorSession,
+  startPocketIDAdministratorSession,
+  startPocketIDRecentAuthentication,
   type ScopeSelection,
 } from "../src/api.js";
 
@@ -27,6 +30,32 @@ function requestUrl(input: string | URL | Request): string {
 }
 
 describe("administration API client", () => {
+  it("consumes only one generated trusted-grant fragment before requests", () => {
+    const replaceState = vi.fn();
+    const token = "A".repeat(43);
+    expect(
+      consumeTrustedGrantToken(
+        { hash: `#token=${token}`, pathname: "/trusted-grant", search: "" },
+        { replaceState },
+      ),
+    ).toBe(token);
+    expect(replaceState).toHaveBeenCalledWith({}, "", "/trusted-grant");
+  });
+
+  it.each(["", "#token=", "#token=short", `#token=${"A".repeat(43)}&extra=1`])(
+    "rejects an empty or malformed trusted-grant fragment %s",
+    (hash) => {
+      const replaceState = vi.fn();
+      expect(
+        consumeTrustedGrantToken(
+          { hash, pathname: "/trusted-grant", search: "?safe=1" },
+          { replaceState },
+        ),
+      ).toBeUndefined();
+      expect(replaceState).toHaveBeenCalledTimes(hash === "" ? 0 : 1);
+    },
+  );
+
   it("activates only the hidden local administrator session", async () => {
     let received: RequestInit | undefined;
     const fetcher = vi.fn(
@@ -79,8 +108,81 @@ describe("administration API client", () => {
       "/v1/admin/local-session",
       "/v1/admin/session",
     ]);
-    expect(unavailable).toEqual({ state: "unavailable" });
-    expect(productionPaths).toEqual(["/v1/admin/local-session"]);
+    expect(unavailable).toEqual({ state: "oidc_required" });
+    expect(productionPaths).toEqual([
+      "/v1/admin/local-session",
+      "/v1/admin/session",
+    ]);
+  });
+
+  it("starts Pocket ID login with a one-use trusted grant token", async () => {
+    let body: string | undefined;
+    const authorizationUrl = await startPocketIDAdministratorSession(
+      "trusted-grant-token",
+      vi.fn((_input: string | URL | Request, init?: RequestInit) => {
+        body = typeof init?.body === "string" ? init.body : undefined;
+        return Promise.resolve(
+          json(
+            { authorization_url: "https://auth.opendle.dev/authorize" },
+            201,
+          ),
+        );
+      }),
+    );
+    expect(authorizationUrl).toBe("https://auth.opendle.dev/authorize");
+    expect(JSON.parse(body ?? "null")).toEqual({
+      purpose: "login",
+      return_path: "/",
+      trusted_grant_token: "trusted-grant-token",
+    });
+  });
+
+  it("starts Pocket ID recent authentication without a trusted grant", async () => {
+    let body: string | undefined;
+    await startPocketIDRecentAuthentication(
+      vi.fn((_input: string | URL | Request, init?: RequestInit) => {
+        body = typeof init?.body === "string" ? init.body : undefined;
+        return Promise.resolve(
+          json(
+            { authorization_url: "https://auth.opendle.dev/authorize" },
+            201,
+          ),
+        );
+      }),
+    );
+    expect(JSON.parse(body ?? "null")).toEqual({
+      purpose: "recent_authentication",
+      return_path: "/",
+    });
+  });
+
+  it("starts one safe recent-authentication flow for a protected failure", async () => {
+    const onRecentAuthenticationRequired = vi.fn(() => Promise.resolve());
+    const client = createFetchAdministrationClient({
+      csrfToken: "csrf-token-with-at-least-thirty-two-characters",
+      onRecentAuthenticationRequired,
+      fetcher: vi.fn(() =>
+        Promise.resolve(
+          json(
+            {
+              error: {
+                code: "recent_auth_required",
+                message: "Recent authentication is required.",
+              },
+            },
+            401,
+          ),
+        ),
+      ),
+    });
+    await expect(
+      client.createCredential({
+        ownerScope: "service-one",
+        secret: "write-only",
+        safeLabel: "test",
+      }),
+    ).rejects.toMatchObject({ code: "recent_auth_required" });
+    expect(onRecentAuthenticationRequired).toHaveBeenCalledOnce();
   });
 
   it("keeps failed local activation errors safe", async () => {

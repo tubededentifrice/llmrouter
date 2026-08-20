@@ -3751,6 +3751,12 @@ components:
           type: string
           pattern: '^/[A-Za-z0-9._~!$&''()*+,;=:@%/?-]*$'
           maxLength: 2000
+        trusted_grant_token:
+          type: string
+          minLength: 43
+          maxLength: 43
+          pattern: '^[A-Za-z0-9_-]+$'
+          description: One-use trusted-console grant token for initial or recovery login.
     AdministratorAuthorization:
       type: object
       additionalProperties: false
@@ -3761,7 +3767,7 @@ components:
     AdministratorSession:
       type: object
       additionalProperties: false
-      required: [issuer, subject, grants, authenticated_at, account_state_checked_at, idle_expires_at, absolute_expires_at, csrf_token, identity_account_url]
+      required: [issuer, subject, grants, authenticated_at, recent_authentication_at, account_state_checked_at, idle_expires_at, absolute_expires_at, csrf_token, identity_account_url, authentication_mode]
       properties:
         issuer: {type: string, format: uri}
         subject: {$ref: '#/components/schemas/OpaqueId'}
@@ -3771,11 +3777,13 @@ components:
           items: {type: string, maxLength: 200}
         authenticated_at: {$ref: '#/components/schemas/Timestamp'}
         account_state_checked_at: {$ref: '#/components/schemas/Timestamp'}
-        recent_authentication_at: {$ref: '#/components/schemas/Timestamp'}
+        recent_authentication_at:
+          oneOf: [{$ref: '#/components/schemas/Timestamp'}, {type: 'null'}]
         idle_expires_at: {$ref: '#/components/schemas/Timestamp'}
         absolute_expires_at: {$ref: '#/components/schemas/Timestamp'}
         csrf_token: {type: string, minLength: 32, maxLength: 200, pattern: '^[A-Za-z0-9_-]+$'}
         identity_account_url: {type: string, format: uri}
+        authentication_mode: {type: string, enum: [local, oidc]}
     AdministratorOperation:
       type: string
       enum: [service.manage, service_parent.manage, catalog.manage, provider_instance.manage, provider_route.manage, business_tool_gateway.approve, credential.manage, assignment.manage, budget.read, budget.write, accounting.read, request_status.read, retention.manage, grant.manage, audit.read, content.read, export.create, health.read, node.drain, circuit.probe, circuit.reset, high_availability.promote, high_availability.failback, backup.start, restore.validate, disaster_recovery.test]

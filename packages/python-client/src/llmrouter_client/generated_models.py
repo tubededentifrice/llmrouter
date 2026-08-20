@@ -1127,6 +1127,7 @@ EmbedAdministrationSnapshot = TypedDict('EmbedAdministrationSnapshot', {
 AdministratorSessionStart = TypedDict('AdministratorSessionStart', {
     'purpose': 'Literal["login", "recent_authentication"]',
     'return_path': 'str',
+    'trusted_grant_token': 'NotRequired[str]',
 })
 
 AdministratorAuthorization = TypedDict('AdministratorAuthorization', {
@@ -1140,11 +1141,12 @@ AdministratorSession = TypedDict('AdministratorSession', {
     'grants': 'list[str]',
     'authenticated_at': 'Timestamp',
     'account_state_checked_at': 'Timestamp',
-    'recent_authentication_at': 'NotRequired[Timestamp]',
+    'recent_authentication_at': 'Timestamp | None',
     'idle_expires_at': 'Timestamp',
     'absolute_expires_at': 'Timestamp',
     'csrf_token': 'str',
     'identity_account_url': 'str',
+    'authentication_mode': 'Literal["local", "oidc"]',
 })
 
 AdministratorOperation: TypeAlias = Literal["service.manage", "service_parent.manage", "catalog.manage", "provider_instance.manage", "provider_route.manage", "business_tool_gateway.approve", "credential.manage", "assignment.manage", "budget.read", "budget.write", "accounting.read", "request_status.read", "retention.manage", "grant.manage", "audit.read", "content.read", "export.create", "health.read", "node.drain", "circuit.probe", "circuit.reset", "high_availability.promote", "high_availability.failback", "backup.start", "restore.validate", "disaster_recovery.test"]
@@ -2321,6 +2323,13 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
       "authenticated_at": {
         "$ref": "#/components/schemas/Timestamp"
       },
+      "authentication_mode": {
+        "enum": [
+          "local",
+          "oidc"
+        ],
+        "type": "string"
+      },
       "csrf_token": {
         "maxLength": 200,
         "minLength": 32,
@@ -2347,7 +2356,14 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
         "type": "string"
       },
       "recent_authentication_at": {
-        "$ref": "#/components/schemas/Timestamp"
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          {
+            "type": "null"
+          }
+        ]
       },
       "subject": {
         "$ref": "#/components/schemas/OpaqueId"
@@ -2358,11 +2374,13 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
       "subject",
       "grants",
       "authenticated_at",
+      "recent_authentication_at",
       "account_state_checked_at",
       "idle_expires_at",
       "absolute_expires_at",
       "csrf_token",
-      "identity_account_url"
+      "identity_account_url",
+      "authentication_mode"
     ],
     "type": "object"
   },
@@ -2379,6 +2397,13 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
       "return_path": {
         "maxLength": 2000,
         "pattern": "^/[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*$",
+        "type": "string"
+      },
+      "trusted_grant_token": {
+        "description": "One-use trusted-console grant token for initial or recovery login.",
+        "maxLength": 43,
+        "minLength": 43,
+        "pattern": "^[A-Za-z0-9_-]+$",
         "type": "string"
       }
     },

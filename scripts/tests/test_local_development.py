@@ -141,6 +141,12 @@ def test_local_start_serializes_operations_and_installs_secrets_exclusively() ->
     assert "stat -c %h" in script
     assert ">${target}" not in script
     assert "cleanup_failed_start" in script
+    for name in (
+        "pocket-id-client-id",
+        "pocket-id-client-secret",
+        "pocket-id-account-api-key",
+    ):
+        assert f'install_secret "${{state_directory}}/{name}" 0 400' in script
 
 
 def test_bootstrap_writer_rejects_a_secret_symlink(tmp_path: Path) -> None:
@@ -152,6 +158,26 @@ def test_bootstrap_writer_rejects_a_secret_symlink(tmp_path: Path) -> None:
     with pytest.raises(SystemExit, match="unsafe"):
         _bootstrap_module()._write_secret(target, "replacement")  # noqa: SLF001
     assert victim.read_text(encoding="ascii") == "keep\n"
+
+
+def test_expired_session_cleanup_waits_for_provider_token_migration() -> None:
+    """Keep a rolling local update safe while migration 0019 runs."""
+    calls: list[str] = []
+
+    class Result:
+        def fetchone(self) -> tuple[bool]:
+            return (False,)
+
+    class Connection:
+        def execute(self, query: str, _parameters=None) -> Result:  # noqa: ANN001
+            calls.append(query)
+            return Result()
+
+    _bootstrap_module()._clear_expired_administrator_sessions(  # noqa: SLF001
+        Connection(), datetime(2026, 8, 20, tzinfo=UTC)
+    )
+    assert len(calls) == 1
+    assert "information_schema.columns" in calls[0]
 
 
 def test_bootstrap_writer_rejects_a_secret_hard_link(tmp_path: Path) -> None:
@@ -175,7 +201,10 @@ def test_local_secret_paths_are_ignored_and_not_printed() -> None:
     assert "set -x" not in script
     assert "cat /run/secrets" not in script
     assert "LLMROUTER_OPENROUTER_API_KEY" not in script
-    assert "env -u OPENROUTER_API_KEY docker compose" in script
+    assert (
+        'env -u OPENROUTER_API_KEY LLMROUTER_PUBLIC_ADMIN_AUTH="${public_admin_auth}" '
+        "docker compose"
+    ) in script
     for name in (
         "credential-wrapping-key",
         "idempotency-digest-key",
@@ -190,6 +219,10 @@ def test_local_secret_paths_are_ignored_and_not_printed() -> None:
     assert "local-development-e2e.py resume" in script
     assert "compose kill --signal KILL backend" in script
     assert "compose up --detach backend" in script
+    bootstrap = BOOTSTRAP_PATH.read_text(encoding="utf-8")
+    assert "_clear_expired_administrator_sessions(connection, current)" in bootstrap
+    assert "provider_columns_ready" in bootstrap
+    assert "provider_refresh_token_ciphertext = NULL" in bootstrap
 
 
 def test_local_proof_resets_and_stops_the_deployment() -> None:

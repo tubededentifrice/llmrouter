@@ -104,6 +104,32 @@ the local URLs. Do not use the protected external URL for agent tests. The
 administration container joins the existing `traefik-proxy` network. Traefik
 applies the existing Pangolin resource policy before it forwards a request.
 
+The public administration site uses the shared Pocket ID issuer at
+`https://auth.opendle.dev`. Put the Router client's ID and secret in the
+ignored mode-0400 files `.local-development/pocket-id-client-id` and
+`.local-development/pocket-id-client-secret`. Put its separate regular,
+expiring Pocket ID account-state API key in
+`.local-development/pocket-id-account-api-key`. The Router uses this key only
+to read user and WebAuthn credential state for its five-minute check. Do not
+use `STATIC_API_KEY` or reuse an Ontology credential. Empty files keep the
+deterministic localhost-only mode.
+
+After the three Pocket ID files contain their values, restart the deployment.
+Create the initial ten-minute one-use Router grant URL from the backend:
+
+```bash
+docker compose -f docker-compose.dev.yml exec backend \
+  /bin/sh -euc '
+    export LLMROUTER_LOCAL_RUNTIME=0
+    export LLMROUTER_DATABASE_URL="postgresql://llmrouter:$(cat /run/secrets/postgres_password)@postgres:5432/llmrouter"
+    exec .venv/bin/python scripts/administrator-grant.py initial
+  '
+```
+
+Open the returned URL and authenticate through Pocket ID. Pocket ID proves the
+person's identity. The one-use Router URL gives that identity its first local
+Router grant. Pocket ID membership alone does not give Router authority.
+
 The [administration embed example](apps/embed-example/README.md) proves the
 service-scoped frame from a distinct localhost origin. It keeps the host
 service token in the example server process.

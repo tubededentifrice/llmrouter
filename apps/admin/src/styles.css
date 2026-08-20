@@ -643,3 +643,10 @@ td small {
     transition-duration: 0.01ms !important;
   }
 }
+.administrator-session-actions {
+  align-items: center;
+  display: flex;
+  gap: var(--space-3);
+  justify-content: flex-end;
+  padding: var(--space-3) var(--space-5) 0;
+}

@@ -11,6 +11,8 @@ import psycopg
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
+from llmrouter_backend.admin_auth.deployment import configured_repository
+from llmrouter_backend.admin_auth.http import router as administrator_auth_router
 from llmrouter_backend.administration.http import router as administration_router
 from llmrouter_backend.administration.service import AdministrationService
 from llmrouter_backend.embed_sessions import (
@@ -30,6 +32,7 @@ app = FastAPI(title="LLM Router", version="0.1.0")
 app.include_router(model_request_router)
 app.include_router(administration_router)
 app.include_router(embed_session_router)
+app.include_router(administrator_auth_router)
 
 
 def _install_local_embed_service() -> None:
@@ -75,6 +78,9 @@ def _install_complete_local_runtime() -> None:
     if database_url is None or any(value is None for value in paths.values()):
         message = "The complete local runtime configuration is incomplete."
         raise RuntimeError(message)
+    administrator_auth = configured_repository(database_url)
+    if administrator_auth is not None:
+        app.state.administrator_auth_repository = administrator_auth
     install_local_runtime(
         app,
         database_url=database_url,
@@ -86,6 +92,7 @@ def _install_complete_local_runtime() -> None:
         replay_path=Path("/local-state/backend-replay/accounting-replay.bin"),
         admin_session=_secret_text(Path(paths["admin_session"] or "")),
         admin_csrf=_secret_text(Path(paths["admin_csrf"] or "")),
+        production_administrator_authority=administrator_auth,
         openrouter_live_flag=os.environ.get("LLMROUTER_LOCAL_OPENROUTER_LIVE"),
     )
 

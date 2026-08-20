@@ -95,6 +95,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
     from pathlib import Path
 
+    from llmrouter_backend.admin_auth import AdministratorAuthRepository
     from llmrouter_backend.admission import AdmissionRequest, AdmissionResult
     from llmrouter_backend.execution import AdapterStop
     from llmrouter_backend.routing import AdapterProgress, AttemptPlan
@@ -102,7 +103,8 @@ if TYPE_CHECKING:
 
 LOCAL_ADMIN_ORIGIN = "http://127.0.0.1:5174"
 LOCAL_SOURCE_NODE_ID = "0198a080-0000-7000-8000-000000000150"
-_COOKIE = "__Host-llmrouter-admin"
+_COOKIE = "__Host-llmrouter-local-admin"
+_LOCAL_ADMIN_PORT = 5174
 _MINIMUM_LOCAL_SECRET_CHARACTERS = 20
 _MAXIMUM_LOCAL_SECRET_CHARACTERS = 500
 _MAXIMUM_LOCAL_ACTIVATION_BYTES = 1024
@@ -163,6 +165,28 @@ class LocalAdministratorAuthority:
             recent_authentication_at=now,
             mutation=policy.mutation,
         )
+
+
+class DualAdministratorAuthority:
+    """Keep localhost proof authority separate from public OIDC authority."""
+
+    def __init__(
+        self,
+        local: LocalAdministratorAuthority,
+        production: AdministratorAuthRepository,
+    ) -> None:
+        self._local = local
+        self._production = production
+
+    def authorize_session(self, session_token: str, **kwargs: object) -> RequestContext:
+        mode, separator, token = session_token.partition(":")
+        if not separator:
+            raise PermissionError("The administrator session mode is invalid.")
+        if mode == "local":
+            return self._local.authorize_session(token, **kwargs)  # type: ignore[arg-type]
+        if mode == "oidc":
+            return self._production.authorize_session(token, **kwargs)  # type: ignore[arg-type]
+        raise PermissionError("The administrator session mode is invalid.")
 
 
 class LocalDistributionAdmission:
@@ -472,6 +496,7 @@ def install_local_runtime(
     replay_path: Path,
     admin_session: str,
     admin_csrf: str,
+    production_administrator_authority: AdministratorAuthRepository | None = None,
     openrouter_live_flag: str | None = None,
 ) -> None:
     """Install all local MVP control-plane and data-plane components."""
@@ -496,7 +521,14 @@ def install_local_runtime(
     views = PostgresModelRequestViews(database_url)
     accounting = PostgresAccountingRepository(database_url)
     replay = LocalReplayProtector(replay_path, replay_key)
-    authority = LocalAdministratorAuthority(admin_session, admin_csrf)
+    local_authority = LocalAdministratorAuthority(admin_session, admin_csrf)
+    authority = (
+        local_authority
+        if production_administrator_authority is None
+        else DualAdministratorAuthority(
+            local_authority, production_administrator_authority
+        )
+    )
     install_administration_service(
         app,
         AdministrationService(
@@ -658,7 +690,10 @@ def install_local_runtime(
         active_stops=cancelable_adapter.active_stops,
     )
     install_model_request_service(app, service)
-    app.state.local_admin_authority = authority
+    app.state.local_admin_authority = local_authority
+    app.state.dual_administrator_authority = (
+        production_administrator_authority is not None
+    )
     app.state.local_adapter = adapter
     app.state.local_submitter = submitter
     app.include_router(_router)
@@ -676,6 +711,8 @@ def install_local_runtime(
 @_router.get("/v1/admin/session", include_in_schema=False)
 def local_admin_session(request: Request) -> Response:
     """Return CSRF only for the generated local administrator cookie."""
+    if not _exact_local_request(request):
+        return JSONResponse({"error": {"code": "invalid_session"}}, status_code=401)
     authority = request.app.state.local_admin_authority
     cookie = request.cookies.get(_COOKIE, "")
     if not authority.valid_session(cookie):
@@ -689,7 +726,10 @@ def local_admin_session(request: Request) -> Response:
 async def activate_local_admin_session(request: Request) -> Response:
     """Activate the generated localhost administrator session."""
     authority = request.app.state.local_admin_authority
-    if _single_header(request, b"origin") != LOCAL_ADMIN_ORIGIN:
+    if (
+        not _exact_local_request(request)
+        or _single_header(request, b"origin") != LOCAL_ADMIN_ORIGIN
+    ):
         return _local_activation_error(403)
     content_length = _single_header(request, b"content-length")
     content_type = _single_header(request, b"content-type")
@@ -737,9 +777,19 @@ async def activate_local_admin_session(request: Request) -> Response:
 
 
 @_router.head("/v1/admin/local-session", include_in_schema=False)
-def local_admin_activation_capability() -> Response:
+def local_admin_activation_capability(request: Request) -> Response:
     """Report only that the hidden localhost activation flow is installed."""
+    if not _exact_local_request(request):
+        return Response(status_code=404, headers={"Cache-Control": "no-store"})
     return Response(status_code=204, headers={"Cache-Control": "no-store"})
+
+
+def _exact_local_request(request: Request) -> bool:
+    return (
+        request.url.scheme == "http"
+        and request.url.hostname == "127.0.0.1"
+        and request.url.port == _LOCAL_ADMIN_PORT
+    )
 
 
 def _local_activation_error(status_code: int) -> JSONResponse:

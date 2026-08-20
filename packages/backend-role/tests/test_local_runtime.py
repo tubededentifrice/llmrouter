@@ -1,5 +1,5 @@
 """Local complete-runtime security and replay tests."""
-# ruff: noqa: D103, PLR2004
+# ruff: noqa: D103, EM101, PLR2004, TRY003
 
 from __future__ import annotations
 
@@ -16,10 +16,12 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from llmrouter_backend.accounting import AttemptOutcome as AccountingOutcome
+from llmrouter_backend.administration.http import _session
 from llmrouter_backend.execution import AdapterStopEvidence
 from llmrouter_backend.local_runtime import (
     LOCAL_ADMIN_ORIGIN,
     LOCAL_SOURCE_NODE_ID,
+    DualAdministratorAuthority,
     LocalAdministratorAuthority,
     LocalBudgetGate,
     LocalCancelableAdapter,
@@ -31,6 +33,7 @@ from llmrouter_backend.local_runtime import (
 )
 from llmrouter_backend.routing import AttemptOutcome as RoutingOutcome
 from llmrouter_backend.spool import CanonicalEvent, EventClass
+from starlette.requests import Request
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -118,13 +121,17 @@ def test_local_administrator_activation_sets_only_a_protected_cookie() -> None:
     csrf = secrets.token_urlsafe(32)
     app.state.local_admin_authority = LocalAdministratorAuthority(secret, csrf)
     app.include_router(_router)
-    client = TestClient(app)
+    client = TestClient(app, base_url=LOCAL_ADMIN_ORIGIN)
 
     capability = client.head("/v1/admin/local-session")
     assert capability.status_code == 204
     assert capability.content == b""
     assert capability.headers["cache-control"] == "no-store"
     assert "/v1/admin/local-session" not in app.openapi()["paths"]
+    public_capability = TestClient(app, base_url="https://llmrouter.opendle.dev").head(
+        "/v1/admin/local-session"
+    )
+    assert public_capability.status_code == 404
 
     response = client.post(
         "/v1/admin/local-session",
@@ -136,11 +143,59 @@ def test_local_administrator_activation_sets_only_a_protected_cookie() -> None:
     assert response.json() == {"authenticated": True, "csrf_token": csrf}
     assert secret not in response.text
     cookie = response.headers["set-cookie"]
-    assert cookie.startswith("__Host-llmrouter-admin=")
+    assert cookie.startswith("__Host-llmrouter-local-admin=")
     assert "HttpOnly" in cookie
     assert "Secure" in cookie
     assert "SameSite=strict" in cookie
     assert "Path=/" in cookie
+
+
+def test_public_session_mode_cannot_use_the_local_activation_token() -> None:
+    secret = secrets.token_urlsafe(32)
+
+    class Production:
+        def authorize_session(self, token: str, **_kwargs: object) -> None:
+            assert token == secret
+            raise PermissionError("The production session is invalid.")
+
+    authority = DualAdministratorAuthority(
+        LocalAdministratorAuthority(secret, secrets.token_urlsafe(32)),
+        cast("Any", Production()),
+    )
+    with pytest.raises(PermissionError, match="production session"):
+        authority.authorize_session(f"oidc:{secret}")
+    with pytest.raises(PermissionError, match="mode is invalid"):
+        authority.authorize_session(secret)
+
+
+def test_http_boundary_selects_local_cookie_only_on_the_exact_local_host() -> None:
+    secret = secrets.token_urlsafe(32)
+    app = FastAPI()
+    app.state.dual_administrator_authority = True
+
+    def request(host: str, cookie: str) -> Request:
+        return Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "scheme": "http" if host == "127.0.0.1:5174" else "https",
+                "path": "/v1/admin/state",
+                "raw_path": b"/v1/admin/state",
+                "query_string": b"",
+                "headers": [
+                    (b"host", host.encode()),
+                    (b"cookie", cookie.encode()),
+                ],
+                "server": (host.partition(":")[0], 5174),
+                "client": ("127.0.0.1", 1),
+                "app": app,
+            }
+        )
+
+    local = request("127.0.0.1:5174", f"__Host-llmrouter-local-admin={secret}")
+    public = request("llmrouter.opendle.dev", f"__Host-llmrouter-admin={secret}")
+    assert _session(local, "request") == f"local:{secret}"
+    assert _session(public, "request") == f"oidc:{secret}"
 
 
 @pytest.mark.parametrize(
@@ -159,7 +214,7 @@ def test_local_administrator_activation_fails_safely(origin: str, status: int) -
     )
     app.include_router(_router)
 
-    response = TestClient(app).post(
+    response = TestClient(app, base_url=LOCAL_ADMIN_ORIGIN).post(
         "/v1/admin/local-session",
         headers={"Origin": origin},
         json={"secret": supplied},
@@ -191,7 +246,7 @@ def test_local_administrator_activation_rejects_ambiguous_or_unbounded_input(
     )
     app.include_router(_router)
 
-    response = TestClient(app).post(
+    response = TestClient(app, base_url=LOCAL_ADMIN_ORIGIN).post(
         "/v1/admin/local-session",
         headers=headers,
         content=json.dumps({"secret": expected}),

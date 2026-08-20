@@ -1,5 +1,5 @@
 """PostgreSQL authority for Pocket ID sessions and local administrator grants."""
-# ruff: noqa: ANN401, ARG002, C901, E501, EM101, PIE810, PLR0912, PLR0913, PLR0915, PLR0917, PLR2004, RUF100, S101, S608, TRY003, TRY203, TRY301
+# ruff: noqa: ANN401, ARG002, C901, E501, EM101, PIE810, PLR0912, PLR0913, PLR0915, PLR0917, PLR2004, RUF100, S101, S105, S608, TRY003, TRY203, TRY301
 
 from __future__ import annotations
 
@@ -40,6 +40,8 @@ from llmrouter_backend.admin_auth.oidc import (
     IdentityServiceUnavailable,
     OIDCConfiguration,
     OIDCTokenVerifier,
+    ProviderSessionInvalid,
+    ProviderSessionRotationFailed,
     build_authorization_url,
 )
 from llmrouter_backend.authority import (
@@ -202,9 +204,8 @@ class AdministratorAuthRepository:
                 code=error.code,
             )
             raise
-        separator = "&" if "?" in self._trusted_grant_base_url else "?"
         return TrustedGrantURL(
-            url=f"{self._trusted_grant_base_url}{separator}{urlencode({'token': token.value})}",
+            url=f"{self._trusted_grant_base_url}#{urlencode({'token': token.value})}",
             expires_at=expires_at,
         )
 
@@ -220,6 +221,8 @@ class AdministratorAuthRepository:
     ) -> AuthorizationStart:
         """Create one server-held state, nonce, and encrypted PKCE verifier."""
         self._require_time(now)
+        if purpose is AuthenticationPurpose.RECENT_AUTHENTICATION:
+            self._clear_expired_sessions(now)
         if not self._valid_return_path(return_path):
             self._audit_failure(
                 request_id=request_id,
@@ -433,6 +436,13 @@ class AdministratorAuthRepository:
                 self._require_current_identity_state(identity_state, now, request_id)
                 if not identity_state.active:
                     raise AdministratorAuthError("invalid_token", request_id)
+                if (
+                    response.token_type != "Bearer"
+                    or response.access_token is None
+                    or response.refresh_token is None
+                    or response.expires_in is None
+                ):
+                    raise AdministratorAuthError("invalid_token", request_id)
                 administrator_id = self._upsert_administrator(
                     connection,
                     issuer=identity.issuer,
@@ -463,8 +473,12 @@ class AdministratorAuthRepository:
                             id, administrator_id, token_digest, csrf_digest,
                             exact_origin, authenticated_at, recent_authenticated_at,
                             account_checked_at, last_used_at, idle_expires_at,
-                            absolute_expires_at, identity_generation
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            absolute_expires_at, identity_generation,
+                            provider_access_token_ciphertext,
+                            provider_refresh_token_ciphertext,
+                            provider_access_expires_at
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                                  %s, %s, %s)
                         """,
                         (
                             session_id,
@@ -479,6 +493,9 @@ class AdministratorAuthRepository:
                             idle_expiry,
                             absolute_expiry,
                             identity_state.generation,
+                            self._encrypt(response.access_token, session_id),
+                            self._encrypt(response.refresh_token, session_id),
+                            now + timedelta(seconds=response.expires_in),
                         ),
                     )
                 else:
@@ -513,7 +530,10 @@ class AdministratorAuthRepository:
                         UPDATE router.administrator_sessions
                         SET recent_authenticated_at = %s, account_checked_at = %s,
                             last_used_at = %s, idle_expires_at = %s,
-                            identity_generation = %s
+                            identity_generation = %s,
+                            provider_access_token_ciphertext = %s,
+                            provider_refresh_token_ciphertext = %s,
+                            provider_access_expires_at = %s
                         WHERE id = %s
                         """,
                         (
@@ -522,6 +542,9 @@ class AdministratorAuthRepository:
                             now,
                             idle_expiry,
                             identity_state.generation,
+                            self._encrypt(response.access_token, session_id),
+                            self._encrypt(response.refresh_token, session_id),
+                            now + timedelta(seconds=response.expires_in),
                             session_id,
                         ),
                     )
@@ -591,6 +614,7 @@ class AdministratorAuthRepository:
     ) -> AdministratorPrincipal:
         """Return one exact effective grant after session and identity-state checks."""
         self._require_time(now)
+        self._clear_expired_sessions(now)
         self._require_uuid(service_id, request_id=request_id)
         self._require_uuid(workspace_id, request_id=request_id)
         if workspace_id is not None and service_id is None:
@@ -608,25 +632,15 @@ class AdministratorAuthRepository:
             )
         if refresh:
             try:
-                with self._connect() as connection, connection.transaction():
-                    session = self._session_row(
-                        connection,
-                        session_token,
-                        request_id=request_id,
-                        for_update=True,
-                    )
-                    self._check_session_time(session, now, request_id=request_id)
-                    valid = self._refresh_identity_state(
-                        connection, session, now, request_id
-                    )
+                self._refresh_token_identity(
+                    session_token, request_id=request_id, now=now, always=True
+                )
             except AdministratorAuthError:
                 if policy.sensitive:
                     self._audit_failure(
                         request_id=request_id, action=policy.operation, now=now
                     )
                 raise
-            if not valid:
-                raise AdministratorAuthError("invalid_token", request_id)
         with self._connect() as connection, connection.transaction():
             session = self._session_row(
                 connection, session_token, request_id=request_id, for_update=True
@@ -1266,6 +1280,7 @@ class AdministratorAuthRepository:
     ) -> None:
         """Revoke one local session after exact Origin and CSRF checks."""
         self._require_time(now)
+        self._clear_expired_sessions(now)
         try:
             with self._connect() as connection, connection.transaction():
                 session = self._browser_mutation_session(
@@ -1277,7 +1292,14 @@ class AdministratorAuthRepository:
                     now=now,
                 )
                 connection.execute(
-                    "UPDATE router.administrator_sessions SET revoked_at = %s WHERE id = %s",
+                    """
+                    UPDATE router.administrator_sessions
+                    SET revoked_at = %s,
+                        provider_access_token_ciphertext = NULL,
+                        provider_refresh_token_ciphertext = NULL,
+                        provider_access_expires_at = NULL
+                    WHERE id = %s
+                    """,
                     (now, session["id"]),
                 )
                 self._audit(
@@ -1410,17 +1432,26 @@ class AdministratorAuthRepository:
         always: bool,
     ) -> None:
         """Commit disablement or recovery invalidation before a safe failure."""
-        with self._connect() as connection, connection.transaction():
-            session = self._session_row(
-                connection, session_token, request_id=request_id, for_update=True
-            )
-            self._check_session_time(session, now, request_id=request_id)
-            if (
-                not always
-                and now - session["account_checked_at"] <= ACCOUNT_STATE_LIMIT
-            ):
-                return
-            valid = self._refresh_identity_state(connection, session, now, request_id)
+        self._clear_expired_sessions(now)
+        rotation = [False]
+        try:
+            with self._connect() as connection, connection.transaction():
+                session = self._session_row(
+                    connection, session_token, request_id=request_id, for_update=True
+                )
+                self._check_session_time(session, now, request_id=request_id)
+                if (
+                    not always
+                    and now - session["account_checked_at"] <= ACCOUNT_STATE_LIMIT
+                ):
+                    return
+                valid = self._refresh_identity_state(
+                    connection, session, now, request_id, rotation
+                )
+        except Exception:
+            if rotation[0]:
+                self._revoke_after_rotation(session_token, now)
+            raise
         if not valid:
             raise AdministratorAuthError("invalid_token", request_id)
 
@@ -1436,6 +1467,9 @@ class AdministratorAuthRepository:
             or session["idle_expires_at"] <= now
             or session["absolute_expires_at"] <= now
             or session["account_checked_at"] > now
+            or session["provider_access_token_ciphertext"] is None
+            or session["provider_refresh_token_ciphertext"] is None
+            or session["provider_access_expires_at"] is None
         ):
             raise AdministratorAuthError("invalid_token", request_id)
 
@@ -1445,21 +1479,54 @@ class AdministratorAuthRepository:
         session: dict[str, Any],
         now: datetime,
         request_id: str,
+        rotation: list[bool],
     ) -> bool:
+        access_token = self._decrypt(
+            session["provider_access_token_ciphertext"],
+            session["id"],
+            request_id=request_id,
+        )
+        refresh_token = self._decrypt(
+            session["provider_refresh_token_ciphertext"],
+            session["id"],
+            request_id=request_id,
+        )
         try:
+            provider = self._identity_service.provider_session_state(
+                access_token=access_token,
+                refresh_token=refresh_token,
+                access_expires_at=session["provider_access_expires_at"],
+                now=now,
+            )
+            rotation[0] = provider.refresh_token != refresh_token
             state = self._identity_service.account_state(
                 issuer=session["issuer"], subject=session["subject"]
             )
+        except (ProviderSessionInvalid, ProviderSessionRotationFailed):
+            self._revoke_session_row(connection, session, now)
+            return False
         except IdentityServiceUnavailable as error:
+            if rotation[0]:
+                self._revoke_session_row(connection, session, now)
+                return False
             raise AdministratorAuthError(
                 "temporarily_unavailable", request_id
             ) from error
+        if provider.checked_at > now or now - provider.checked_at > ACCOUNT_STATE_LIMIT:
+            raise AdministratorAuthError("temporarily_unavailable", request_id)
         self._require_current_identity_state(state, now, request_id)
-        if not state.active or state.generation != session["identity_generation"]:
+        if (
+            not provider.active
+            or not state.active
+            or state.generation != session["identity_generation"]
+        ):
             connection.execute(
                 """
                 UPDATE router.administrator_sessions
-                SET revoked_at = COALESCE(revoked_at, %s)
+                SET revoked_at = COALESCE(revoked_at, %s),
+                    provider_access_token_ciphertext = NULL,
+                    provider_refresh_token_ciphertext = NULL,
+                    provider_access_expires_at = NULL
                 WHERE administrator_id = %s
                 """,
                 (now, session["administrator_id"]),
@@ -1488,11 +1555,75 @@ class AdministratorAuthRepository:
             )
             return False
         connection.execute(
+            """
+            UPDATE router.administrator_sessions
+            SET provider_access_token_ciphertext = %s,
+                provider_refresh_token_ciphertext = %s,
+                provider_access_expires_at = %s
+            WHERE id = %s
+            """,
+            (
+                self._encrypt(provider.access_token, session["id"]),
+                self._encrypt(provider.refresh_token, session["id"]),
+                provider.access_expires_at,
+                session["id"],
+            ),
+        )
+        connection.execute(
             "UPDATE router.administrator_sessions SET account_checked_at = %s WHERE id = %s",
             (state.checked_at, session["id"]),
         )
         session["account_checked_at"] = state.checked_at
         return True
+
+    def _revoke_session_row(
+        self,
+        connection: Connection[dict[str, Any]],
+        session: dict[str, Any],
+        now: datetime,
+    ) -> None:
+        connection.execute(
+            """
+            UPDATE router.administrator_sessions
+            SET revoked_at = COALESCE(revoked_at, %s),
+                provider_access_token_ciphertext = NULL,
+                provider_refresh_token_ciphertext = NULL,
+                provider_access_expires_at = NULL
+            WHERE id = %s
+            """,
+            (now, session["id"]),
+        )
+
+    def _revoke_after_rotation(self, session_token: str, now: datetime) -> None:
+        """Remove provider secrets after a failure follows remote rotation."""
+        with self._connect() as connection, connection.transaction():
+            connection.execute(
+                """
+                UPDATE router.administrator_sessions
+                SET revoked_at = COALESCE(revoked_at, %s),
+                    provider_access_token_ciphertext = NULL,
+                    provider_refresh_token_ciphertext = NULL,
+                    provider_access_expires_at = NULL
+                WHERE token_digest = %s
+                """,
+                (now, self._digest("session", session_token)),
+            )
+
+    def _clear_expired_sessions(self, now: datetime) -> None:
+        """Revoke expired sessions and remove their provider secrets."""
+        with self._connect() as connection, connection.transaction():
+            connection.execute(
+                """
+                UPDATE router.administrator_sessions
+                SET revoked_at = COALESCE(revoked_at, %s),
+                    provider_access_token_ciphertext = NULL,
+                    provider_refresh_token_ciphertext = NULL,
+                    provider_access_expires_at = NULL
+                WHERE revoked_at IS NULL
+                  AND (idle_expires_at <= %s OR absolute_expires_at <= %s)
+                """,
+                (now, now, now),
+            )
 
     def _require_current_identity_state(
         self, state: Any, now: datetime, request_id: str

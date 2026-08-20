@@ -114,6 +114,12 @@ services:
       LLMROUTER_REPLAY_KEY_FILE: /run/secrets/canonical_replay_key
       LLMROUTER_ADMIN_SESSION_FILE: /run/secrets/administrator_session
       LLMROUTER_ADMIN_CSRF_FILE: /run/secrets/administrator_csrf
+      LLMROUTER_PUBLIC_ADMIN_AUTH: ${LLMROUTER_PUBLIC_ADMIN_AUTH:-0}
+      LLMROUTER_OIDC_CLIENT_ID_FILE: /run/secrets/oidc_client_id
+      LLMROUTER_OIDC_CLIENT_SECRET_FILE: /run/secrets/oidc_client_secret
+      LLMROUTER_POCKET_ID_API_KEY_FILE: /run/secrets/pocket_id_account_api_key
+      LLMROUTER_ADMIN_DIGEST_KEY_FILE: /run/secrets/administrator_digest_key
+      LLMROUTER_ADMIN_ENCRYPTION_KEY_FILE: /run/secrets/administrator_encryption_key
       UV_LINK_MODE: copy
       UV_PYTHON_DOWNLOADS: never
     secrets:
@@ -125,6 +131,11 @@ services:
       - canonical_replay_key
       - administrator_session
       - administrator_csrf
+      - oidc_client_id
+      - oidc_client_secret
+      - pocket_id_account_api_key
+      - administrator_digest_key
+      - administrator_encryption_key
     volumes:
       - .:/workspace:ro
       - ./.local-development:/local-state
@@ -245,6 +256,16 @@ secrets:
     file: .local-development/administrator-session
   administrator_csrf:
     file: .local-development/administrator-csrf
+  oidc_client_id:
+    file: .local-development/pocket-id-client-id
+  oidc_client_secret:
+    file: .local-development/pocket-id-client-secret
+  pocket_id_account_api_key:
+    file: .local-development/pocket-id-account-api-key
+  administrator_digest_key:
+    file: .local-development/administrator-digest-key
+  administrator_encryption_key:
+    file: .local-development/administrator-encryption-key
 
 networks:
   traefik-proxy:

@@ -211,6 +211,26 @@ describe("administration app states", () => {
     expect(required).toContain("Activate administrator session");
   });
 
+  it("shows bounded Pocket ID action progress and retry errors", () => {
+    const pending = renderToStaticMarkup(
+      <LocalAdministrationGateView
+        session={{ state: "oidc_required" }}
+        sessionAction="sign_in_pending"
+        onActivate={vi.fn()}
+      />,
+    );
+    const failed = renderToStaticMarkup(
+      <LocalAdministrationGateView
+        session={{ state: "oidc_required" }}
+        sessionAction="error"
+        onActivate={vi.fn()}
+      />,
+    );
+    expect(pending).toContain("Opening Pocket ID…");
+    expect(pending).toContain("disabled");
+    expect(failed).toContain("Pocket ID is not available. Try again.");
+  });
+
   it("shows an empty scope state before it makes a request", () => {
     const html = renderToStaticMarkup(<App client={client} />);
     expect(html).toContain("Select an exact scope");

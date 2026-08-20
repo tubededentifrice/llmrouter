@@ -62,6 +62,12 @@ def main() -> None:
         "LLMROUTER_REPLAY_KEY_FILE:",
         "LLMROUTER_ADMIN_SESSION_FILE:",
         "LLMROUTER_ADMIN_CSRF_FILE:",
+        "LLMROUTER_PUBLIC_ADMIN_AUTH:",
+        "LLMROUTER_OIDC_CLIENT_ID_FILE:",
+        "LLMROUTER_OIDC_CLIENT_SECRET_FILE:",
+        "LLMROUTER_POCKET_ID_API_KEY_FILE:",
+        "LLMROUTER_ADMIN_DIGEST_KEY_FILE:",
+        "LLMROUTER_ADMIN_ENCRYPTION_KEY_FILE:",
     }
     if any(value not in text for value in required_runtime):
         raise SystemExit("The complete local runtime is not configured.")
@@ -87,6 +93,11 @@ def main() -> None:
         "canonical-replay-key",
         "administrator-session",
         "administrator-csrf",
+        "administrator-digest-key",
+        "administrator-encryption-key",
+        "pocket-id-client-id",
+        "pocket-id-client-secret",
+        "pocket-id-account-api-key",
     }
     if any(f"file: .local-development/{name}" not in text for name in required_secrets):
         raise SystemExit("A generated local runtime secret is not configured.")

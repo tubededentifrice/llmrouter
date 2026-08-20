@@ -20,6 +20,7 @@ from llmrouter_backend.admin_auth.errors import AdministratorAuthError
 from llmrouter_backend.admin_auth.model import (
     IdentityState,
     OIDCTokenResponse,
+    ProviderSessionState,
     SecretValue,
     VerifiedIdentity,
 )
@@ -49,6 +50,14 @@ class IdentityServiceUnavailable(RuntimeError):
     """The configured identity service did not give an authoritative result."""
 
 
+class ProviderSessionInvalid(RuntimeError):
+    """The identity provider rejected the stored provider session."""
+
+
+class ProviderSessionRotationFailed(IdentityServiceUnavailable):
+    """A refresh rotated the provider secret before a later safe failure."""
+
+
 class IdentityService(Protocol):
     """The network operations required from the shared identity service."""
 
@@ -64,6 +73,17 @@ class IdentityService(Protocol):
 
     def account_state(self, *, issuer: str, subject: str) -> IdentityState:
         """Return current disablement and recovery state."""
+        ...
+
+    def provider_session_state(
+        self,
+        *,
+        access_token: str,
+        refresh_token: str,
+        access_expires_at: datetime,
+        now: datetime,
+    ) -> ProviderSessionState:
+        """Return authoritative central-session state and rotated tokens."""
         ...
 
 
@@ -294,7 +314,7 @@ def build_authorization_url(
         "response_type": "code",
         "client_id": configuration.client_id,
         "redirect_uri": configuration.redirect_uri,
-        "scope": "openid",
+        "scope": "openid offline_access",
         "state": state,
         "nonce": nonce,
         "code_challenge": challenge,

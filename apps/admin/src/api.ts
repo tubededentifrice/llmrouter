@@ -221,13 +221,20 @@ export interface FetchAdministrationClientOptions {
   readonly csrfToken?: string;
   readonly fetcher?: typeof fetch;
   readonly now?: () => Date;
+  readonly onRecentAuthenticationRequired?: () => Promise<void>;
 }
 
 const jsonHeaders = { "Content-Type": "application/json" } as const;
 
 export type LocalAdministratorSession =
-  | { readonly state: "active"; readonly csrfToken: string }
+  | {
+      readonly state: "active";
+      readonly csrfToken: string;
+      readonly authenticationMode: "local" | "oidc";
+      readonly identityAccountUrl?: string;
+    }
   | { readonly state: "required" }
+  | { readonly state: "oidc_required" }
   | { readonly state: "unavailable" };
 
 export async function inspectLocalAdministratorSession(
@@ -243,13 +250,14 @@ export async function inspectLocalAdministratorSession(
   } catch {
     return { state: "unavailable" };
   }
-  if (!capability.ok) return { state: "unavailable" };
+  const localAvailable = capability.ok;
   const response = await fetcher("/v1/admin/session", {
     credentials: "same-origin",
     cache: "no-store",
   });
   if (response.status === 404) return { state: "unavailable" };
-  if (response.status === 401) return { state: "required" };
+  if (response.status === 401)
+    return { state: localAvailable ? "required" : "oidc_required" };
   if (!response.ok)
     throw new AdministrationApiError(
       "The local administrator session is not available.",
@@ -259,7 +267,11 @@ export async function inspectLocalAdministratorSession(
         status: response.status,
       },
     );
-  const document = (await response.json()) as { readonly csrf_token?: unknown };
+  const document = (await response.json()) as {
+    readonly csrf_token?: unknown;
+    readonly authentication_mode?: unknown;
+    readonly identity_account_url?: unknown;
+  };
   if (
     typeof document.csrf_token !== "string" ||
     document.csrf_token.length < 20
@@ -268,7 +280,100 @@ export async function inspectLocalAdministratorSession(
       "The local administrator session is not available.",
       { code: "local_session_invalid", requestId: null, status: 500 },
     );
-  return { state: "active", csrfToken: document.csrf_token };
+  const mode = document.authentication_mode === "oidc" ? "oidc" : "local";
+  return {
+    state: "active",
+    csrfToken: document.csrf_token,
+    authenticationMode: mode,
+    ...(typeof document.identity_account_url === "string"
+      ? { identityAccountUrl: document.identity_account_url }
+      : {}),
+  };
+}
+
+export async function startPocketIDAdministratorSession(
+  trustedGrantToken?: string,
+  fetcher: typeof fetch = globalThis.fetch.bind(globalThis),
+): Promise<string> {
+  return startPocketIDSession("login", trustedGrantToken, fetcher);
+}
+
+export async function startPocketIDRecentAuthentication(
+  fetcher: typeof fetch = globalThis.fetch.bind(globalThis),
+): Promise<string> {
+  return startPocketIDSession("recent_authentication", undefined, fetcher);
+}
+
+async function startPocketIDSession(
+  purpose: "login" | "recent_authentication",
+  trustedGrantToken: string | undefined,
+  fetcher: typeof fetch,
+): Promise<string> {
+  const response = await fetcher("/v1/admin/session-starts", {
+    method: "POST",
+    credentials: "same-origin",
+    cache: "no-store",
+    headers: jsonHeaders,
+    body: JSON.stringify({
+      purpose,
+      return_path: "/",
+      ...(trustedGrantToken === undefined
+        ? {}
+        : { trusted_grant_token: trustedGrantToken }),
+    }),
+  });
+  if (!response.ok)
+    throw new AdministrationApiError("Pocket ID sign-in did not start.", {
+      code: "administrator_sign_in_failed",
+      requestId: null,
+      status: response.status,
+    });
+  const document = (await response.json()) as {
+    readonly authorization_url?: unknown;
+  };
+  if (typeof document.authorization_url !== "string")
+    throw new AdministrationApiError("Pocket ID sign-in did not start.", {
+      code: "administrator_sign_in_invalid",
+      requestId: null,
+      status: 500,
+    });
+  return document.authorization_url;
+}
+
+export function consumeTrustedGrantToken(
+  location: Pick<Location, "hash" | "pathname" | "search"> = window.location,
+  history: Pick<History, "replaceState"> = window.history,
+): string | undefined {
+  const fragment = location.hash;
+  if (fragment === "") return undefined;
+  history.replaceState({}, "", `${location.pathname}${location.search}`);
+  const parameters = new URLSearchParams(fragment.slice(1));
+  const values = parameters.getAll("token");
+  if (
+    [...parameters.keys()].some((key) => key !== "token") ||
+    values.length !== 1 ||
+    !/^[A-Za-z0-9_-]{43}$/.test(values[0] ?? "")
+  )
+    return undefined;
+  return values[0];
+}
+
+export async function endAdministratorSession(
+  csrfToken: string,
+  fetcher: typeof fetch = globalThis.fetch.bind(globalThis),
+): Promise<void> {
+  const response = await fetcher("/v1/admin/session", {
+    method: "DELETE",
+    credentials: "same-origin",
+    cache: "no-store",
+    headers: { "X-CSRF-Token": csrfToken },
+  });
+  if (!response.ok)
+    throw new AdministrationApiError("Administrator sign-out failed.", {
+      code: "administrator_sign_out_failed",
+      requestId: null,
+      status: response.status,
+    });
 }
 
 export async function activateLocalAdministrator(
@@ -316,8 +421,10 @@ export function createFetchAdministrationClient({
   csrfToken: suppliedCsrfToken,
   fetcher = globalThis.fetch.bind(globalThis),
   now = () => new Date(),
+  onRecentAuthenticationRequired,
 }: FetchAdministrationClientOptions = {}): AdministrationClient {
   let csrfToken = suppliedCsrfToken ?? null;
+  let recentAuthentication: Promise<void> | null = null;
 
   async function request<T>(
     path: string,
@@ -360,6 +467,23 @@ export function createFetchAdministrationClient({
         document = (await response.json()) as ApiErrorDocument;
       } catch {
         // The safe generic error below does not expose an upstream response.
+      }
+      if (
+        document.error?.code === "recent_auth_required" &&
+        onRecentAuthenticationRequired !== undefined
+      ) {
+        if (recentAuthentication === null) {
+          const attempt = onRecentAuthenticationRequired();
+          recentAuthentication = attempt;
+          try {
+            await attempt;
+          } catch (error) {
+            if (recentAuthentication === attempt) recentAuthentication = null;
+            throw error;
+          }
+        } else {
+          await recentAuthentication;
+        }
       }
       throw new AdministrationApiError(
         document.error?.message ??

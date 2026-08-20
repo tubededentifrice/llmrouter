@@ -214,11 +214,11 @@ export type EmbedRequestStatus = RequestStatus & JsonValue;
 
 export type EmbedAdministrationSnapshot = { readonly service_id: OpaqueId; readonly workspace_id: OpaqueId | null; readonly permissions: ReadonlyArray<"configuration.read" | "accounting.read" | "request_status.read" | "health.read">; readonly expires_at: Timestamp; readonly state?: EmbedAdministrationState; readonly configuration?: EmbedAdministrationConfiguration; readonly requests?: ReadonlyArray<EmbedRequestStatus>; readonly accounting?: AccountingSummary; };
 
-export type AdministratorSessionStart = { readonly purpose: "login" | "recent_authentication"; readonly return_path: string; };
+export type AdministratorSessionStart = { readonly purpose: "login" | "recent_authentication"; readonly return_path: string; readonly trusted_grant_token?: string; };
 
 export type AdministratorAuthorization = { readonly authorization_url: string; readonly expires_at: Timestamp; };
 
-export type AdministratorSession = { readonly issuer: string; readonly subject: OpaqueId; readonly grants: ReadonlyArray<string>; readonly authenticated_at: Timestamp; readonly account_state_checked_at: Timestamp; readonly recent_authentication_at?: Timestamp; readonly idle_expires_at: Timestamp; readonly absolute_expires_at: Timestamp; readonly csrf_token: string; readonly identity_account_url: string; };
+export type AdministratorSession = { readonly issuer: string; readonly subject: OpaqueId; readonly grants: ReadonlyArray<string>; readonly authenticated_at: Timestamp; readonly account_state_checked_at: Timestamp; readonly recent_authentication_at: Timestamp | null; readonly idle_expires_at: Timestamp; readonly absolute_expires_at: Timestamp; readonly csrf_token: string; readonly identity_account_url: string; readonly authentication_mode: "local" | "oidc"; };
 
 export type AdministratorOperation = "service.manage" | "service_parent.manage" | "catalog.manage" | "provider_instance.manage" | "provider_route.manage" | "business_tool_gateway.approve" | "credential.manage" | "assignment.manage" | "budget.read" | "budget.write" | "accounting.read" | "request_status.read" | "retention.manage" | "grant.manage" | "audit.read" | "content.read" | "export.create" | "health.read" | "node.drain" | "circuit.probe" | "circuit.reset" | "high_availability.promote" | "high_availability.failback" | "backup.start" | "restore.validate" | "disaster_recovery.test";
 
@@ -1174,6 +1174,13 @@ export const contractSchemas = {
       "authenticated_at": {
         "$ref": "#/components/schemas/Timestamp"
       },
+      "authentication_mode": {
+        "enum": [
+          "local",
+          "oidc"
+        ],
+        "type": "string"
+      },
       "csrf_token": {
         "maxLength": 200,
         "minLength": 32,
@@ -1200,7 +1207,14 @@ export const contractSchemas = {
         "type": "string"
       },
       "recent_authentication_at": {
-        "$ref": "#/components/schemas/Timestamp"
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          {
+            "type": "null"
+          }
+        ]
       },
       "subject": {
         "$ref": "#/components/schemas/OpaqueId"
@@ -1211,11 +1225,13 @@ export const contractSchemas = {
       "subject",
       "grants",
       "authenticated_at",
+      "recent_authentication_at",
       "account_state_checked_at",
       "idle_expires_at",
       "absolute_expires_at",
       "csrf_token",
-      "identity_account_url"
+      "identity_account_url",
+      "authentication_mode"
     ],
     "type": "object"
   },
@@ -1232,6 +1248,13 @@ export const contractSchemas = {
       "return_path": {
         "maxLength": 2000,
         "pattern": "^/[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*$",
+        "type": "string"
+      },
+      "trusted_grant_token": {
+        "description": "One-use trusted-console grant token for initial or recovery login.",
+        "maxLength": 43,
+        "minLength": 43,
+        "pattern": "^[A-Za-z0-9_-]+$",
         "type": "string"
       }
     },
