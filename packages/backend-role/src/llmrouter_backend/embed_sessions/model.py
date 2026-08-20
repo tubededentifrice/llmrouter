@@ -170,7 +170,7 @@ class EmbedSessionError(RuntimeError):
         """Store only an approved code and request identity."""
         status = {
             "invalid_request": 400,
-            "invalid_token": 401,
+            "invalid_token": 401,  # nosec B105 - Public HTTP status code.
             "recent_auth_required": 401,
             "insufficient_scope": 403,
             "not_found": 404,
@@ -181,7 +181,7 @@ class EmbedSessionError(RuntimeError):
         super().__init__(
             {
                 "invalid_request": "The request is invalid.",
-                "invalid_token": "Authentication failed.",
+                "invalid_token": "Authentication failed.",  # nosec B105 - Public error.
                 "recent_auth_required": "Recent authentication is required.",
                 "insufficient_scope": "The token does not permit this operation.",
                 "not_found": "The requested record was not found.",

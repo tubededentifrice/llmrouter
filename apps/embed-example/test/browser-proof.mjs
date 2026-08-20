@@ -166,13 +166,23 @@ try {
       "--disable-gpu",
       `--remote-debugging-port=${browserPort}`,
       `--user-data-dir=${browserProfile}`,
-      hostOrigin,
+      "about:blank",
     ],
     { stdio: "ignore" },
   );
-  const page = await browserPage();
+  const page = await createBrowserPage();
   const cdp = await connectCdp(page.webSocketDebuggerUrl);
+  await cdp.send("Page.enable");
   await cdp.send("Runtime.enable");
+  const navigation = await cdp.send("Page.navigate", { url: hostOrigin });
+  assert(
+    navigation.errorText === undefined,
+    `The browser could not navigate to the example host: ${String(navigation.errorText)}.`,
+  );
+  await waitForExpression(
+    cdp,
+    `location.origin === ${JSON.stringify(hostOrigin)} && document.readyState === "complete" && document.querySelector("#root") !== null`,
+  );
   try {
     await waitForExpression(
       cdp,
@@ -406,15 +416,12 @@ async function waitForUrl(url) {
   throw new Error(`The localhost server did not start: ${url}`);
 }
 
-async function browserPage() {
-  const endpoint = `http://127.0.0.1:${browserPort}/json/list`;
+async function createBrowserPage() {
+  const endpoint = `http://127.0.0.1:${browserPort}/json/new?about%3Ablank`;
   for (let attempt = 0; attempt < 100; ++attempt) {
     try {
-      const pages = await (await fetch(endpoint)).json();
-      const page = pages.find(
-        (item) => item.type === "page" && item.url.startsWith(hostOrigin),
-      );
-      if (page !== undefined) return page;
+      const response = await fetch(endpoint, { method: "PUT" });
+      if (response.ok) return response.json();
     } catch {
       // The browser debugging endpoint can refuse connections while it starts.
     }

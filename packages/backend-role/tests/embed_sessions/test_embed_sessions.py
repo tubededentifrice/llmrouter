@@ -1,10 +1,11 @@
 """Focused service and HTTP tests for embed-session authority."""
-# ruff: noqa: ANN001, ANN201, ANN202, ARG002, D102, D107, DTZ001, EM101, PLC0415, PLR0913, PLR2004, S105, S106
+# ruff: noqa: ARG002, D102, D107, DTZ001, EM101, PLC0415, PLR0913, PLR2004, S105, S106
 
 from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 import pytest
 from fastapi import FastAPI
@@ -13,7 +14,10 @@ from llmrouter_backend.administration import AdministrationService
 from llmrouter_backend.authority import (
     Audience,
     AuthorityPath,
+    EmbedPrincipal,
     PrincipalKind,
+    RequestContext,
+    Scope,
     ServicePrincipal,
 )
 from llmrouter_backend.embed_sessions import (
@@ -29,6 +33,9 @@ from llmrouter_backend.embed_sessions import (
 )
 from llmrouter_backend.testing import ScopeTestBuilder
 from pydantic import ValidationError
+
+if TYPE_CHECKING:
+    from llmrouter_backend.embed_sessions.model import Permission
 
 NOW = datetime(2026, 8, 20, 12, tzinfo=UTC)
 SERVICE_ID = "0198a080-0000-7000-8000-000000000001"
@@ -53,14 +60,20 @@ class FakeAuthenticator:
         return self.principal
 
 
-class FakeRepository:
+class FakeRepository(EmbedSessionRepository):
     """Capture exact authorized contexts for service tests."""
 
     def __init__(self) -> None:
-        self.context = None
-        self.revoked = None
+        self.context: RequestContext | None = None
+        self.revoked: tuple[str, frozenset[str] | None] | None = None
 
-    def create(self, context, document, *, now):
+    def create(
+        self,
+        context: RequestContext,
+        document: EmbedSessionRequest,
+        *,
+        now: datetime,
+    ) -> CreatedSession:
         self.context = context
         return CreatedSession(
             "0198a080-0000-7000-8000-000000000099",
@@ -71,15 +84,15 @@ class FakeRepository:
 
     def redeem(
         self,
-        session_id,
-        bootstrap_token,
-        frame_nonce,
-        host_origin,
+        session_id: str,
+        bootstrap_token: str,
+        frame_nonce: str,
+        host_origin: str,
         *,
-        request_origin,
-        request_id,
-        now,
-    ):
+        request_origin: str,
+        request_id: str,
+        now: datetime,
+    ) -> RedeemedSession:
         if request_origin != FRAME_ORIGIN or host_origin != HOST_ORIGIN:
             raise EmbedSessionError("not_found", request_id)
         principal = ScopeTestBuilder(scope=_workspace_scope(), now=now).embed(
@@ -98,11 +111,25 @@ class FakeRepository:
             cookie_max_age=300,
         )
 
-    def revoke(self, context, session_id, *, now, allowed_workspace_ids=None):
+    def revoke(
+        self,
+        context: RequestContext,
+        session_id: str,
+        *,
+        now: datetime,
+        allowed_workspace_ids: frozenset[str] | None = None,
+    ) -> None:
         self.context = context
         self.revoked = (session_id, allowed_workspace_ids)
 
-    def authenticate_session(self, session_token, *, request_origin, request_id, now):
+    def authenticate_session(
+        self,
+        session_token: str,
+        *,
+        request_origin: str,
+        request_id: str,
+        now: datetime,
+    ) -> EmbedPrincipal:
         if session_token != "c" * 43 or request_origin != FRAME_ORIGIN:
             raise EmbedSessionError("invalid_token", request_id)
         return replace(
@@ -120,10 +147,16 @@ class FakeAdministrationService(AdministrationService):
     """Return one content-free frame snapshot without global authority."""
 
     def __init__(self) -> None:
-        self.contexts = None
+        self.contexts: dict[str, RequestContext] | None = None
 
     def embed_snapshot(
-        self, contexts, service_id, *, workspace_id, start, end
+        self,
+        contexts: dict[str, RequestContext],
+        service_id: str,
+        *,
+        workspace_id: str | None,
+        start: datetime,
+        end: datetime,
     ) -> dict[str, object]:
         self.contexts = contexts
         assert service_id == SERVICE_ID
@@ -137,9 +170,7 @@ class FakeAdministrationService(AdministrationService):
         }
 
 
-def _workspace_scope():
-    from llmrouter_backend.authority import Scope
-
+def _workspace_scope() -> Scope:
     return Scope(SERVICE_ID, WORKSPACE_ID)
 
 
@@ -164,12 +195,14 @@ def _principal(
 
 
 def _request(*, sensitive: bool = False) -> EmbedSessionRequest:
-    permissions = ["configuration.write"] if sensitive else ["configuration.read"]
+    permission: Permission = (
+        "configuration.write" if sensitive else "configuration.read"
+    )
     return EmbedSessionRequest(
         host_user_subject="host-user",
         workspace_id=WORKSPACE_ID,
         allowed_origin=HOST_ORIGIN,
-        permissions=permissions,
+        permissions=[permission],
         recent_auth_at=NOW - timedelta(minutes=1) if sensitive else None,
         theme=EmbedTheme(mode="dark", density="compact", corner_style="rounded"),
     )
@@ -210,7 +243,9 @@ def test_create_and_revoke_use_exact_authorized_context() -> None:
         "a" * 43, SERVICE_ID, _request(), request_id="request-create", now=NOW
     )
     assert created.bootstrap_token == "b" * 43
-    assert repository.context.scope == _workspace_scope()
+    create_context = repository.context
+    assert create_context is not None
+    assert create_context.scope == _workspace_scope()
     service.revoke(
         "a" * 43,
         SERVICE_ID,
@@ -265,8 +300,6 @@ def test_frame_read_uses_only_embed_authority_and_exact_workspace() -> None:
             request_id="request-permission",
             now=NOW,
         )
-    from llmrouter_backend.authority import Scope
-
     with pytest.raises(EmbedSessionError) as missing_workspace:
         service.authorize_session(
             "c" * 43,
@@ -443,10 +476,12 @@ def test_embed_snapshot_route_uses_only_hidden_cookie_and_exact_scope() -> None:
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
     assert response.json()["configuration"]["providers"] == []
-    assert set(administration.contexts) == {"configuration.read"}
+    captured_contexts = administration.contexts
+    assert captured_contexts is not None
+    assert set(captured_contexts) == {"configuration.read"}
     assert all(
         context.authority_path is AuthorityPath.EMBED
-        for context in administration.contexts.values()
+        for context in captured_contexts.values()
     )
     missing_workspace = client.get(
         "/v1/embed/administration/snapshot",
