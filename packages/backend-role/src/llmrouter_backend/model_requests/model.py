@@ -216,6 +216,16 @@ class CompatibilityResponseFormat(ClosedModel):
     schema_major_version: Annotated[int, Field(ge=1, strict=True)] | None = None
 
 
+class CompatibilityNamedToolChoice(ClosedModel):
+    """One closed compatible named-tool selection."""
+
+    type: Literal["function"]
+    name: Annotated[
+        str,
+        StringConstraints(pattern=r"^[a-zA-Z][a-zA-Z0-9_.-]{0,99}$"),
+    ]
+
+
 class MetadataEntry(ClosedModel):
     """One bounded compatibility metadata entry."""
 
@@ -233,7 +243,9 @@ class CompatibleChatRequest(ClosedModel):
     tools: Annotated[list[ToolDefinition], Field(max_length=100)] | None = Field(
         default=None, repr=False
     )
-    tool_choice: Literal["auto", "none", "required"] | dict[str, object] | None = None
+    tool_choice: (
+        Literal["auto", "none", "required"] | CompatibilityNamedToolChoice | None
+    ) = None
     response_format: CompatibilityResponseFormat | None = None
     temperature: Annotated[Decimal, Field(ge=0, le=2)] | None = None
     max_completion_tokens: Annotated[

@@ -134,7 +134,7 @@ LIVE_MODELS = {
 }
 
 
-def main(arguments: Sequence[str] = ()) -> None:
+def main(arguments: Sequence[str] = ()) -> None:  # noqa: C901
     """Run no-cost checks, then the selected bounded provider operations."""
     calls = 0
     request_ids: list[str] = []
@@ -229,6 +229,13 @@ def main(arguments: Sequence[str] = ()) -> None:
                 calls = _attempt_count(tuple(request_ids))
         print(f"Live OpenRouter proof failed safely. Paid provider calls: {calls}.")
         raise SystemExit(str(error)) from None
+    except Exception:  # noqa: BLE001 -- Never print secret-bearing exception details.
+        if request_ids:
+            with suppress(Exception):
+                calls = _attempt_count(tuple(request_ids))
+        print(f"Live OpenRouter proof failed safely. Paid provider calls: {calls}.")
+        safe_message = f"The live {phase} operation failed safely."
+        raise SystemExit(safe_message) from None
     finally:
         if credential_id is not None and credential_revision is not None:
             _retire_credential(credential_id, credential_revision)

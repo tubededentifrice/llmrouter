@@ -1101,6 +1101,30 @@ def test_http_rejects_bad_headers_and_duplicate_json_without_content_leak() -> N
     assert unsupported.json()["error"]["code"] == "unsupported_contract"
 
 
+def test_compatible_handler_rejects_an_open_named_tool_choice() -> None:
+    """Keep the compatible named-tool document equal to the closed contract."""
+    service, _, _, _, _, _ = _service()
+    body = json.loads(_compatible_body(stream=False))
+    body["tool_choice"] = {
+        "type": "function",
+        "name": "safe_tool",
+        "private_extra": "private prompt",
+    }
+    response = TestClient(_app(service)).post(
+        "/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {TOKEN}",
+            "X-LLMRouter-Request-ID": REQUEST_ID,
+            "Content-Type": "application/json",
+        },
+        json=body,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_request"
+    assert "private prompt" not in response.text
+
+
 def test_http_rejects_one_oversized_body_chunk_before_json_or_authentication() -> None:
     service, authenticator, _, _, _, _ = _service()
     client = TestClient(_app(service))

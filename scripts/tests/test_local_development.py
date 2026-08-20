@@ -883,6 +883,31 @@ def test_live_openrouter_network_failure_is_redacted(
     assert provider_content not in report
 
 
+def test_live_openrouter_unexpected_failure_is_redacted(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Convert an unexpected dependency failure to one fixed safe message."""
+    module = _live_module()
+    inherited_value = "test-only-inherited-provider-value"
+    private_detail = "test-only-private-database-detail"
+
+    def failed(_key: str, _model: object) -> dict[str, Decimal]:
+        raise RuntimeError(private_detail)
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", inherited_value)
+    monkeypatch.setattr(module, "_provider_preflight", failed)
+    with pytest.raises(SystemExit) as captured:
+        module.main()
+
+    evidence = capsys.readouterr()
+    report = evidence.out + evidence.err + str(captured.value)
+    assert "Paid provider calls: 0." in report
+    assert "The live no-cost preflight operation failed safely." in report
+    assert "Traceback" not in report
+    assert inherited_value not in report
+    assert private_detail not in report
+
+
 def test_live_openrouter_timeout_evidence_is_closed_and_redacted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
