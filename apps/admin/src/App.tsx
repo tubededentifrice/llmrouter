@@ -1,1008 +1,1584 @@
-import { useReducer } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useState,
+  type ReactNode,
+  type SubmitEvent,
+} from "react";
 import {
   Button,
-  ChainStep,
-  ContextItem,
+  Card,
   Icon,
-  IconButton,
-  AccountMenu,
-  NavigationItem,
   PageHeading,
+  Panel,
+  PanelHeader,
+  ShellErrorBoundary,
   StatCard,
   StatusPill,
-  WorkspaceSelector,
+  Toast,
   type IconName,
 } from "@opendle/ui";
+import {
+  AdministrationApiError,
+  createFetchAdministrationClient,
+  errorMessage,
+  type AccountingSummary,
+  type AdministrationClient,
+  type AdministrationSnapshot,
+  type Assignment,
+  type Credential,
+  type ProviderInstance,
+  type ProviderModelRoute,
+  type RequestStatus,
+  type ScopeSelection,
+} from "./api.js";
 
-type Section =
-  | "overview"
-  | "topology"
-  | "providers"
-  | "assignments"
-  | "requests"
-  | "operations"
-  | "security";
-type ViewMode = "graph" | "table";
+type Section = "configuration" | "assignments" | "requests" | "accounting";
+export interface Notice {
+  readonly tone: "success" | "error";
+  readonly message: string;
+  readonly staleRevision?: boolean;
+}
 
-const navigation: {
-  id: Section;
-  label: string;
-  icon: IconName;
-  count?: string;
+function errorNotice(error: unknown): Notice {
+  return {
+    tone: "error",
+    message: errorMessage(error),
+    staleRevision:
+      error instanceof AdministrationApiError && error.staleRevision,
+  };
+}
+
+const sections: readonly {
+  readonly id: Section;
+  readonly label: string;
+  readonly icon: IconName;
 }[] = [
-  { id: "overview", label: "Overview", icon: "grid" },
-  { id: "topology", label: "Topology", icon: "layers" },
-  { id: "providers", label: "Providers & models", icon: "cloud", count: "8" },
-  { id: "assignments", label: "Assignments", icon: "activity", count: "12" },
-  { id: "requests", label: "Requests", icon: "list" },
-  { id: "operations", label: "Operations", icon: "server", count: "2" },
-  { id: "security", label: "Security & access", icon: "shield" },
-];
-const pageTitles: Record<
-  Section,
-  { eyebrow: string; title: string; description: string }
-> = {
-  overview: {
-    eyebrow: "Global administration",
-    title: "Fleet overview",
-    description:
-      "A calm view of your routing system, ready for the next decision.",
-  },
-  topology: {
-    eyebrow: "Global administration",
-    title: "Router topology",
-    description:
-      "See how traffic moves through healthy nodes and their current boundaries.",
-  },
-  providers: {
-    eyebrow: "Configuration",
-    title: "Providers & models",
-    description:
-      "Manage the catalog and inspect route health without losing context.",
-  },
-  assignments: {
-    eyebrow: "Configuration",
-    title: "Assignments",
-    description: "Give each work type a clear, observable fallback path.",
-  },
-  requests: {
-    eyebrow: "Observability",
-    title: "Request activity",
-    description:
-      "Follow logical requests from admission to the selected provider.",
-  },
-  operations: {
-    eyebrow: "Operations",
-    title: "Operations",
-    description:
-      "Keep the control plane ready, replicated, and safe to change.",
-  },
-  security: {
-    eyebrow: "Administration",
-    title: "Security & access",
-    description:
-      "Review grants, sessions, and the actions that protect your boundary.",
-  },
-};
-const graphNodes = [
-  {
-    id: "assignment",
-    type: "assignment",
-    title: "customer-support",
-    subtitle: "Assignment",
-    x: 8,
-    y: 43,
-    status: "active",
-  },
-  {
-    id: "gateway",
-    type: "gateway",
-    title: "Router gateway",
-    subtitle: "2 healthy nodes",
-    x: 37,
-    y: 43,
-    status: "active",
-  },
-  {
-    id: "anthropic",
-    type: "provider",
-    title: "Anthropic",
-    subtitle: "Provider · 3 routes",
-    x: 67,
-    y: 18,
-    status: "active",
-  },
-  {
-    id: "openai",
-    type: "provider",
-    title: "OpenAI",
-    subtitle: "Provider · 4 routes",
-    x: 67,
-    y: 67,
-    status: "active",
-  },
-  {
-    id: "claude",
-    type: "model",
-    title: "claude-sonnet-4",
-    subtitle: "Selected route",
-    x: 91,
-    y: 18,
-    status: "active",
-  },
-  {
-    id: "gpt",
-    type: "model",
-    title: "gpt-4.1-mini",
-    subtitle: "Fallback route",
-    x: 91,
-    y: 67,
-    status: "warning",
-  },
-];
-const activities = [
-  {
-    time: "2 min ago",
-    title: "Fallback route used",
-    detail: "gpt-4.1-mini served 2 requests after a rate limit.",
-    tone: "amber",
-  },
-  {
-    time: "18 min ago",
-    title: "Configuration published",
-    detail: "Assignment customer-support is now on revision 42.",
-    tone: "lime",
-  },
-  {
-    time: "1 hr ago",
-    title: "Provider circuit recovered",
-    detail: "Anthropic is healthy after a successful probe.",
-    tone: "blue",
-  },
+  { id: "configuration", label: "Configuration", icon: "settings" },
+  { id: "assignments", label: "Assignments", icon: "layers" },
+  { id: "requests", label: "Request status", icon: "list" },
+  { id: "accounting", label: "Accounting", icon: "activity" },
 ];
 
-interface AppState {
-  activeSection: Section;
-  viewMode: ViewMode;
-  selectedNode: string;
-  mobileNavOpen: boolean;
-  toast: string | null;
+function initialScope(): ScopeSelection {
+  const query = new URLSearchParams(globalThis.location?.search ?? "");
+  return {
+    mode: query.get("view") === "service" ? "service" : "global",
+    serviceId: query.get("service_id") ?? "",
+    workspaceId: query.get("workspace_id") ?? "",
+  };
 }
-type AppAction =
-  | { type: "section"; value: Section }
-  | { type: "view"; value: ViewMode }
-  | { type: "node"; value: string }
-  | { type: "mobile-nav"; value: boolean }
-  | { type: "toast"; value: string | null };
-const initialState: AppState = {
-  activeSection: "overview",
-  viewMode: "graph",
-  selectedNode: "claude",
-  mobileNavOpen: false,
-  toast: null,
-};
-function appReducer(state: AppState, action: AppAction): AppState {
-  switch (action.type) {
-    case "section":
-      return { ...state, activeSection: action.value, mobileNavOpen: false };
-    case "view":
-      return { ...state, viewMode: action.value };
-    case "node":
-      return { ...state, selectedNode: action.value };
-    case "mobile-nav":
-      return { ...state, mobileNavOpen: action.value };
-    case "toast":
-      return { ...state, toast: action.value };
+
+function toneForState(state: string): "green" | "amber" | "red" | "blue" {
+  if (state === "active" || state === "succeeded" || state === "current") {
+    return "green";
   }
+  if (state === "disabled" || state === "running" || state === "distributing") {
+    return "amber";
+  }
+  if (state === "failed" || state === "cancelled" || state === "retired") {
+    return "red";
+  }
+  return "blue";
 }
 
-type Notify = (message: string) => void;
+function revisionLabel(revision: string): string {
+  return revision.length > 16
+    ? `${revision.slice(0, 8)}…${revision.slice(-6)}`
+    : revision;
+}
 
-function Sidebar({
-  activeSection,
-  mobileNavOpen,
-  onSection,
-  onNotify,
+function activeScopeRevision(snapshot: AdministrationSnapshot): string | null {
+  const effectiveItems = [
+    ...snapshot.providers,
+    ...snapshot.routes,
+    ...snapshot.assignments,
+  ];
+  return (
+    effectiveItems.find((item) => item.inherited === false)?.active_revision ??
+    null
+  );
+}
+
+function ScopeBanner({
+  scope,
+  snapshot,
 }: {
-  activeSection: Section;
-  mobileNavOpen: boolean;
-  onSection: (section: Section) => void;
-  onNotify: Notify;
+  readonly scope: ScopeSelection;
+  readonly snapshot: AdministrationSnapshot;
 }) {
   return (
-    <aside className={`sidebar ${mobileNavOpen ? "sidebar-open" : ""}`}>
-      <div className="brand-lockup">
-        <div className="brand-mark" aria-hidden="true">
-          <span />
-          <span />
-          <span />
+    <section className="scope-banner" aria-labelledby="scope-heading">
+      <span className="scope-banner-icon">
+        <Icon name="shield" size={18} />
+      </span>
+      <div>
+        <p id="scope-heading">Exact administration scope</p>
+        <strong>
+          {scope.mode === "global"
+            ? "Global administrator"
+            : "Service administrator"}
+        </strong>
+      </div>
+      <dl>
+        <div>
+          <dt>Service</dt>
+          <dd>{scope.serviceId}</dd>
         </div>
         <div>
-          <strong>LLM Router</strong>
-          <small>Control plane</small>
+          <dt>Workspace</dt>
+          <dd>
+            {scope.workspaceId === "" ? "Service level" : scope.workspaceId}
+          </dd>
         </div>
-      </div>
-      <WorkspaceSelector
-        className="scope-switcher"
-        name="Global fleet"
-        detail="All services"
-        avatar="G"
-        end={<Icon name="chevron" size={16} />}
-        onClick={() => {
-          onNotify(
-            "Scope switcher is available in the full administration flow.",
-          );
-        }}
-      />
-      <nav className="primary-nav" aria-label="Administration navigation">
-        <p className="nav-label">Manage</p>
-        {navigation.slice(0, 4).map((item) => (
-          <NavigationItem
-            key={item.id}
-            className="nav-item"
-            active={activeSection === item.id}
-            icon={<Icon name={item.icon} size={18} />}
-            label={item.label}
-            count={item.count}
-            onClick={() => {
-              onSection(item.id);
-            }}
-          />
-        ))}
-        <p className="nav-label nav-label-spaced">Observe</p>
-        {navigation.slice(4).map((item) => (
-          <NavigationItem
-            key={item.id}
-            className="nav-item"
-            active={activeSection === item.id}
-            alert={item.id === "operations"}
-            icon={<Icon name={item.icon} size={18} />}
-            label={item.label}
-            count={item.count}
-            onClick={() => {
-              onSection(item.id);
-            }}
-          />
-        ))}
-      </nav>
-      <div className="sidebar-bottom">
-        <div className="sidebar-health">
-          <span className="health-beacon" />
-          <div>
-            <strong>All systems healthy</strong>
-            <small>Last checked 30 sec ago</small>
-          </div>
+        <div>
+          <dt>State revision</dt>
+          <dd title={snapshot.state.revision}>
+            {revisionLabel(snapshot.state.revision)}
+          </dd>
         </div>
-        <AccountMenu
-          className="sidebar-account"
-          avatar="VL"
-          name="Vincent L."
-          detail="Global administrator"
-          end={<Icon name="more" size={18} />}
-          onClick={() => {
-            onSection("security");
-          }}
-        />
-      </div>
-    </aside>
-  );
-}
-
-function Topbar({
-  page,
-  onMobileOpen,
-  onSection,
-}: {
-  page: (typeof pageTitles)[Section];
-  onMobileOpen: () => void;
-  onSection: (section: Section) => void;
-}) {
-  return (
-    <header className="topbar">
-      <IconButton
-        className="mobile-menu"
-        aria-label="Open navigation"
-        icon={<Icon name="menu" />}
-        onClick={onMobileOpen}
-      />
-      <div className="breadcrumbs">
-        <span>Global</span>
-        <span className="breadcrumb-separator">/</span>
-        <strong>{page.title}</strong>
-        <span className="prototype-badge">Prototype</span>
-      </div>
-      <div className="topbar-actions">
-        <label className="search-box">
-          <Icon name="search" size={17} />
-          <input
-            aria-label="Search administration"
-            placeholder="Search anything"
-          />
-          <kbd>⌘ K</kbd>
-        </label>
-        <IconButton
-          className="topbar-icon"
-          aria-label="View alerts"
-          icon={
-            <>
-              <span className="notification-dot" />
-              <Icon name="activity" size={18} />
-            </>
-          }
-          onClick={() => {
-            onSection("operations");
-          }}
-        />
-        <button
-          className="topbar-avatar"
-          type="button"
-          aria-label="Open security and access"
-          onClick={() => {
-            onSection("security");
-          }}
-        >
-          VL
-        </button>
-      </div>
-    </header>
-  );
-}
-
-function SummaryStats() {
-  return (
-    <section className="stat-grid" aria-label="Fleet summary">
-      <StatCard
-        icon={<Icon name="activity" size={17} />}
-        tone="blue"
-        label="Requests today"
-        value="24,816"
-        trendClassName="trend-up"
-        trend={
-          <>
-            <Icon name="arrow-up" size={14} /> 18.4%
-          </>
-        }
-        note="vs last week"
-        visual={
-          <div className="sparkline sparkline-blue">
-            <i />
-            <i />
-            <i />
-            <i />
-            <i />
-            <i />
-            <i />
-            <i />
-            <i />
-          </div>
-        }
-      />
-      <StatCard
-        icon={<Icon name="shield" size={17} />}
-        tone="lime"
-        label="Success rate"
-        value="99.82%"
-        trendClassName="trend-up"
-        trend={
-          <>
-            <Icon name="arrow-up" size={14} /> 0.06%
-          </>
-        }
-        note="vs last week"
-        visual={
-          <div className="sparkline sparkline-lime">
-            <i />
-            <i />
-            <i />
-            <i />
-            <i />
-            <i />
-            <i />
-            <i />
-            <i />
-          </div>
-        }
-      />
-      <StatCard
-        icon={<Icon name="clock" size={17} />}
-        tone="purple"
-        label="Average latency"
-        value="842"
-        unit="ms"
-        trendClassName="trend-down"
-        trend={
-          <>
-            <Icon name="arrow-up" size={14} /> 12.1%
-          </>
-        }
-        note="faster this week"
-        visual={
-          <div className="sparkline sparkline-purple">
-            <i />
-            <i />
-            <i />
-            <i />
-            <i />
-            <i />
-            <i />
-            <i />
-            <i />
-          </div>
-        }
-      />
-      <StatCard
-        icon={<Icon name="database" size={17} />}
-        tone="amber"
-        label="Spend this month"
-        value="$1,284"
-        unit=".60"
-        trendClassName="trend-neutral"
-        trend="68%"
-        note="of $1,900 budget"
-        visual={
-          <div className="budget-meter">
-            <span />
-          </div>
-        }
-      />
+      </dl>
     </section>
   );
 }
 
-function GraphPanel({
-  selectedNode,
-  onNode,
-  onNotify,
+function ScopeForm({
+  current,
+  onApply,
 }: {
-  selectedNode: string;
-  onNode: (id: string) => void;
-  onNotify: Notify;
+  readonly current: ScopeSelection;
+  readonly onApply: (scope: ScopeSelection) => void;
 }) {
+  function submit(event: SubmitEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const values = new FormData(event.currentTarget);
+    onApply({
+      mode: values.get("mode") === "service" ? "service" : "global",
+      serviceId: String(values.get("service_id") ?? "").trim(),
+      workspaceId: String(values.get("workspace_id") ?? "").trim(),
+    });
+  }
   return (
-    <div className="graph-body">
-      <div className="graph-toolbar">
-        <div className="graph-tabs">
-          <button className="active" type="button">
-            All routes
-          </button>
-          <button type="button">
-            Needs attention <span>2</span>
-          </button>
-        </div>
-        <button
-          className="filter-button"
-          type="button"
-          onClick={() => {
-            onNotify(
-              "Graph filters are ready for the next implementation step.",
-            );
-          }}
-        >
-          <Icon name="filter" size={15} /> Filter
-        </button>
-      </div>
-      <div className="graph-canvas">
-        <svg
-          className="graph-lines"
-          aria-hidden="true"
-          viewBox="0 0 100 100"
-          preserveAspectRatio="none"
-        >
-          <path d="M21 51 C27 51,29 51,37 51" />
-          <path d="M54 48 C59 35,61 28,67 25" />
-          <path d="M54 54 C59 67,61 72,67 75" />
-          <path d="M81 25 C85 25,86 25,91 25" />
-          <path d="M81 75 C85 75,86 75,91 75" />
-        </svg>
-        {graphNodes.map((node) => (
-          <button
-            key={node.id}
-            className={`graph-node node-${node.type} ${selectedNode === node.id ? "is-selected" : ""}`}
-            style={{ left: `${String(node.x)}%`, top: `${String(node.y)}%` }}
-            type="button"
-            onClick={() => {
-              onNode(node.id);
-            }}
-          >
-            <span className="node-symbol">
-              <Icon
-                name={
-                  node.type === "assignment"
-                    ? "spark"
-                    : node.type === "gateway"
-                      ? "server"
-                      : node.type === "provider"
-                        ? "cloud"
-                        : "activity"
-                }
-                size={16}
-              />
-            </span>
-            <span className="node-copy">
-              <strong>{node.title}</strong>
-              <small>{node.subtitle}</small>
-            </span>
-            {node.status === "warning" ? (
-              <span className="node-warning">
-                <Icon name="warning" size={13} />
-              </span>
-            ) : (
-              <span className="node-health" />
-            )}
-          </button>
-        ))}
-      </div>
-      <div className="graph-legend">
-        <span>
-          <i className="legend-dot legend-active" /> Active
-        </span>
-        <span>
-          <i className="legend-dot legend-warning" /> Degraded
-        </span>
-        <span>
-          <i className="legend-line" /> Fallback path
-        </span>
-        <span className="graph-zoom">Scroll to zoom · Drag to pan</span>
-      </div>
-    </div>
+    <form className="scope-form" onSubmit={submit}>
+      <label>
+        View
+        <select name="mode" defaultValue={current.mode}>
+          <option value="global">Global administration</option>
+          <option value="service">Service administration</option>
+        </select>
+      </label>
+      <label>
+        Service ID
+        <input
+          required
+          name="service_id"
+          defaultValue={current.serviceId}
+          placeholder="Service UUID"
+        />
+      </label>
+      <label>
+        Workspace ID <span>(optional)</span>
+        <input
+          name="workspace_id"
+          defaultValue={current.workspaceId}
+          placeholder="Service-level scope"
+        />
+      </label>
+      <Button type="submit" icon={<Icon name="refresh" size={16} />}>
+        Load exact scope
+      </Button>
+    </form>
   );
 }
 
-function RoutingTable({ onNode }: { onNode: (id: string) => void }) {
+export function StateMessage({
+  kind,
+  children,
+  onRetry,
+}: {
+  readonly kind: "loading" | "empty" | "error";
+  readonly children: ReactNode;
+  readonly onRetry?: () => void;
+}) {
   return (
-    <div className="table-wrap">
+    <Card
+      className={`state-message state-message-${kind}`}
+      role={kind === "error" ? "alert" : "status"}
+    >
+      <Icon
+        name={
+          kind === "error" ? "warning" : kind === "loading" ? "refresh" : "list"
+        }
+        size={22}
+      />
+      <div>
+        <h2>
+          {kind === "error"
+            ? "The scope is not available"
+            : kind === "loading"
+              ? "Loading protected state"
+              : "Select an exact scope"}
+        </h2>
+        <p>{children}</p>
+      </div>
+      {onRetry ? (
+        <Button variant="secondary" onClick={onRetry}>
+          Try again
+        </Button>
+      ) : null}
+    </Card>
+  );
+}
+
+function EmptyRow({
+  columns,
+  children,
+}: {
+  readonly columns: number;
+  readonly children: ReactNode;
+}) {
+  return (
+    <tr>
+      <td className="empty-cell" colSpan={columns}>
+        {children}
+      </td>
+    </tr>
+  );
+}
+
+function Revision({
+  value,
+  inherited,
+}: {
+  readonly value: string;
+  readonly inherited?: boolean;
+}) {
+  return (
+    <span className="revision" title={value}>
+      {revisionLabel(value)}
+      {inherited ? " · inherited" : ""}
+    </span>
+  );
+}
+
+function CredentialForm({
+  client,
+  scope,
+  onChanged,
+  onNotice,
+}: {
+  readonly client: AdministrationClient;
+  readonly scope: ScopeSelection;
+  readonly onChanged: () => Promise<void>;
+  readonly onNotice: (notice: Notice) => void;
+}) {
+  const [secret, setSecret] = useState("");
+  const [safeLabel, setSafeLabel] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  async function submit(event: SubmitEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSubmitting(true);
+    try {
+      await client.createCredential({
+        ownerScope: scope.serviceId,
+        secret,
+        safeLabel,
+      });
+      setSecret("");
+      setSafeLabel("");
+      onNotice({
+        tone: "success",
+        message: "The write-only OpenRouter credential was stored.",
+      });
+      await onChanged();
+    } catch (error) {
+      onNotice(errorNotice(error));
+    } finally {
+      setSecret("");
+      setSubmitting(false);
+    }
+  }
+  return (
+    <form className="configuration-form" onSubmit={submit}>
+      <h3>Store OpenRouter credential</h3>
+      <p>The secret is write-only. This field clears after each submit.</p>
+      <div className="form-grid">
+        <label>
+          Safe label
+          <input
+            maxLength={200}
+            value={safeLabel}
+            onChange={(event) => setSafeLabel(event.target.value)}
+            autoComplete="off"
+          />
+        </label>
+        <label>
+          Provider secret
+          <input
+            required
+            type="password"
+            value={secret}
+            onChange={(event) => setSecret(event.target.value)}
+            autoComplete="new-password"
+            spellCheck={false}
+          />
+        </label>
+      </div>
+      <Button
+        type="submit"
+        disabled={submitting || secret === ""}
+        icon={<Icon name="key" size={16} />}
+      >
+        {submitting ? "Storing…" : "Store credential"}
+      </Button>
+    </form>
+  );
+}
+
+function CredentialTable({
+  values,
+}: {
+  readonly values: readonly Credential[];
+}) {
+  return (
+    <div className="table-scroll">
       <table>
-        <caption className="sr-only">Routing records</caption>
         <thead>
           <tr>
-            <th scope="col">Name</th>
-            <th scope="col">Kind</th>
-            <th scope="col">Status</th>
-            <th scope="col">Last event</th>
-            <th scope="col">
-              <span className="sr-only">Actions</span>
-            </th>
+            <th>Label fingerprint</th>
+            <th>Owner</th>
+            <th>State</th>
+            <th>Revision</th>
           </tr>
         </thead>
         <tbody>
-          {graphNodes.map((node) => (
-            <tr key={node.id}>
-              <td>
-                <strong>{node.title}</strong>
-                <small>{node.subtitle}</small>
-              </td>
-              <td>{node.type}</td>
-              <td>
-                <StatusPill tone={node.status === "warning" ? "amber" : "lime"}>
-                  {node.status === "warning" ? "Degraded" : "Healthy"}
-                </StatusPill>
-              </td>
-              <td>
-                {node.status === "warning"
-                  ? "Rate limit · 2 min ago"
-                  : "Checked · 30 sec ago"}
-              </td>
-              <td>
-                <button
-                  className="row-action"
-                  type="button"
-                  aria-label={`Inspect ${node.title}`}
-                  onClick={() => {
-                    onNode(node.id);
-                  }}
-                >
-                  <Icon name="chevron" size={16} />
-                </button>
-              </td>
-            </tr>
-          ))}
+          {values.length === 0 ? (
+            <EmptyRow columns={4}>
+              No credential metadata is in this authority.
+            </EmptyRow>
+          ) : (
+            values.map((item) => (
+              <tr key={item.credential_id}>
+                <td>
+                  <strong>{item.fingerprint}</strong>
+                  <small>{item.credential_id}</small>
+                </td>
+                <td>{item.owner_scope}</td>
+                <td>
+                  <StatusPill tone={toneForState(item.state)}>
+                    {item.state}
+                  </StatusPill>
+                </td>
+                <td>
+                  <Revision value={item.revision} />
+                </td>
+              </tr>
+            ))
+          )}
         </tbody>
       </table>
     </div>
   );
 }
 
-function Inspector({
-  onViewTable,
-  onNotify,
+function ProviderForm({
+  client,
+  scope,
+  credentials,
+  expectedRevision,
+  onChanged,
+  onNotice,
 }: {
-  onViewTable: () => void;
-  onNotify: Notify;
+  readonly client: AdministrationClient;
+  readonly scope: ScopeSelection;
+  readonly credentials: readonly Credential[];
+  readonly expectedRevision: string | null;
+  readonly onChanged: () => Promise<void>;
+  readonly onNotice: (notice: Notice) => void;
 }) {
+  const [displayName, setDisplayName] = useState("OpenRouter");
+  const [credentialId, setCredentialId] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  async function submit(event: SubmitEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSubmitting(true);
+    try {
+      const result = await client.putProvider(scope, null, {
+        provider_catalog_id: "openai_compatible.v1",
+        display_name: displayName,
+        endpoint: "https://openrouter.ai/api/v1",
+        credential_id: credentialId,
+        state: "active",
+        settings: {
+          schema_name: "adapter.openai_compatible.settings",
+          major_version: 1,
+          document: {
+            profile: "openrouter",
+            supported_operations: ["chat.complete", "chat.stream"],
+          },
+        },
+        expected_revision: expectedRevision,
+        reason: "Create the OpenRouter provider instance",
+        eligible_service_ids: [],
+      });
+      onNotice({
+        tone: "success",
+        message: `Provider instance published at ${revisionLabel(result.active_revision)} (${result.distribution_state}).`,
+      });
+      await onChanged();
+    } catch (error) {
+      onNotice(errorNotice(error));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+  const credentialOptions = credentials.reduce<ReactNode[]>((options, item) => {
+    if (item.state === "active") {
+      options.push(
+        <option key={item.credential_id} value={item.credential_id}>
+          {item.fingerprint}
+        </option>,
+      );
+    }
+    return options;
+  }, []);
   return (
-    <aside
-      className="panel inspector-panel"
-      aria-label="Selected route inspector"
-    >
-      <div className="inspector-header">
-        <div>
-          <p className="panel-kicker">Selected route</p>
-          <h2>claude-sonnet-4</h2>
-        </div>
-        <button
-          className="icon-button"
-          type="button"
-          aria-label="More route actions"
-          onClick={() => {
-            onNotify("More route actions are available in the full inspector.");
-          }}
-        >
-          <Icon name="more" size={18} />
-        </button>
-      </div>
-      <div className="inspector-status">
-        <StatusPill tone="lime">Healthy</StatusPill>
-        <span>99.96% over the last 24 hours</span>
-      </div>
-      <div className="inspector-section">
-        <span className="section-label">Effective configuration</span>
-        <div className="inheritance-row">
-          <span className="inheritance-icon">
-            <Icon name="layers" size={15} />
-          </span>
-          <div>
-            <strong>Inherited from Global fleet</strong>
-            <small>Revision router-2026.08.14</small>
-          </div>
-          <Icon name="chevron" size={16} />
-        </div>
-        <div className="detail-list">
-          <div>
-            <span>Provider</span>
-            <strong>Anthropic</strong>
-          </div>
-          <div>
-            <span>Model</span>
-            <strong>claude-sonnet-4</strong>
-          </div>
-          <div>
-            <span>Context window</span>
-            <strong>200k tokens</strong>
-          </div>
-          <div>
-            <span>Price</span>
-            <strong>$3 / $15 per 1M</strong>
-          </div>
-        </div>
-      </div>
-      <div className="inspector-section">
-        <span className="section-label">Fallback chain</span>
-        <div className="route-chain">
-          <ChainStep
-            number="1"
-            title="claude-sonnet-4"
-            detail="Anthropic · Current"
-            tone="lime"
-            status="Active"
+    <form className="configuration-form" onSubmit={submit}>
+      <h3>Add OpenRouter instance</h3>
+      <p>
+        The endpoint and supported operations use the accepted OpenRouter
+        profile.
+      </p>
+      <div className="form-grid">
+        <label>
+          Display name
+          <input
+            required
+            maxLength={200}
+            value={displayName}
+            onChange={(event) => setDisplayName(event.target.value)}
           />
-          <div className="chain-line" />
-          <ChainStep
-            number="2"
-            title="gpt-4.1-mini"
-            detail="OpenAI · Fallback"
-            tone="slate"
-            status="Ready"
-          />
-        </div>
+        </label>
+        <label>
+          Credential
+          <select
+            required
+            value={credentialId}
+            onChange={(event) => setCredentialId(event.target.value)}
+          >
+            <option value="">Select write-only credential</option>
+            {credentialOptions}
+          </select>
+        </label>
       </div>
-      <div className="inspector-alert">
-        <Icon name="shield" size={16} />
-        <div>
-          <strong>Safe to change</strong>
-          <span>
-            Changes publish after validation and create a new revision.
-          </span>
-        </div>
-      </div>
-      <div className="inspector-actions">
-        <button
-          className="button button-primary button-full"
-          type="button"
-          onClick={() => {
-            onNotify("Route editor opened for claude-sonnet-4.");
-          }}
-        >
-          Edit route <Icon name="chevron" size={16} />
-        </button>
-        <button
-          className="button button-quiet button-full"
-          type="button"
-          onClick={onViewTable}
-        >
-          <Icon name="eye" size={16} /> Inspect in table
-        </button>
-      </div>
-    </aside>
+      <Button type="submit" disabled={submitting || credentialId === ""}>
+        {submitting ? "Publishing…" : "Publish instance"}
+      </Button>
+    </form>
   );
 }
 
-function RoutingWorkspace({
-  viewMode,
-  selectedNode,
-  onView,
-  onNode,
-  onNotify,
+function ProviderTable({
+  client,
+  scope,
+  values,
+  onChanged,
+  onNotice,
 }: {
-  viewMode: ViewMode;
-  selectedNode: string;
-  onView: (mode: ViewMode) => void;
-  onNode: (id: string) => void;
-  onNotify: Notify;
+  readonly client: AdministrationClient;
+  readonly scope: ScopeSelection;
+  readonly values: readonly ProviderInstance[];
+  readonly onChanged: () => Promise<void>;
+  readonly onNotice: (notice: Notice) => void;
 }) {
+  async function change(item: ProviderInstance) {
+    try {
+      const nextState = item.state === "active" ? "disabled" : "active";
+      const result = await client.putProvider(
+        scope,
+        item.provider_instance_id,
+        {
+          provider_catalog_id: item.provider_catalog_id,
+          display_name: item.display_name,
+          endpoint: item.endpoint,
+          credential_id: item.credential_id,
+          state: nextState,
+          settings: item.settings,
+          expected_revision: item.active_revision,
+          reason: `${nextState === "active" ? "Restore" : "Disable"} the provider instance`,
+          eligible_service_ids: [],
+        },
+      );
+      onNotice({
+        tone: "success",
+        message: `Provider instance ${nextState}. Active revision ${revisionLabel(result.active_revision)}.`,
+      });
+      await onChanged();
+    } catch (error) {
+      onNotice(errorNotice(error));
+    }
+  }
   return (
-    <section className="workspace-grid">
-      <div className="panel graph-panel">
-        <div className="panel-header">
-          <div>
-            <div className="panel-kicker">
-              <span className="live-dot" /> Live graph
-            </div>
-            <h2>Routing graph</h2>
-            <p>
-              Relationships, fallback paths, and current health at a glance.
-            </p>
-          </div>
-          <div
-            className="view-toggle"
-            role="group"
-            aria-label="Choose graph or table view"
-          >
-            <button
-              className={viewMode === "graph" ? "is-selected" : ""}
-              type="button"
-              onClick={() => {
-                onView("graph");
-              }}
-            >
-              <Icon name="layers" size={15} /> Graph
-            </button>
-            <button
-              className={viewMode === "table" ? "is-selected" : ""}
-              type="button"
-              onClick={() => {
-                onView("table");
-              }}
-            >
-              <Icon name="list" size={15} /> Table
-            </button>
-          </div>
-        </div>
-        {viewMode === "graph" ? (
-          <GraphPanel
-            selectedNode={selectedNode}
-            onNode={onNode}
-            onNotify={onNotify}
-          />
-        ) : (
-          <RoutingTable onNode={onNode} />
-        )}
-      </div>
-      <Inspector
-        onViewTable={() => {
-          onView("table");
-        }}
-        onNotify={onNotify}
-      />
-    </section>
-  );
-}
-
-function BottomPanels({
-  onSection,
-  onNode,
-}: {
-  onSection: (section: Section) => void;
-  onNode: (id: string) => void;
-}) {
-  return (
-    <section className="bottom-grid">
-      <div className="panel attention-panel">
-        <div className="panel-header compact">
-          <div>
-            <div className="panel-kicker">Operator focus</div>
-            <h2>Needs attention</h2>
-          </div>
-          <button
-            className="text-button"
-            type="button"
-            onClick={() => {
-              onSection("operations");
-            }}
-          >
-            View all <Icon name="chevron" size={15} />
-          </button>
-        </div>
-        <div className="attention-list">
-          <button
-            className="attention-row"
-            type="button"
-            onClick={() => {
-              onNode("gpt");
-            }}
-          >
-            <span className="attention-icon attention-amber">
-              <Icon name="warning" size={16} />
-            </span>
-            <span>
-              <strong>OpenAI fallback is rate limited</strong>
-              <small>2 requests used fallback in the last 15 minutes</small>
-            </span>
-            <Icon name="chevron" size={16} />
-          </button>
-          <button
-            className="attention-row"
-            type="button"
-            onClick={() => {
-              onSection("operations");
-            }}
-          >
-            <span className="attention-icon attention-blue">
-              <Icon name="server" size={16} />
-            </span>
-            <span>
-              <strong>Node router-eu-02 needs a drain</strong>
-              <small>Maintenance window begins in 2 hours</small>
-            </span>
-            <Icon name="chevron" size={16} />
-          </button>
-        </div>
-      </div>
-      <div className="panel activity-panel">
-        <div className="panel-header compact">
-          <div>
-            <div className="panel-kicker">Audit trail</div>
-            <h2>Recent activity</h2>
-          </div>
-          <button
-            className="icon-button"
-            type="button"
-            aria-label="More activity actions"
-            onClick={() => {
-              onSection("requests");
-            }}
-          >
-            <Icon name="more" size={18} />
-          </button>
-        </div>
-        <div className="activity-list">
-          {activities.map((item) => (
-            <div className="activity-row" key={item.title}>
-              <span className={`activity-marker marker-${item.tone}`} />
-              <div>
-                <strong>{item.title}</strong>
-                <small>{item.detail}</small>
-              </div>
-              <time>{item.time}</time>
-            </div>
-          ))}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function App() {
-  const [state, dispatch] = useReducer(appReducer, initialState);
-  const page = pageTitles[state.activeSection];
-  const notify: Notify = (message) => {
-    dispatch({ type: "toast", value: message });
-    window.setTimeout(() => {
-      dispatch({ type: "toast", value: null });
-    }, 2600);
-  };
-  const selectSection = (section: Section) => {
-    dispatch({ type: "section", value: section });
-  };
-  return (
-    <div className="app-shell">
-      <Sidebar
-        activeSection={state.activeSection}
-        mobileNavOpen={state.mobileNavOpen}
-        onSection={selectSection}
-        onNotify={notify}
-      />
-      <div className="main-column">
-        <Topbar
-          page={page}
-          onMobileOpen={() => {
-            dispatch({ type: "mobile-nav", value: true });
-          }}
-          onSection={selectSection}
-        />
-        <main className="content">
-          <PageHeading
-            actions={
-              <>
-                <Button
-                  className="button button-quiet"
-                  icon={<Icon name="eye" size={16} />}
-                  onClick={() => {
-                    notify("Runbook opened in the full administration flow.");
-                  }}
-                >
-                  View runbook
-                </Button>
-                <Button
-                  className="button button-primary"
-                  icon={<Icon name="plus" size={17} />}
-                  onClick={() => {
-                    notify(
-                      "Provider creation is ready for the next implementation step.",
-                    );
-                  }}
-                >
-                  Add provider
-                </Button>
-              </>
-            }
-            className="page-heading"
-            description={page.description}
-            eyebrow={page.eyebrow}
-            title={page.title}
-          />
-          <section
-            className="context-strip"
-            aria-label="Current administration scope"
-          >
-            <ContextItem
-              className="context-item"
-              icon={<Icon name="grid" size={16} />}
-              iconClassName="context-icon context-lime"
-              label="Scope"
-              value="Global fleet"
-            />
-            <span className="context-divider" />
-            <ContextItem
-              className="context-item"
-              icon={<Icon name="layers" size={16} />}
-              iconClassName="context-icon context-blue"
-              label="Services"
-              value="3 active"
-            />
-            <span className="context-divider" />
-            <ContextItem
-              className="context-item"
-              icon={<Icon name="activity" size={16} />}
-              iconClassName="context-icon context-purple"
-              label="Revision"
-              value="router-2026.08.14"
-            />
-            <div className="context-spacer" />
-            <StatusPill tone="lime">Live and synced</StatusPill>
-            <span className="context-updated">Updated 30 sec ago</span>
-          </section>
-          <SummaryStats />
-          <RoutingWorkspace
-            viewMode={state.viewMode}
-            selectedNode={state.selectedNode}
-            onView={(mode) => {
-              dispatch({ type: "view", value: mode });
-            }}
-            onNode={(id) => {
-              dispatch({ type: "node", value: id });
-            }}
-            onNotify={notify}
-          />
-          <BottomPanels
-            onSection={selectSection}
-            onNode={(id) => {
-              dispatch({ type: "node", value: id });
-            }}
-          />
-          <p className="footer-note">
-            <Icon name="lock" size={13} /> Mock data only · No request content
-            or credentials are shown in this view.
-          </p>
-        </main>
-      </div>
-      {state.toast ? (
-        <div className="toast" role="status">
-          <span className="toast-check">✓</span>
-          {state.toast}
-        </div>
-      ) : null}
+    <div className="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Provider instance</th>
+            <th>Source</th>
+            <th>State</th>
+            <th>Revision</th>
+            <th>
+              <span className="sr-only">Actions</span>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {values.length === 0 ? (
+            <EmptyRow columns={5}>
+              No provider instance is effective in this scope.
+            </EmptyRow>
+          ) : (
+            values.map((item) => (
+              <tr key={item.provider_instance_id}>
+                <td>
+                  <strong>{item.display_name}</strong>
+                  <small>{item.provider_instance_id}</small>
+                </td>
+                <td>{item.source_layer}</td>
+                <td>
+                  <StatusPill tone={toneForState(item.state)}>
+                    {item.state}
+                  </StatusPill>
+                </td>
+                <td>
+                  <Revision
+                    value={item.active_revision}
+                    inherited={item.inherited}
+                  />
+                </td>
+                <td>
+                  {item.inherited || item.state === "retired" ? (
+                    <span className="muted-action">Read only</span>
+                  ) : (
+                    <Button variant="quiet" onClick={() => void change(item)}>
+                      {item.state === "active" ? "Disable" : "Restore"}
+                    </Button>
+                  )}
+                </td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
     </div>
   );
 }
 
-export { App };
+interface RouteFormState {
+  readonly providerId: string;
+  readonly canonicalModelId: string;
+  readonly wireModel: string;
+  readonly inputPrice: string;
+  readonly outputPrice: string;
+}
+
+const initialRouteForm: RouteFormState = {
+  providerId: "",
+  canonicalModelId: "",
+  wireModel: "deepseek/deepseek-v4-flash",
+  inputPrice: "",
+  outputPrice: "",
+};
+
+const canonicalUuidPattern =
+  "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const canonicalUuid = new RegExp(`^${canonicalUuidPattern}$`);
+const nonNegativeDecimal = /^(0|[1-9][0-9]*)(\.[0-9]+)?$/;
+
+function RouteForm({
+  client,
+  scope,
+  providers,
+  expectedRevision,
+  onChanged,
+  onNotice,
+}: {
+  readonly client: AdministrationClient;
+  readonly scope: ScopeSelection;
+  readonly providers: readonly ProviderInstance[];
+  readonly expectedRevision: string | null;
+  readonly onChanged: () => Promise<void>;
+  readonly onNotice: (notice: Notice) => void;
+}) {
+  const [form, updateForm] = useReducer(
+    (state: RouteFormState, update: Partial<RouteFormState>) => ({
+      ...state,
+      ...update,
+    }),
+    initialRouteForm,
+  );
+  const [submitting, setSubmitting] = useState(false);
+  const routeReady =
+    form.providerId !== "" &&
+    canonicalUuid.test(form.canonicalModelId) &&
+    nonNegativeDecimal.test(form.inputPrice) &&
+    nonNegativeDecimal.test(form.outputPrice);
+  async function submit(event: SubmitEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!routeReady) return;
+    setSubmitting(true);
+    try {
+      const result = await client.putRoute(scope, null, {
+        provider_instance_id: form.providerId,
+        canonical_model_id: form.canonicalModelId,
+        wire_model: form.wireModel,
+        capabilities: ["chat.complete", "chat.stream"],
+        settings: {
+          schema_name: "adapter.openai_compatible.route",
+          major_version: 1,
+          document: {},
+        },
+        price_authority: {
+          mode: "manual",
+          source_name: null,
+          lookup_identifier: null,
+        },
+        prices: [
+          {
+            unit: "input_token",
+            price: form.inputPrice,
+            currency: "USD",
+            raw_source_value: `${form.inputPrice} USD per 1000000 input tokens`,
+            unit_quantity: "1000000",
+          },
+          {
+            unit: "output_token",
+            price: form.outputPrice,
+            currency: "USD",
+            raw_source_value: `${form.outputPrice} USD per 1000000 output tokens`,
+            unit_quantity: "1000000",
+          },
+        ],
+        synchronization_schedule: "0 0 * * 0",
+        stale_after_seconds: 1209600,
+        state: "active",
+        expected_revision: expectedRevision,
+        reason: "Create the OpenRouter model route",
+        eligible_service_ids: [],
+      });
+      onNotice({
+        tone: "success",
+        message: `Model route published at ${revisionLabel(result.active_revision)} (${result.distribution_state}).`,
+      });
+      await onChanged();
+    } catch (error) {
+      onNotice(errorNotice(error));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+  const providerOptions = providers.reduce<ReactNode[]>((options, item) => {
+    if (item.state === "active") {
+      options.push(
+        <option
+          key={item.provider_instance_id}
+          value={item.provider_instance_id}
+        >
+          {item.display_name}
+        </option>,
+      );
+    }
+    return options;
+  }, []);
+  return (
+    <form className="configuration-form" onSubmit={submit}>
+      <h3>Add provider-model route</h3>
+      <p>
+        DeepSeek V4 Flash is the default live-test route. Prices are USD per one
+        million tokens.
+      </p>
+      <div className="form-grid form-grid-three">
+        <label>
+          Provider instance
+          <select
+            required
+            value={form.providerId}
+            onChange={(event) => updateForm({ providerId: event.target.value })}
+          >
+            <option value="">Select instance</option>
+            {providerOptions}
+          </select>
+        </label>
+        <label>
+          Canonical model UUID
+          <input
+            required
+            pattern={canonicalUuidPattern}
+            placeholder="Canonical model UUID"
+            value={form.canonicalModelId}
+            onChange={(event) =>
+              updateForm({ canonicalModelId: event.target.value })
+            }
+          />
+        </label>
+        <label>
+          OpenRouter model
+          <input
+            required
+            value={form.wireModel}
+            onChange={(event) => updateForm({ wireModel: event.target.value })}
+          />
+        </label>
+        <label>
+          Input price
+          <input
+            required
+            inputMode="decimal"
+            pattern="(0|[1-9][0-9]*)(\.[0-9]+)?"
+            placeholder="Explicit USD price"
+            value={form.inputPrice}
+            onChange={(event) => updateForm({ inputPrice: event.target.value })}
+          />
+        </label>
+        <label>
+          Output price
+          <input
+            required
+            inputMode="decimal"
+            pattern="(0|[1-9][0-9]*)(\.[0-9]+)?"
+            placeholder="Explicit USD price"
+            value={form.outputPrice}
+            onChange={(event) =>
+              updateForm({ outputPrice: event.target.value })
+            }
+          />
+        </label>
+      </div>
+      <Button type="submit" disabled={submitting || !routeReady}>
+        {submitting ? "Publishing…" : "Publish route"}
+      </Button>
+    </form>
+  );
+}
+
+function RouteTable({
+  client,
+  scope,
+  values,
+  onChanged,
+  onNotice,
+}: {
+  readonly client: AdministrationClient;
+  readonly scope: ScopeSelection;
+  readonly values: readonly ProviderModelRoute[];
+  readonly onChanged: () => Promise<void>;
+  readonly onNotice: (notice: Notice) => void;
+}) {
+  async function change(item: ProviderModelRoute) {
+    try {
+      const nextState = item.state === "active" ? "disabled" : "active";
+      const result = await client.putRoute(
+        scope,
+        item.provider_model_route_id,
+        {
+          provider_instance_id: item.provider_instance_id,
+          canonical_model_id: item.canonical_model_id,
+          wire_model: item.wire_model,
+          capabilities: item.capabilities,
+          settings: item.settings,
+          price_authority: item.price_authority,
+          prices: item.prices,
+          synchronization_schedule: item.synchronization_schedule,
+          stale_after_seconds: item.stale_after_seconds,
+          state: nextState,
+          expected_revision: item.active_revision,
+          reason: `${nextState === "active" ? "Restore" : "Disable"} the provider-model route`,
+          eligible_service_ids: [],
+        },
+      );
+      onNotice({
+        tone: "success",
+        message: `Provider-model route ${nextState}. Active revision ${revisionLabel(result.active_revision)}.`,
+      });
+      await onChanged();
+    } catch (error) {
+      onNotice(errorNotice(error));
+    }
+  }
+  return (
+    <div className="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Model route</th>
+            <th>Capabilities</th>
+            <th>State</th>
+            <th>Revision</th>
+            <th>
+              <span className="sr-only">Actions</span>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {values.length === 0 ? (
+            <EmptyRow columns={5}>
+              No provider-model route is effective in this scope.
+            </EmptyRow>
+          ) : (
+            values.map((item) => (
+              <tr key={item.provider_model_route_id}>
+                <td>
+                  <strong>{item.wire_model}</strong>
+                  <small>{item.provider_model_route_id}</small>
+                </td>
+                <td>{item.capabilities.join(", ")}</td>
+                <td>
+                  <StatusPill tone={toneForState(item.state)}>
+                    {item.state}
+                  </StatusPill>
+                </td>
+                <td>
+                  <Revision
+                    value={item.active_revision}
+                    inherited={item.inherited}
+                  />
+                </td>
+                <td>
+                  {item.inherited || item.state === "retired" ? (
+                    <span className="muted-action">Read only</span>
+                  ) : (
+                    <Button variant="quiet" onClick={() => void change(item)}>
+                      {item.state === "active" ? "Disable" : "Restore"}
+                    </Button>
+                  )}
+                </td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ConfigurationView(props: {
+  readonly client: AdministrationClient;
+  readonly scope: ScopeSelection;
+  readonly snapshot: AdministrationSnapshot;
+  readonly onChanged: () => Promise<void>;
+  readonly onNotice: (notice: Notice) => void;
+}) {
+  const { client, scope, snapshot, onChanged, onNotice } = props;
+  const expectedRevision = activeScopeRevision(snapshot);
+  return (
+    <div className="panel-stack">
+      {scope.mode === "global" ? (
+        <Panel>
+          <PanelHeader
+            kicker="Write-only secret control"
+            title="Provider credentials"
+            description="Secret values never return to this application."
+          />
+          <CredentialForm
+            client={client}
+            scope={scope}
+            onChanged={onChanged}
+            onNotice={onNotice}
+          />
+          <CredentialTable values={snapshot.credentials} />
+        </Panel>
+      ) : (
+        <Panel className="permission-note">
+          <Icon name="lock" />
+          <div>
+            <h2>Secret custody stays global</h2>
+            <p>
+              This service view can select eligible credential references. It
+              cannot read or change secret material.
+            </p>
+          </div>
+        </Panel>
+      )}
+      <Panel>
+        <PanelHeader
+          kicker="Provider access"
+          title="OpenRouter instances"
+          description="Create one accepted OpenRouter endpoint and inspect its effective source."
+        />
+        <ProviderForm
+          client={client}
+          scope={scope}
+          credentials={snapshot.credentials}
+          expectedRevision={expectedRevision}
+          onChanged={onChanged}
+          onNotice={onNotice}
+        />
+        <ProviderTable
+          client={client}
+          scope={scope}
+          values={snapshot.providers}
+          onChanged={onChanged}
+          onNotice={onNotice}
+        />
+      </Panel>
+      <Panel>
+        <PanelHeader
+          kicker="Provider model"
+          title="OpenRouter routes"
+          description="Connect a canonical model to the exact OpenRouter wire model and prices."
+        />
+        <RouteForm
+          client={client}
+          scope={scope}
+          providers={snapshot.providers}
+          expectedRevision={expectedRevision}
+          onChanged={onChanged}
+          onNotice={onNotice}
+        />
+        <RouteTable
+          client={client}
+          scope={scope}
+          values={snapshot.routes}
+          onChanged={onChanged}
+          onNotice={onNotice}
+        />
+      </Panel>
+    </div>
+  );
+}
+
+function AssignmentForm({
+  client,
+  scope,
+  routes,
+  expectedRevision,
+  onChanged,
+  onNotice,
+}: {
+  readonly client: AdministrationClient;
+  readonly scope: ScopeSelection;
+  readonly routes: readonly ProviderModelRoute[];
+  readonly expectedRevision: string | null;
+  readonly onChanged: () => Promise<void>;
+  readonly onNotice: (notice: Notice) => void;
+}) {
+  const [name, setName] = useState("general");
+  const [orderedRoutes, setOrderedRoutes] = useState("");
+  const [timeout, setTimeoutValue] = useState("30000");
+  const [submitting, setSubmitting] = useState(false);
+  const candidates = orderedRoutes.split("\n").flatMap((value) => {
+    const candidate = value.trim();
+    return candidate === "" ? [] : [candidate];
+  });
+  async function submit(event: SubmitEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSubmitting(true);
+    try {
+      const result = await client.putAssignment(scope, name, {
+        expected_revision: expectedRevision,
+        state: "active",
+        candidates: candidates.map((provider_model_route_id) => ({
+          provider_model_route_id,
+          attempt_timeout_ms: Number(timeout),
+        })),
+        required_capabilities: ["chat.complete", "chat.stream"],
+        reason: "Publish the ordered MVP fallback chain",
+      });
+      onNotice({
+        tone: "success",
+        message: `Assignment published at ${revisionLabel(result.active_revision)} (${result.distribution_state}).`,
+      });
+      await onChanged();
+    } catch (error) {
+      onNotice(errorNotice(error));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+  return (
+    <form className="configuration-form" onSubmit={submit}>
+      <h3>Publish complete fallback chain</h3>
+      <p>
+        Put one route ID on each line. The first line is the primary route.
+        Later lines are ordered fallbacks.
+      </p>
+      <div className="form-grid">
+        <label>
+          Assignment name
+          <input
+            required
+            maxLength={100}
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+          />
+        </label>
+        <label>
+          Attempt timeout (ms)
+          <input
+            required
+            type="number"
+            min={100}
+            max={120000}
+            value={timeout}
+            onChange={(event) => setTimeoutValue(event.target.value)}
+          />
+        </label>
+      </div>
+      <label className="full-field">
+        Ordered route IDs
+        <textarea
+          required
+          rows={Math.max(3, candidates.length + 1)}
+          value={orderedRoutes}
+          onChange={(event) => setOrderedRoutes(event.target.value)}
+          placeholder={routes
+            .map((item) => item.provider_model_route_id)
+            .join("\n")}
+        />
+      </label>
+      <ol className="fallback-preview" aria-label="Ordered fallback preview">
+        {candidates.map((candidate, index) => (
+          <li key={candidate}>
+            <span>{index + 1}</span>
+            <code>{candidate}</code>
+            {index === 0 ? (
+              <strong>Primary</strong>
+            ) : (
+              <small>Fallback {index}</small>
+            )}
+          </li>
+        ))}
+      </ol>
+      <Button type="submit" disabled={submitting || candidates.length === 0}>
+        {submitting ? "Publishing…" : "Publish chain"}
+      </Button>
+    </form>
+  );
+}
+
+function AssignmentTable({
+  client,
+  scope,
+  values,
+  onChanged,
+  onNotice,
+}: {
+  readonly client: AdministrationClient;
+  readonly scope: ScopeSelection;
+  readonly values: readonly Assignment[];
+  readonly onChanged: () => Promise<void>;
+  readonly onNotice: (notice: Notice) => void;
+}) {
+  async function change(item: Assignment) {
+    try {
+      const nextState = item.state === "active" ? "disabled" : "active";
+      const result = await client.putAssignment(scope, item.name, {
+        expected_revision: item.active_revision,
+        state: nextState,
+        candidates: item.candidates,
+        required_capabilities: item.required_capabilities,
+        reason: `${nextState === "active" ? "Restore" : "Disable"} the assignment`,
+      });
+      onNotice({
+        tone: "success",
+        message: `Assignment ${nextState}. Active revision ${revisionLabel(result.active_revision)}.`,
+      });
+      await onChanged();
+    } catch (error) {
+      onNotice(errorNotice(error));
+    }
+  }
+  return (
+    <div className="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Assignment</th>
+            <th>Complete ordered chain</th>
+            <th>State</th>
+            <th>Revision</th>
+            <th>
+              <span className="sr-only">Actions</span>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {values.length === 0 ? (
+            <EmptyRow columns={5}>
+              No assignment is effective in this scope.
+            </EmptyRow>
+          ) : (
+            values.map((item) => (
+              <tr key={item.name}>
+                <td>
+                  <strong>{item.name}</strong>
+                  <small>{item.source_layer}</small>
+                </td>
+                <td>
+                  <ol className="table-chain">
+                    {item.candidates.map((candidate, index) => (
+                      <li key={candidate.provider_model_route_id}>
+                        <span>{index + 1}</span>
+                        <div>
+                          <code>{candidate.provider_model_route_id}</code>
+                          <small>
+                            {index === 0 ? "Primary" : `Fallback ${index}`}
+                          </small>
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                </td>
+                <td>
+                  <StatusPill tone={toneForState(item.state)}>
+                    {item.state}
+                  </StatusPill>
+                </td>
+                <td>
+                  <Revision
+                    value={item.active_revision}
+                    inherited={item.inherited}
+                  />
+                </td>
+                <td>
+                  {item.inherited || item.state === "retired" ? (
+                    <span className="muted-action">Read only</span>
+                  ) : (
+                    <Button variant="quiet" onClick={() => void change(item)}>
+                      {item.state === "active" ? "Disable" : "Restore"}
+                    </Button>
+                  )}
+                </td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function AssignmentsView(props: {
+  readonly client: AdministrationClient;
+  readonly scope: ScopeSelection;
+  readonly snapshot: AdministrationSnapshot;
+  readonly onChanged: () => Promise<void>;
+  readonly onNotice: (notice: Notice) => void;
+}) {
+  return (
+    <Panel>
+      <PanelHeader
+        kicker="Immediate publication"
+        title="Assignments and ordered fallbacks"
+        description="The nearest scope replaces the complete inherited fallback chain."
+      />
+      <AssignmentForm
+        client={props.client}
+        scope={props.scope}
+        routes={props.snapshot.routes}
+        expectedRevision={activeScopeRevision(props.snapshot)}
+        onChanged={props.onChanged}
+        onNotice={props.onNotice}
+      />
+      <AssignmentTable
+        client={props.client}
+        scope={props.scope}
+        values={props.snapshot.assignments}
+        onChanged={props.onChanged}
+        onNotice={props.onNotice}
+      />
+    </Panel>
+  );
+}
+
+function RequestTable({
+  values,
+}: {
+  readonly values: readonly RequestStatus[];
+}) {
+  return (
+    <div className="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Logical request</th>
+            <th>Workspace</th>
+            <th>Assignment</th>
+            <th>State</th>
+            <th>Revision</th>
+            <th>Safe diagnostic</th>
+          </tr>
+        </thead>
+        <tbody>
+          {values.length === 0 ? (
+            <EmptyRow columns={6}>
+              No request status is in this bounded scope.
+            </EmptyRow>
+          ) : (
+            values.map((item) => (
+              <tr key={item.request_id}>
+                <td>
+                  <strong>{item.request_id}</strong>
+                </td>
+                <td>{item.workspace_id ?? "Service level"}</td>
+                <td>{item.assignment ?? "Not reported"}</td>
+                <td>
+                  <StatusPill tone={toneForState(item.state)}>
+                    {item.state}
+                  </StatusPill>
+                </td>
+                <td>{item.state_revision ?? "—"}</td>
+                <td>
+                  {item.error?.message ??
+                    item.error?.code ??
+                    "No safe diagnostic"}
+                </td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function AccountingView({ summary }: { readonly summary: AccountingSummary }) {
+  return (
+    <div className="panel-stack">
+      <div className="stat-grid">
+        <StatCard
+          icon={<Icon name="list" size={17} />}
+          label="Logical requests"
+          value={String(summary.logical_requests)}
+          note="Selected seven-day range"
+          tone="blue"
+        />
+        <StatCard
+          icon={<Icon name="activity" size={17} />}
+          label="Provider attempts"
+          value={String(summary.attempts)}
+          note="Includes billable failures"
+          tone="purple"
+        />
+        <StatCard
+          icon={<Icon name="audit" size={17} />}
+          label="Bounded cost"
+          value={`${summary.cost} ${summary.currency}`}
+          note={`Corrections ${summary.corrections}`}
+          tone="lime"
+        />
+      </div>
+      <Panel>
+        <PanelHeader
+          kicker="Bounded accounting"
+          title="Usage by unit"
+          description={`${summary.from} to ${summary.to}`}
+        />
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Usage unit</th>
+                <th>Quantity</th>
+              </tr>
+            </thead>
+            <tbody>
+              {summary.usage.length === 0 ? (
+                <EmptyRow columns={2}>
+                  No usage is recorded in this range.
+                </EmptyRow>
+              ) : (
+                summary.usage.map((item) => (
+                  <tr key={item.unit}>
+                    <td>{item.unit}</td>
+                    <td>{item.quantity}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+export function StaleRevisionBanner() {
+  return (
+    <div className="stale-banner" role="alert">
+      <Icon name="warning" />
+      <span>
+        <strong>Stale configuration revision.</strong> Refresh the scope, review
+        the active revision, and submit an intentional new change.
+      </span>
+    </div>
+  );
+}
+
+export function AdministrationDashboard({
+  client,
+  scope,
+  snapshot,
+  initialSection = "configuration",
+  notice,
+  onNotice,
+  onReload,
+}: {
+  readonly client: AdministrationClient;
+  readonly scope: ScopeSelection;
+  readonly snapshot: AdministrationSnapshot;
+  readonly initialSection?: Section;
+  readonly notice: Notice | null;
+  readonly onNotice: (notice: Notice | null) => void;
+  readonly onReload: () => Promise<void>;
+}) {
+  const [section, setSection] = useReducer(
+    (_current: Section, next: Section) => next,
+    initialSection,
+  );
+  const page = sections.find((item) => item.id === section) ?? sections[0]!;
+  const stale = notice?.staleRevision === true;
+  return (
+    <div className="application-shell">
+      <aside className="sidebar">
+        <div className="brand">
+          <span>
+            <Icon name="layers" />
+          </span>
+          <div>
+            <strong>LLM Router</strong>
+            <small>Administration</small>
+          </div>
+        </div>
+        <nav aria-label="Administration areas">
+          {sections.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              aria-current={section === item.id ? "page" : undefined}
+              onClick={() => setSection(item.id)}
+            >
+              <Icon name={item.icon} size={17} />
+              <span>{item.label}</span>
+            </button>
+          ))}
+        </nav>
+        <div className="sidebar-scope">
+          <small>Exact scope</small>
+          <strong>{scope.serviceId}</strong>
+          <span>{scope.workspaceId || "Service level"}</span>
+        </div>
+      </aside>
+      <div className="main-column">
+        <header className="topbar">
+          <span>
+            {scope.mode === "global" ? "Global authority" : "Service authority"}
+          </span>
+          <Button
+            variant="quiet"
+            icon={<Icon name="refresh" size={16} />}
+            onClick={() => void onReload()}
+          >
+            Refresh
+          </Button>
+        </header>
+        <main className="content">
+          <ScopeBanner scope={scope} snapshot={snapshot} />
+          <PageHeading
+            eyebrow={page.label}
+            title={page.label}
+            description="Protected MVP administration with exact scope and bounded operational data."
+          />
+          {stale ? <StaleRevisionBanner /> : null}
+          {section === "configuration" ? (
+            <ConfigurationView
+              client={client}
+              scope={scope}
+              snapshot={snapshot}
+              onChanged={onReload}
+              onNotice={onNotice}
+            />
+          ) : null}
+          {section === "assignments" ? (
+            <AssignmentsView
+              client={client}
+              scope={scope}
+              snapshot={snapshot}
+              onChanged={onReload}
+              onNotice={onNotice}
+            />
+          ) : null}
+          {section === "requests" ? (
+            <Panel>
+              <PanelHeader
+                kicker="Content-free status"
+                title="Logical requests"
+                description="This view does not contain prompts, model output, or provider secrets."
+              />
+              <RequestTable values={snapshot.requests} />
+            </Panel>
+          ) : null}
+          {section === "accounting" ? (
+            <AccountingView summary={snapshot.accounting} />
+          ) : null}
+        </main>
+      </div>
+    </div>
+  );
+}
+
+export function PersistentNotice({
+  notice,
+  onDismiss,
+}: {
+  readonly notice: Notice | null;
+  readonly onDismiss: () => void;
+}) {
+  return notice ? (
+    <Toast
+      className={`notice notice-${notice.tone}`}
+      role={notice.tone === "error" ? "alert" : "status"}
+      onDismiss={onDismiss}
+    >
+      {notice.message}
+    </Toast>
+  ) : null;
+}
+
+export function AdministrationStateView({
+  client,
+  failure,
+  loading,
+  notice,
+  onNotice,
+  onReload,
+  scope,
+  snapshot,
+}: {
+  readonly client: AdministrationClient;
+  readonly failure: string | null;
+  readonly loading: boolean;
+  readonly notice: Notice | null;
+  readonly onNotice: (notice: Notice | null) => void;
+  readonly onReload: () => Promise<void>;
+  readonly scope: ScopeSelection;
+  readonly snapshot: AdministrationSnapshot | null;
+}) {
+  return (
+    <>
+      {loading ? (
+        <main className="entry-state">
+          <StateMessage kind="loading">
+            Protected service and workspace state is loading.
+          </StateMessage>
+        </main>
+      ) : null}
+      {!loading && failure !== null ? (
+        <main className="entry-state">
+          <StateMessage kind="error" onRetry={() => void onReload()}>
+            {failure}
+          </StateMessage>
+        </main>
+      ) : null}
+      {!loading && failure === null && snapshot === null ? (
+        <main className="entry-state">
+          <StateMessage kind="empty">
+            Enter a service ID. Add a workspace ID only when the authority is
+            for one exact workspace.
+          </StateMessage>
+        </main>
+      ) : null}
+      {!loading && failure === null && snapshot !== null ? (
+        <AdministrationDashboard
+          client={client}
+          scope={scope}
+          snapshot={snapshot}
+          notice={notice}
+          onNotice={onNotice}
+          onReload={onReload}
+        />
+      ) : null}
+      <PersistentNotice notice={notice} onDismiss={() => onNotice(null)} />
+    </>
+  );
+}
+
+export interface AppProps {
+  readonly client?: AdministrationClient;
+  readonly startingScope?: ScopeSelection;
+}
+
+export function App({ client: suppliedClient, startingScope }: AppProps = {}) {
+  const client = useMemo(
+    () => suppliedClient ?? createFetchAdministrationClient(),
+    [suppliedClient],
+  );
+  const [scope, setScope] = useState(startingScope ?? initialScope);
+  const [snapshot, setSnapshot] = useState<AdministrationSnapshot | null>(null);
+  const [loading, setLoading] = useState(scope.serviceId !== "");
+  const [failure, setFailure] = useState<string | null>(null);
+  const [notice, setNotice] = useReducer(
+    (_current: Notice | null, next: Notice | null) => next,
+    null,
+  );
+  const load = useCallback(
+    async (signal?: AbortSignal) => {
+      if (scope.serviceId === "") {
+        setSnapshot(null);
+        setLoading(false);
+        setFailure(null);
+        return;
+      }
+      setLoading(true);
+      setFailure(null);
+      try {
+        setSnapshot(await client.load(scope, signal));
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === "AbortError")) {
+          setFailure(errorMessage(error));
+        }
+      } finally {
+        if (!signal?.aborted) setLoading(false);
+      }
+    },
+    [client, scope],
+  );
+  useEffect(() => {
+    const controller = new AbortController();
+    void load(controller.signal);
+    return () => controller.abort();
+  }, [load]);
+  function applyScope(next: ScopeSelection) {
+    setNotice(null);
+    setScope(next);
+    const query = new URLSearchParams();
+    query.set("view", next.mode);
+    if (next.serviceId !== "") query.set("service_id", next.serviceId);
+    if (next.workspaceId !== "") query.set("workspace_id", next.workspaceId);
+    globalThis.history?.replaceState(null, "", `?${query.toString()}`);
+  }
+  return (
+    <ShellErrorBoundary
+      fallbackClassName="fatal-state"
+      fallbackTitle="LLM Router administration is not available"
+      fallbackMessage="Reload the page. No change was sent."
+      resetKey={scope}
+    >
+      <div className="scope-entry">
+        <ScopeForm current={scope} onApply={applyScope} />
+      </div>
+      <AdministrationStateView
+        client={client}
+        failure={failure}
+        loading={loading}
+        notice={notice}
+        onNotice={setNotice}
+        onReload={async () => load()}
+        scope={scope}
+        snapshot={snapshot}
+      />
+    </ShellErrorBoundary>
+  );
+}
