@@ -22,7 +22,6 @@ def test_enabled_public_authentication_rejects_empty_secret_files(
     names = (
         "LLMROUTER_OIDC_CLIENT_ID_FILE",
         "LLMROUTER_OIDC_CLIENT_SECRET_FILE",
-        "LLMROUTER_POCKET_ID_API_KEY_FILE",
         "LLMROUTER_ADMIN_DIGEST_KEY_FILE",
         "LLMROUTER_ADMIN_ENCRYPTION_KEY_FILE",
     )
@@ -39,7 +38,6 @@ def test_enabled_public_authentication_rejects_empty_secret_files(
     [
         ("client_id", "client id\n"),
         ("client_secret", "A" * 31 + "\n"),
-        ("api_key", "B" * 32 + "\nextra"),
         ("digest_key", "YQ==\n"),
         ("encryption_key", " " + "YQ"),
     ],
@@ -51,7 +49,6 @@ def test_public_authentication_rejects_unsafe_secret_formats(
     values = {
         "client_id": "router-client",
         "client_secret": "A" * 32,
-        "api_key": "B" * 32,
         "digest_key": "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE",
         "encryption_key": "YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmI",
     }
@@ -59,7 +56,6 @@ def test_public_authentication_rejects_unsafe_secret_formats(
     names = {
         "client_id": "LLMROUTER_OIDC_CLIENT_ID_FILE",
         "client_secret": "LLMROUTER_OIDC_CLIENT_SECRET_FILE",
-        "api_key": "LLMROUTER_POCKET_ID_API_KEY_FILE",
         "digest_key": "LLMROUTER_ADMIN_DIGEST_KEY_FILE",
         "encryption_key": "LLMROUTER_ADMIN_ENCRYPTION_KEY_FILE",
     }

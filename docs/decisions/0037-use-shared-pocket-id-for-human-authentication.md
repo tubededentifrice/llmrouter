@@ -34,6 +34,9 @@ clients. Each client has exact redirect URIs and a separate audience. Each
 application uses the authorization code flow with Proof Key for Code Exchange
 and creates its own server-side session. The immutable issuer and subject pair
 links the same human to local administrator records in both applications.
+LLM Router uses refresh-token rotation and access-token introspection for its
+provider-session checks. It does not use a Pocket ID administrator API key or
+read Pocket ID account and passkey administration APIs.
 
 Pocket ID authenticates humans only. LLM Router continues to own its service
 tree, workspaces, administrator grants, permissions, machine credential
@@ -65,6 +68,7 @@ not create or recover a Pocket ID account or passkey.
   applications.
 - Account and passkey management has one central user interface.
 - Each application still makes and audits its own authorization decisions.
+- Each application uses only its confidential OpenID Connect client credential.
 - Pocket ID availability is required for new administrator sessions, recent
   authentication, and identity changes. Existing non-sensitive actions have
   only the bounded status-cache period in the product specification.
@@ -89,8 +93,9 @@ records.
 The design removes two custom WebAuthn implementations. It also creates one
 high-value shared identity dependency. Conformance tests must cover issuer and
 audience validation, Proof Key for Code Exchange, state and nonce validation,
-recent authentication, account disablement, passkey recovery, local session
-revocation, provider outage, and token confusion between the two clients.
+recent authentication, refresh-token rotation, access-token introspection,
+local session revocation, provider outage, and token confusion between the two
+clients.
 
 Identity-service groups can restrict client admission. They do not replace
 local authorization or expand a service or workspace boundary.

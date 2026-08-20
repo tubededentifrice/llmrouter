@@ -26,7 +26,7 @@
     },
     {
       "path": "docs/api/openapi.yaml",
-      "sha256": "0754a48be7551be4709e2aa2959523f295208a8acfc9d1015b401e6a7bf56154"
+      "sha256": "60d78cfa1d29b4c75c570ea176871087bfbc9d0c8f59da1db96cce49e6a2fbb4"
     },
     {
       "path": "docs/api/request-fingerprint.md",
@@ -58,7 +58,7 @@
     "AdministratorGrant": "d71250d4f1c51b2544b37d7170b6ca2707a10e0a787228c2b54fefc0468a5310",
     "AdministratorGrantPage": "ceccf29dfbee33647374dba5d6af3b8398b67f2e56383941c8083469e6f85d33",
     "AdministratorOperation": "64b26683218ba18e94009dd8aa88da0861134820e856c8dd70b9ab6aea9fee5e",
-    "AdministratorSession": "c4800dc6bf295f5facd9bf8021e66c674d558509a90a7adc5c734fa177213670",
+    "AdministratorSession": "eac1ff7e981a111a1d0f629b8c6cceb930d870dff00f7a390feeceb932303690",
     "AdministratorSessionStart": "536c6d3153ae9b2608fd307156755731824362ddf604d8c092f30ec169f09059",
     "AdmissionReceipt": "2be4d584b068b1c7a8d2b836b48e1d4c2bdfa7be7ae7eab290fb7334b8d9105f",
     "AgentRunRequest": "65c0fa9ffaced8a303324e7191d3e83030b90c6dc31b00e258e91276429a5987",
@@ -191,6 +191,6 @@
   },
   "contract_set": "llmrouter-v1",
   "generator_version": 1,
-  "source_sha256": "0754a48be7551be4709e2aa2959523f295208a8acfc9d1015b401e6a7bf56154",
+  "source_sha256": "60d78cfa1d29b4c75c570ea176871087bfbc9d0c8f59da1db96cce49e6a2fbb4",
   "version": "1.0.0"
 }

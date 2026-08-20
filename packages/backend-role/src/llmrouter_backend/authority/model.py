@@ -261,7 +261,7 @@ class AdministratorPrincipal:
     authenticated_at: datetime
     last_activity_at: datetime
     recent_authentication_at: datetime | None
-    account_checked_at: datetime
+    provider_session_checked_at: datetime
     idle_expires_at: datetime
     absolute_expires_at: datetime
     grant_revision: int
@@ -282,7 +282,7 @@ class AdministratorPrincipal:
         _require_aware(self.last_activity_at, "last-activity time")
         if self.recent_authentication_at is not None:
             _require_aware(self.recent_authentication_at, "recent authentication time")
-        _require_aware(self.account_checked_at, "account-check time")
+        _require_aware(self.provider_session_checked_at, "provider-session check time")
         _require_aware(self.idle_expires_at, "idle-expiry time")
         _require_aware(self.absolute_expires_at, "absolute-expiry time")
         if not self.authenticated_at <= self.last_activity_at:
@@ -306,7 +306,7 @@ class AdministratorPrincipal:
         if self.idle_expires_at > self.absolute_expires_at:
             msg = "The idle expiry must not exceed the absolute expiry."
             raise ValueError(msg)
-        if self.account_checked_at < self.authenticated_at:
+        if self.provider_session_checked_at < self.authenticated_at:
             msg = "The account-check time must not precede authentication."
             raise ValueError(msg)
         if (

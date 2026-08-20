@@ -21,11 +21,11 @@ from llmrouter_backend.admin_auth import (
     AuthenticationPurpose,
     GrantRequest,
     IdentityServiceUnavailable,
-    IdentityState,
     OIDCConfiguration,
     OIDCTokenResponse,
     OIDCTokenVerifier,
     ProviderSessionInvalid,
+    ProviderSessionRotationFailed,
     ProviderSessionState,
     TrustedGrantPurpose,
     administrator_session_cookie,
@@ -85,13 +85,12 @@ class FakeIdentityService:
         self.is_available = True
         self.nonce = ""
         self.subject = "person-1"
-        self.generation = 1
         self.active = True
-        self.checked_at = NOW
         self.token_type = "id-token"
         self.reject_provider_session = False
         self.rotate_provider_session = False
-        self.account_state_unavailable = False
+        self.fail_after_rotation = False
+        self.provider_calls: list[tuple[str, str]] = []
 
     def available(self) -> bool:
         if not self.is_available:
@@ -126,15 +125,6 @@ class FakeIdentityService:
             expires_in=300,
         )
 
-    def account_state(
-        self, *, issuer: str, subject: str, now: datetime
-    ) -> IdentityState:
-        if not self.is_available or self.account_state_unavailable:
-            raise IdentityServiceUnavailable
-        assert issuer == ISSUER and subject == self.subject
-        assert now.tzinfo is not None
-        return IdentityState(self.active, self.generation, self.checked_at)
-
     def provider_session_state(
         self,
         *,
@@ -143,8 +133,13 @@ class FakeIdentityService:
         access_expires_at: datetime,
         now: datetime,
     ) -> ProviderSessionState:
+        self.provider_calls.append((access_token, refresh_token))
+        if not self.is_available:
+            raise IdentityServiceUnavailable
         if self.reject_provider_session:
             raise ProviderSessionInvalid
+        if self.fail_after_rotation:
+            raise ProviderSessionRotationFailed
         return ProviderSessionState(
             active=self.active,
             access_token=(
@@ -156,6 +151,43 @@ class FakeIdentityService:
             access_expires_at=access_expires_at,
             checked_at=now,
         )
+
+
+def test_callback_checks_provider_session_and_stores_rotated_tokens(
+    auth_repository: tuple[AdministratorAuthRepository, FakeIdentityService],
+) -> None:
+    """Check the provider before creation and store its rotated token pair."""
+    repository, identity = auth_repository
+    identity.rotate_provider_session = True
+    session, _ = _bootstrap(repository, identity, frozenset({"health.read"}))
+    assert identity.provider_calls == [
+        ("provider-access-token", "provider-refresh-token")
+    ]
+
+    repository.authenticate_session(
+        session,
+        request_id="rotated-provider-token-check",
+        now=NOW + timedelta(minutes=6),
+        policy=_policy("health.read"),
+    )
+    assert identity.provider_calls[1] == ("rotated-access", "rotated-refresh")
+
+
+def test_callback_rejects_an_inactive_provider_session(
+    auth_repository: tuple[AdministratorAuthRepository, FakeIdentityService],
+) -> None:
+    """Do not create a local session for an inactive provider session."""
+    repository, identity = auth_repository
+    state, _ = _start(repository, identity)
+    identity.active = False
+    with pytest.raises(AdministratorAuthError) as rejected:
+        repository.complete_authorization(
+            "code", state, request_id="inactive-provider-callback", now=NOW
+        )
+    assert rejected.value.code == "invalid_token"
+    assert identity.provider_calls == [
+        ("provider-access-token", "provider-refresh-token")
+    ]
 
 
 @pytest.fixture
@@ -1111,7 +1143,6 @@ def test_disablement_persists_session_invalidation_and_outage_fails_closed(
     repository, identity = auth_repository
     session, _ = _bootstrap(repository, identity, frozenset({"health.read"}))
     identity.active = False
-    identity.checked_at = NOW + timedelta(minutes=1)
     with pytest.raises(AdministratorAuthError) as disabled:
         repository.authenticate_session(
             session,
@@ -1178,38 +1209,6 @@ def test_identity_outage_uses_only_a_fresh_cache_for_non_sensitive_work(
     assert stale.value.code == "temporarily_unavailable"
 
 
-def test_recovery_generation_invalidates_the_old_session(
-    database_url: str,
-    auth_repository: tuple[AdministratorAuthRepository, FakeIdentityService],
-) -> None:
-    """Persist recovery generation invalidation before the safe failure returns."""
-    repository, identity = auth_repository
-    session, _ = _bootstrap(repository, identity, frozenset({"health.read"}))
-    identity.generation = 2
-    identity.checked_at = NOW + timedelta(minutes=1)
-    with pytest.raises(AdministratorAuthError) as recovered:
-        repository.authenticate_session(
-            session,
-            request_id="recovery-generation",
-            now=NOW + timedelta(minutes=1),
-            policy=_policy("health.read", sensitive=True),
-        )
-    assert recovered.value.code == "invalid_token"
-    with psycopg.connect(database_url) as connection:
-        row = connection.execute(
-            """
-            SELECT administrator.identity_generation, session.revoked_at
-            FROM router.administrators AS administrator
-            JOIN router.administrator_sessions AS session
-              ON session.administrator_id = administrator.id
-            """
-        ).fetchone()
-    assert row is not None
-    generation, revoked_at = row
-    assert generation == 2
-    assert revoked_at == NOW + timedelta(minutes=1)
-
-
 @pytest.mark.parametrize("failure", ["invalid", "after_rotation"])
 def test_provider_session_failure_revokes_and_clears_tokens(
     database_url: str,
@@ -1218,10 +1217,9 @@ def test_provider_session_failure_revokes_and_clears_tokens(
 ) -> None:
     repository, identity = auth_repository
     session, _ = _bootstrap(repository, identity, frozenset({"health.read"}))
-    identity.checked_at = NOW + timedelta(minutes=6)
     identity.reject_provider_session = failure == "invalid"
     identity.rotate_provider_session = failure == "after_rotation"
-    identity.account_state_unavailable = failure == "after_rotation"
+    identity.fail_after_rotation = failure == "after_rotation"
     with pytest.raises(AdministratorAuthError) as rejected:
         repository.authenticate_session(
             session,
@@ -1381,7 +1379,6 @@ def test_grant_list_activity_extends_idle_expiry(
     """Keep an active grant reader signed in until 15 minutes after its activity."""
     repository, identity = auth_repository
     session, _ = _bootstrap(repository, identity, frozenset({"grant.manage"}))
-    identity.checked_at = NOW + timedelta(minutes=14)
     repository.list_grants(
         session, request_id="active-list", now=NOW + timedelta(minutes=14)
     )

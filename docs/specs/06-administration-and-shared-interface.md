@@ -67,15 +67,18 @@ failure MUST create LLM Router audit events.
 An administrator session MUST have an idle expiry of no more than 15 minutes
 and an absolute expiry of no more than 8 hours. A sensitive action MUST require
 an identity-service authentication no more than five minutes old. The service
-MUST validate the authentication time and current account state. Account
-disablement, passkey recovery, or central session revocation MUST make each
-applicable LLM Router administrator session unusable within five minutes and
-before its next sensitive action. If the identity service is unavailable, LLM
-Router MUST reject new administrator sessions and sensitive actions. An
-existing session MAY continue non-sensitive actions only while its last
-account-state check is no more than five minutes old. Local logout MUST revoke
-the local administrator session immediately. Account disablement, passkey
-revocation, and recovery MUST also revoke applicable identity-service sessions.
+MUST validate the authentication time and current OpenID Connect provider
+session. Each provider check MUST rotate the refresh token and introspect the
+new access token through the confidential client. LLM Router MUST NOT use a
+Pocket ID administrator API key or read the identity service's account or
+passkey administration APIs. Account disablement, recovery, and central logout
+MUST revoke the applicable identity-service sessions. A rejected refresh or
+inactive access token MUST make the related LLM Router session unusable within
+five minutes and before its next sensitive action. If the identity service is
+unavailable, LLM Router MUST reject new administrator sessions and sensitive
+actions. An existing session MAY continue non-sensitive actions only while its
+last provider-session check is no more than five minutes old. Local logout MUST
+revoke the local administrator session immediately.
 
 The local administrator session cookie MUST use `Secure`, `HttpOnly`,
 `SameSite=Lax`, a `__Host-` name, and no `Domain` attribute. Each administrator

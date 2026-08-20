@@ -333,7 +333,7 @@ def test_service_administrator_workspace_set_is_exact() -> None:
         authenticated_at=NOW - timedelta(hours=1),
         last_activity_at=NOW,
         recent_authentication_at=None,
-        account_checked_at=NOW,
+        provider_session_checked_at=NOW,
         idle_expires_at=NOW + timedelta(minutes=15),
         absolute_expires_at=NOW + timedelta(hours=7),
         grant_revision=2,
@@ -414,10 +414,10 @@ def test_recent_authentication_does_not_use_session_start_time() -> None:
 
 
 def test_future_account_check_fails_authentication() -> None:
-    """An account-state check cannot be more than the clock-skew limit in the future."""
+    """A provider-session check cannot exceed the clock-skew limit."""
     builder = ScopeTestBuilder(Scope(), now=NOW)
     principal = builder.administrator("service.manage", global_authority=True)
-    future = replace(principal, account_checked_at=NOW + timedelta(seconds=31))
+    future = replace(principal, provider_session_checked_at=NOW + timedelta(seconds=31))
     with pytest.raises(SafeAuthorityError) as captured:
         authorize(
             future,

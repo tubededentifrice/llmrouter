@@ -4,18 +4,15 @@
 from __future__ import annotations
 
 import base64
-import hashlib
 import json
 from datetime import datetime, timedelta
 from typing import Any
-from urllib.parse import quote
 
 import httpx
 from Crypto.PublicKey import RSA  # nosec B413 - Maintained PyCryptodome.
 
 from llmrouter_backend.admin_auth.errors import AdministratorAuthError
 from llmrouter_backend.admin_auth.model import (
-    IdentityState,
     OIDCTokenResponse,
     ProviderSessionState,
     VerifiedIdentity,
@@ -33,7 +30,7 @@ _MAXIMUM_PROVIDER_TOKEN_SECONDS = 86_400
 
 
 class PocketIDIdentityService:
-    """Call only the exact Pocket ID token and administrator API endpoints."""
+    """Call only the exact Pocket ID OpenID Connect endpoints."""
 
     def __init__(
         self,
@@ -42,34 +39,24 @@ class PocketIDIdentityService:
         token_endpoint: str,
         jwks_endpoint: str,
         introspection_endpoint: str,
-        api_base_url: str,
         client_secret: str,
-        api_key: str,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
-        if not client_secret or not api_key:
-            raise ValueError("Pocket ID deployment secrets are required.")
+        if not client_secret:
+            raise ValueError("The Pocket ID client secret is required.")
         issuer = configuration.issuer.rstrip("/")
         expected = {
             f"{issuer}/api/oidc/token",
             f"{issuer}/.well-known/jwks.json",
             f"{issuer}/api/oidc/introspect",
-            f"{issuer}/api",
         }
-        if {
-            token_endpoint,
-            jwks_endpoint,
-            introspection_endpoint,
-            api_base_url.rstrip("/"),
-        } != expected:
+        if {token_endpoint, jwks_endpoint, introspection_endpoint} != expected:
             raise ValueError("Pocket ID endpoints must use the exact issuer.")
         self._configuration = configuration
         self._token_endpoint = token_endpoint
         self._jwks_endpoint = jwks_endpoint
         self._introspection_endpoint = introspection_endpoint
-        self._api_base_url = api_base_url.rstrip("/")
         self._client_secret = client_secret
-        self._api_key = api_key
         self._client = httpx.Client(
             timeout=httpx.Timeout(5.0), follow_redirects=False, transport=transport
         )
@@ -114,28 +101,25 @@ class PocketIDIdentityService:
     ) -> ProviderSessionState:
         if not access_token or not refresh_token or access_expires_at.tzinfo is None:
             raise IdentityServiceUnavailable
-        rotated = False
-        if access_expires_at <= now:
-            document = self._request(
-                "POST",
-                self._token_endpoint,
-                data={"grant_type": "refresh_token", "refresh_token": refresh_token},
-                auth=(self._configuration.client_id, self._client_secret),
-                invalid_provider_session=True,
-            )
-            prior_refresh_token = refresh_token
-            rotated = True
-            try:
-                if _string(document, "token_type").casefold() != "bearer":
-                    raise ValueError
-                access_token = _token(document, "access_token")
-                refresh_token = _token(document, "refresh_token")
-                if refresh_token == prior_refresh_token:
-                    raise ValueError
-                expires_in = _positive_integer(document, "expires_in")
-                access_expires_at = now + timedelta(seconds=expires_in)
-            except (TypeError, ValueError) as error:
-                raise ProviderSessionRotationFailed from error
+        document = self._request(
+            "POST",
+            self._token_endpoint,
+            data={"grant_type": "refresh_token", "refresh_token": refresh_token},
+            auth=(self._configuration.client_id, self._client_secret),
+            invalid_provider_session=True,
+        )
+        prior_refresh_token = refresh_token
+        try:
+            if _string(document, "token_type").casefold() != "bearer":
+                raise ValueError
+            access_token = _token(document, "access_token")
+            refresh_token = _token(document, "refresh_token")
+            if refresh_token == prior_refresh_token:
+                raise ValueError
+            expires_in = _positive_integer(document, "expires_in")
+            access_expires_at = now + timedelta(seconds=expires_in)
+        except (TypeError, ValueError) as error:
+            raise ProviderSessionRotationFailed from error
         try:
             document = self._request(
                 "POST",
@@ -145,55 +129,14 @@ class PocketIDIdentityService:
                 invalid_provider_session=True,
             )
         except (IdentityServiceUnavailable, ProviderSessionInvalid) as error:
-            if rotated:
-                raise ProviderSessionRotationFailed from error
-            raise
+            raise ProviderSessionRotationFailed from error
         if not isinstance(document.get("active"), bool):
-            if rotated:
-                raise ProviderSessionRotationFailed
-            raise IdentityServiceUnavailable
+            raise ProviderSessionRotationFailed
         return ProviderSessionState(
             active=document["active"],
             access_token=access_token,
             refresh_token=refresh_token,
             access_expires_at=access_expires_at,
-            checked_at=now,
-        )
-
-    def account_state(
-        self, *, issuer: str, subject: str, now: datetime
-    ) -> IdentityState:
-        if issuer != self._configuration.issuer or not subject:
-            raise IdentityServiceUnavailable
-        encoded_subject = quote(subject, safe="")
-        headers = {"X-API-KEY": self._api_key}
-        user = self._request(
-            "GET", f"{self._api_base_url}/users/{encoded_subject}", headers=headers
-        )
-        credentials = self._request(
-            "GET",
-            f"{self._api_base_url}/users/{encoded_subject}/webauthn-credentials",
-            headers=headers,
-            allow_array=True,
-        )
-        try:
-            if user.get("id") != subject or not isinstance(user.get("disabled"), bool):
-                raise ValueError
-            values = credentials
-            if len(values) > 1000:
-                raise ValueError
-            identifiers = sorted(_string(item, "id") for item in values)
-            if any(len(identifier) > 200 for identifier in identifiers):
-                raise ValueError
-        except (KeyError, TypeError, ValueError) as error:
-            raise IdentityServiceUnavailable from error
-        fingerprint = hashlib.sha256(
-            json.dumps(identifiers, separators=(",", ":")).encode()
-        ).digest()
-        generation = int.from_bytes(fingerprint[:8], "big") & ((1 << 63) - 1)
-        return IdentityState(
-            active=not user["disabled"],
-            generation=max(1, generation),
             checked_at=now,
         )
 

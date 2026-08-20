@@ -144,7 +144,6 @@ def test_local_start_serializes_operations_and_installs_secrets_exclusively() ->
     for name in (
         "pocket-id-client-id",
         "pocket-id-client-secret",
-        "pocket-id-account-api-key",
     ):
         assert f'install_secret "${{state_directory}}/{name}" 0 400' in script
 

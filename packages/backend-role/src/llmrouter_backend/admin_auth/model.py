@@ -69,24 +69,6 @@ class SecretValue:
 
 
 @dataclass(frozen=True, slots=True)
-class IdentityState:
-    """Current identity-service account state."""
-
-    active: bool
-    generation: int
-    checked_at: datetime
-
-    def __post_init__(self) -> None:
-        """Require a positive state generation and aware check time."""
-        if self.generation < 1:
-            msg = "The identity generation must be positive."
-            raise ValueError(msg)
-        if self.checked_at.tzinfo is None or self.checked_at.utcoffset() is None:
-            msg = "The account-check time must include a time zone."
-            raise ValueError(msg)
-
-
-@dataclass(frozen=True, slots=True)
 class ProviderSessionState:
     """Current provider session state and its rotated opaque tokens."""
 

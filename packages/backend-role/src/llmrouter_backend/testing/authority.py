@@ -85,7 +85,7 @@ class ScopeTestBuilder:
             authenticated_at=self.now - timedelta(hours=1),
             last_activity_at=self.now,
             recent_authentication_at=recent_authentication_at,
-            account_checked_at=self.now,
+            provider_session_checked_at=self.now,
             idle_expires_at=self.now + timedelta(minutes=15),
             absolute_expires_at=self.now + timedelta(hours=7),
             grant_revision=1,

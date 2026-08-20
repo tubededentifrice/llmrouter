@@ -38,7 +38,7 @@ from llmrouter_backend.authority.model import (
 
 TOKEN_CLOCK_SKEW = timedelta(seconds=30)
 RECENT_AUTH_LIMIT = timedelta(minutes=5)
-ACCOUNT_STATE_LIMIT = timedelta(minutes=5)
+PROVIDER_SESSION_CHECK_LIMIT = timedelta(minutes=5)
 MINIMUM_IDEMPOTENCY_KEY_LENGTH = 16
 MAXIMUM_IDEMPOTENCY_KEY_LENGTH = 200
 SHA256_HEX_LENGTH = 64
@@ -191,8 +191,8 @@ def _check_administrator_time(
     if principal.idle_expires_at <= now or principal.absolute_expires_at <= now:
         raise invalid_token(request_id)
     if (
-        principal.account_checked_at > now
-        or now - principal.account_checked_at > ACCOUNT_STATE_LIMIT
+        principal.provider_session_checked_at > now
+        or now - principal.provider_session_checked_at > PROVIDER_SESSION_CHECK_LIMIT
     ):
         raise invalid_token(request_id)
     if policy.sensitive and (

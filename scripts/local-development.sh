@@ -85,7 +85,6 @@ prepare_secrets() {
   install_secret "${state_directory}/administrator-encryption-key" 32
   install_secret "${state_directory}/pocket-id-client-id" 0 400
   install_secret "${state_directory}/pocket-id-client-secret" 0 400
-  install_secret "${state_directory}/pocket-id-account-api-key" 0 400
   install_secret "${state_directory}/example-host-token" 0
   install_secret "${state_directory}/data-plane-token" 0
 }
@@ -94,12 +93,12 @@ compose() {
   local public_admin_auth=0
   local configured=0
   local target
-  for target in pocket-id-client-id pocket-id-client-secret pocket-id-account-api-key; do
+  for target in pocket-id-client-id pocket-id-client-secret; do
     if [[ -s "${state_directory}/${target}" ]]; then
       configured=$((configured + 1))
     fi
   done
-  if [[ "${configured}" == "3" ]]; then
+  if [[ "${configured}" == "2" ]]; then
     public_admin_auth=1
   elif [[ "${configured}" != "0" ]]; then
     fail "The Pocket ID client configuration is incomplete."

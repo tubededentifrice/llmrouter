@@ -2318,7 +2318,12 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
         "$ref": "#/components/schemas/Timestamp"
       },
       "account_state_checked_at": {
-        "$ref": "#/components/schemas/Timestamp"
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        ],
+        "description": "Time of the latest successful OIDC refresh and introspection check. The field name is retained for version 1 compatibility."
       },
       "authenticated_at": {
         "$ref": "#/components/schemas/Timestamp"

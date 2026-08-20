@@ -19,7 +19,6 @@ from Crypto.Signature import pkcs1_15  # nosec B413 - Maintained PyCryptodome.
 
 from llmrouter_backend.admin_auth.errors import AdministratorAuthError
 from llmrouter_backend.admin_auth.model import (
-    IdentityState,
     OIDCTokenResponse,
     ProviderSessionState,
     SecretValue,
@@ -70,12 +69,6 @@ class IdentityService(Protocol):
         self, *, code: str, redirect_uri: str, pkce_verifier: str
     ) -> OIDCTokenResponse:
         """Exchange one code through the confidential client."""
-        ...
-
-    def account_state(
-        self, *, issuer: str, subject: str, now: datetime
-    ) -> IdentityState:
-        """Return current disablement and recovery state."""
         ...
 
     def provider_session_state(

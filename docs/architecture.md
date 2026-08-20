@@ -136,6 +136,9 @@ but it has an independent protocol namespace and version.
 
 Global interactive administration uses the same shared Pocket ID deployment as
 Ontology. Pocket ID owns human accounts, passkeys, enrollment, and recovery.
+The Router uses only its confidential OpenID Connect client, refresh-token
+rotation, and access-token introspection. It does not use a Pocket ID
+administrator API key.
 Each application is a separate OpenID Connect client and keeps its own
 administrator grants, server-side sessions, authorization, and audit. Public
 sign-up and non-passkey authentication are disabled.

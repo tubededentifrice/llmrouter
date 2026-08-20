@@ -220,7 +220,7 @@ artifact_sha256:
   docs/api/embed-protocol.md: 4cf8b7514f6159b6b3affedc15157bfe2192dfbc643c83d53595a5031c4d0355
   docs/api/embedding-protocol.md: 3dcf022e4663c7adace7e6b533e0e0770cc1420fbba39987ac0a330dbe008a18
   docs/api/errors.md: 0b25b51de943f8419d3f53985b9877dc05fcd97dd191fc3cf687845219b7ab1f
-  docs/api/openapi.yaml: 0754a48be7551be4709e2aa2959523f295208a8acfc9d1015b401e6a7bf56154
+  docs/api/openapi.yaml: 60d78cfa1d29b4c75c570ea176871087bfbc9d0c8f59da1db96cce49e6a2fbb4
   docs/api/request-fingerprint.md: ce37b2d9a12e0ef15c065a0e73f2107ac5c4dc446e09ead82c4b205cd7da587f
   docs/api/service-management.md: 501f672274ecb9599ee005d66b33938ead8757693608c8d5e36d9e19c5a76215
   docs/api/stream-protocol.md: 3245e7315826449a1017af56f1cebbafad97dec4e0e9bb8c1592d34d121021a2

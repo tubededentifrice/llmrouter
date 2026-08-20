@@ -12,7 +12,7 @@ from llmrouter_backend.authority.audit import (
     SensitivePermissionAuditor,
 )
 from llmrouter_backend.authority.enforcement import (
-    ACCOUNT_STATE_LIMIT,
+    PROVIDER_SESSION_CHECK_LIMIT,
     RECENT_AUTH_LIMIT,
     TOKEN_CLOCK_SKEW,
     IdempotencyRegistry,
@@ -50,12 +50,12 @@ from llmrouter_backend.authority.model import (
 )
 
 __all__ = [
-    "ACCOUNT_STATE_LIMIT",
     "ADMINISTRATOR_ABSOLUTE_LIMIT",
     "ADMINISTRATOR_IDLE_LIMIT",
     "ADMINISTRATOR_OPERATIONS",
     "EMBED_OPERATIONS",
     "MACHINE_OPERATIONS_BY_AUDIENCE",
+    "PROVIDER_SESSION_CHECK_LIMIT",
     "RECENT_AUTH_LIMIT",
     "SERVICE_TOKEN_LIFETIME",
     "TOKEN_CLOCK_SKEW",

@@ -1,5 +1,5 @@
 """Focused Pocket ID HTTP adapter tests."""
-# ruff: noqa: D103, PLR2004, PT018, S105, S106
+# ruff: noqa: D103, PLR2004, S105, S106
 
 from __future__ import annotations
 
@@ -19,7 +19,6 @@ from llmrouter_backend.admin_auth.oidc import (
 from llmrouter_backend.admin_auth.pocket_id import PocketIDIdentityService
 
 ISSUER = "https://auth.opendle.dev"
-SUBJECT = "0198a080-0000-7000-8000-000000000201"
 
 
 def _configuration() -> OIDCConfiguration:
@@ -39,9 +38,7 @@ def _identity(handler) -> PocketIDIdentityService:  # noqa: ANN001
         token_endpoint=f"{ISSUER}/api/oidc/token",
         jwks_endpoint=f"{ISSUER}/.well-known/jwks.json",
         introspection_endpoint=f"{ISSUER}/api/oidc/introspect",
-        api_base_url=f"{ISSUER}/api",
         client_secret="client-secret",
-        api_key="account-api-key",
         transport=httpx.MockTransport(handler),
     )
 
@@ -72,7 +69,7 @@ def test_code_exchange_uses_confidential_client_and_pkce() -> None:
     assert "transient-access-token" not in repr(result)
 
 
-def test_provider_session_is_introspected_and_expired_tokens_are_refreshed() -> None:
+def test_provider_session_rotates_refresh_and_introspects() -> None:
     requests: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -94,37 +91,14 @@ def test_provider_session_is_introspected_and_expired_tokens_are_refreshed() -> 
 
     now = datetime(2026, 8, 20, tzinfo=UTC)
     state = _identity(handler).provider_session_state(
-        access_token="expired-access",
+        access_token="current-access",
         refresh_token="refresh-token",
-        access_expires_at=now,
+        access_expires_at=now + timedelta(minutes=5),
         now=now,
     )
     assert state.active
     assert state.access_expires_at == now + timedelta(minutes=5)
     assert requests == ["/api/oidc/token", "/api/oidc/introspect"]
-
-
-def test_account_state_detects_disablement_and_passkey_recovery() -> None:
-    now = datetime(2026, 8, 20, tzinfo=UTC)
-    credentials = ["credential-one"]
-    disabled = False
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.headers["X-API-KEY"] == "account-api-key"
-        if request.url.path.endswith("/webauthn-credentials"):
-            return httpx.Response(200, json=[{"id": value} for value in credentials])
-        return httpx.Response(200, json={"id": SUBJECT, "disabled": disabled})
-
-    identity = _identity(handler)
-    first = identity.account_state(issuer=ISSUER, subject=SUBJECT, now=now)
-    credentials[:] = ["credential-two"]
-    recovered = identity.account_state(issuer=ISSUER, subject=SUBJECT, now=now)
-    disabled = True
-    blocked = identity.account_state(issuer=ISSUER, subject=SUBJECT, now=now)
-    assert first.active and recovered.active
-    assert first.checked_at == recovered.checked_at == blocked.checked_at == now
-    assert first.generation != recovered.generation
-    assert not blocked.active
 
 
 def test_rejected_refresh_is_an_invalid_provider_session() -> None:

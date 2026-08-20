@@ -3784,7 +3784,9 @@ components:
           uniqueItems: true
           items: {type: string, maxLength: 200}
         authenticated_at: {$ref: '#/components/schemas/Timestamp'}
-        account_state_checked_at: {$ref: '#/components/schemas/Timestamp'}
+        account_state_checked_at:
+          allOf: [{$ref: '#/components/schemas/Timestamp'}]
+          description: Time of the latest successful OIDC refresh and introspection check. The field name is retained for version 1 compatibility.
         recent_authentication_at:
           oneOf: [{$ref: '#/components/schemas/Timestamp'}, {type: 'null'}]
         idle_expires_at: {$ref: '#/components/schemas/Timestamp'}

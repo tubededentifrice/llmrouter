@@ -28,7 +28,6 @@ def configured_repository(database_url: str) -> AdministratorAuthRepository | No
     names = {
         "client_id": "LLMROUTER_OIDC_CLIENT_ID_FILE",
         "client_secret": "LLMROUTER_OIDC_CLIENT_SECRET_FILE",
-        "api_key": "LLMROUTER_POCKET_ID_API_KEY_FILE",
         "digest_key": "LLMROUTER_ADMIN_DIGEST_KEY_FILE",
         "encryption_key": "LLMROUTER_ADMIN_ENCRYPTION_KEY_FILE",
     }
@@ -39,7 +38,6 @@ def configured_repository(database_url: str) -> AdministratorAuthRepository | No
     values = {
         "client_id": _client_id(raw_values["client_id"]),
         "client_secret": _pocket_secret(raw_values["client_secret"]),
-        "api_key": _pocket_secret(raw_values["api_key"]),
         "digest_key": raw_values["digest_key"],
         "encryption_key": raw_values["encryption_key"],
     }
@@ -56,9 +54,7 @@ def configured_repository(database_url: str) -> AdministratorAuthRepository | No
         token_endpoint=f"{ISSUER}/api/oidc/token",
         jwks_endpoint=f"{ISSUER}/.well-known/jwks.json",
         introspection_endpoint=f"{ISSUER}/api/oidc/introspect",
-        api_base_url=f"{ISSUER}/api",
         client_secret=values["client_secret"],
-        api_key=values["api_key"],
     )
     return AdministratorAuthRepository(
         database_url,
