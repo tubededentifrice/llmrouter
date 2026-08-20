@@ -427,7 +427,7 @@ class AdministratorAuthRepository:
                     raise AdministratorAuthError("recent_auth_required", request_id)
                 try:
                     identity_state = self._identity_service.account_state(
-                        issuer=identity.issuer, subject=identity.subject
+                        issuer=identity.issuer, subject=identity.subject, now=now
                     )
                 except IdentityServiceUnavailable as error:
                     raise AdministratorAuthError(
@@ -1501,7 +1501,7 @@ class AdministratorAuthRepository:
             )
             rotation[0] = provider.refresh_token != refresh_token
             state = self._identity_service.account_state(
-                issuer=session["issuer"], subject=session["subject"]
+                issuer=session["issuer"], subject=session["subject"], now=now
             )
         except (ProviderSessionInvalid, ProviderSessionRotationFailed):
             self._revoke_session_row(connection, session, now)

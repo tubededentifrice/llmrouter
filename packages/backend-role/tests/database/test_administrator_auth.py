@@ -126,10 +126,13 @@ class FakeIdentityService:
             expires_in=300,
         )
 
-    def account_state(self, *, issuer: str, subject: str) -> IdentityState:
+    def account_state(
+        self, *, issuer: str, subject: str, now: datetime
+    ) -> IdentityState:
         if not self.is_available or self.account_state_unavailable:
             raise IdentityServiceUnavailable
         assert issuer == ISSUER and subject == self.subject
+        assert now.tzinfo is not None
         return IdentityState(self.active, self.generation, self.checked_at)
 
     def provider_session_state(

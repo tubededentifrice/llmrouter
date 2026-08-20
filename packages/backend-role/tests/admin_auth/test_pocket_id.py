@@ -105,6 +105,7 @@ def test_provider_session_is_introspected_and_expired_tokens_are_refreshed() -> 
 
 
 def test_account_state_detects_disablement_and_passkey_recovery() -> None:
+    now = datetime(2026, 8, 20, tzinfo=UTC)
     credentials = ["credential-one"]
     disabled = False
 
@@ -115,12 +116,13 @@ def test_account_state_detects_disablement_and_passkey_recovery() -> None:
         return httpx.Response(200, json={"id": SUBJECT, "disabled": disabled})
 
     identity = _identity(handler)
-    first = identity.account_state(issuer=ISSUER, subject=SUBJECT)
+    first = identity.account_state(issuer=ISSUER, subject=SUBJECT, now=now)
     credentials[:] = ["credential-two"]
-    recovered = identity.account_state(issuer=ISSUER, subject=SUBJECT)
+    recovered = identity.account_state(issuer=ISSUER, subject=SUBJECT, now=now)
     disabled = True
-    blocked = identity.account_state(issuer=ISSUER, subject=SUBJECT)
+    blocked = identity.account_state(issuer=ISSUER, subject=SUBJECT, now=now)
     assert first.active and recovered.active
+    assert first.checked_at == recovered.checked_at == blocked.checked_at == now
     assert first.generation != recovered.generation
     assert not blocked.active
 

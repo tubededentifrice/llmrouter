@@ -72,7 +72,9 @@ class IdentityService(Protocol):
         """Exchange one code through the confidential client."""
         ...
 
-    def account_state(self, *, issuer: str, subject: str) -> IdentityState:
+    def account_state(
+        self, *, issuer: str, subject: str, now: datetime
+    ) -> IdentityState:
         """Return current disablement and recovery state."""
         ...
 

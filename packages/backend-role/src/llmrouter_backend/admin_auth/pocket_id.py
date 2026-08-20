@@ -6,7 +6,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import quote
 
@@ -160,7 +160,9 @@ class PocketIDIdentityService:
             checked_at=now,
         )
 
-    def account_state(self, *, issuer: str, subject: str) -> IdentityState:
+    def account_state(
+        self, *, issuer: str, subject: str, now: datetime
+    ) -> IdentityState:
         if issuer != self._configuration.issuer or not subject:
             raise IdentityServiceUnavailable
         encoded_subject = quote(subject, safe="")
@@ -192,7 +194,7 @@ class PocketIDIdentityService:
         return IdentityState(
             active=not user["disabled"],
             generation=max(1, generation),
-            checked_at=datetime.now(UTC),
+            checked_at=now,
         )
 
     def token_verifier(self) -> PocketIDTokenVerifier:
