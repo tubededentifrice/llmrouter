@@ -437,7 +437,8 @@ class AdministratorAuthRepository:
                 if not identity_state.active:
                     raise AdministratorAuthError("invalid_token", request_id)
                 if (
-                    response.token_type != "Bearer"
+                    not isinstance(response.token_type, str)
+                    or response.token_type.casefold() != "bearer"
                     or response.access_token is None
                     or response.refresh_token is None
                     or response.expires_in is None

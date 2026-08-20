@@ -1,11 +1,12 @@
 """Exact OpenID Connect authorization-code and identity-token validation."""
-# ruff: noqa: C901, EM101, N818, PLR2004, S105, TRY301
+# ruff: noqa: C901, EM101, N818, PLR2004, TRY301
 
 from __future__ import annotations
 
 import base64
 import hashlib
 import hmac
+import math
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Protocol
@@ -196,7 +197,8 @@ class OIDCTokenVerifier:
     ) -> VerifiedIdentity:
         """Validate token use, header, signature, exact claims, and time."""
         if (
-            response.token_type != "Bearer"  # nosec B105
+            not isinstance(response.token_type, str)
+            or response.token_type.casefold() != "bearer"  # nosec B105
             or not 1 <= len(response.id_token) <= 16384
             or not 32 <= len(expected_nonce) <= 200
         ):
@@ -244,10 +246,9 @@ class OIDCTokenVerifier:
             raise
         except (ValueError, TypeError, jwt.PyJWTError) as error:
             raise AdministratorAuthError("invalid_token", request_id) from error
-        audience = claims["aud"]
-        if (
-            claims["iss"] != self._configuration.issuer
-            or audience != self._configuration.client_id
+        audiences = _exact_audiences(claims["aud"], request_id)
+        if claims["iss"] != self._configuration.issuer or audiences != (
+            self._configuration.client_id,
         ):
             raise AdministratorAuthError("invalid_token", request_id)
         if "azp" in claims and claims["azp"] != self._configuration.client_id:
@@ -265,7 +266,9 @@ class OIDCTokenVerifier:
         if "nbf" in claims:
             numeric_names.append("nbf")
         if any(
-            isinstance(claims[name], bool) or not isinstance(claims[name], int)
+            isinstance(claims[name], bool)
+            or not isinstance(claims[name], (int, float))
+            or (isinstance(claims[name], float) and not math.isfinite(claims[name]))
             for name in numeric_names
         ):
             raise AdministratorAuthError("invalid_token", request_id)
@@ -294,6 +297,19 @@ class OIDCTokenVerifier:
             expires_at=expires_at,
             authenticated_at=authenticated_at,
         )
+
+
+def _exact_audiences(value: object, request_id: str) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return (value,)
+    if (
+        isinstance(value, list)
+        and len(value) == 1
+        and isinstance(value[0], str)
+        and value[0]
+    ):
+        return (value[0],)
+    raise AdministratorAuthError("invalid_token", request_id)
 
 
 def build_authorization_url(

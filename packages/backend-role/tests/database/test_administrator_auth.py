@@ -472,6 +472,41 @@ def test_token_confusion_and_exact_oidc_claims_fail_closed(
     assert error.value.code == "invalid_token"
 
 
+def test_pocket_id_standard_token_shapes_are_accepted(
+    auth_repository: tuple[AdministratorAuthRepository, FakeIdentityService],
+) -> None:
+    """Accept Pocket ID case, audience, and NumericDate forms."""
+    repository, identity = auth_repository
+    state, nonce = _start(repository, identity)
+    token = _encode_id_token(
+        {
+            "iss": ISSUER,
+            "sub": identity.subject,
+            "aud": [CLIENT_ID],
+            "azp": CLIENT_ID,
+            "type": "id-token",
+            "nonce": nonce,
+            "iat": NOW.timestamp(),
+            "exp": (NOW + timedelta(minutes=5)).timestamp(),
+            "auth_time": NOW.timestamp(),
+        },
+        identity.private_key,
+    )
+    identity.exchange_code = lambda **_: OIDCTokenResponse(  # type: ignore[method-assign]
+        id_token=token,
+        token_type="bearer",
+        access_token="provider-access-token",
+        refresh_token="provider-refresh-token",
+        expires_in=300,
+    )
+
+    session = repository.complete_authorization(
+        "code", state, request_id="pocket-shape", now=NOW
+    )
+
+    assert session.session_token is not None
+
+
 @pytest.mark.parametrize(
     ("claim", "value"),
     [
@@ -518,7 +553,7 @@ def test_identity_token_rejects_wrong_algorithm_signature_and_response_type(
     for algorithm, key, token_type in (
         ("HS256", identity.private_key, "Bearer"),
         ("RS256", RSA.generate(2048), "Bearer"),
-        ("RS256", identity.private_key, "bearer"),
+        ("RS256", identity.private_key, "MAC"),
     ):
         state, nonce = _start(repository, identity)
         token = _encode_id_token(
