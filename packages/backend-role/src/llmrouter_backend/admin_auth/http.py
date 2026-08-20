@@ -26,6 +26,8 @@ _LOCAL_PORT = 5174
 _MAXIMUM_START_BYTES = 4096
 _MAXIMUM_CALLBACK_VALUE = 4096
 _MINIMUM_STATE_CHARACTERS = 32
+_CALLBACK_ISSUER = "https://auth.opendle.dev"
+_CALLBACK_SCOPE = "openid offline_access"
 
 
 class SessionStartDocument(BaseModel):
@@ -190,13 +192,17 @@ async def _session_start_document(
 
 
 def _callback_values(request: Request, request_id: str) -> tuple[str, str]:
-    if set(request.query_params) != {"code", "state"}:
+    if set(request.query_params) != {"code", "state", "iss", "scope"}:
         raise AdministratorAuthError("invalid_request", request_id)
     codes = request.query_params.getlist("code")
     states = request.query_params.getlist("state")
+    issuers = request.query_params.getlist("iss")
+    scopes = request.query_params.getlist("scope")
     if (
         len(codes) != 1
         or len(states) != 1
+        or issuers != [_CALLBACK_ISSUER]
+        or scopes != [_CALLBACK_SCOPE]
         or not 1 <= len(codes[0]) <= _MAXIMUM_CALLBACK_VALUE
         or not _MINIMUM_STATE_CHARACTERS <= len(states[0]) <= _MAXIMUM_CALLBACK_VALUE
     ):

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from urllib.parse import urlencode
 
 import pytest
 from fastapi import FastAPI
@@ -15,6 +16,17 @@ from llmrouter_backend.admin_auth.model import SecretValue, SessionResult
 
 NOW = datetime(2026, 8, 20, tzinfo=UTC)
 SECRET = SecretValue("A" * 43)
+
+
+def _callback_query(*, code: str = "code", state: str = SECRET.value) -> str:
+    return urlencode(
+        {
+            "code": code,
+            "state": state,
+            "iss": "https://auth.opendle.dev",
+            "scope": "openid offline_access",
+        }
+    )
 
 
 class Repository:
@@ -68,7 +80,7 @@ def _client() -> tuple[TestClient, Repository]:
     return TestClient(app), repository
 
 
-def test_trusted_login_callback_and_session_cookie() -> None:
+def test_pocket_id_213_callback_shape_sets_the_session_cookie() -> None:
     client, repository = _client()
     started = client.post(
         "/v1/admin/session-starts",
@@ -81,7 +93,7 @@ def test_trusted_login_callback_and_session_cookie() -> None:
     assert started.status_code == 201
     assert repository.trusted_grant_token == SECRET.value
     callback = client.get(
-        "/v1/admin/oidc/callback?code=code&state=" + SECRET.value,
+        "/v1/admin/oidc/callback?" + _callback_query(),
         follow_redirects=False,
     )
     assert callback.status_code == 303
@@ -118,7 +130,7 @@ def test_missing_repository_is_a_bounded_temporary_failure() -> None:
         "/v1/admin/session-starts",
         json={"purpose": "login", "return_path": "/"},
     )
-    callback = client.get("/v1/admin/oidc/callback?code=code&state=" + SECRET.value)
+    callback = client.get("/v1/admin/oidc/callback?" + _callback_query())
     assert started.status_code == 503
     assert callback.status_code == 503
     assert started.json()["error"]["code"] == "temporarily_unavailable"
@@ -151,10 +163,34 @@ def test_session_start_rejects_unbounded_or_ambiguous_http_input(
 @pytest.mark.parametrize(
     "query",
     [
-        f"code=one&code=two&state={SECRET.value}",
-        f"code={'x' * 4097}&state={SECRET.value}",
-        f"code=code&state={SECRET.value}&extra=1",
-        "code=code&state=short",
+        _callback_query() + "&code=two",
+        _callback_query(code="x" * 4097),
+        _callback_query() + "&extra=1",
+        _callback_query(state="short"),
+        urlencode(
+            {
+                "code": "code",
+                "state": SECRET.value,
+                "iss": "https://attacker.example",
+                "scope": "openid offline_access",
+            }
+        ),
+        urlencode(
+            {
+                "code": "code",
+                "state": SECRET.value,
+                "iss": "https://auth.opendle.dev",
+                "scope": "offline_access openid",
+            }
+        ),
+        urlencode(
+            {
+                "code": "code",
+                "state": SECRET.value,
+                "iss": "https://auth.opendle.dev",
+            }
+        ),
+        _callback_query() + "&iss=https%3A%2F%2Fauth.opendle.dev",
     ],
 )
 def test_callback_rejects_duplicate_unbounded_or_extra_query_values(

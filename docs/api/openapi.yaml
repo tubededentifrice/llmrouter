@@ -1307,6 +1307,14 @@ paths:
           in: query
           required: true
           schema: {type: string, minLength: 32, maxLength: 4096}
+        - name: iss
+          in: query
+          required: true
+          schema: {type: string, enum: ['https://auth.opendle.dev']}
+        - name: scope
+          in: query
+          required: true
+          schema: {type: string, enum: ['openid offline_access']}
       responses:
         '303':
           description: Authentication completed. The response sets the local session cookie and redirects to the validated local return path.
