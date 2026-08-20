@@ -11,6 +11,7 @@ DROP INDEX router.embed_sessions_expiry_idx;
 
 ALTER TABLE router.embed_sessions
 DROP CONSTRAINT embed_sessions_redemption_state,
+DROP CONSTRAINT embed_sessions_sensitive_recent_auth,
 DROP CONSTRAINT embed_sessions_lifetime,
 DROP CONSTRAINT embed_sessions_theme_closed,
 DROP CONSTRAINT embed_sessions_origin_bounds,

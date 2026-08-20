@@ -13,6 +13,7 @@ from llmrouter_backend.authority import Audience, ServicePrincipal
 from llmrouter_backend.embed_sessions import (
     CreatedSession,
     EmbedSessionError,
+    EmbedSessionRepository,
     EmbedSessionRequest,
     EmbedSessionService,
     EmbedTheme,
@@ -75,9 +76,9 @@ class FakeRepository:
     ):
         if request_origin != FRAME_ORIGIN or host_origin != HOST_ORIGIN:
             raise EmbedSessionError("not_found", request_id)
-        principal = ScopeTestBuilder(
-            scope=_workspace_scope(), now=now
-        ).embed("configuration.read")
+        principal = ScopeTestBuilder(scope=_workspace_scope(), now=now).embed(
+            "configuration.read"
+        )
         return RedeemedSession(
             principal=replace(
                 principal,
@@ -87,14 +88,26 @@ class FakeRepository:
                 allowed_workspace_ids=frozenset({WORKSPACE_ID}),
             ),
             session_token="c" * 43,
-            theme=EmbedTheme(
-                mode="dark", density="compact", corner_style="rounded"
-            ),
+            theme=EmbedTheme(mode="dark", density="compact", corner_style="rounded"),
+            cookie_max_age=300,
         )
 
     def revoke(self, context, session_id, *, now, allowed_workspace_ids=None):
         self.context = context
         self.revoked = (session_id, allowed_workspace_ids)
+
+    def authenticate_session(self, session_token, *, request_origin, request_id, now):
+        if session_token != "c" * 43 or request_origin != FRAME_ORIGIN:
+            raise EmbedSessionError("invalid_token", request_id)
+        return replace(
+            ScopeTestBuilder(scope=_workspace_scope(), now=now).embed(
+                "configuration.read"
+            ),
+            session_id="0198a080-0000-7000-8000-000000000099",
+            host_subject="host-user",
+            service_id=SERVICE_ID,
+            allowed_workspace_ids=frozenset({WORKSPACE_ID}),
+        )
 
 
 def _workspace_scope():
@@ -181,6 +194,27 @@ def test_create_and_revoke_use_exact_authorized_context() -> None:
     assert repository.revoked == (created.session_id, None)
 
 
+def test_frame_cookie_authentication_uses_service_boundary() -> None:
+    """The frame can authenticate its hidden cookie through one exact origin."""
+    service = EmbedSessionService(FakeAuthenticator(_principal()), FakeRepository())
+    principal = service.authenticate_session(
+        "c" * 43,
+        request_origin=FRAME_ORIGIN,
+        request_id="request-cookie",
+        now=NOW,
+    )
+    assert principal.service_id == SERVICE_ID
+    assert principal.allowed_workspace_ids == frozenset({WORKSPACE_ID})
+    with pytest.raises(EmbedSessionError) as captured:
+        service.authenticate_session(
+            "c" * 43,
+            request_origin="https://other.example",
+            request_id="request-cookie-origin",
+            now=NOW,
+        )
+    assert captured.value.code == "invalid_token"
+
+
 def test_workspace_token_cannot_create_service_wide_session() -> None:
     """A workspace-limited host token cannot obtain service-wide authority."""
     repository = FakeRepository()
@@ -190,9 +224,7 @@ def test_workspace_token_cannot_create_service_wide_session() -> None:
     )
     document = _request().model_copy(update={"workspace_id": None})
     with pytest.raises(EmbedSessionError) as captured:
-        service.create(
-            "a" * 43, SERVICE_ID, document, request_id="request", now=NOW
-        )
+        service.create("a" * 43, SERVICE_ID, document, request_id="request", now=NOW)
     assert captured.value.code == "insufficient_scope"
     assert repository.context is None
 
@@ -209,6 +241,29 @@ def test_closed_request_validation_rejects_escalation_and_bad_origins() -> None:
     ):
         with pytest.raises(ValidationError):
             EmbedSessionRequest.model_validate(changed)
+
+
+def test_static_origin_configuration_supports_only_exact_loopback_development() -> None:
+    """Local setup accepts exact loopback origins and rejects unsafe configuration."""
+    EmbedSessionRepository(
+        "postgresql://unused",
+        frame_origin="http://127.0.0.1:5174",
+        allowed_host_origins={SERVICE_ID: frozenset({"http://localhost:5175"})},
+    )
+    with pytest.raises(ValueError, match="needs a host origin"):
+        EmbedSessionRepository(
+            "postgresql://unused",
+            frame_origin=FRAME_ORIGIN,
+            allowed_host_origins={SERVICE_ID: frozenset()},
+        )
+    with pytest.raises(ValueError, match="must be canonical"):
+        EmbedSessionRepository(
+            "postgresql://unused",
+            frame_origin=FRAME_ORIGIN,
+            allowed_host_origins={
+                SERVICE_ID.replace("-", ""): frozenset({HOST_ORIGIN})
+            },
+        )
 
 
 def test_sensitive_request_needs_aware_recent_authentication() -> None:
@@ -265,6 +320,26 @@ def test_http_routes_set_safe_cookie_and_hide_secrets() -> None:
     assert "HttpOnly" in cookie
     assert "SameSite=none" in cookie
     assert "Domain=" not in cookie
+    assert "Max-Age=300" in cookie
+
+
+def test_http_rejects_duplicate_content_type_headers() -> None:
+    """A duplicate content type cannot select ambiguous request parsing."""
+    service = EmbedSessionService(FakeAuthenticator(_principal()), FakeRepository())
+    app = FastAPI()
+    app.include_router(router)
+    install_embed_session_service(app, service)
+    response = TestClient(app).post(
+        f"/v1/services/{SERVICE_ID}/administration/embed-sessions",
+        headers=[
+            ("Authorization", f"Bearer {'a' * 43}"),
+            ("Content-Type", "application/json"),
+            ("Content-Type", "application/problem+json"),
+        ],
+        content=_request().model_dump_json(),
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_request"
 
 
 def test_http_errors_do_not_echo_bootstrap_input() -> None:

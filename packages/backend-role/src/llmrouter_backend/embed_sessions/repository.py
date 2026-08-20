@@ -55,12 +55,14 @@ class EmbedSessionRepository:
         self._database_url = database_url
         self._frame_origin = exact_web_origin(frame_origin)
         self._frame_url = f"{self._frame_origin}/service-administration"
-        self._allowed_host_origins = {
-            str(uuid.UUID(service_id)): frozenset(
+        self._allowed_host_origins: dict[str, frozenset[str]] = {}
+        for service_id, origins in allowed_host_origins.items():
+            canonical_service_id = str(uuid.UUID(service_id))
+            if canonical_service_id != service_id:
+                raise ValueError("A configured service identity must be canonical.")
+            self._allowed_host_origins[canonical_service_id] = frozenset(
                 exact_web_origin(origin) for origin in origins
             )
-            for service_id, origins in allowed_host_origins.items()
-        }
         if not self._allowed_host_origins or any(
             not origins for origins in self._allowed_host_origins.values()
         ):
@@ -196,6 +198,15 @@ class EmbedSessionRepository:
                       AND embed.expires_at > %s
                       AND service.id = embed.service_id
                       AND service.state = 'active'
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM unnest(embed.workspace_ids) AS selected(workspace_id)
+                          LEFT JOIN router.workspaces AS workspace
+                            ON workspace.id = selected.workspace_id
+                           AND workspace.service_id = embed.service_id
+                           AND workspace.state = 'active'
+                          WHERE workspace.id IS NULL
+                      )
                     RETURNING embed.service_id::text, embed.workspace_ids,
                               embed.host_subject, embed.permitted_actions,
                               embed.created_at, embed.expires_at,
@@ -245,6 +256,7 @@ class EmbedSessionRepository:
                         permitted=True,
                         session_id=parsed_session_id,
                         now=now,
+                        system_actor=True,
                     )
         if row is None:
             raise EmbedSessionError("not_found", request_id)
@@ -253,9 +265,8 @@ class EmbedSessionRepository:
         return RedeemedSession(
             principal=principal,
             session_token=session_token,
-            theme=EmbedTheme(
-                mode=row[7], density=row[8], corner_style=row[9]
-            ),
+            theme=EmbedTheme(mode=row[7], density=row[8], corner_style=row[9]),
+            cookie_max_age=max(0, int((principal.expires_at - now).total_seconds())),
         )
 
     def authenticate_session(
@@ -286,6 +297,15 @@ class EmbedSessionRepository:
                   AND embed.expires_at > %s
                   AND embed.frame_origin = %s
                   AND service.state = 'active'
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM unnest(embed.workspace_ids) AS selected(workspace_id)
+                      LEFT JOIN router.workspaces AS workspace
+                        ON workspace.id = selected.workspace_id
+                       AND workspace.service_id = embed.service_id
+                       AND workspace.state = 'active'
+                      WHERE workspace.id IS NULL
+                  )
                 """,
                 (_digest(session_token), now, now, self._frame_origin),
             ).fetchone()
@@ -369,9 +389,12 @@ def _digest(value: str) -> bytes:
 
 def _uuid(value: str | None, request_id: str) -> uuid.UUID:
     try:
-        return uuid.UUID(value)
+        parsed = uuid.UUID(value)
     except (ValueError, AttributeError, TypeError) as error:
         raise EmbedSessionError("not_found", request_id) from error
+    if str(parsed) != value:
+        raise EmbedSessionError("not_found", request_id)
+    return parsed
 
 
 def _require_aware(now: datetime) -> None:
@@ -405,14 +428,18 @@ def _require_active_scope(
     ).fetchone()
     if service is None:
         raise EmbedSessionError("not_found", request_id)
-    if workspace_id is not None and connection.execute(
-        """
+    if (
+        workspace_id is not None
+        and connection.execute(
+            """
         SELECT 1 FROM router.workspaces
         WHERE id = %s AND service_id = %s AND state = 'active'
         FOR SHARE
         """,
-        (workspace_id, service_id),
-    ).fetchone() is None:
+            (workspace_id, service_id),
+        ).fetchone()
+        is None
+    ):
         raise EmbedSessionError("not_found", request_id)
 
 

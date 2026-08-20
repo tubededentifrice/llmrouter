@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Protocol
 from llmrouter_backend.authority import (
     Audience,
     AuthorityPath,
+    EmbedPrincipal,
     OperationPolicy,
     PrincipalKind,
     SafeAuthorityError,
@@ -109,6 +110,22 @@ class EmbedSessionService:
             document.bootstrap_token.get_secret_value(),
             document.frame_nonce,
             document.host_origin,
+            request_origin=request_origin,
+            request_id=request_id,
+            now=now or datetime.now(UTC),
+        )
+
+    def authenticate_session(
+        self,
+        session_token: str,
+        *,
+        request_origin: str,
+        request_id: str,
+        now: datetime | None = None,
+    ) -> EmbedPrincipal:
+        """Authenticate one frame cookie for the exact Router origin."""
+        return self._repository.authenticate_session(
+            session_token,
             request_origin=request_origin,
             request_id=request_id,
             now=now or datetime.now(UTC),

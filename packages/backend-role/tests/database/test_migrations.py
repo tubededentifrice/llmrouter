@@ -212,6 +212,47 @@ def test_embed_session_migration_rolls_back_and_reapplies(database_url: str) -> 
         assert applied_versions(connection)[-1] == 17  # noqa: PLR2004
 
 
+def test_embed_session_migration_upgrades_and_protects_existing_session(
+    database_url: str,
+) -> None:
+    """Upgrade one legacy session and refuse a rollback that would lose its state."""
+    session_id = "0198a080-0000-7000-8000-000000000099"
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        migrate(connection, target=16)
+        seed_scope(connection)
+        connection.execute(
+            """
+            INSERT INTO router.embed_sessions (
+                id, service_id, workspace_ids, host_subject,
+                permitted_actions, host_origin, frame_origin,
+                bootstrap_token_digest, expires_at, created_at
+            ) VALUES (
+                %s, %s, ARRAY[%s::uuid], 'host-user',
+                ARRAY['configuration.read'], 'https://host.example',
+                'https://router.example', decode(repeat('01', 32), 'hex'),
+                transaction_timestamp() + interval '5 minutes',
+                transaction_timestamp()
+            )
+            """,
+            (session_id, SERVICE_ID, WORKSPACE_ID),
+        )
+        migrate(connection)
+        upgraded = connection.execute(
+            """
+            SELECT theme_mode, theme_density, theme_corner_style,
+                   frame_nonce_digest, session_token_digest
+            FROM router.embed_sessions WHERE id = %s
+            """,
+            (session_id,),
+        ).fetchone()
+        assert upgraded == ("system", "comfortable", "rounded", None, None)
+        with pytest.raises(
+            psycopg.errors.ObjectNotInPrerequisiteState, match="data loss"
+        ):
+            migrate(connection, target=16)
+        assert applied_versions(connection)[-1] == 17  # noqa: PLR2004
+
+
 @pytest.mark.parametrize(
     ("value", "accepted"),
     [

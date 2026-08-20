@@ -25,14 +25,22 @@ from llmrouter_backend.embed_sessions import (
     EmbedSessionError,
     EmbedSessionRepository,
     EmbedSessionRequest,
+    EmbedSessionService,
     EmbedTheme,
 )
+from llmrouter_backend.machine_identity import (
+    BootstrapScope,
+    MachineCredentialRepository,
+    WorkspaceLimit,
+)
+from psycopg import sql
 
 from .helpers import OTHER_WORKSPACE_ID, SERVICE_ID, WORKSPACE_ID, seed_scope
 
 NOW = datetime(2026, 8, 20, 12, tzinfo=UTC)
 FRAME_ORIGIN = "https://router.example"
 HOST_ORIGIN = "https://host.example"
+DIGEST_KEY = bytes(range(32))
 
 
 @pytest.fixture
@@ -71,9 +79,7 @@ def _document(
         host_user_subject="host-user",
         workspace_id=workspace_id,
         allowed_origin=HOST_ORIGIN,
-        permissions=(
-            ["configuration.write"] if sensitive else ["configuration.read"]
-        ),
+        permissions=(["configuration.write"] if sensitive else ["configuration.read"]),
         recent_auth_at=NOW - timedelta(minutes=1) if sensitive else None,
         theme=EmbedTheme(mode="dark", density="compact", corner_style="rounded"),
     )
@@ -111,6 +117,7 @@ def test_create_redeem_authenticate_and_audit_without_plaintext(
     assert redeemed.principal.service_id == SERVICE_ID
     assert redeemed.principal.allowed_workspace_ids == frozenset({WORKSPACE_ID})
     assert redeemed.principal.operations == frozenset({"configuration.read"})
+    assert redeemed.cookie_max_age == 299
     authenticated = repository.authenticate_session(
         redeemed.session_token,
         request_origin=FRAME_ORIGIN,
@@ -143,14 +150,14 @@ def test_create_redeem_authenticate_and_audit_without_plaintext(
     with psycopg.connect(database_url) as connection:
         assert connection.execute(
             """
-            SELECT action, permission_result
+            SELECT action, permission_result, actor_kind, authority_class
             FROM router.audit_events
             WHERE action LIKE 'embed_session.%'
             ORDER BY occurred_at, action
             """
         ).fetchall() == [
-            ("embed_session.create", "permitted"),
-            ("embed_session.bootstrap", "permitted"),
+            ("embed_session.create", "permitted", "service", "service"),
+            ("embed_session.bootstrap", "permitted", "system", "system"),
         ]
         stored = connection.execute(
             "SELECT session_token_digest FROM router.embed_sessions WHERE id = %s",
@@ -158,6 +165,181 @@ def test_create_redeem_authenticate_and_audit_without_plaintext(
         ).fetchone()
         assert stored is not None
         assert stored[0] != redeemed.session_token.encode()
+
+
+def test_real_machine_identity_creates_exact_embed_authority(
+    database_url: str, repository: EmbedSessionRepository
+) -> None:
+    """A real host-backend token can create only its authorized session scope."""
+    machine = MachineCredentialRepository(
+        database_url,
+        issuer="https://router.example.test",
+        digest_keys={"test-key": DIGEST_KEY},
+        current_digest_key_id="test-key",
+    )
+    administrator = RequestContext(
+        request_id="credential-create",
+        actor_kind=PrincipalKind.ADMINISTRATOR,
+        actor_id="issuer:administrator",
+        authority_class=AuthorityClass.GLOBAL_ADMINISTRATOR,
+        authority_path=AuthorityPath.GLOBAL_ADMINISTRATION,
+        machine_audience=None,
+        operation="credential.manage",
+        scope=Scope(),
+        authorized_at=NOW,
+        recent_authentication_at=NOW,
+        mutation=True,
+    )
+    bootstrap = machine.create_initial_bootstrap(
+        administrator,
+        SERVICE_ID,
+        BootstrapScope(
+            audiences=frozenset({Audience.HOST_BACKEND}),
+            operations=frozenset({"admin_embed.create"}),
+            workspace_limit=WorkspaceLimit.EXPLICIT_ONLY,
+        ),
+        now=NOW,
+    )
+    token = machine.exchange(
+        request_id="host-token",
+        service_id=SERVICE_ID,
+        bootstrap_secret=bootstrap.secret.value,
+        audience=Audience.HOST_BACKEND,
+        operations=frozenset({"admin_embed.create"}),
+        workspace_ids=frozenset({WORKSPACE_ID}),
+        now=NOW,
+    )
+    service = EmbedSessionService(machine, repository)
+    created = service.create(
+        token.access_token.value,
+        SERVICE_ID,
+        _document(),
+        request_id="embed-create",
+        now=NOW,
+    )
+    assert created.frame_url == f"{FRAME_ORIGIN}/service-administration"
+    with pytest.raises(EmbedSessionError) as service_wide:
+        service.create(
+            token.access_token.value,
+            SERVICE_ID,
+            _document(workspace_id=None),
+            request_id="embed-service-wide",
+            now=NOW,
+        )
+    assert service_wide.value.code == "insufficient_scope"
+
+
+def test_disabled_workspace_invalidates_bootstrap_and_cookie(
+    database_url: str, repository: EmbedSessionRepository
+) -> None:
+    """Workspace disablement stops bootstrap and cookie authority immediately."""
+    before_bootstrap = repository.create(_context(), _document(), now=NOW)
+    redeemed = repository.create(_context(), _document(), now=NOW)
+    cookie = repository.redeem(
+        redeemed.session_id,
+        redeemed.bootstrap_token,
+        "nonce-0123456789",
+        HOST_ORIGIN,
+        request_origin=FRAME_ORIGIN,
+        request_id="redeem-before-disable",
+        now=NOW + timedelta(seconds=1),
+    )
+    with psycopg.connect(database_url) as connection:
+        connection.execute(
+            """
+            UPDATE router.workspaces
+            SET state = 'disabled', state_revision = state_revision + 1
+            WHERE id = %s
+            """,
+            (WORKSPACE_ID,),
+        )
+    with pytest.raises(EmbedSessionError):
+        repository.redeem(
+            before_bootstrap.session_id,
+            before_bootstrap.bootstrap_token,
+            "nonce-0123456789",
+            HOST_ORIGIN,
+            request_origin=FRAME_ORIGIN,
+            request_id="redeem-after-disable",
+            now=NOW + timedelta(seconds=2),
+        )
+    with pytest.raises(EmbedSessionError) as invalid_cookie:
+        repository.authenticate_session(
+            cookie.session_token,
+            request_origin=FRAME_ORIGIN,
+            request_id="cookie-after-disable",
+            now=NOW + timedelta(seconds=2),
+        )
+    assert invalid_cookie.value.code == "invalid_token"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        SERVICE_ID.replace("-", ""),
+        SERVICE_ID.upper(),
+        "{0198a080-0000-7000-8000-000000000001}",
+    ],
+)
+def test_noncanonical_uuid_forms_are_hidden(
+    repository: EmbedSessionRepository, value: str
+) -> None:
+    """Alternate UUID spellings cannot select a service or session record."""
+    with pytest.raises(EmbedSessionError) as service:
+        repository.create(
+            replace(_context(), scope=Scope(value, WORKSPACE_ID)),
+            _document(),
+            now=NOW,
+        )
+    assert service.value.code == "not_found"
+    with pytest.raises(EmbedSessionError) as session:
+        repository.redeem(
+            value,
+            "x" * 43,
+            "nonce-0123456789",
+            HOST_ORIGIN,
+            request_origin=FRAME_ORIGIN,
+            request_id="noncanonical-session",
+            now=NOW,
+        )
+    assert session.value.code == "not_found"
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "UPDATE router.embed_sessions SET host_subject = repeat('x', 201)",
+        "UPDATE router.embed_sessions SET permitted_actions = ARRAY['content.read']",
+        (
+            "UPDATE router.embed_sessions "
+            "SET permitted_actions = ARRAY['configuration.write']"
+        ),
+        (
+            "UPDATE router.embed_sessions "
+            "SET expires_at = created_at + interval '6 minutes'"
+        ),
+        (
+            "UPDATE router.embed_sessions "
+            "SET redeemed_at = created_at - interval '1 second', "
+            "frame_nonce_digest = decode(repeat('01', 32), 'hex'), "
+            "session_token_digest = decode(repeat('02', 32), 'hex')"
+        ),
+        (
+            "UPDATE router.embed_sessions "
+            "SET revoked_at = created_at - interval '1 second'"
+        ),
+    ],
+)
+def test_database_constraints_reject_unsafe_session_rows(
+    database_url: str, repository: EmbedSessionRepository, statement: str
+) -> None:
+    """PostgreSQL rejects unsafe scope, lifetime, and redemption state."""
+    repository.create(_context(), _document(), now=NOW)
+    with (
+        psycopg.connect(database_url) as connection,
+        pytest.raises(psycopg.errors.CheckViolation),
+    ):
+        connection.execute(sql.SQL(statement))
 
 
 def test_sensitive_session_uses_host_authentication_window(
@@ -320,17 +502,13 @@ def test_wrong_workspace_and_service_scope_are_hidden(
         repository.create(
             replace(
                 _context(),
-                scope=Scope(
-                    "0198a080-0000-7000-8000-000000000002", WORKSPACE_ID
-                ),
+                scope=Scope("0198a080-0000-7000-8000-000000000002", WORKSPACE_ID),
             ),
             _document(),
             now=NOW,
         )
     assert service.value.code == "not_found"
-    wrong_audience = replace(
-        _context(), machine_audience=Audience.CONFIGURATION
-    )
+    wrong_audience = replace(_context(), machine_audience=Audience.CONFIGURATION)
     with pytest.raises(EmbedSessionError) as audience:
         repository.create(wrong_audience, _document(), now=NOW)
     assert audience.value.code == "insufficient_scope"

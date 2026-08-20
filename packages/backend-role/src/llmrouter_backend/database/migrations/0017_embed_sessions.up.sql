@@ -14,6 +14,8 @@ ADD CONSTRAINT embed_sessions_permissions_closed CHECK (
     ]::text[]
 ),
 ADD CONSTRAINT embed_sessions_origin_bounds CHECK (
+    char_length(host_subject) BETWEEN 1 AND 200
+    AND
     char_length(host_origin) BETWEEN 1 AND 2000
     AND char_length(frame_origin) BETWEEN 1 AND 2000
 ),
@@ -33,18 +35,31 @@ ADD CONSTRAINT embed_sessions_lifetime CHECK (
         )
     )
 ),
+ADD CONSTRAINT embed_sessions_sensitive_recent_auth CHECK (
+    NOT (permitted_actions && ARRAY[
+        'configuration.write', 'budget.write', 'diagnostic.run'
+    ]::text[])
+    OR recent_auth_at IS NOT NULL
+),
 ADD CONSTRAINT embed_sessions_redemption_state CHECK (
     (
-        redeemed_at IS NULL
-        AND frame_nonce_digest IS NULL
-        AND session_token_digest IS NULL
-    ) OR (
-        redeemed_at IS NOT NULL
-        AND frame_nonce_digest IS NOT NULL
-        AND session_token_digest IS NOT NULL
+        (
+            redeemed_at IS NULL
+            AND frame_nonce_digest IS NULL
+            AND session_token_digest IS NULL
+        ) OR (
+            redeemed_at IS NOT NULL
+            AND frame_nonce_digest IS NOT NULL
+            AND session_token_digest IS NOT NULL
+        )
     )
     AND (frame_nonce_digest IS NULL OR octet_length(frame_nonce_digest) = 32)
     AND (session_token_digest IS NULL OR octet_length(session_token_digest) = 32)
+    AND (
+        redeemed_at IS NULL
+        OR (redeemed_at >= created_at AND redeemed_at < expires_at)
+    )
+    AND (revoked_at IS NULL OR revoked_at >= created_at)
 );
 
 CREATE INDEX embed_sessions_expiry_idx

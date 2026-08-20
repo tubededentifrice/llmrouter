@@ -6,7 +6,6 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from datetime import UTC, datetime
 
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse, Response
@@ -93,14 +92,10 @@ async def redeem_embed_session(request: Request, session_id: str) -> Response:
         if workspace_id is not None:
             body["workspace_id"] = workspace_id
         response = _json(body)
-        maximum_age = max(
-            0,
-            int((result.principal.expires_at - datetime.now(UTC)).total_seconds()),
-        )
         response.set_cookie(
             SESSION_COOKIE,
             result.session_token,
-            max_age=maximum_age,
+            max_age=result.cookie_max_age,
             path="/",
             secure=True,
             httponly=True,
@@ -161,7 +156,7 @@ def _header(request: Request, name: str, request_id: str) -> str:
 
 
 async def _body(request: Request, request_id: str) -> bytes:
-    content_type = request.headers.get("content-type", "").split(";", 1)[0].strip()
+    content_type = _header(request, "content-type", request_id).split(";", 1)[0].strip()
     if content_type != "application/json":
         raise EmbedSessionError("invalid_request", request_id)
     body = bytearray()

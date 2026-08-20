@@ -150,12 +150,14 @@ class RedeemedSession:
     principal: EmbedPrincipal
     session_token: str
     theme: EmbedTheme
+    cookie_max_age: int
 
     def __repr__(self) -> str:
         """Keep the browser session secret out of diagnostics."""
         return (
             f"RedeemedSession(principal={self.principal!r}, "
-            f"session_token=[REDACTED], theme={self.theme!r})"
+            "session_token=[REDACTED], "
+            f"theme={self.theme!r}, cookie_max_age={self.cookie_max_age!r})"
         )
 
 
