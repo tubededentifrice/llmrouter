@@ -63,7 +63,6 @@ services:
         .venv/bin/python scripts/local-development-migrate.py
     volumes:
       - .:/workspace:ro
-      - ./.local-development:/local-state
       - llmrouter-python-environment:/workspace/.venv
       - llmrouter-uv-cache:/root/.cache/uv
 
@@ -108,12 +107,34 @@ services:
       LLMROUTER_FRAME_ORIGIN: http://127.0.0.1:5175
       LLMROUTER_LOCAL_RUNTIME: "1"
       LLMROUTER_MACHINE_DIGEST_KEY_FILE: /run/secrets/machine_digest_key
+      LLMROUTER_WRAPPING_KEY_FILE: /run/secrets/credential_wrapping_key
+      LLMROUTER_IDEMPOTENCY_KEY_FILE: /run/secrets/idempotency_digest_key
+      LLMROUTER_DISTRIBUTION_KEY_FILE: /run/secrets/distribution_key
+      LLMROUTER_REPLAY_KEY_FILE: /run/secrets/canonical_replay_key
+      LLMROUTER_ADMIN_SESSION_FILE: /run/secrets/administrator_session
+      LLMROUTER_ADMIN_CSRF_FILE: /run/secrets/administrator_csrf
       UV_LINK_MODE: copy
       UV_PYTHON_DOWNLOADS: never
+    secrets:
+      - postgres_password
+      - machine_digest_key
+      - credential_wrapping_key
+      - idempotency_digest_key
+      - distribution_key
+      - canonical_replay_key
+      - administrator_session
+      - administrator_csrf
+    volumes:
+      - .:/workspace:ro
+      - ./.local-development:/local-state
+      - llmrouter-python-environment:/workspace/.venv
+      - llmrouter-uv-cache:/root/.cache/uv
     command:
       - /bin/sh
       - -euc
       - |
+        mkdir -p /local-state/backend-replay
+        chmod 700 /local-state/backend-replay
         export LLMROUTER_DATABASE_URL="postgresql://llmrouter:$$(cat /run/secrets/postgres_password)@postgres:5432/llmrouter"
         exec .venv/bin/uvicorn llmrouter_backend.app:app --host 0.0.0.0 --port 8000 --no-access-log
     ports:
@@ -198,6 +219,18 @@ secrets:
     file: .local-development/machine-digest-key
   example_host_token:
     file: .local-development/example-host-token
+  credential_wrapping_key:
+    file: .local-development/credential-wrapping-key
+  idempotency_digest_key:
+    file: .local-development/idempotency-digest-key
+  distribution_key:
+    file: .local-development/distribution-key
+  canonical_replay_key:
+    file: .local-development/canonical-replay-key
+  administrator_session:
+    file: .local-development/administrator-session
+  administrator_csrf:
+    file: .local-development/administrator-csrf
 
 volumes:
   llmrouter-admin-node-modules:

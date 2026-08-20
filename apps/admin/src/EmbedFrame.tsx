@@ -3,6 +3,7 @@ import { useEffect, useMemo, useReducer, useRef } from "react";
 import type { AdministrationSnapshot } from "./api.js";
 import {
   FrameProtocolController,
+  scheduleFrameStart,
   type BootstrapResult,
   type EmbedSection,
   type EmbedTheme,
@@ -142,8 +143,11 @@ export function EmbedFrame({
       void controller.receive(event);
     };
     window.addEventListener("message", receive);
-    controller.start();
+    const cancelStart = scheduleFrameStart(() => {
+      controller.start();
+    });
     return () => {
+      cancelStart();
       window.removeEventListener("message", receive);
       controller.dispose();
       clearAuthority();

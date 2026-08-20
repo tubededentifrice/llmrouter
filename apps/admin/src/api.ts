@@ -225,6 +225,88 @@ export interface FetchAdministrationClientOptions {
 
 const jsonHeaders = { "Content-Type": "application/json" } as const;
 
+export type LocalAdministratorSession =
+  | { readonly state: "active"; readonly csrfToken: string }
+  | { readonly state: "required" }
+  | { readonly state: "unavailable" };
+
+export async function inspectLocalAdministratorSession(
+  fetcher: typeof fetch = globalThis.fetch.bind(globalThis),
+): Promise<LocalAdministratorSession> {
+  let capability: Response;
+  try {
+    capability = await fetcher("/v1/admin/local-session", {
+      method: "HEAD",
+      credentials: "same-origin",
+      cache: "no-store",
+    });
+  } catch {
+    return { state: "unavailable" };
+  }
+  if (!capability.ok) return { state: "unavailable" };
+  const response = await fetcher("/v1/admin/session", {
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  if (response.status === 404) return { state: "unavailable" };
+  if (response.status === 401) return { state: "required" };
+  if (!response.ok)
+    throw new AdministrationApiError(
+      "The local administrator session is not available.",
+      {
+        code: "local_session_unavailable",
+        requestId: null,
+        status: response.status,
+      },
+    );
+  const document = (await response.json()) as { readonly csrf_token?: unknown };
+  if (
+    typeof document.csrf_token !== "string" ||
+    document.csrf_token.length < 20
+  )
+    throw new AdministrationApiError(
+      "The local administrator session is not available.",
+      { code: "local_session_invalid", requestId: null, status: 500 },
+    );
+  return { state: "active", csrfToken: document.csrf_token };
+}
+
+export async function activateLocalAdministrator(
+  secret: string,
+  fetcher: typeof fetch = globalThis.fetch.bind(globalThis),
+): Promise<string> {
+  const response = await fetcher("/v1/admin/local-session", {
+    method: "POST",
+    credentials: "same-origin",
+    cache: "no-store",
+    headers: jsonHeaders,
+    body: JSON.stringify({ secret }),
+  });
+  if (!response.ok)
+    throw new AdministrationApiError(
+      "The local administrator session was not activated.",
+      {
+        code: "local_administrator_activation_failed",
+        requestId: null,
+        status: response.status,
+      },
+    );
+  const document = (await response.json()) as {
+    readonly authenticated?: unknown;
+    readonly csrf_token?: unknown;
+  };
+  if (
+    document.authenticated !== true ||
+    typeof document.csrf_token !== "string" ||
+    document.csrf_token.length < 20
+  )
+    throw new AdministrationApiError(
+      "The local administrator session was not activated.",
+      { code: "local_session_invalid", requestId: null, status: 500 },
+    );
+  return document.csrf_token;
+}
+
 function randomKey(): string {
   return globalThis.crypto.randomUUID();
 }

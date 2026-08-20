@@ -134,3 +134,29 @@ def test_local_secret_paths_are_ignored_and_not_printed() -> None:
     assert "set -x" not in script
     assert "cat /run/secrets" not in script
     assert "LLMROUTER_OPENROUTER_API_KEY" not in script
+    for name in (
+        "credential-wrapping-key",
+        "idempotency-digest-key",
+        "distribution-key",
+        "canonical-replay-key",
+        "administrator-session",
+        "administrator-csrf",
+        "data-plane-token",
+    ):
+        assert f'install_secret "${{state_directory}}/{name}"' in script
+    assert "local-development-e2e.py prepare" in script
+    assert "local-development-e2e.py resume" in script
+    assert "compose restart backend" in script
+
+
+def test_local_proof_resets_and_stops_the_deployment() -> None:
+    """Keep the clean deterministic proof as one safe command."""
+    script = (REPOSITORY_ROOT / "scripts/local-development.sh").read_text(
+        encoding="utf-8"
+    )
+    proof = script[script.index("    prove)") : script.index("    *)")]
+    assert 'local-development.sh" reset' in proof
+    assert 'local-development.sh" start' in proof
+    assert 'local-development.sh" e2e' in proof
+    assert 'local-development.sh" stop' in proof
+    assert "trap" in proof

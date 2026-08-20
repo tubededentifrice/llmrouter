@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   AdministrationApiError,
+  activateLocalAdministrator,
   createFetchAdministrationClient,
   errorMessage,
+  inspectLocalAdministratorSession,
   type ScopeSelection,
 } from "../src/api.js";
 
@@ -25,6 +27,75 @@ function requestUrl(input: string | URL | Request): string {
 }
 
 describe("administration API client", () => {
+  it("activates only the hidden local administrator session", async () => {
+    let received: RequestInit | undefined;
+    const fetcher = vi.fn(
+      (_input: string | URL | Request, init?: RequestInit) => {
+        received = init;
+        return Promise.resolve(
+          json({
+            authenticated: true,
+            csrf_token: "generated-local-csrf-value-with-safe-length",
+          }),
+        );
+      },
+    );
+    const secret = "generated-local-administrator-secret";
+    const csrf = await activateLocalAdministrator(secret, fetcher);
+    expect(csrf).toBe("generated-local-csrf-value-with-safe-length");
+    expect(received?.method).toBe("POST");
+    expect(received?.credentials).toBe("same-origin");
+    expect(received?.cache).toBe("no-store");
+    expect(received?.body).toBe(JSON.stringify({ secret }));
+  });
+
+  it("distinguishes local activation from a production administration path", async () => {
+    const localPaths: string[] = [];
+    const required = await inspectLocalAdministratorSession(
+      vi.fn((input: string | URL | Request) => {
+        const path = requestUrl(input);
+        localPaths.push(path);
+        return Promise.resolve(
+          path.endsWith("/local-session")
+            ? new Response(null, { status: 204 })
+            : json({ error: {} }, 401),
+        );
+      }),
+    );
+    const productionPaths: string[] = [];
+    const unavailable = await inspectLocalAdministratorSession(
+      vi.fn((input: string | URL | Request) => {
+        const path = requestUrl(input);
+        productionPaths.push(path);
+        return Promise.resolve(
+          path.endsWith("/local-session")
+            ? json({ error: {} }, 404)
+            : json({ error: {} }, 401),
+        );
+      }),
+    );
+    expect(required).toEqual({ state: "required" });
+    expect(localPaths).toEqual([
+      "/v1/admin/local-session",
+      "/v1/admin/session",
+    ]);
+    expect(unavailable).toEqual({ state: "unavailable" });
+    expect(productionPaths).toEqual(["/v1/admin/local-session"]);
+  });
+
+  it("keeps failed local activation errors safe", async () => {
+    const secret = "generated-secret-that-must-not-return";
+    await expect(
+      activateLocalAdministrator(
+        secret,
+        vi.fn(() => Promise.resolve(json({ private: secret }, 401))),
+      ),
+    ).rejects.toMatchObject({
+      code: "local_administrator_activation_failed",
+      status: 401,
+    });
+  });
+
   it("loads only bounded exact-scope routes", async () => {
     const paths: string[] = [];
     const fetcher = vi.fn((input: string | URL | Request) => {

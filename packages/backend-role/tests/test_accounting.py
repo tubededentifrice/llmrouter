@@ -17,6 +17,7 @@ from llmrouter_backend.accounting import (
     PostgresAccountingRepository,
     PriceComponent,
     SourceSnapshot,
+    UsageComponent,
     UsageDelta,
     UsageUnit,
     exact_decimal,
@@ -31,6 +32,35 @@ from llmrouter_backend.authority import (
 )
 
 NOW = datetime(2026, 8, 13, tzinfo=UTC)
+
+
+class _PriceRows:
+    def __init__(self, rows: list[tuple[str, str, Decimal, Decimal]]) -> None:
+        self._rows = rows
+
+    def execute(self, *_args: object, **_kwargs: object) -> _PriceRows:
+        return self
+
+    def fetchall(self) -> list[tuple[str, str, Decimal, Decimal]]:
+        return self._rows
+
+
+def _priced_event(price_version_id: str) -> AccountingEvent:
+    return AccountingEvent(
+        "event",
+        "canonical",
+        "request",
+        "service",
+        None,
+        "budget",
+        AccountingSubjectKind.PROVIDER_ATTEMPT,
+        "attempt",
+        AttemptOutcome.SUCCEEDED,
+        "USD",
+        (UsageComponent(UsageUnit.INPUT_TOKEN, Decimal(4)),),
+        NOW,
+        price_version_id=price_version_id,
+    )
 
 
 def test_accounting_values_reject_binary_float_and_allow_signed_corrections() -> None:
@@ -51,6 +81,21 @@ def test_accounting_values_reject_binary_float_and_allow_signed_corrections() ->
     )
     assert correction.amount_delta == Decimal("-0.125")
     assert correction.usage_delta[0].quantity == Decimal("-2")
+
+
+def test_price_calculation_removes_only_insignificant_fraction_zeros() -> None:
+    repository = object.__new__(PostgresAccountingRepository)
+    event = _priced_event("per-million")
+    rows = _PriceRows(
+        [("USD", "input_token", Decimal("1000000"), Decimal("0.100000000000000000"))]
+    )
+    assert repository._event_amount(rows, event) == Decimal("0.0000004")  # type: ignore[arg-type]
+
+    over_scale = _PriceRows(
+        [("USD", "input_token", Decimal(3), Decimal("1.000000000000000000"))]
+    )
+    with pytest.raises(AccountingError, match="exceeds the accounting scale"):
+        repository._event_amount(over_scale, event)  # type: ignore[arg-type]
 
 
 def test_source_snapshot_copies_its_price_rows() -> None:

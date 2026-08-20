@@ -298,6 +298,17 @@ def test_start_dispatch_finish_usage_and_terminal_recovery(
         routing.dispatch(plan, owner_id="worker-two")
     assert wrong_owner.value.code is RoutingErrorCode.CLAIM_CONFLICT
 
+    execution.append_event(
+        _context(),
+        ExecutionTarget(ExecutionKind.MODEL, request_id),
+        event_name="output.delta",
+        payload={
+            "output_index": 0,
+            "content_type": "text/plain",
+            "delta": "complete",
+        },
+    )
+
     result = AdapterResult(
         AttemptOutcome.SUCCEEDED,
         usage=(UsageComponent(UsageUnit.INPUT_TOKEN, Decimal("1E-8")),),

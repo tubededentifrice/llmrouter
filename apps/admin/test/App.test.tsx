@@ -7,10 +7,13 @@ import {
   AdministrationDashboard,
   AdministrationStateView,
   App,
+  LocalAdministrationGateView,
+  LocalAdministratorActivation,
   StaleRevisionBanner,
   StateMessage,
   type AppProps,
 } from "../src/App.js";
+import { scheduleFrameStart } from "../src/embedProtocol.js";
 import {
   configurationRevisionForScope,
   type AdministrationClient,
@@ -162,6 +165,52 @@ function dashboard(
 }
 
 describe("administration app states", () => {
+  it("does not consume an embed token from a temporary Strict Mode effect", () => {
+    const callbacks: (() => void)[] = [];
+    const start = vi.fn();
+    const cancel = scheduleFrameStart(start, (callback) => {
+      callbacks.push(callback);
+    });
+    cancel();
+    callbacks[0]?.();
+    expect(start).not.toHaveBeenCalled();
+
+    scheduleFrameStart(start, (callback) => {
+      callbacks.push(callback);
+    });
+    callbacks[1]?.();
+    expect(start).toHaveBeenCalledOnce();
+  });
+
+  it("uses one write-only local administrator control", () => {
+    const html = renderToStaticMarkup(
+      <LocalAdministratorActivation onActivate={vi.fn()} />,
+    );
+    expect(html).toContain("Activate administrator session");
+    expect(html).toContain('type="password"');
+    expect(html).toContain('autoComplete="off"');
+    expect(html).toContain('value=""');
+    expect(html).not.toContain("localStorage");
+  });
+
+  it("keeps the normal app when local activation capability is absent", () => {
+    const unavailable = renderToStaticMarkup(
+      <LocalAdministrationGateView
+        session={{ state: "unavailable" }}
+        onActivate={vi.fn()}
+      />,
+    );
+    const required = renderToStaticMarkup(
+      <LocalAdministrationGateView
+        session={{ state: "required" }}
+        onActivate={vi.fn()}
+      />,
+    );
+    expect(unavailable).toContain("Select an exact scope");
+    expect(unavailable).not.toContain("Activate administrator session");
+    expect(required).toContain("Activate administrator session");
+  });
+
   it("shows an empty scope state before it makes a request", () => {
     const html = renderToStaticMarkup(<App client={client} />);
     expect(html).toContain("Select an exact scope");

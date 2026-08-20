@@ -1,7 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "@opendle/ui/styles.css";
-import { App } from "./App.js";
+import { LocalAdministrationApp } from "./App.js";
 import { EmbedFrame, InvalidEmbedFrame } from "./EmbedFrame.js";
 import { embedFrameParameters } from "./embedProtocol.js";
 import "./embedStyles.css";
@@ -21,7 +21,7 @@ createRoot(root).render(
         <EmbedFrame sessionId={embed.sessionId} hostOrigin={embed.hostOrigin} />
       )
     ) : (
-      <App />
+      <LocalAdministrationApp />
     )}
   </StrictMode>,
 );

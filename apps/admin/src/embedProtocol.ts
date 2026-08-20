@@ -72,6 +72,19 @@ const sections = new Set<EmbedSection>([
 ]);
 const maximumMessageIds = 256;
 
+export function scheduleFrameStart(
+  start: () => void,
+  schedule: (callback: () => void) => void = queueMicrotask,
+): () => void {
+  let mounted = true;
+  schedule(() => {
+    if (mounted) start();
+  });
+  return () => {
+    mounted = false;
+  };
+}
+
 export class FrameProtocolController {
   readonly frameNonce: string;
   private readonly seen = new Set<string>();

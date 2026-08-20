@@ -23,9 +23,11 @@ import {
 } from "@opendle/ui";
 import {
   AdministrationApiError,
+  activateLocalAdministrator,
   configurationRevisionForScope,
   createFetchAdministrationClient,
   errorMessage,
+  inspectLocalAdministratorSession,
   type AccountingSummary,
   type AdministrationClient,
   type AdministrationSnapshot,
@@ -1599,6 +1601,141 @@ export function AdministrationStateView({
 export interface AppProps {
   readonly client?: AdministrationClient;
   readonly startingScope?: ScopeSelection;
+}
+
+export function LocalAdministratorActivation({
+  onActivate,
+}: {
+  readonly onActivate: (secret: string) => Promise<void>;
+}) {
+  const [secret, setSecret] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  async function submit(event: SubmitEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSubmitting(true);
+    setFailure(null);
+    try {
+      await onActivate(secret);
+    } catch {
+      setFailure("The local administrator session was not activated.");
+    } finally {
+      setSecret("");
+      setSubmitting(false);
+    }
+  }
+  return (
+    <main className="local-activation">
+      <Card className="local-activation-card">
+        <PageHeading
+          eyebrow="Localhost only"
+          title="Activate administrator session"
+          description="Enter the generated local administrator secret. The control clears the value after each attempt."
+        />
+        <form
+          className="local-activation-form"
+          onSubmit={(event) => void submit(event)}
+        >
+          <label>
+            Local administrator secret
+            <input
+              name="local-administrator-secret"
+              type="password"
+              autoComplete="off"
+              spellCheck="false"
+              value={secret}
+              required
+              minLength={20}
+              onChange={(event) => {
+                setSecret(event.currentTarget.value);
+              }}
+            />
+          </label>
+          {failure === null ? null : <p role="alert">{failure}</p>}
+          <Button type="submit" disabled={submitting || secret.length < 20}>
+            {submitting ? "Activating…" : "Activate local session"}
+          </Button>
+        </form>
+      </Card>
+    </main>
+  );
+}
+
+function ActivatedAdministrationApp({
+  csrfToken,
+}: {
+  readonly csrfToken: string;
+}) {
+  const client = useMemo(
+    () => createFetchAdministrationClient({ csrfToken }),
+    [csrfToken],
+  );
+  return <App client={client} />;
+}
+
+export type LocalSessionGate =
+  | { readonly state: "checking" }
+  | { readonly state: "required" }
+  | { readonly state: "active"; readonly csrfToken: string }
+  | { readonly state: "unavailable" }
+  | { readonly state: "failed" };
+
+export function LocalAdministrationGateView({
+  session,
+  onActivate,
+}: {
+  readonly session: LocalSessionGate;
+  readonly onActivate: (secret: string) => Promise<void>;
+}) {
+  if (session.state === "checking")
+    return (
+      <main className="entry-state">
+        <StateMessage kind="loading">
+          The administrator session state is loading.
+        </StateMessage>
+      </main>
+    );
+  if (session.state === "required")
+    return <LocalAdministratorActivation onActivate={onActivate} />;
+  if (session.state === "failed")
+    return (
+      <main className="entry-state">
+        <StateMessage kind="error">
+          The local administrator session is not available.
+        </StateMessage>
+      </main>
+    );
+  if (session.state === "active")
+    return <ActivatedAdministrationApp csrfToken={session.csrfToken} />;
+  return <App />;
+}
+
+export function LocalAdministrationApp() {
+  const [session, setSession] = useState<LocalSessionGate>({
+    state: "checking",
+  });
+  useEffect(() => {
+    let mounted = true;
+    void inspectLocalAdministratorSession()
+      .then((result) => {
+        if (mounted) setSession(result);
+      })
+      .catch(() => {
+        if (mounted) setSession({ state: "failed" });
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+  return (
+    <LocalAdministrationGateView
+      session={session}
+      onActivate={async (secret) => {
+        const csrfToken = await activateLocalAdministrator(secret);
+        setSession({ state: "active", csrfToken });
+      }}
+    />
+  );
 }
 
 export function App({ client: suppliedClient, startingScope }: AppProps = {}) {

@@ -1092,7 +1092,7 @@ class PostgresAccountingRepository:
                 )
             amount += usage.quantity / price[0] * price[1]
         try:
-            return exact_decimal(amount)
+            return exact_decimal(amount.normalize())
         except ValueError as error:
             raise AccountingError(
                 "The exact price calculation exceeds the accounting scale."

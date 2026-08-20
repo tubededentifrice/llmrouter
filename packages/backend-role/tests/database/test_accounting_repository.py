@@ -1,9 +1,10 @@
 """PostgreSQL accounting and price synchronization tests."""
-# ruff: noqa: D103, E501, FBT003, FURB157, PLR0915, PLR2004
+# ruff: noqa: D103, E501, FBT003, FURB157, PLR0915, PLR2004, SLF001
 
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -618,10 +619,10 @@ def test_price_sync_preserves_active_configuration_and_last_good_price(
             "wire-model": (
                 PriceComponent(
                     UsageUnit.INPUT_TOKEN,
-                    Decimal("0.002"),
+                    Decimal("0.1"),
                     "USD",
-                    "0.002",
-                    Decimal("1000"),
+                    "0.1 per 1000000 input_token",
+                    Decimal("1000000"),
                 ),
             )
         },
@@ -643,6 +644,48 @@ def test_price_sync_preserves_active_configuration_and_last_good_price(
     assert result.resulting_configuration_revisions == (
         result.resulting_configuration_revision,
     )
+    with psycopg.connect(database_url) as connection:
+        price_version_id = connection.execute(
+            """SELECT id::text FROM router.route_price_versions
+               WHERE provider_model_route_id = %s""",
+            (ROUTE_ID,),
+        ).fetchone()[0]
+        priced = AccountingEvent(
+            "postgres-price-event",
+            "postgres-price-canonical",
+            REQUEST_ROW_ID,
+            SERVICE_ID,
+            WORKSPACE_ID,
+            BUDGET_ID,
+            AccountingSubjectKind.PROVIDER_ATTEMPT,
+            "postgres-price-attempt",
+            AttemptOutcome.SUCCEEDED,
+            "USD",
+            (UsageComponent(UsageUnit.INPUT_TOKEN, Decimal(4)),),
+            NOW,
+            price_version_id=price_version_id,
+        )
+        assert repository._event_amount(connection, priced) == Decimal("0.0000004")
+        over_scale_id = uuid.uuid4()
+        connection.execute(
+            """INSERT INTO router.route_price_versions (
+                   id, provider_model_route_id, version_number, currency, status
+               ) VALUES (%s, %s, 999, 'USD', 'current')""",
+            (over_scale_id, ROUTE_ID),
+        )
+        connection.execute(
+            """INSERT INTO router.route_price_components (
+                   price_version_id, component_kind, unit_name,
+                   unit_quantity, unit_price, raw_source_value
+               ) VALUES (%s, 'usage', 'input_token', 3, 1, '1 USD per 3')""",
+            (over_scale_id,),
+        )
+        with pytest.raises(AccountingError, match="exceeds the accounting scale"):
+            repository._event_amount(
+                connection,
+                replace(priced, price_version_id=str(over_scale_id)),
+            )
+        connection.rollback()
     recovered = repository.get_synchronization(_administrator(), result.operation_id)
     assert recovered.resulting_configuration_revision == (
         result.resulting_configuration_revision

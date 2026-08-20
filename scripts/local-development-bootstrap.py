@@ -8,10 +8,12 @@ import os
 import stat
 from base64 import urlsafe_b64decode
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 import psycopg
+from llmrouter_backend.adapters.openrouter import openrouter_registered_schemas
 from llmrouter_backend.authority import (
     Audience,
     AuthorityClass,
@@ -20,6 +22,22 @@ from llmrouter_backend.authority import (
     RequestContext,
     Scope,
 )
+from llmrouter_backend.budgets import (
+    BudgetScopeKind,
+    BudgetTarget,
+    PostgresBudgetRepository,
+    ResetPeriod,
+)
+from llmrouter_backend.configuration import (
+    CatalogEntry,
+    CatalogKind,
+    ConfigurationScope,
+    PostgresConfigurationRepository,
+    RegisteredDocument,
+    ScopeConfiguration,
+    SettingsSchemaRegistry,
+)
+from llmrouter_backend.configuration.errors import ConfigurationError
 from llmrouter_backend.machine_identity import (
     BootstrapScope,
     MachineCredentialRepository,
@@ -46,6 +64,8 @@ def main() -> None:
             "WHERE service_id = %s)",
             (SERVICE_ID,),
         ).fetchone() == (True,)
+    _seed_catalog(database_url, current)
+    _seed_budget(database_url, current)
     machine = MachineCredentialRepository(
         database_url,
         issuer="llmrouter-local-development",
@@ -58,8 +78,10 @@ def main() -> None:
             _administrator_context(current),
             SERVICE_ID,
             BootstrapScope(
-                audiences=frozenset({Audience.HOST_BACKEND}),
-                operations=frozenset({"admin_embed.create"}),
+                audiences=frozenset({Audience.HOST_BACKEND, Audience.DATA_PLANE}),
+                operations=frozenset(
+                    {"admin_embed.create", "model.create", "model.read", "model.cancel"}
+                ),
                 workspace_limit=WorkspaceLimit.EXPLICIT_ONLY,
             ),
             now=current,
@@ -79,7 +101,90 @@ def main() -> None:
         now=current,
     )
     _write_secret(STATE_DIRECTORY / "example-host-token", token.access_token.value)
+    data_token = machine.exchange(
+        request_id="local-data-plane-token",
+        service_id=SERVICE_ID,
+        bootstrap_secret=_read_secret(bootstrap_path),
+        audience=Audience.DATA_PLANE,
+        operations=frozenset({"model.create", "model.read", "model.cancel"}),
+        workspace_ids=frozenset(WORKSPACE_IDS),
+        now=current,
+    )
+    _write_secret(STATE_DIRECTORY / "data-plane-token", data_token.access_token.value)
     print("Local development identities are ready.")
+
+
+def _seed_budget(database_url: str, current: datetime) -> None:
+    """Create one bounded local service budget with an idempotent operation."""
+    repository = PostgresBudgetRepository(database_url)
+    repository.put_limit(
+        _administrator_context(current, operation="budget.write", service_scope=True),
+        BudgetTarget(BudgetScopeKind.SERVICE, service_id=SERVICE_ID),
+        hard_limit=Decimal(5),
+        currency="USD",
+        warning_threshold=Decimal(4),
+        reset_period=ResetPeriod.NONE,
+        expected_revision="0",
+        idempotency_key="local-service-budget-v1",
+        now=current,
+    )
+
+
+def _seed_catalog(database_url: str, current: datetime) -> None:
+    """Publish the accepted local OpenRouter and DeepSeek catalog once."""
+    with psycopg.connect(database_url) as connection:
+        active = connection.execute(
+            """SELECT EXISTS (
+                   SELECT 1 FROM router.active_configurations
+                   WHERE scope_kind = 'global'
+               )"""
+        ).fetchone() == (True,)
+    if active:
+        return
+    repository = PostgresConfigurationRepository(
+        database_url,
+        schema_registry=SettingsSchemaRegistry(openrouter_registered_schemas()),
+    )
+    content = ScopeConfiguration(
+        catalog=(
+            CatalogEntry(
+                CatalogKind.PROVIDER,
+                "openai_compatible.v1",
+                "OpenRouter",
+                frozenset({"chat.complete", "chat.stream"}),
+                settings=RegisteredDocument(
+                    "adapter.openai_compatible.settings",
+                    1,
+                    {
+                        "profile": "openrouter",
+                        "supported_operations": ["chat.complete", "chat.stream"],
+                    },
+                ),
+            ),
+            CatalogEntry(
+                CatalogKind.MODEL,
+                "0198a080-0000-7000-8000-000000000120",
+                "DeepSeek V4 Flash",
+                frozenset({"chat.complete", "chat.stream"}),
+            ),
+        )
+    )
+    try:
+        repository.publish(
+            _administrator_context(current, operation="catalog.manage"),
+            ConfigurationScope(),
+            content,
+            expected_active_revision=None,
+            reason="Create the deterministic local model catalog",
+            now=current,
+            resource_id="local-model-catalog",
+            idempotency_key="local-model-catalog-v1",
+        )
+    except ConfigurationError as error:
+        details = "; ".join(
+            f"{issue.field_path}: {issue.reason}" for issue in error.issues
+        )
+        raise SystemExit(f"The local catalog is invalid. {details}") from error
 
 
 def _seed_scopes(connection: psycopg.Connection[Any]) -> None:
@@ -111,7 +216,12 @@ def _seed_scopes(connection: psycopg.Connection[Any]) -> None:
         )
 
 
-def _administrator_context(current: datetime) -> RequestContext:
+def _administrator_context(
+    current: datetime,
+    *,
+    operation: str = "credential.manage",
+    service_scope: bool = False,
+) -> RequestContext:
     return RequestContext(
         request_id="local-bootstrap-create",
         actor_kind=PrincipalKind.ADMINISTRATOR,
@@ -119,8 +229,8 @@ def _administrator_context(current: datetime) -> RequestContext:
         authority_class=AuthorityClass.GLOBAL_ADMINISTRATOR,
         authority_path=AuthorityPath.GLOBAL_ADMINISTRATION,
         machine_audience=None,
-        operation="credential.manage",
-        scope=Scope(),
+        operation=operation,
+        scope=Scope(SERVICE_ID) if service_scope else Scope(),
         authorized_at=current,
         recent_authentication_at=current,
         mutation=True,

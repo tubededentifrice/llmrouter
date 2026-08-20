@@ -73,7 +73,14 @@ prepare_state_directory() {
 prepare_secrets() {
   install_secret "${state_directory}/postgres-password" 32
   install_secret "${state_directory}/machine-digest-key" 32
+  install_secret "${state_directory}/credential-wrapping-key" 32
+  install_secret "${state_directory}/idempotency-digest-key" 32
+  install_secret "${state_directory}/distribution-key" 32
+  install_secret "${state_directory}/canonical-replay-key" 32
+  install_secret "${state_directory}/administrator-session" 32
+  install_secret "${state_directory}/administrator-csrf" 32
   install_secret "${state_directory}/example-host-token" 0
+  install_secret "${state_directory}/data-plane-token" 0
 }
 
 compose() {
@@ -106,6 +113,7 @@ wait_until_ready() {
       echo "Administration: http://127.0.0.1:5174"
       echo "Embed example: http://127.0.0.1:5176"
       echo "Runtime components: http://127.0.0.1:8010/ready"
+      echo "Deterministic proof: ./scripts/local-development.sh e2e"
       return
     fi
     sleep 2
@@ -141,6 +149,13 @@ main() {
     reset)
       lock_operation
       compose down --volumes --remove-orphans
+      if [[ -d "${state_directory}/backend-replay" ]]; then
+        compose run --rm --no-deps backend /bin/sh -euc \
+          'rm -f /local-state/backend-replay/accounting-replay.bin /local-state/backend-replay/accounting-replay.bin.lock /local-state/backend-replay/accounting-replay.bin.owner /local-state/backend-replay/accounting-replay.bin.state; rmdir /local-state/backend-replay' \
+          >/dev/null
+        compose down --volumes --remove-orphans >/dev/null
+      fi
+      rm -f "${state_directory}/e2e-state.json"
       ;;
     status)
       compose ps
@@ -148,8 +163,23 @@ main() {
     logs)
       compose logs --follow --tail 100
       ;;
+    e2e)
+      lock_operation
+      uv run --package llmrouter-backend python scripts/local-development-e2e.py prepare
+      compose restart backend >/dev/null
+      wait_until_ready
+      uv run --package llmrouter-backend python scripts/local-development-e2e.py resume
+      ;;
+    prove)
+      trap '"${repository_root}/scripts/local-development.sh" stop >/dev/null 2>&1 || true' EXIT
+      "${repository_root}/scripts/local-development.sh" reset
+      "${repository_root}/scripts/local-development.sh" start
+      "${repository_root}/scripts/local-development.sh" e2e
+      "${repository_root}/scripts/local-development.sh" stop
+      trap - EXIT
+      ;;
     *)
-      fail "Usage: ./scripts/local-development.sh {start|stop|reset|status|logs}"
+      fail "Usage: ./scripts/local-development.sh {start|stop|reset|status|logs|e2e|prove}"
       ;;
   esac
 }

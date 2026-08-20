@@ -53,6 +53,30 @@ def main() -> None:
     forbidden = ("LLMROUTER_OPENROUTER_API_KEY:", "sk-or-", "OPENROUTER_API_KEY=")
     if any(value in text for value in forbidden):
         raise SystemExit("The local Compose file contains provider secret material.")
+    required_runtime = {
+        'LLMROUTER_LOCAL_RUNTIME: "1"',
+        "LLMROUTER_WRAPPING_KEY_FILE:",
+        "LLMROUTER_IDEMPOTENCY_KEY_FILE:",
+        "LLMROUTER_DISTRIBUTION_KEY_FILE:",
+        "LLMROUTER_REPLAY_KEY_FILE:",
+        "LLMROUTER_ADMIN_SESSION_FILE:",
+        "LLMROUTER_ADMIN_CSRF_FILE:",
+    }
+    if any(value not in text for value in required_runtime):
+        raise SystemExit("The complete local runtime is not configured.")
+    required_secrets = {
+        "credential-wrapping-key",
+        "idempotency-digest-key",
+        "distribution-key",
+        "canonical-replay-key",
+        "administrator-session",
+        "administrator-csrf",
+    }
+    if any(
+        f"file: .local-development/{name}" not in text
+        for name in required_secrets
+    ):
+        raise SystemExit("A generated local runtime secret is not configured.")
     print("Local development deployment checks passed.")
 
 

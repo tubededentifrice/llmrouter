@@ -62,12 +62,34 @@ The command creates mode-0600 local database credentials in the ignored
 `.local-development/` directory. It starts PostgreSQL, applies all migrations,
 starts the backend, starts the administration UI, and starts the embed example.
 It also starts a local worker that renews the short-lived example host token.
-The command waits for the available runtime foundation before it returns. No
-service publishes a non-loopback host port. The `/ready` response reports each
-runtime component. Until the MVP end-to-end composition task installs the
-administration and model-request services, it reports those components as
-`unavailable` and reports the overall state as `partial`. Their routes fail
-safely with status 503 during this intermediate state.
+The command waits for the complete MVP runtime before it returns. No service
+publishes a non-loopback host port. The `/ready` response reports the database,
+administration, embed-session, and model-request components as `ready`.
+
+The administration page asks for the generated local administrator secret.
+Open `.local-development/administrator-session` with a local editor and paste
+its value into the write-only password control. The ignored file and all other
+generated local secrets have mode 0600. The startup command does not print the
+secret, and the browser does not store it in a URL or local storage.
+
+Run the deterministic proof after startup:
+
+```bash
+./scripts/local-development.sh e2e
+```
+
+The proof uses a generated write-only fake credential and an in-process
+OpenRouter transport. It does not make an external provider call. It configures
+an ordered failed-route-to-DeepSeek V4 Flash fallback through the protected
+administration API. It then
+proves request replay, non-stream and stream output, status, cancellation,
+accounting, restart recovery, isolation failures, and the real administration
+embed in a headless browser. Use this one command to run the proof from a clean
+state and stop all services when it finishes:
+
+```bash
+./scripts/local-development.sh prove
+```
 
 Use these local addresses:
 

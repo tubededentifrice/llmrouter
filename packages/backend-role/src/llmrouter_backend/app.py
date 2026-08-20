@@ -19,6 +19,7 @@ from llmrouter_backend.embed_sessions import (
     install_embed_session_service,
 )
 from llmrouter_backend.embed_sessions.http import router as embed_session_router
+from llmrouter_backend.local_runtime import install_local_runtime
 from llmrouter_backend.machine_identity import MachineCredentialRepository
 from llmrouter_backend.model_requests.http import router as model_request_router
 from llmrouter_backend.model_requests.service import ModelRequestService
@@ -57,6 +58,37 @@ def _install_local_embed_service() -> None:
     install_embed_session_service(app, EmbedSessionService(machine, repository))
 
 
+def _install_complete_local_runtime() -> None:
+    """Install the full runtime only for the explicit localhost deployment."""
+    if os.environ.get("LLMROUTER_LOCAL_RUNTIME") != "1":
+        return
+    database_url = os.environ.get("LLMROUTER_DATABASE_URL")
+    paths = {
+        "digest_key": os.environ.get("LLMROUTER_MACHINE_DIGEST_KEY_FILE"),
+        "wrapping_key": os.environ.get("LLMROUTER_WRAPPING_KEY_FILE"),
+        "idempotency_key": os.environ.get("LLMROUTER_IDEMPOTENCY_KEY_FILE"),
+        "distribution_key": os.environ.get("LLMROUTER_DISTRIBUTION_KEY_FILE"),
+        "replay_key": os.environ.get("LLMROUTER_REPLAY_KEY_FILE"),
+        "admin_session": os.environ.get("LLMROUTER_ADMIN_SESSION_FILE"),
+        "admin_csrf": os.environ.get("LLMROUTER_ADMIN_CSRF_FILE"),
+    }
+    if database_url is None or any(value is None for value in paths.values()):
+        message = "The complete local runtime configuration is incomplete."
+        raise RuntimeError(message)
+    install_local_runtime(
+        app,
+        database_url=database_url,
+        digest_key=_secret_bytes(Path(paths["digest_key"] or "")),
+        wrapping_key=_secret_bytes(Path(paths["wrapping_key"] or "")),
+        idempotency_key=_secret_bytes(Path(paths["idempotency_key"] or "")),
+        distribution_key=_secret_bytes(Path(paths["distribution_key"] or "")),
+        replay_key=_secret_bytes(Path(paths["replay_key"] or "")),
+        replay_path=Path("/local-state/backend-replay/accounting-replay.bin"),
+        admin_session=_secret_text(Path(paths["admin_session"] or "")),
+        admin_csrf=_secret_text(Path(paths["admin_csrf"] or "")),
+    )
+
+
 def _secret_bytes(path: Path) -> bytes:
     """Read one generated base64url deployment key without displaying it."""
     unavailable = "A local secret file is unavailable."
@@ -80,7 +112,26 @@ def _secret_bytes(path: Path) -> bytes:
     return decoded
 
 
+def _secret_text(path: Path) -> str:
+    """Read one generated local bearer without displaying it."""
+    unavailable = "A local secret file is unavailable."
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(descriptor, "rb", closefd=True) as secret:
+            metadata = os.fstat(secret.fileno())
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                raise RuntimeError(unavailable)
+            value = secret.read().decode("ascii").strip()
+    except (OSError, UnicodeError) as error:
+        raise RuntimeError(unavailable) from error
+    if not 43 <= len(value) <= 200:  # noqa: PLR2004
+        message = "A local secret file is invalid."
+        raise RuntimeError(message)
+    return value
+
+
 _install_local_embed_service()
+_install_complete_local_runtime()
 
 
 @app.get("/health", include_in_schema=False)
