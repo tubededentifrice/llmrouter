@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import process from "node:process";
 import react from "@vitejs/plugin-react";
@@ -20,9 +21,11 @@ const readPermissions = [
 ] as const;
 
 interface ExampleHostConfiguration {
+  readonly routerApiOrigin?: string;
   readonly routerOrigin: string;
   readonly serviceId: string;
   readonly serviceToken: string;
+  readonly serviceTokenFile?: string;
   readonly workspaceIds: readonly [string, string];
 }
 
@@ -58,17 +61,18 @@ export class ExampleHostService {
         403,
         "Router administration membership is not active.",
       );
-    if (this.configuration.serviceToken === "")
+    const serviceToken = this.serviceToken();
+    if (serviceToken === "")
       throw new PublicHostError(
         503,
         "The example host token is not configured.",
       );
     const response = await this.dependencies.fetcher(
-      `${this.configuration.routerOrigin}/v1/services/${encodeURIComponent(this.configuration.serviceId)}/administration/embed-sessions`,
+      `${this.routerApiOrigin()}/v1/services/${encodeURIComponent(this.configuration.serviceId)}/administration/embed-sessions`,
       {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${this.configuration.serviceToken}`,
+          Authorization: `Bearer ${serviceToken}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -103,11 +107,12 @@ export class ExampleHostService {
   }
 
   async revokeSession(sessionId: string): Promise<void> {
+    const serviceToken = this.serviceToken();
     const response = await this.dependencies.fetcher(
-      `${this.configuration.routerOrigin}/v1/services/${encodeURIComponent(this.configuration.serviceId)}/administration/embed-sessions/${encodeURIComponent(sessionId)}`,
+      `${this.routerApiOrigin()}/v1/services/${encodeURIComponent(this.configuration.serviceId)}/administration/embed-sessions/${encodeURIComponent(sessionId)}`,
       {
         method: "DELETE",
-        headers: { Authorization: `Bearer ${this.configuration.serviceToken}` },
+        headers: { Authorization: `Bearer ${serviceToken}` },
       },
     );
     if (!response.ok && response.status !== 404)
@@ -125,6 +130,18 @@ export class ExampleHostService {
       userVariant: 0,
       workspaceVariant: 0,
     };
+  }
+
+  private routerApiOrigin(): string {
+    return (
+      this.configuration.routerApiOrigin ?? this.configuration.routerOrigin
+    );
+  }
+
+  private serviceToken(): string {
+    if (this.configuration.serviceTokenFile === undefined)
+      return this.configuration.serviceToken;
+    return readFileSync(this.configuration.serviceTokenFile, "utf8").trim();
   }
 
   changeContext(state: HostState, action: ContextAction): HostState {
@@ -353,9 +370,11 @@ async function serializeRequest(
 function configurationFromEnvironment(): ExampleHostConfiguration {
   const routerOrigin =
     process.env.LLMROUTER_EXAMPLE_ROUTER_ORIGIN ?? defaultRouterOrigin;
+  const routerApiOrigin =
+    process.env.LLMROUTER_EXAMPLE_ROUTER_API_ORIGIN ?? routerOrigin;
   const serviceId =
     process.env.LLMROUTER_EXAMPLE_SERVICE_ID ?? "service-example";
-  const serviceToken = process.env.LLMROUTER_EXAMPLE_HOST_TOKEN ?? "";
+  const { serviceToken, serviceTokenFile } = serviceTokenFromEnvironment();
   const firstWorkspace =
     process.env.LLMROUTER_EXAMPLE_WORKSPACE_ID ?? "workspace-example-a";
   const secondWorkspace =
@@ -364,12 +383,34 @@ function configurationFromEnvironment(): ExampleHostConfiguration {
     throw new Error(
       "LLMROUTER_EXAMPLE_ROUTER_ORIGIN must be an exact distinct origin.",
     );
+  if (
+    !exactOrigin(routerApiOrigin) &&
+    routerApiOrigin !== "http://backend:8000"
+  )
+    throw new Error("LLMROUTER_EXAMPLE_ROUTER_API_ORIGIN is invalid.");
   return {
+    routerApiOrigin,
     routerOrigin,
     serviceId,
     serviceToken,
+    ...(serviceTokenFile === undefined ? {} : { serviceTokenFile }),
     workspaceIds: [firstWorkspace, secondWorkspace],
   };
+}
+
+function serviceTokenFromEnvironment(): {
+  serviceToken: string;
+  serviceTokenFile: string | undefined;
+} {
+  const direct = process.env.LLMROUTER_EXAMPLE_HOST_TOKEN;
+  const file = process.env.LLMROUTER_EXAMPLE_HOST_TOKEN_FILE;
+  if (direct !== undefined && file !== undefined)
+    throw new Error("Configure only one example host token source.");
+  if (file === undefined)
+    return { serviceToken: direct ?? "", serviceTokenFile: undefined };
+  if (file !== "/run/secrets/example_host_token")
+    throw new Error("The example host token file path is invalid.");
+  return { serviceToken: "", serviceTokenFile: file };
 }
 
 function parseContextAction(value: unknown): ContextAction {

@@ -28,6 +28,7 @@ __pycache__/
 # Runtime data
 runtime-data/
 data/
+.local-development/
 .playwright-mcp/
 .agents/
 .codex/

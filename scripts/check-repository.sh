@@ -132,6 +132,10 @@ required_files=(
   "scripts/check-client-packages.sh"
   "scripts/check-contract-models.sh"
   "scripts/generate-contract-models.py"
+  "scripts/check-local-development.py"
+  "scripts/local-development-bootstrap.py"
+  "scripts/local-development-migrate.py"
+  "scripts/local-development.sh"
 )
 
 for required_file in "${required_files[@]}"; do
@@ -209,6 +213,7 @@ grep -qx 'openapi: 3.1.0' "${repository_root}/docs/api/openapi.yaml"
 grep -qx '  version: 1.0.0' "${repository_root}/docs/api/openapi.yaml"
 "${repository_root}/scripts/check-api-contracts.sh"
 "${repository_root}/scripts/check-dependency-policy.sh"
+uv run python "${repository_root}/scripts/check-local-development.py"
 
 if [[ "${LLMROUTER_FULL_CHECKS:-0}" == "1" ]]; then
   "${repository_root}/scripts/check-python.sh"

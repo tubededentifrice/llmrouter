@@ -1,0 +1,45 @@
+"""Check the localhost development deployment contract."""
+# ruff: noqa: EM101, INP001, PLR2004, TRY003
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+COMPOSE_PATH = REPOSITORY_ROOT / "docker-compose.dev.yml"
+IMMUTABLE_IMAGE = re.compile(r"^[^\s@]+(?:[:][^\s@]+)?@sha256:[0-9a-f]{64}$")
+PORT_BINDING = re.compile(r'^\s+- "(?P<binding>[^\"]*\d+:\d+)"$', re.MULTILINE)
+
+
+def main() -> None:
+    """Reject public ports, floating images, and embedded secret values."""
+    text = COMPOSE_PATH.read_text(encoding="utf-8")
+    required = {
+        "postgres",
+        "migrate",
+        "token-worker",
+        "backend",
+        "node-dependencies",
+        "admin-dev",
+        "embed-example",
+    }
+    missing = sorted(name for name in required if f"\n  {name}:\n" not in text)
+    if missing:
+        raise SystemExit("The local Compose service map is incomplete.")
+    images = re.findall(r"^\s+image:\s+(\S+)$", text, re.MULTILINE)
+    if len(images) != 3 or any(
+        IMMUTABLE_IMAGE.fullmatch(image) is None for image in images
+    ):
+        raise SystemExit("A local development image is not immutable.")
+    for match in PORT_BINDING.finditer(text):
+        if not match.group("binding").startswith("127.0.0.1:"):
+            raise SystemExit("A local development service has a public port binding.")
+    forbidden = ("LLMROUTER_OPENROUTER_API_KEY:", "sk-or-", "OPENROUTER_API_KEY=")
+    if any(value in text for value in forbidden):
+        raise SystemExit("The local Compose file contains provider secret material.")
+    print("Local development deployment checks passed.")
+
+
+if __name__ == "__main__":
+    main()

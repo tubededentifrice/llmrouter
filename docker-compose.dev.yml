@@ -1,50 +1,208 @@
-# Local development front end.
-#
-# Local access uses http://127.0.0.1:5174. The same container is also joined
-# to the host Traefik network. Traefik routes the protected public hostname
-# to the container; it does not expose the application port on a public host
-# interface.
+# Localhost-only LLM Router MVP development deployment.
+# Start and stop this file through scripts/local-development.sh.
 
-name: llmrouter
+name: llmrouter-development
+
+x-python-service: &python-service
+  image: ghcr.io/astral-sh/uv:0.12.0-python3.13-trixie-slim@sha256:c8a73be6ed92bb5437785f4bab9a5ea579ce122744a8d8cde379d092e168dedf
+  working_dir: /workspace
+  environment:
+    UV_LINK_MODE: copy
+    UV_PYTHON_DOWNLOADS: never
+  volumes:
+    - .:/workspace:ro
+    - llmrouter-python-environment:/workspace/.venv
+    - llmrouter-uv-cache:/root/.cache/uv
+  secrets:
+    - postgres_password
+    - machine_digest_key
+
+x-node-service: &node-service
+  image: node:24.17.0-alpine@sha256:156b55f92e98ccd5ef49578a8cea0df4679826564bad1c9d4ef04462b9f0ded6
+  working_dir: /workspace
+  volumes:
+    - .:/workspace:ro
+    - ../opendle-ui:/opendle-ui
+    - llmrouter-node-modules:/workspace/node_modules
+    - llmrouter-admin-node-modules:/workspace/apps/admin/node_modules
+    - llmrouter-embed-node-modules:/workspace/apps/embed-example/node_modules
 
 services:
-  admin-dev:
-    image: node:24.17.0-alpine@sha256:156b55f92e98ccd5ef49578a8cea0df4679826564bad1c9d4ef04462b9f0ded6
+  postgres:
+    image: postgres@sha256:5c855ad7b85e68e48a62f34662853f38b57c1c1d80f3a927ab58034fd6d31c5e
     restart: unless-stopped
-    working_dir: /workspace
-    command: sh -lc "npm install --global npm@11.18.0 --no-audit --no-fund && npm ci --no-audit --no-fund && npm run dev --workspace @llmrouter/admin -- --host 0.0.0.0"
+    environment:
+      POSTGRES_DB: llmrouter
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_USER: llmrouter
+    secrets:
+      - postgres_password
     volumes:
-      - .:/workspace
-      - ../opendle-ui:/opendle-ui
-      - llmrouter-node-modules-v2:/workspace/node_modules
-      - llmrouter-admin-node-modules-v2:/workspace/apps/admin/node_modules
-    expose:
-      - "5173"
+      - llmrouter-postgres-data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5434:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready --username llmrouter --dbname llmrouter"]
+      interval: 2s
+      timeout: 3s
+      start_period: 10s
+      retries: 30
+
+  migrate:
+    <<: *python-service
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - /bin/sh
+      - -euc
+      - |
+        export LLMROUTER_DATABASE_URL="postgresql://llmrouter:$$(cat /run/secrets/postgres_password)@postgres:5432/llmrouter"
+        uv sync --frozen --all-packages --python /usr/local/bin/python
+        .venv/bin/python scripts/local-development-migrate.py
+    volumes:
+      - .:/workspace:ro
+      - ./.local-development:/local-state
+      - llmrouter-python-environment:/workspace/.venv
+      - llmrouter-uv-cache:/root/.cache/uv
+
+  token-worker:
+    <<: *python-service
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command:
+      - /bin/sh
+      - -euc
+      - |
+        export LLMROUTER_DATABASE_URL="postgresql://llmrouter:$$(cat /run/secrets/postgres_password)@postgres:5432/llmrouter"
+        while true; do
+          .venv/bin/python scripts/local-development-bootstrap.py
+          sleep 240
+        done
+    volumes:
+      - .:/workspace:ro
+      - ./.local-development:/local-state
+      - llmrouter-python-environment:/workspace/.venv
+      - llmrouter-uv-cache:/root/.cache/uv
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import os,time; path='/local-state/example-host-token'; assert os.path.getsize(path) > 0 and time.time() - os.path.getmtime(path) < 270"
+      interval: 2s
+      timeout: 2s
+      start_period: 5s
+      retries: 30
+
+  backend:
+    <<: *python-service
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      LLMROUTER_FRAME_ORIGIN: http://127.0.0.1:5175
+      LLMROUTER_LOCAL_RUNTIME: "1"
+      LLMROUTER_MACHINE_DIGEST_KEY_FILE: /run/secrets/machine_digest_key
+      UV_LINK_MODE: copy
+      UV_PYTHON_DOWNLOADS: never
+    command:
+      - /bin/sh
+      - -euc
+      - |
+        export LLMROUTER_DATABASE_URL="postgresql://llmrouter:$$(cat /run/secrets/postgres_password)@postgres:5432/llmrouter"
+        exec .venv/bin/uvicorn llmrouter_backend.app:app --host 0.0.0.0 --port 8000 --no-access-log
+    ports:
+      - "127.0.0.1:8010:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=2).read()"
+      interval: 3s
+      timeout: 3s
+      start_period: 10s
+      retries: 30
+
+  node-dependencies:
+    <<: *node-service
+    restart: "no"
+    command:
+      - /bin/sh
+      - -euc
+      - npm install --global npm@11.18.0 --no-audit --no-fund && npm ci --no-audit --no-fund
+
+  admin-dev:
+    <<: *node-service
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+      node-dependencies:
+        condition: service_completed_successfully
+    environment:
+      LLMROUTER_VITE_PROXY_ORIGIN: http://backend:8000
+    command:
+      - /bin/sh
+      - -euc
+      - npm run dev --workspace @llmrouter/admin -- --host 0.0.0.0
     ports:
       - "127.0.0.1:5174:5173"
+      - "127.0.0.1:5175:5173"
     healthcheck:
       test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:5173/"]
-      interval: 10s
+      interval: 3s
       timeout: 3s
-      start_period: 20s
-      retries: 3
-    networks:
-      - default
-      - traefik-proxy
-    labels:
-      - "traefik.enable=true"
-      - "traefik.docker.network=traefik-proxy"
-      - "traefik.http.routers.llmrouter-dev.rule=Host(`llmrouter.opendle.dev`)"
-      - "traefik.http.routers.llmrouter-dev.entrypoints=websecure"
-      - "traefik.http.routers.llmrouter-dev.tls=true"
-      - "traefik.http.routers.llmrouter-dev.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.llmrouter-dev.middlewares=badger@file"
-      - "traefik.http.services.llmrouter-dev.loadbalancer.server.port=5173"
+      start_period: 10s
+      retries: 30
 
-networks:
-  traefik-proxy:
-    external: true
+  embed-example:
+    <<: *node-service
+    restart: unless-stopped
+    depends_on:
+      admin-dev:
+        condition: service_healthy
+      token-worker:
+        condition: service_healthy
+    environment:
+      LLMROUTER_EXAMPLE_HOST_TOKEN_FILE: /run/secrets/example_host_token
+      LLMROUTER_EXAMPLE_ROUTER_API_ORIGIN: http://backend:8000
+      LLMROUTER_EXAMPLE_ROUTER_ORIGIN: http://127.0.0.1:5175
+      LLMROUTER_EXAMPLE_SERVICE_ID: 0198a080-0000-7000-8000-000000000101
+      LLMROUTER_EXAMPLE_WORKSPACE_ID: 0198a080-0000-7000-8000-000000000102
+      LLMROUTER_EXAMPLE_SECOND_WORKSPACE_ID: 0198a080-0000-7000-8000-000000000103
+    secrets:
+      - example_host_token
+    command:
+      - /bin/sh
+      - -euc
+      - npm run dev --workspace @llmrouter/embed-example -- --host 0.0.0.0
+    ports:
+      - "127.0.0.1:5176:5176"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:5176/"]
+      interval: 3s
+      timeout: 3s
+      start_period: 10s
+      retries: 30
+
+secrets:
+  postgres_password:
+    file: .local-development/postgres-password
+  machine_digest_key:
+    file: .local-development/machine-digest-key
+  example_host_token:
+    file: .local-development/example-host-token
 
 volumes:
-  llmrouter-admin-node-modules-v2:
-  llmrouter-node-modules-v2:
+  llmrouter-admin-node-modules:
+  llmrouter-embed-node-modules:
+  llmrouter-node-modules:
+  llmrouter-postgres-data:
+  llmrouter-python-environment:
+  llmrouter-uv-cache:

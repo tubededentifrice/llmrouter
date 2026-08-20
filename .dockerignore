@@ -9,5 +9,6 @@ dist
 docs
 node_modules
 runtime-data
+.local-development
 scripts
 tmp

@@ -6,6 +6,7 @@ export default defineConfig({
   optimizeDeps: { exclude: ["@opendle/ui"] },
   server: {
     allowedHosts: ["llmrouter.opendle.dev", "llmrouter.opendle.com"],
+    proxy: localProxy(),
     headers: {
       "Cache-Control": "no-store",
       "X-Content-Type-Options": "nosniff",
@@ -18,6 +19,19 @@ export default defineConfig({
     },
   },
 });
+
+function localProxy() {
+  const target = process.env.LLMROUTER_VITE_PROXY_ORIGIN;
+  if (target === undefined) return {};
+  const url = new URL(target);
+  if (
+    url.origin !== target ||
+    url.protocol !== "http:" ||
+    url.hostname !== "backend"
+  )
+    throw new Error("LLMROUTER_VITE_PROXY_ORIGIN is invalid.");
+  return { "/v1": { target, changeOrigin: false } };
+}
 
 function frameSecurityHeaders(): Plugin {
   return {

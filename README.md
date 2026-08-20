@@ -52,28 +52,49 @@ use.
 
 ## Development site
 
-Start the administration development site with:
+Start the complete localhost development deployment from a clean checkout:
 
 ```bash
-docker compose -f docker-compose.dev.yml up -d
+./scripts/local-development.sh start
 ```
 
-Use `http://127.0.0.1:5174` for local work and agent browser tests. The
-protected external site is [https://llmrouter.opendle.dev](https://llmrouter.opendle.dev).
-Pangolin and Traefik protect this external route. Agents MUST use the local
-URL directly. Do not use the protected external URL for agent tests.
+The command creates mode-0600 local database credentials in the ignored
+`.local-development/` directory. It starts PostgreSQL, applies all migrations,
+starts the backend, starts the administration UI, and starts the embed example.
+It also starts a local worker that renews the short-lived example host token.
+The command waits for readiness before it returns. No service publishes a
+non-loopback host port.
+
+Use these local addresses:
+
+- Backend readiness: `http://127.0.0.1:8010/ready`
+- Administration: `http://127.0.0.1:5174`
+- Router frame: `http://127.0.0.1:5175`
+- Embed example: `http://127.0.0.1:5176`
+
+The protected external site is
+[https://llmrouter.opendle.dev](https://llmrouter.opendle.dev). Agents MUST use
+the local URLs. Do not use the protected external URL for agent tests.
 
 The [administration embed example](apps/embed-example/README.md) proves the
 service-scoped frame from a distinct localhost origin. It keeps the host
 service token in the example server process.
 
-Useful commands:
+The local database uses a named volume. Normal stop and start operations keep
+its data. A reset removes the local database volume and all local application
+volumes. It does not remove the ignored secret files. Use these commands:
 
 ```bash
-docker compose -f docker-compose.dev.yml logs -f admin-dev
-docker compose -f docker-compose.dev.yml ps
-docker compose -f docker-compose.dev.yml down
+./scripts/local-development.sh status
+./scripts/local-development.sh logs
+./scripts/local-development.sh stop
+./scripts/local-development.sh reset
 ```
+
+The deployment does not read an OpenRouter key from the shell or store it in a
+file. After administrator authentication is configured, enter the key only in
+the write-only provider credential control. Do not put the key in Compose, a
+command, a fixture, or a repository file.
 
 ## Work process
 
