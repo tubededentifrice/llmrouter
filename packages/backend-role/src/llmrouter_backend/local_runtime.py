@@ -12,7 +12,7 @@ import uuid
 from base64 import b64decode, b64encode
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Never
+from typing import TYPE_CHECKING, Never, cast
 
 import httpx
 import psycopg
@@ -62,6 +62,7 @@ from llmrouter_backend.credential_store import (
     SecretLease,
 )
 from llmrouter_backend.execution import (
+    AdapterStopEvidence,
     ErrorScope,
     ExecutionKind,
     ExecutionState,
@@ -95,7 +96,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from llmrouter_backend.admission import AdmissionRequest, AdmissionResult
-    from llmrouter_backend.execution import AdapterStop, AdapterStopEvidence
+    from llmrouter_backend.execution import AdapterStop
     from llmrouter_backend.routing import AdapterProgress, AttemptPlan
     from llmrouter_backend.spool import CanonicalEvent
 
@@ -104,6 +105,7 @@ LOCAL_SOURCE_NODE_ID = "0198a080-0000-7000-8000-000000000150"
 _COOKIE = "__Host-llmrouter-admin"
 _MINIMUM_LOCAL_SECRET_CHARACTERS = 20
 _MAXIMUM_LOCAL_SECRET_CHARACTERS = 500
+_MAXIMUM_LOCAL_ACTIVATION_BYTES = 1024
 _router = APIRouter()
 _LOGGER = logging.getLogger(__name__)
 
@@ -278,12 +280,23 @@ class LocalBudgetGate:
 
     def release(self, reservation_id: str) -> None:
         """Reconcile an unused reservation with zero cost."""
+        with psycopg.connect(self._database_url) as connection:
+            row = connection.execute(
+                """SELECT created_at
+                   FROM router.budget_candidate_reservations
+                   WHERE id = %s""",
+                (reservation_id,),
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("The local budget reservation is unavailable.")
         self._repository.reconcile(
             _system("budget.reconcile"),
             reservation_id,
-            accounting_event_id=str(uuid.uuid4()),
+            accounting_event_id=str(
+                uuid.uuid5(uuid.UUID(reservation_id), "unused-reservation")
+            ),
             actual_amount=Decimal(0),
-            now=_now(),
+            now=row[0],
         )
 
     def evidence(self, plan: AttemptPlan) -> tuple[str, str]:
@@ -317,6 +330,19 @@ class LocalBudgetGate:
             return evidence
         raise RuntimeError("The local attempt reservation is unavailable.")
 
+    def finished_at(self, plan: AttemptPlan) -> datetime:
+        """Return the durable attempt time for idempotent accounting retries."""
+        with psycopg.connect(self._database_url) as connection:
+            row = connection.execute(
+                """SELECT finished_at
+                   FROM router.provider_attempts
+                   WHERE id = %s AND request_row_id = %s""",
+                (plan.attempt_id, plan.request_row_id),
+            ).fetchone()
+        if row is None or row[0] is None:
+            raise RuntimeError("The local attempt completion time is unavailable.")
+        return cast("datetime", row[0])
+
 
 class LocalCancelableAdapter:
     """Expose only active plans as durable cancellation callbacks."""
@@ -336,7 +362,18 @@ class LocalCancelableAdapter:
                 self._active.pop(plan.attempt_id, None)
 
     def cancel(self, plan: AttemptPlan) -> AdapterStopEvidence:
-        return self._adapter.cancel(plan)
+        with self._lock:
+            active = self._active.get(plan.attempt_id)
+        evidence = self._adapter.cancel(plan)
+        if active is not None and evidence.stop_requested:
+            return AdapterStopEvidence(
+                evidence.operation_id,
+                supported=True,
+                stop_requested=True,
+                confirmed_stopped=True,
+                safe_code="local_deterministic_transport_stopped",
+            )
+        return evidence
 
     def active_stops(
         self, context: RequestContext, target: ExecutionTarget
@@ -344,11 +381,21 @@ class LocalCancelableAdapter:
         del context
         with self._lock:
             plans = tuple(
-                plan
-                for plan in self._active.values()
-                if plan.request_id == target.public_id
+                active
+                for active in self._active.values()
+                if active.request_id == target.public_id
             )
         return tuple(self._stop(plan) for plan in plans)
+
+    def close(self) -> None:
+        """Stop each active local provider stream during process shutdown."""
+        with self._lock:
+            plans = tuple(self._active.values())
+        for plan in plans:
+            try:
+                self.cancel(plan)
+            except Exception:
+                _LOGGER.exception("A local provider stream did not stop cleanly.")
 
     def _stop(self, plan: AttemptPlan) -> Callable[[], AdapterStopEvidence]:
         return lambda: self.cancel(plan)
@@ -487,6 +534,7 @@ def install_local_runtime(
         reservation_id, accounting_scope_id = budget.evidence(plan)
         event_id = str(uuid.uuid5(uuid.UUID(plan.attempt_id), "accounting"))
         currency = plan.typed_prices[0].currency
+        occurred_at = budget.finished_at(plan)
         event = AccountingEvent(
             event_id,
             event_id,
@@ -499,7 +547,7 @@ def install_local_runtime(
             _accounting_outcome(result.outcome),
             currency,
             result.usage,
-            _now(),
+            occurred_at,
             price_version_id=plan.price_version_id,
             assignment_id=plan.assignment_id,
         )
@@ -544,17 +592,12 @@ def install_local_runtime(
         }:
             return
         if current[0] == "cancel_requested":
-            state = (
-                ExecutionState.CANCELLED
-                if result.outcome is AttemptOutcome.CANCELLED
-                else ExecutionState.UNCERTAIN
-            )
-        else:
-            state = (
-                ExecutionState.SUCCEEDED
-                if result.outcome is AttemptOutcome.SUCCEEDED
-                else ExecutionState.FAILED
-            )
+            return
+        state = (
+            ExecutionState.SUCCEEDED
+            if result.outcome is AttemptOutcome.SUCCEEDED
+            else ExecutionState.FAILED
+        )
         execution.transition(
             context,
             target,
@@ -607,6 +650,15 @@ def install_local_runtime(
     app.state.local_submitter = submitter
     app.include_router(_router)
 
+    def shutdown_local_runtime() -> None:
+        cancelable_adapter.close()
+        try:
+            submitter.close()
+        finally:
+            replay.close()
+
+    app.router.add_event_handler("shutdown", shutdown_local_runtime)
+
 
 @_router.get("/v1/admin/session", include_in_schema=False)
 def local_admin_session(request: Request) -> Response:
@@ -624,11 +676,26 @@ def local_admin_session(request: Request) -> Response:
 async def activate_local_admin_session(request: Request) -> Response:
     """Activate the generated localhost administrator session."""
     authority = request.app.state.local_admin_authority
-    if request.headers.get("origin") != LOCAL_ADMIN_ORIGIN:
+    if _single_header(request, b"origin") != LOCAL_ADMIN_ORIGIN:
         return _local_activation_error(403)
+    content_length = _single_header(request, b"content-length")
+    content_type = _single_header(request, b"content-type")
+    if (
+        content_length is None
+        or not content_length.isascii()
+        or not content_length.isdecimal()
+        or not 1 <= int(content_length) <= _MAXIMUM_LOCAL_ACTIVATION_BYTES
+        or content_type is None
+        or content_type.partition(";")[0].strip().lower() != "application/json"
+        or request.headers.get("transfer-encoding") is not None
+    ):
+        return _local_activation_error(400)
     try:
-        document = await request.json()
-    except Exception:  # noqa: BLE001
+        body = await request.body()
+        if len(body) > _MAXIMUM_LOCAL_ACTIVATION_BYTES:
+            return _local_activation_error(400)
+        document = json.loads(body)
+    except (UnicodeDecodeError, json.JSONDecodeError):
         return _local_activation_error(400)
     secret = document.get("secret") if isinstance(document, dict) else None
     if (
@@ -673,6 +740,16 @@ def _local_activation_error(status_code: int) -> JSONResponse:
         status_code=status_code,
         headers={"Cache-Control": "no-store"},
     )
+
+
+def _single_header(request: Request, name: bytes) -> str | None:
+    """Return one exact HTTP header, or reject a missing or duplicate value."""
+    values = [
+        value.decode("latin-1")
+        for header_name, value in request.scope.get("headers", ())
+        if header_name.lower() == name
+    ]
+    return values[0] if len(values) == 1 else None
 
 
 def _local_openrouter(request: httpx.Request) -> httpx.Response:
@@ -773,6 +850,8 @@ def _system(operation: str, scope: Scope | None = None) -> RequestContext:
 
 
 def _accounting_outcome(value: AttemptOutcome) -> AccountingOutcome:
+    if value is AttemptOutcome.CANCELLED:
+        return AccountingOutcome.FAILED
     return AccountingOutcome(value.value)
 
 

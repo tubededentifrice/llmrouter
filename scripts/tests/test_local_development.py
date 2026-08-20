@@ -146,7 +146,8 @@ def test_local_secret_paths_are_ignored_and_not_printed() -> None:
         assert f'install_secret "${{state_directory}}/{name}"' in script
     assert "local-development-e2e.py prepare" in script
     assert "local-development-e2e.py resume" in script
-    assert "compose restart backend" in script
+    assert "compose kill --signal KILL backend" in script
+    assert "compose up --detach backend" in script
 
 
 def test_local_proof_resets_and_stops_the_deployment() -> None:

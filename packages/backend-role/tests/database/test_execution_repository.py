@@ -6,6 +6,7 @@ import concurrent.futures
 import hashlib
 import json
 import threading
+import time
 import uuid
 from collections.abc import Callable  # noqa: TC003
 from datetime import UTC, datetime, timedelta
@@ -32,6 +33,7 @@ from llmrouter_backend.execution import (
     make_event,
 )
 from llmrouter_backend.execution.repository import _finish_routing_attempts
+from psycopg.conninfo import make_conninfo
 from psycopg.rows import dict_row
 
 from .helpers import (
@@ -1302,6 +1304,111 @@ def test_cancellation_recomputes_active_work_after_adapter_callback(
         active_stops=(stop,),
     )
     assert result.status.state is ExecutionState.CANCELLED
+
+
+def test_model_cancellation_uses_routing_lock_order_without_deadlock(
+    database_url: str, repository: PostgresExecutionRepository
+) -> None:
+    """Let routing finish before cancellation locks the logical request."""
+    attempt_id = "0198a080-0000-7000-8000-000000000077"
+    repository.transition(
+        _context("model.create", mutation=True),
+        TARGET,
+        expected_revision=1,
+        new_state=ExecutionState.RUNNING,
+    )
+    with psycopg.connect(database_url) as connection:
+        connection.execute(
+            """INSERT INTO router.route_price_versions (
+                   id, provider_model_route_id, version_number, currency, status
+               ) VALUES (%s, %s, 1, 'USD', 'current')""",
+            (PRICE_VERSION_ID, FIXTURE_ROUTE_ID),
+        )
+        _insert_provider_attempt(connection, attempt_id=attempt_id, attempt_number=1)
+
+    route_has_attempt = threading.Event()
+    allow_route_to_finish = threading.Event()
+    cancellation_url = make_conninfo(
+        database_url, application_name="execution-cancellation-lock-order"
+    )
+
+    def finish_route() -> None:
+        with (
+            psycopg.connect(database_url, row_factory=dict_row) as connection,
+            connection.transaction(),
+        ):
+            connection.execute(
+                "SELECT id FROM router.provider_attempts WHERE id = %s FOR UPDATE",
+                (attempt_id,),
+            ).fetchone()
+            route_has_attempt.set()
+            assert allow_route_to_finish.wait(timeout=5)
+            _finish_routing_attempts(
+                connection,
+                REQUEST_ROW_ID,
+                state="failed",
+                error_class="transport",
+                fallback_decision="stop_request",
+                detail_code="adapter_finished",
+            )
+
+    def cancel() -> ExecutionState:
+        return (
+            PostgresExecutionRepository(cancellation_url)
+            .cancel(
+                _context("model.cancel", mutation=True),
+                TARGET,
+                reason="concurrent routing completion",
+            )
+            .status.state
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        route_future = executor.submit(finish_route)
+        assert route_has_attempt.wait(timeout=5)
+        cancel_future = executor.submit(cancel)
+
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            with psycopg.connect(database_url) as monitor:
+                waiting = monitor.execute(
+                    """SELECT EXISTS (
+                           SELECT 1 FROM pg_stat_activity
+                           WHERE application_name = %s
+                             AND wait_event_type = 'Lock'
+                             AND query LIKE '%%provider_attempts%%'
+                       )""",
+                    ("execution-cancellation-lock-order",),
+                ).fetchone()
+            if waiting is not None and waiting[0]:
+                break
+            time.sleep(0.01)
+        else:
+            pytest.fail("Cancellation did not wait for the active routing attempt.")
+
+        with psycopg.connect(database_url) as probe:
+            probe.execute(
+                """SELECT row_id FROM router.logical_requests
+                   WHERE row_id = %s FOR UPDATE NOWAIT""",
+                (REQUEST_ROW_ID,),
+            ).fetchone()
+
+        allow_route_to_finish.set()
+        route_future.result(timeout=5)
+        assert cancel_future.result(timeout=5) is ExecutionState.CANCELLED
+
+    with psycopg.connect(database_url) as connection:
+        tracked = connection.execute(
+            """SELECT request.state, attempt.state, decision.attempt_state
+               FROM router.logical_requests AS request
+               JOIN router.provider_attempts AS attempt
+                 ON attempt.request_row_id = request.row_id
+               JOIN router.routing_candidate_decisions AS decision
+                 ON decision.attempt_id = attempt.id
+               WHERE request.row_id = %s AND attempt.id = %s""",
+            (REQUEST_ROW_ID, attempt_id),
+        ).fetchone()
+    assert tracked == ("cancelled", "failed", "failed")
 
 
 def test_cancellation_audits_not_found_denied_and_terminal_results(

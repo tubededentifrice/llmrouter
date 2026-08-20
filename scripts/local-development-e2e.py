@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import shutil
 import socket
 import stat
 import struct
@@ -238,6 +239,7 @@ def _prepare() -> None:
 
     cancel_id = _uuidv7()
     _create(data_token, cancel_id, _model_body("Wait for cancellation."))
+    _wait_attempt_started(cancel_id, candidate_ordinal=2)
     cancelled = httpx.post(
         f"{BASE_URL}/v1/model-requests/{cancel_id}/cancel",
         headers={
@@ -247,7 +249,7 @@ def _prepare() -> None:
         json={"reason": "The deterministic proof cancels this request."},
         timeout=10,
     )
-    assert cancelled.status_code == 200
+    assert cancelled.status_code == 200, cancelled.text[:500]
     assert cancelled.json()["state"] in {"cancel_requested", "cancelled", "uncertain"}
     cancelled_status = _wait_terminal(data_token, cancel_id)
     assert cancelled_status["state"] in {"cancelled", "uncertain"}
@@ -257,6 +259,7 @@ def _prepare() -> None:
     _create(data_token, recovery_id, recovery_body)
     _write_state(
         {
+            "cancel_id": cancel_id,
             "recovery_id": recovery_id,
             "successful_id": request_id,
         }
@@ -316,6 +319,21 @@ def _resume() -> None:
             (state["successful_id"],),
         ).fetchall()
         assert fallback == [(1, "failed"), (2, "succeeded")]
+        cancelled_accounting = connection.execute(
+            """SELECT count(*)
+               FROM router.accounting_facts AS fact
+               JOIN router.provider_attempts AS attempt
+                 ON attempt.id = fact.subject_id
+                AND attempt.request_row_id = fact.request_row_id
+               WHERE fact.request_row_id = (
+                   SELECT row_id FROM router.logical_requests WHERE request_id = %s
+               )
+                 AND fact.subject_kind = 'provider_attempt'
+                 AND fact.outcome = 'failed'
+                 AND attempt.candidate_ordinal = 2""",
+            (state["cancel_id"],),
+        ).fetchone()
+        assert cancelled_accounting == (1,)
     _prove_live_embed()
     print(
         "The deterministic API, accounting, persistence, recovery, and embed proof "
@@ -398,7 +416,7 @@ class _CdpBrowser:
     """Control one local headless browser without an added browser dependency."""
 
     def __init__(self) -> None:
-        self._profile = tempfile.TemporaryDirectory(prefix="llmrouter-live-browser-")
+        self._profile = Path(tempfile.mkdtemp(prefix="llmrouter-live-browser-"))
         self._port = _unused_loopback_port()
         self._process = subprocess.Popen(  # noqa: S603
             [
@@ -410,31 +428,53 @@ class _CdpBrowser:
                 "--remote-allow-origins=http://127.0.0.1",
                 "--remote-debugging-address=127.0.0.1",
                 f"--remote-debugging-port={self._port}",
-                f"--user-data-dir={self._profile.name}",
+                f"--user-data-dir={self._profile}",
                 "about:blank",
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        endpoint = self._debugging_endpoint()
-        self._socket = _WebSocket(endpoint)
-        self._next_id = 0
-        self._contexts: dict[str, int] = {}
-        self.command("Page.enable")
-        self.command("Runtime.enable")
+        self._socket: _WebSocket | None = None
+        try:
+            endpoint = self._debugging_endpoint()
+            self._socket = _WebSocket(endpoint)
+            self._next_id = 0
+            self._contexts: dict[str, int] = {}
+            self.command("Page.enable")
+            self.command("Runtime.enable")
+        except Exception:
+            self._stop()
+            raise
 
     def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *_error: object) -> None:
-        self._socket.close()
-        self._process.terminate()
-        try:
-            self._process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            self._process.kill()
-            self._process.wait(timeout=5)
-        self._profile.cleanup()
+        self._stop()
+
+    def _stop(self) -> None:
+        if self._socket is not None:
+            self._socket.close()
+            self._socket = None
+        if self._process.poll() is None:
+            self._process.terminate()
+            try:
+                self._process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self._process.kill()
+                self._process.wait(timeout=5)
+        deadline = time.monotonic() + 5
+        while True:
+            try:
+                shutil.rmtree(self._profile)
+            except FileNotFoundError:
+                return
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.05)
+            else:
+                return
 
     def _debugging_endpoint(self) -> str:
         for _attempt in range(100):
@@ -456,6 +496,7 @@ class _CdpBrowser:
     def command(
         self, method: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
+        assert self._socket is not None
         self._next_id += 1
         identity = self._next_id
         message: dict[str, Any] = {"id": identity, "method": method}
@@ -771,6 +812,25 @@ def _wait_terminal(token: str, request_id: str) -> dict[str, Any]:
             return document
         time.sleep(0.1)
     raise AssertionError("The model request did not become terminal.")
+
+
+def _wait_attempt_started(request_id: str, *, candidate_ordinal: int) -> None:
+    for _attempt in range(100):
+        with psycopg_connect() as connection:
+            started = connection.execute(
+                """SELECT EXISTS (
+                       SELECT 1 FROM router.provider_attempts
+                       WHERE request_row_id = (
+                           SELECT row_id FROM router.logical_requests
+                           WHERE request_id = %s
+                       ) AND candidate_ordinal = %s AND state = 'started'
+                   )""",
+                (request_id, candidate_ordinal),
+            ).fetchone()
+        if started == (True,):
+            return
+        time.sleep(0.1)
+    raise AssertionError("The cancellable provider attempt did not start.")
 
 
 def _events(token: str, request_id: str) -> str:

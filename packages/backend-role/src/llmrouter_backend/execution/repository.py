@@ -380,6 +380,7 @@ class PostgresExecutionRepository:
             psycopg.connect(self._database_url, row_factory=dict_row) as connection,
             connection.transaction(),
         ):
+            _lock_model_attempts_before_target(connection, context, target)
             row = _lock_target(connection, context, target)
             if row is None:
                 message = "A cancellation target disappeared before stop evidence."
@@ -472,6 +473,7 @@ class PostgresExecutionRepository:
             psycopg.connect(self._database_url, row_factory=dict_row) as connection,
             connection.transaction(),
         ):
+            _lock_model_attempts_before_target(connection, context, target)
             row = _lock_target(connection, context, target)
             if row is None:
                 raise ExecutionError(ExecutionErrorCode.NOT_FOUND, context.request_id)
@@ -1204,6 +1206,26 @@ def _active_operation_ids(
         (row_id,),
     ).fetchall()
     return {str(row["operation_identity"]) for row in rows}
+
+
+def _lock_model_attempts_before_target(
+    connection: Connection[Any], context: RequestContext, target: ExecutionTarget
+) -> None:
+    """Use the routing attempt-to-request lock order before cancellation writes."""
+    if target.kind is not ExecutionKind.MODEL:
+        return
+    connection.execute(
+        """SELECT attempt.id
+           FROM router.provider_attempts AS attempt
+           JOIN router.logical_requests AS request
+             ON request.row_id = attempt.request_row_id
+           WHERE request.request_id = %s AND request.service_id = %s
+             AND request.workspace_id IS NOT DISTINCT FROM %s
+             AND attempt.state = 'started'
+           ORDER BY attempt.id
+           FOR UPDATE OF attempt""",
+        (target.public_id, context.scope.service_id, context.scope.workspace_id),
+    ).fetchall()
 
 
 def _close_active_work(

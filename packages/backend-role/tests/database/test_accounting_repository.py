@@ -645,11 +645,13 @@ def test_price_sync_preserves_active_configuration_and_last_good_price(
         result.resulting_configuration_revision,
     )
     with psycopg.connect(database_url) as connection:
-        price_version_id = connection.execute(
+        price_version_row = connection.execute(
             """SELECT id::text FROM router.route_price_versions
                WHERE provider_model_route_id = %s""",
             (ROUTE_ID,),
-        ).fetchone()[0]
+        ).fetchone()
+        assert price_version_row is not None
+        price_version_id = price_version_row[0]
         priced = AccountingEvent(
             "postgres-price-event",
             "postgres-price-canonical",

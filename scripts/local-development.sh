@@ -166,7 +166,8 @@ main() {
     e2e)
       lock_operation
       uv run --package llmrouter-backend python scripts/local-development-e2e.py prepare
-      compose restart backend >/dev/null
+      compose kill --signal KILL backend >/dev/null
+      compose up --detach backend >/dev/null
       wait_until_ready
       uv run --package llmrouter-backend python scripts/local-development-e2e.py resume
       ;;
