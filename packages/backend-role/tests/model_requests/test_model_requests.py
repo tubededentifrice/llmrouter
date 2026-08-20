@@ -7,13 +7,24 @@ import asyncio
 import concurrent.futures
 import json
 import threading
+import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
+import httpx
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
+from llmrouter_backend.accounting import PriceComponent, UsageUnit
+from llmrouter_backend.adapters import ModelOperation
+from llmrouter_backend.adapters.openrouter import (
+    DEEPSEEK_V4_FLASH_WIRE_MODEL,
+    OPENROUTER_ADAPTER_TYPE,
+    OPENROUTER_SUPPORTED_CAPABILITIES,
+    OpenRouterAdapter,
+)
 from llmrouter_backend.admission import (
     AdmissionError,
     AdmissionErrorCode,
@@ -28,6 +39,7 @@ from llmrouter_backend.authority import (
     Scope,
     ServicePrincipal,
 )
+from llmrouter_backend.credential_store import SecretLease
 from llmrouter_backend.execution import (
     AdapterStop,
     AdapterStopEvidence,
@@ -43,6 +55,7 @@ from llmrouter_backend.execution import (
     TerminalError,
     make_event,
 )
+from llmrouter_backend.local_runtime import LocalCancelableAdapter
 from llmrouter_backend.model_requests import http as model_request_http
 from llmrouter_backend.model_requests.http import (
     install_model_request_service,
@@ -52,13 +65,22 @@ from llmrouter_backend.model_requests.model import (
     MAXIMUM_HTTP_BODY_BYTES,
     ModelRequestDocument,
     ModelRequestError,
+    PreparedModelRequest,
     ResumePoint,
 )
 from llmrouter_backend.model_requests.service import (
     ActiveStopSource,
     ModelRequestService,
+    ThreadWorkSubmitter,
+    TransientModelInputRegistry,
 )
-from llmrouter_backend.routing import AdapterResult, AttemptOutcome
+from llmrouter_backend.routing import (
+    AdapterResult,
+    AttemptOutcome,
+    AttemptPlan,
+    AttemptTimeouts,
+)
+from llmrouter_backend.routing.coordinator import _execute_adapter
 from llmrouter_backend.routing.errors import RoutingError, RoutingErrorCode
 
 if TYPE_CHECKING:
@@ -69,6 +91,7 @@ SERVICE_ID = "0198b08f-7000-7000-8000-000000000001"
 OTHER_SERVICE_ID = "0198b08f-7000-7000-8000-000000000002"
 WORKSPACE_ID = "0198b08f-7000-7000-8000-000000000003"
 REQUEST_ID = "0198b08f-7000-7000-8000-000000000004"
+STREAM_REQUEST_ID = "0198b08f-7000-7000-8000-000000000005"
 TOKEN = "T" * 43
 
 
@@ -101,6 +124,20 @@ def _body(*, text: str = "private prompt", workspace_id: str = WORKSPACE_ID) -> 
             "messages": [{"role": "user", "content": text}],
             "limits": {"attempt_timeout_ms": 30_000, "max_output_units": 64},
             "output": {"format": "text"},
+        },
+        separators=(",", ":"),
+    ).encode()
+
+
+def _compatible_body(*, stream: bool) -> bytes:
+    return json.dumps(
+        {
+            "model": "chat",
+            "messages": [{"role": "user", "content": "private prompt"}],
+            "max_completion_tokens": 64,
+            "stream": stream,
+            "x_llmrouter_workspace_id": WORKSPACE_ID,
+            "x_llmrouter_data_profile": "service-data",
         },
         separators=(",", ":"),
     ).encode()
@@ -442,6 +479,7 @@ def _service(
     stops: ActiveStopSource | None = None,
     run_inline: bool = True,
     resume_running: bool = False,
+    operations: list[ModelOperation] | None = None,
 ) -> tuple[
     ModelRequestService,
     _Authenticator,
@@ -455,6 +493,14 @@ def _service(
     routing = _Routing()
     views = _Views(execution)
     authenticator = _Authenticator(principal or _principal())
+
+    class RecordingInputs(TransientModelInputRegistry):
+        def claim(self, request_id: str, prepared: PreparedModelRequest) -> bool:
+            if operations is not None:
+                operations.append(prepared.adapter_request.operation)
+            return super().claim(request_id, prepared)
+
+    inputs = RecordingInputs(execution)
 
     def submit(work: Callable[[], None]) -> None:
         if resume_running:
@@ -479,6 +525,7 @@ def _service(
         owner_id="test-owner",
         clock=lambda: NOW,
         active_stops=stops,
+        inputs=inputs,
     )
     return service, authenticator, admission, execution, routing, views
 
@@ -842,6 +889,194 @@ def test_http_create_status_stream_and_safe_replay_gap() -> None:
     )
     assert gap.status_code == 409
     assert gap.json()["error"]["code"] == "stream_replay_unavailable"
+
+
+def test_compatible_handler_selects_provider_native_complete_and_stream() -> None:
+    operations: list[ModelOperation] = []
+    service, _, _, _, _, views = _service(operations=operations)
+    views.scopes[REQUEST_ID] = Scope(SERVICE_ID, WORKSPACE_ID)
+    views.scopes[STREAM_REQUEST_ID] = Scope(SERVICE_ID, WORKSPACE_ID)
+    client = TestClient(_app(service))
+
+    def headers(request_id: str) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {TOKEN}",
+            "X-LLMRouter-Request-ID": request_id,
+            "Content-Type": "application/json",
+        }
+
+    completed = client.post(
+        "/v1/chat/completions",
+        headers=headers(REQUEST_ID),
+        content=_compatible_body(stream=False),
+    )
+    streamed = client.post(
+        "/v1/chat/completions",
+        headers=headers(STREAM_REQUEST_ID),
+        content=_compatible_body(stream=True),
+    )
+
+    assert completed.status_code == 200
+    assert completed.json()["object"] == "chat.completion"
+    assert completed.json()["x_llmrouter_state"] == "succeeded"
+    assert streamed.status_code == 200
+    assert streamed.headers["content-type"].startswith("text/event-stream")
+    assert "chat.completion.chunk" in streamed.text
+    assert "data: [DONE]" in streamed.text
+    assert operations == [ModelOperation.COMPLETE, ModelOperation.STREAM]
+
+
+def test_compatible_handler_finishes_when_local_provider_stalls_before_headers() -> (
+    None
+):
+    """Make a stalled local provider request terminal at its attempt deadline."""
+    execution = _Execution()
+    admission = _Admission(execution)
+    views = _Views(execution)
+    views.scopes[REQUEST_ID] = Scope(SERVICE_ID, WORKSPACE_ID)
+    inputs = TransientModelInputRegistry(execution)
+    entered = threading.Event()
+    release = threading.Event()
+
+    class StalledTransport(httpx.BaseTransport):
+        def handle_request(self, request: httpx.Request) -> httpx.Response:
+            del request
+            entered.set()
+            release.wait(timeout=5)
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "application/json"},
+                json={"choices": []},
+            )
+
+    attempt_timeout_ms = 150
+    plan = AttemptPlan(
+        claim_id="0198b08f-7000-7000-8000-000000000020",
+        claim_generation=1,
+        request_id=REQUEST_ID,
+        request_row_id="0198b08f-7000-7000-8000-000000000021",
+        service_id=SERVICE_ID,
+        workspace_id=WORKSPACE_ID,
+        attempt_id="0198b08f-7000-7000-8000-000000000022",
+        attempt_number=1,
+        candidate_ordinal=1,
+        assignment_id="0198b08f-7000-7000-8000-000000000023",
+        assignment_revision="0198b08f-7000-7000-8000-000000000024",
+        route_snapshot_id="0198b08f-7000-7000-8000-000000000025",
+        route_snapshot_sha256=b"s" * 32,
+        route_configuration_revision="0198b08f-7000-7000-8000-000000000026",
+        provider_model_route_id="0198b08f-7000-7000-8000-000000000027",
+        route_generation=1,
+        provider_instance_id="0198b08f-7000-7000-8000-000000000028",
+        provider_instance_generation=1,
+        credential_id="0198b08f-7000-7000-8000-000000000029",
+        credential_generation=1,
+        price_version_id="0198b08f-7000-7000-8000-000000000030",
+        adapter_type=OPENROUTER_ADAPTER_TYPE,
+        endpoint="https://openrouter.ai/api/v1",
+        wire_model=DEEPSEEK_V4_FLASH_WIRE_MODEL,
+        capabilities=OPENROUTER_SUPPORTED_CAPABILITIES,
+        candidate_policy={},
+        instance_settings={
+            "profile": "openrouter",
+            "supported_operations": ("chat.complete", "chat.stream"),
+        },
+        route_settings={},
+        typed_prices=(
+            PriceComponent(
+                UsageUnit.INPUT_TOKEN,
+                Decimal("0.01"),
+                "USD",
+                "0.01",
+                Decimal(1_000_000),
+            ),
+        ),
+        timeouts=AttemptTimeouts(
+            attempt_timeout_ms,
+            attempt_timeout_ms,
+            attempt_timeout_ms,
+            attempt_timeout_ms,
+        ),
+        logical_deadline=NOW + timedelta(minutes=15),
+        attempt_deadline=NOW + timedelta(milliseconds=attempt_timeout_ms),
+        diagnostic=False,
+        partial_output=False,
+        committed_effect=False,
+        started=True,
+        dispatched=True,
+        recovery_only=False,
+        recovery_failure=None,
+        prestart_reservation_id="0198b08f-7000-7000-8000-000000000031",
+        request_terminal=False,
+    )
+    adapter = OpenRouterAdapter(
+        requests=inputs.request_for_plan,
+        credentials=lambda _plan: SecretLease(
+            plan.credential_id,
+            plan.credential_generation,
+            datetime.now(UTC) + timedelta(minutes=1),
+            bytearray(b"test-provider-value"),
+        ),
+        output=inputs.output_for_plan,
+        transport=StalledTransport(),
+    )
+    local_adapter = LocalCancelableAdapter(adapter)
+
+    class DeadlineRouting:
+        result: AdapterResult | None = None
+
+        def execute(
+            self,
+            context: RequestContext,
+            *,
+            request_id: str,
+            owner_id: str,
+        ) -> AdapterResult:
+            del context, request_id, owner_id
+            self.result = _execute_adapter(local_adapter, plan, now=NOW)
+            return self.result
+
+    routing = DeadlineRouting()
+    submitter = ThreadWorkSubmitter(maximum_workers=1)
+    service = ModelRequestService(
+        authenticator=_Authenticator(_principal()),
+        admission=admission,
+        execution=execution,
+        routing=routing,
+        views=views,
+        submit=submitter,
+        owner_id="local-development-backend",
+        clock=lambda: NOW,
+        inputs=inputs,
+        active_stops=local_adapter.active_stops,
+    )
+    started = time.monotonic()
+    try:
+        response = TestClient(_app(service)).post(
+            "/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {TOKEN}",
+                "X-LLMRouter-Request-ID": REQUEST_ID,
+                "Content-Type": "application/json",
+            },
+            content=_compatible_body(stream=False),
+        )
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+        submitter.close()
+        local_adapter.close()
+        adapter.close()
+
+    assert entered.is_set()
+    assert elapsed < 1
+    assert response.status_code == 200
+    assert response.json()["x_llmrouter_state"] == "failed"
+    assert "private prompt" not in response.text
+    assert routing.result is not None
+    assert routing.result.outcome is AttemptOutcome.FAILED
+    assert routing.result.failure is not None
+    assert routing.result.failure.evidence.detail_code == "execution_timeout"
 
 
 def test_http_rejects_bad_headers_and_duplicate_json_without_content_leak() -> None:

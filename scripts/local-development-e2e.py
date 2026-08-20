@@ -334,14 +334,16 @@ def _resume() -> None:
             (state["cancel_id"],),
         ).fetchone()
         assert cancelled_accounting == (1,)
-    _prove_live_embed()
+    _prove_service_scoped_embed()
+    _prove_global_administration()
     print(
         "The deterministic API, accounting, persistence, recovery, and embed proof "
         "passed."
     )
 
 
-def _prove_live_embed() -> None:
+def _prove_service_scoped_embed() -> None:
+    """Prove embed origin, scope, and user-switch isolation."""
     wrong_origin = httpx.post(
         "http://127.0.0.1:5176/api/context",
         headers={"Origin": "http://127.0.0.1:5999"},
@@ -375,6 +377,10 @@ def _prove_live_embed() -> None:
         assert WORKSPACE_ID in new_text
         assert "Configuration" in new_text
 
+
+def _prove_global_administration() -> None:
+    """Prove deterministic global administration data and secret controls."""
+    with _CdpBrowser() as browser:
         browser.navigate(f"http://127.0.0.1:5174/?view=global&service_id={SERVICE_ID}")
         browser.wait_for_text("Activate administrator session")
         browser.activate_administrator(secrets.token_urlsafe(24))

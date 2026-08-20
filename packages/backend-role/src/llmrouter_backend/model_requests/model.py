@@ -205,6 +205,83 @@ class ToolDefinition(ClosedModel):
     input_schema_major_version: Annotated[int, Field(ge=1, strict=True)]
 
 
+class CompatibilityResponseFormat(ClosedModel):
+    """One accepted compatibility output control."""
+
+    type: Literal["text", "json_object", "json_schema"]
+    schema_name: (
+        Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9._-]{0,99}$")]
+        | None
+    ) = None
+    schema_major_version: Annotated[int, Field(ge=1, strict=True)] | None = None
+
+
+class MetadataEntry(ClosedModel):
+    """One bounded compatibility metadata entry."""
+
+    key: Annotated[str, Field(min_length=1, max_length=100)]
+    value: Annotated[str, Field(max_length=1_000)]
+
+
+class CompatibleChatRequest(ClosedModel):
+    """The accepted OpenAI-compatible chat request."""
+
+    model: AssignmentName
+    messages: Annotated[
+        list[Message], Field(min_length=1, max_length=1_000, repr=False)
+    ]
+    tools: Annotated[list[ToolDefinition], Field(max_length=100)] | None = Field(
+        default=None, repr=False
+    )
+    tool_choice: Literal["auto", "none", "required"] | dict[str, object] | None = None
+    response_format: CompatibilityResponseFormat | None = None
+    temperature: Annotated[Decimal, Field(ge=0, le=2)] | None = None
+    max_completion_tokens: Annotated[
+        int, Field(ge=1, le=1_000_000, strict=True)
+    ] | None = None
+    stream: Annotated[bool, Field(strict=True)] = False
+    metadata: Annotated[list[MetadataEntry], Field(max_length=100)] | None = None
+    user: Annotated[str, Field(max_length=200)] | None = None
+    x_llmrouter_workspace_id: OpaqueId | None = None
+    x_llmrouter_data_profile: Literal["service-data"] | None = None
+    x_llmrouter_max_cost: Money | None = None
+    x_llmrouter_exact_route: OpaqueId | None = None
+    x_llmrouter_exact_route_grant: (
+        Annotated[SecretStr, Field(min_length=43, max_length=200)] | None
+    ) = None
+
+    @field_validator("temperature", mode="before")
+    @classmethod
+    def validate_numeric_temperature(cls, value: object) -> object:
+        """Reject a string where the contract requires a JSON number."""
+        if value is not None and (
+            isinstance(value, (bool, str))
+            or not isinstance(value, (Decimal, int, float))
+        ):
+            raise ValueError("A temperature must be a JSON number.")
+        return value
+
+    @model_validator(mode="after")
+    def validate_exact_route_pair(self) -> CompatibleChatRequest:
+        """Require both write-only exact-route extension fields together."""
+        if (self.x_llmrouter_exact_route is None) != (
+            self.x_llmrouter_exact_route_grant is None
+        ):
+            raise ValueError("An exact route requires one diagnostic grant.")
+        return self
+
+    def __repr__(self) -> str:
+        """Keep compatibility content and grants out of diagnostics."""
+        return (
+            "CompatibleChatRequest("
+            f"model={self.model!r}, messages=[REDACTED], tools=[REDACTED], "
+            f"stream={self.stream!r}, workspace={self.x_llmrouter_workspace_id!r}, "
+            "exact_route_grant=[REDACTED])"
+        )
+
+    __str__ = __repr__
+
+
 class ModelRequestDocument(ClosedModel):
     """The accepted closed native request body."""
 

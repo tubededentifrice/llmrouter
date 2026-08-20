@@ -106,6 +106,7 @@ services:
     environment:
       LLMROUTER_FRAME_ORIGIN: http://127.0.0.1:5175
       LLMROUTER_LOCAL_RUNTIME: "1"
+      LLMROUTER_LOCAL_OPENROUTER_LIVE: ${LLMROUTER_LOCAL_OPENROUTER_LIVE:-0}
       LLMROUTER_MACHINE_DIGEST_KEY_FILE: /run/secrets/machine_digest_key
       LLMROUTER_WRAPPING_KEY_FILE: /run/secrets/credential_wrapping_key
       LLMROUTER_IDEMPOTENCY_KEY_FILE: /run/secrets/idempotency_digest_key

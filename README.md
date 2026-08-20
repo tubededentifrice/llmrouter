@@ -122,6 +122,43 @@ file. After administrator authentication is configured, enter the key only in
 the write-only provider credential control. Do not put the key in Compose, a
 command, a fixture, or a repository file.
 
+For the optional, bounded live proof, use a private subshell and the hidden
+shell input. The subshell removes the inherited value when it exits:
+
+```bash
+(
+  read -rs OPENROUTER_API_KEY
+  printf '\n'
+  export OPENROUTER_API_KEY
+  ./scripts/local-development.sh live-openrouter
+)
+```
+
+Press Enter after the hidden input. The proof first runs the complete offline
+proof. It then checks the current OpenRouter key and model metadata without an
+inference call. If all checks pass, it makes one small compatible non-streaming
+request and one small compatible streaming request for
+`deepseek/deepseek-v4-flash`. It has one route,
+no retry, an output limit of 64 units, and a maximum cost of USD 0.001 for each
+request. The command reports only the call count and bounded Router accounting.
+It resets the local database and stops all services after success or failure.
+
+DeepSeek V4 Flash stays the default supported MVP model. For an authorized
+alternate live check, use `live-openrouter-mimo` in the same private subshell.
+This action selects the fixed `xiaomi/mimo-v2.5` wire model. MiMo 2.5 has a
+separate canonical model identity. You can also use `live-openrouter-granite`
+to select the fixed `ibm-granite/granite-4.1-8b` wire model. Granite 4.1 8B
+has its own canonical model identity. Each alternate action uses the same
+two-call, one-route, no-retry, output, and cost limits. The model selector goes
+only to the proof process. It does not go to Compose.
+
+For the guarded Granite stream diagnostic, use
+`live-openrouter-granite-stream` in the same private subshell. This action keeps
+the no-cost preflight, protected configuration, isolation check, status and
+accounting checks, administration embed check, and sensitive-data scans. It
+makes exactly one paid stream request and does not retry. The default
+`live-openrouter` action stays the two-call DeepSeek acceptance proof.
+
 ## Work process
 
 1. Use the repository `director` skill to complete one ready Beads task.

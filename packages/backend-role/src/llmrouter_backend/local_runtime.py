@@ -448,6 +448,18 @@ class LocalReplayProtector:
         return f"local-replay:{event.event_id}"
 
 
+def _local_openrouter_transport(
+    live_flag: str | None,
+) -> httpx.BaseTransport | None:
+    """Use real TLS only for the one exact local live-test flag."""
+    if live_flag in {None, "", "0"}:
+        return httpx.MockTransport(_local_openrouter)
+    if live_flag == "1":
+        return None
+    message = "The local OpenRouter live-test flag is invalid."
+    raise RuntimeError(message)
+
+
 def install_local_runtime(
     app: FastAPI,
     *,
@@ -460,6 +472,7 @@ def install_local_runtime(
     replay_path: Path,
     admin_session: str,
     admin_csrf: str,
+    openrouter_live_flag: str | None = None,
 ) -> None:
     """Install all local MVP control-plane and data-plane components."""
     machine = MachineCredentialRepository(
@@ -526,7 +539,7 @@ def install_local_runtime(
         requests=inputs.request_for_plan,
         credentials=credential_source,
         output=inputs.output_for_plan,
-        transport=httpx.MockTransport(_local_openrouter),
+        transport=_local_openrouter_transport(openrouter_live_flag),
     )
     cancelable_adapter = LocalCancelableAdapter(adapter)
 
@@ -761,7 +774,11 @@ def _local_openrouter(request: httpx.Request) -> httpx.Response:
     document = json.loads(request.content)
     if document.get("model") != "deepseek/deepseek-v4-flash":
         return httpx.Response(404, json={"error": {"code": "model_not_found"}})
-    usage = {"prompt_tokens": 4, "completion_tokens": 2}
+    usage = {
+        "prompt_tokens": 4,
+        "completion_tokens": 2,
+        "prompt_tokens_details": {"cached_tokens": 0},
+    }
     messages = document.get("messages", ())
     delayed = any(
         isinstance(message, dict)

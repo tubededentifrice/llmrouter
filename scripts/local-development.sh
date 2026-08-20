@@ -84,7 +84,8 @@ prepare_secrets() {
 }
 
 compose() {
-  docker compose --project-directory "${repository_root}" -f "${compose_file}" "$@"
+  env -u OPENROUTER_API_KEY docker compose \
+    --project-directory "${repository_root}" -f "${compose_file}" "$@"
 }
 
 cleanup_failed_start() {
@@ -179,8 +180,33 @@ main() {
       "${repository_root}/scripts/local-development.sh" stop
       trap - EXIT
       ;;
+    live-openrouter|live-openrouter-mimo|live-openrouter-granite|live-openrouter-granite-stream)
+      if [[ ! -v OPENROUTER_API_KEY ]]; then
+        fail "OPENROUTER_API_KEY is required through an inherited secret environment input."
+      fi
+      model_arguments=()
+      if [[ "$1" == "live-openrouter-mimo" ]]; then
+        model_arguments=(--model mimo)
+      elif [[ "$1" == "live-openrouter-granite" ]]; then
+        model_arguments=(--model granite)
+      elif [[ "$1" == "live-openrouter-granite-stream" ]]; then
+        model_arguments=(--model granite --stream-only)
+      fi
+      trap 'env -u OPENROUTER_API_KEY "${repository_root}/scripts/local-development.sh" reset >/dev/null 2>&1 || true' EXIT
+      env -u OPENROUTER_API_KEY \
+        "${repository_root}/scripts/local-development.sh" prove
+      env -u OPENROUTER_API_KEY \
+        "${repository_root}/scripts/local-development.sh" reset
+      env -u OPENROUTER_API_KEY LLMROUTER_LOCAL_OPENROUTER_LIVE=1 \
+        "${repository_root}/scripts/local-development.sh" start
+      uv run --package llmrouter-backend python \
+        scripts/local-development-live-openrouter.py "${model_arguments[@]}"
+      env -u OPENROUTER_API_KEY \
+        "${repository_root}/scripts/local-development.sh" reset
+      trap - EXIT
+      ;;
     *)
-      fail "Usage: ./scripts/local-development.sh {start|stop|reset|status|logs|e2e|prove}"
+      fail "Usage: ./scripts/local-development.sh {start|stop|reset|status|logs|e2e|prove|live-openrouter|live-openrouter-mimo|live-openrouter-granite|live-openrouter-granite-stream}"
       ;;
   esac
 }

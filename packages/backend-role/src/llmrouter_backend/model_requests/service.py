@@ -63,6 +63,7 @@ from llmrouter_backend.routing.errors import RoutingError, RoutingErrorCode
 
 from .model import (
     CancelDocument,
+    CompatibleChatRequest,
     CreateModelRequestResult,
     FieldError,
     ModelRequestDocument,
@@ -345,19 +346,85 @@ class ModelRequestService:
                 error_request_id, ("X-LLMRouter-Request-ID",)
             ) from error
         document = _parse_model_document(raw_body, error_request_id)
+        return self._create_document(
+            principal,
+            request_id,
+            document,
+            now=now,
+            error_request_id=error_request_id,
+            adapter_operation=ModelOperation.STREAM,
+            fingerprint_operation="model.create",
+        )
+
+    def create_compatible_chat(
+        self,
+        token: str,
+        request_id: str,
+        raw_body: bytes,
+        *,
+        error_request_id: str,
+    ) -> tuple[CreateModelRequestResult, bool]:
+        """Map one accepted compatible chat request before normal admission."""
+        now = self._clock()
+        principal = self._authenticate(token, error_request_id, now=now)
+        try:
+            validate_uuidv7(request_id)
+        except ValueError as error:
+            raise _invalid_request(
+                error_request_id, ("X-LLMRouter-Request-ID",)
+            ) from error
+        compatible = _parse_compatible_chat(raw_body, error_request_id)
+        document = _compatible_native_document(compatible, error_request_id)
+        compatible_fingerprint = _compatible_fingerprint(compatible)
+        result = self._create_document(
+            principal,
+            request_id,
+            document,
+            now=now,
+            error_request_id=error_request_id,
+            adapter_operation=(
+                ModelOperation.STREAM
+                if compatible.stream
+                else ModelOperation.COMPLETE
+            ),
+            fingerprint_operation="openai.chat.completions.create",
+            fingerprint_execution=compatible_fingerprint,
+        )
+        return result, compatible.stream
+
+    def _create_document(
+        self,
+        principal: ServicePrincipal,
+        request_id: str,
+        document: ModelRequestDocument,
+        *,
+        now: datetime,
+        error_request_id: str,
+        adapter_operation: ModelOperation,
+        fingerprint_operation: str,
+        fingerprint_execution: dict[str, JsonValue] | None = None,
+    ) -> CreateModelRequestResult:
+        """Admit one validated document through the shared native boundaries."""
         scope = Scope(principal.service_id, document.workspace_id)
         context = _authorize(
             principal, "model.create", scope, error_request_id, now, mutation=True
         )
         _require_mvp_capabilities(document, error_request_id)
-        adapter_request = _validated_adapter_request(document, error_request_id)
+        adapter_request = _validated_adapter_request(
+            document, error_request_id, operation=adapter_operation
+        )
+        execution_fingerprint = (
+            _fingerprint_execution(document)
+            if fingerprint_execution is None
+            else fingerprint_execution
+        )
         fingerprint = FingerprintInput(
-            operation="model.create",
+            operation=fingerprint_operation,
             contract_major=1,
             service_id=principal.service_id,
             workspace_id=document.workspace_id,
             data_profile=document.data_profile,
-            execution=_fingerprint_execution(document),
+            execution=execution_fingerprint,
             resolved_exact_route_scope=(
                 None
                 if document.exact_route is None
@@ -679,6 +746,81 @@ def _parse_model_document(raw_body: bytes, request_id: str) -> ModelRequestDocum
         raise _validation_error(error, request_id) from error
 
 
+def _parse_compatible_chat(
+    raw_body: bytes, request_id: str
+) -> CompatibleChatRequest:
+    value = _strict_json(raw_body, request_id)
+    try:
+        return CompatibleChatRequest.model_validate(value)
+    except ValidationError as error:
+        raise _validation_error(error, request_id) from error
+
+
+def _compatible_native_document(
+    value: CompatibleChatRequest, request_id: str
+) -> ModelRequestDocument:
+    if (
+        value.tools is not None
+        or value.tool_choice is not None
+        or (
+            value.response_format is not None
+            and (
+                value.response_format.type != "text"
+                or value.response_format.schema_name is not None
+                or value.response_format.schema_major_version is not None
+            )
+        )
+    ):
+        raise ModelRequestError(
+            "unsupported_capability",
+            400,
+            "This deployment does not support the requested compatibility feature.",
+            request_id,
+        )
+    output: dict[str, object] = {"format": "text"}
+    if value.temperature is not None:
+        output["temperature"] = value.temperature
+    limits: dict[str, object] = {
+        "attempt_timeout_ms": 30_000,
+        "max_output_units": value.max_completion_tokens or 128,
+    }
+    if value.x_llmrouter_max_cost is not None:
+        limits["max_cost"] = value.x_llmrouter_max_cost.model_dump(mode="json")
+    try:
+        target: dict[str, object]
+        if value.x_llmrouter_exact_route is None:
+            target = {"assignment": value.model}
+        else:
+            target = {
+                "exact_route": value.x_llmrouter_exact_route,
+                "exact_route_grant": value.x_llmrouter_exact_route_grant,
+            }
+        return ModelRequestDocument.model_validate(
+            {
+                "api_version": "1",
+                "data_profile": value.x_llmrouter_data_profile or "service-data",
+                "workspace_id": value.x_llmrouter_workspace_id,
+                "messages": [item.model_dump(mode="json") for item in value.messages],
+                "limits": limits,
+                "output": output,
+                **target,
+            }
+        )
+    except ValidationError as error:
+        raise _validation_error(error, request_id) from error
+
+
+def _compatible_fingerprint(value: CompatibleChatRequest) -> dict[str, JsonValue]:
+    return cast(
+        "dict[str, JsonValue]",
+        value.model_dump(
+            mode="json",
+            exclude_none=True,
+            exclude={"stream", "x_llmrouter_exact_route_grant"},
+        ),
+    )
+
+
 def _parse_cancel_document(raw_body: bytes, request_id: str) -> CancelDocument:
     value = _strict_json(raw_body, request_id)
     try:
@@ -813,7 +955,9 @@ def _fingerprint_execution(document: ModelRequestDocument) -> Mapping[str, JsonV
     return result
 
 
-def _adapter_request(document: ModelRequestDocument) -> ModelAdapterRequest:
+def _adapter_request(
+    document: ModelRequestDocument, *, operation: ModelOperation
+) -> ModelAdapterRequest:
     messages: list[ModelMessage] = []
     for message in document.messages:
         content = (
@@ -825,7 +969,7 @@ def _adapter_request(document: ModelRequestDocument) -> ModelAdapterRequest:
         )
         messages.append(ModelMessage(MessageRole(message.role), content))
     return ModelAdapterRequest(
-        ModelOperation.STREAM,
+        operation,
         tuple(messages),
         document.limits.max_output_units,
         None
@@ -835,10 +979,13 @@ def _adapter_request(document: ModelRequestDocument) -> ModelAdapterRequest:
 
 
 def _validated_adapter_request(
-    document: ModelRequestDocument, request_id: str
+    document: ModelRequestDocument,
+    request_id: str,
+    *,
+    operation: ModelOperation = ModelOperation.STREAM,
 ) -> ModelAdapterRequest:
     try:
-        return _adapter_request(document)
+        return _adapter_request(document, operation=operation)
     except (TypeError, ValueError) as error:
         raise _invalid_request(request_id, ("messages",)) from error
 

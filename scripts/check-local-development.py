@@ -55,6 +55,7 @@ def main() -> None:
         raise SystemExit("The local Compose file contains provider secret material.")
     required_runtime = {
         'LLMROUTER_LOCAL_RUNTIME: "1"',
+        "LLMROUTER_LOCAL_OPENROUTER_LIVE: ${LLMROUTER_LOCAL_OPENROUTER_LIVE:-0}",
         "LLMROUTER_WRAPPING_KEY_FILE:",
         "LLMROUTER_IDEMPOTENCY_KEY_FILE:",
         "LLMROUTER_DISTRIBUTION_KEY_FILE:",
@@ -72,10 +73,7 @@ def main() -> None:
         "administrator-session",
         "administrator-csrf",
     }
-    if any(
-        f"file: .local-development/{name}" not in text
-        for name in required_secrets
-    ):
+    if any(f"file: .local-development/{name}" not in text for name in required_secrets):
         raise SystemExit("A generated local runtime secret is not configured.")
     print("Local development deployment checks passed.")
 

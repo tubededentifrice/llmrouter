@@ -108,6 +108,11 @@ class _StoppedError(RuntimeError):
 class _InvalidResponseError(RuntimeError):
     """The provider response did not match the bounded wire contract."""
 
+    def __init__(self, detail_code: str = "invalid_provider_response") -> None:
+        """Keep one fixed safe parser branch without provider data."""
+        self.detail_code = detail_code
+        super().__init__(detail_code)
+
 
 class _SinkError(RuntimeError):
     """The provider-neutral output sink did not accept an event."""
@@ -423,12 +428,20 @@ class OpenRouterAdapter:
                 "provider_transport_error",
                 usage=_request_usage(),
             )
-        except (UnicodeEncodeError, _InvalidResponseError):
+        except _InvalidResponseError as error:
             return _failure(
                 plan,
                 TerminalErrorClass.INVALID_PROVIDER_RESPONSE,
                 ErrorScope.PROVIDER_MODEL_ROUTE,
-                "invalid_provider_response",
+                error.detail_code,
+                usage=_request_usage(),
+            )
+        except UnicodeEncodeError:
+            return _failure(
+                plan,
+                TerminalErrorClass.INVALID_PROVIDER_RESPONSE,
+                ErrorScope.PROVIDER_MODEL_ROUTE,
+                "response_text_encoding",
                 usage=_request_usage(),
             )
         except RuntimeError:
@@ -499,12 +512,12 @@ class OpenRouterAdapter:
         output_events = 0
         emitted = False
         done = False
-        terminal = False
+        terminal_reason: str | None = None
         usage: tuple[UsageComponent, ...] | None = None
         try:
             for data in _sse_data(response, active, progress):
                 if done:
-                    raise _InvalidResponseError
+                    raise _InvalidResponseError("stream_data_after_done")
                 if data == b"[DONE]":
                     done = True
                     continue
@@ -516,15 +529,19 @@ class OpenRouterAdapter:
                 if "usage" in root:
                     reported_usage = _usage(root.get("usage"), required=True)
                     if usage is not None and usage != reported_usage:
-                        raise _InvalidResponseError
+                        raise _InvalidResponseError("stream_usage_conflict")
                     usage = reported_usage
                 choices = root.get("choices")
                 if choices == [] and "usage" in root:
                     continue
                 if not isinstance(choices, list) or len(choices) != 1:
-                    raise _InvalidResponseError
+                    raise _InvalidResponseError("stream_choices_shape")
                 choice = _mapping(choices[0])
-                delta = None if choice is None else _mapping(choice.get("delta"))
+                if choice is None:
+                    raise _InvalidResponseError("stream_choice_object")
+                delta = _mapping(choice.get("delta"))
+                if delta is None:
+                    raise _InvalidResponseError("stream_delta_object")
                 content = None if delta is None else delta.get("content")
                 refusal = None if delta is None else delta.get("refusal")
                 finish_reason = None if choice is None else choice.get("finish_reason")
@@ -544,51 +561,58 @@ class OpenRouterAdapter:
                         usage=_request_usage() if usage is None else usage,
                     )
                 if refusal is not None and not isinstance(refusal, str):
-                    raise _InvalidResponseError
+                    raise _InvalidResponseError("stream_refusal_type")
                 if finish_reason is not None and not isinstance(finish_reason, str):
-                    raise _InvalidResponseError
+                    raise _InvalidResponseError("stream_finish_type")
+                if content is not None and not isinstance(content, str):
+                    raise _InvalidResponseError("stream_content_type")
                 if finish_reason is not None:
-                    if terminal or finish_reason not in {"stop", "length"}:
-                        raise _InvalidResponseError
-                    terminal = True
+                    if finish_reason not in {"stop", "length"}:
+                        raise _InvalidResponseError("stream_finish_value")
+                    if terminal_reason is not None:
+                        if finish_reason != terminal_reason:
+                            raise _InvalidResponseError("stream_finish_conflict")
+                        if content:
+                            raise _InvalidResponseError(
+                                "stream_content_after_finish"
+                            )
+                        continue
+                    terminal_reason = finish_reason
                 if content is None:
                     continue
-                if not isinstance(content, str):
-                    raise _InvalidResponseError
                 if not content:
                     continue
-                if terminal and finish_reason is None:
-                    raise _InvalidResponseError
+                if terminal_reason is not None and finish_reason is None:
+                    raise _InvalidResponseError("stream_content_after_finish")
                 try:
                     encoded = content.encode("utf-8")
                 except UnicodeEncodeError as error:
-                    raise _InvalidResponseError from error
+                    raise _InvalidResponseError("stream_content_encoding") from error
                 if len(encoded) > _MAXIMUM_OUTPUT_DELTA_BYTES:
-                    raise _InvalidResponseError
+                    raise _InvalidResponseError("stream_delta_limit")
                 output_bytes += len(encoded)
                 output_events += 1
-                if (
-                    output_bytes > _MAXIMUM_OUTPUT_BYTES
-                    or output_events > _MAXIMUM_OUTPUT_EVENTS
-                ):
-                    raise _InvalidResponseError
+                if output_bytes > _MAXIMUM_OUTPUT_BYTES:
+                    raise _InvalidResponseError("stream_output_bytes_limit")
+                if output_events > _MAXIMUM_OUTPUT_EVENTS:
+                    raise _InvalidResponseError("stream_output_events_limit")
                 self._emit(
                     plan,
                     ModelOutputEvent(ModelOutputEventKind.DELTA, content),
                     usage=_request_usage() if usage is None else usage,
                 )
                 emitted = True
-        except _InvalidResponseError:
-            if emitted:
-                return _failure(
-                    plan,
-                    TerminalErrorClass.INVALID_PROVIDER_RESPONSE,
-                    ErrorScope.PROVIDER_MODEL_ROUTE,
-                    "invalid_stream_response",
-                    outcome=AttemptOutcome.INTERRUPTED,
-                    usage=_request_usage() if usage is None else usage,
-                )
-            raise
+        except _InvalidResponseError as error:
+            return _failure(
+                plan,
+                TerminalErrorClass.INVALID_PROVIDER_RESPONSE,
+                ErrorScope.PROVIDER_MODEL_ROUTE,
+                error.detail_code,
+                outcome=(
+                    AttemptOutcome.INTERRUPTED if emitted else AttemptOutcome.FAILED
+                ),
+                usage=_request_usage() if usage is None else usage,
+            )
         except httpx.HTTPError:
             if active.stop.is_set():
                 raise _StoppedError from None
@@ -602,17 +626,25 @@ class OpenRouterAdapter:
                     usage=_request_usage() if usage is None else usage,
                 )
             raise
-        if not done or not terminal or not emitted or usage is None:
-            if emitted:
-                return _failure(
-                    plan,
-                    TerminalErrorClass.INVALID_PROVIDER_RESPONSE,
-                    ErrorScope.PROVIDER_MODEL_ROUTE,
-                    "invalid_stream_terminal",
-                    outcome=AttemptOutcome.INTERRUPTED,
-                    usage=_request_usage() if usage is None else usage,
-                )
-            raise _InvalidResponseError
+        if not done or terminal_reason is None or not emitted or usage is None:
+            if not done:
+                detail_code = "stream_missing_done"
+            elif terminal_reason is None:
+                detail_code = "stream_missing_finish"
+            elif not emitted:
+                detail_code = "stream_missing_content"
+            else:
+                detail_code = "stream_missing_usage"
+            return _failure(
+                plan,
+                TerminalErrorClass.INVALID_PROVIDER_RESPONSE,
+                ErrorScope.PROVIDER_MODEL_ROUTE,
+                detail_code,
+                outcome=(
+                    AttemptOutcome.INTERRUPTED if emitted else AttemptOutcome.FAILED
+                ),
+                usage=_request_usage() if usage is None else usage,
+            )
         self._emit(plan, ModelOutputEvent(ModelOutputEventKind.COMPLETED), usage=usage)
         return AdapterResult(AttemptOutcome.SUCCEEDED, usage=usage)
 
@@ -867,7 +899,7 @@ def _validate_response_headers(
         len(items) > _MAXIMUM_HEADER_COUNT
         or sum(len(key) + len(value) for key, value in items) > _MAXIMUM_HEADER_BYTES
     ):
-        raise _InvalidResponseError
+        raise _InvalidResponseError("response_header_limits")
     content_length = response.headers.get("content-length")
     if (
         validate_content_length
@@ -876,15 +908,15 @@ def _validate_response_headers(
             not content_length.isdecimal() or int(content_length) > _MAXIMUM_BODY_BYTES
         )
     ):
-        raise _InvalidResponseError
+        raise _InvalidResponseError("response_content_length")
     if response.history:
-        raise _InvalidResponseError
+        raise _InvalidResponseError("response_redirect_history")
 
 
 def _validate_content_type(response: httpx.Response, operation: ModelOperation) -> None:
     value = response.headers.get("content-type")
     if value is None or len(value) > 200:
-        raise _InvalidResponseError
+        raise _InvalidResponseError("response_content_type")
     media_type = value.partition(";")[0].strip().casefold()
     expected = (
         "text/event-stream"
@@ -892,7 +924,7 @@ def _validate_content_type(response: httpx.Response, operation: ModelOperation) 
         else "application/json"
     )
     if media_type != expected:
-        raise _InvalidResponseError
+        raise _InvalidResponseError("response_content_type")
 
 
 def _read_bounded(
@@ -935,7 +967,7 @@ def _sse_data(
         saw_chunk = True
         total_bytes += len(chunk)
         if total_bytes > _MAXIMUM_BODY_BYTES:
-            raise _InvalidResponseError
+            raise _InvalidResponseError("stream_body_limit")
         buffer.extend(chunk)
         progress(AdapterPhase.PROGRESS)
         while b"\n" in buffer:
@@ -950,23 +982,23 @@ def _sse_data(
                 continue
             event_bytes += len(line)
             if event_bytes > _MAXIMUM_EVENT_BYTES:
-                raise _InvalidResponseError
+                raise _InvalidResponseError("stream_event_limit")
             if line.startswith(b":"):
                 continue
             if not line.startswith(b"data:"):
-                raise _InvalidResponseError
+                raise _InvalidResponseError("stream_sse_field")
             data = line[5:]
             if data.startswith(b" "):
                 data = data[1:]
             data_lines.append(data)
         if len(buffer) + event_bytes > _MAXIMUM_EVENT_BYTES:
-            raise _InvalidResponseError
+            raise _InvalidResponseError("stream_buffer_limit")
     if not saw_chunk:
         progress(AdapterPhase.PROGRESS)
     if buffer:
         line = bytes(buffer).removesuffix(b"\r")
         if not line.startswith(b"data:"):
-            raise _InvalidResponseError
+            raise _InvalidResponseError("stream_sse_tail")
         data = line[5:]
         data_lines.append(data[1:] if data.startswith(b" ") else data)
     if data_lines:
@@ -975,7 +1007,7 @@ def _sse_data(
 
 def _json_object(payload: bytes, *, maximum_bytes: int) -> dict[str, object]:
     if not payload or len(payload) > maximum_bytes:
-        raise _InvalidResponseError
+        raise _InvalidResponseError("response_json_size")
     try:
         value = json.loads(
             payload,
@@ -983,15 +1015,18 @@ def _json_object(payload: bytes, *, maximum_bytes: int) -> dict[str, object]:
             parse_constant=_invalid_json_constant,
             parse_float=_strict_json_float,
         )
-    except (
-        UnicodeDecodeError,
-        json.JSONDecodeError,
-        RecursionError,
-        ValueError,
-    ) as error:
-        raise _InvalidResponseError from error
+    except _InvalidResponseError:
+        raise
+    except UnicodeDecodeError as error:
+        raise _InvalidResponseError("response_json_encoding") from error
+    except json.JSONDecodeError as error:
+        raise _InvalidResponseError("response_json_syntax") from error
+    except RecursionError as error:
+        raise _InvalidResponseError("response_json_depth") from error
+    except ValueError as error:
+        raise _InvalidResponseError("response_json_value") from error
     if not isinstance(value, dict) or any(not isinstance(key, str) for key in value):
-        raise _InvalidResponseError
+        raise _InvalidResponseError("response_json_object")
     return cast("dict[str, object]", value)
 
 
@@ -999,19 +1034,19 @@ def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     result: dict[str, object] = {}
     for key, value in pairs:
         if key in result:
-            raise ValueError("The provider JSON contains a duplicate field.")
+            raise _InvalidResponseError("response_json_duplicate_field")
         result[key] = value
     return result
 
 
 def _invalid_json_constant(_value: str) -> NoReturn:
-    raise ValueError("The provider JSON contains a non-finite number.")
+    raise _InvalidResponseError("response_json_non_finite")
 
 
 def _strict_json_float(value: str) -> float:
     result = float(value)
     if not math.isfinite(result):
-        raise ValueError("The provider JSON contains a non-finite number.")
+        raise _InvalidResponseError("response_json_non_finite")
     return result
 
 
@@ -1030,7 +1065,7 @@ def _usage(value: object, *, required: bool) -> tuple[UsageComponent, ...]:
     usage = _mapping(value)
     if usage is None:
         if required:
-            raise _InvalidResponseError
+            raise _InvalidResponseError("response_usage_object")
         return tuple(result)
     prompt_tokens = usage.get("prompt_tokens")
     completion_tokens = usage.get("completion_tokens")
@@ -1038,7 +1073,7 @@ def _usage(value: object, *, required: bool) -> tuple[UsageComponent, ...]:
         completion_tokens
     ):
         if required or prompt_tokens is not None or completion_tokens is not None:
-            raise _InvalidResponseError
+            raise _InvalidResponseError("response_usage_tokens")
         return tuple(result)
     details = _mapping(usage.get("prompt_tokens_details"))
     cached_tokens = 0
@@ -1047,11 +1082,11 @@ def _usage(value: object, *, required: bool) -> tuple[UsageComponent, ...]:
         if _valid_usage_integer(cached):
             cached_tokens = cached
         elif cached is not None:
-            raise _InvalidResponseError
+            raise _InvalidResponseError("response_usage_cached_tokens")
     elif usage.get("prompt_tokens_details") is not None:
-        raise _InvalidResponseError
+        raise _InvalidResponseError("response_usage_details")
     if cached_tokens > prompt_tokens:
-        raise _InvalidResponseError
+        raise _InvalidResponseError("response_usage_inconsistent")
     result.extend(
         (
             UsageComponent(
@@ -1060,7 +1095,7 @@ def _usage(value: object, *, required: bool) -> tuple[UsageComponent, ...]:
             UsageComponent(UsageUnit.OUTPUT_TOKEN, Decimal(completion_tokens)),
         )
     )
-    if details is not None and "cached_tokens" in details:
+    if cached_tokens > 0:
         result.append(UsageComponent(UsageUnit.CACHED_TOKEN, Decimal(cached_tokens)))
     return tuple(result)
 
@@ -1136,18 +1171,18 @@ def _stream_provider_failure(
 ) -> AdapterResult:
     error = _mapping(value)
     if error is None:
-        raise _InvalidResponseError
+        raise _InvalidResponseError("stream_error_object")
     status = error.get("code")
     if (
         not isinstance(status, int)
         or isinstance(status, bool)
         or not 400 <= status <= 599
     ):
-        raise _InvalidResponseError
+        raise _InvalidResponseError("stream_error_status")
     metadata = _mapping(error.get("metadata"))
     error_type = None if metadata is None else metadata.get("error_type")
     if error_type is not None and not isinstance(error_type, str):
-        raise _InvalidResponseError
+        raise _InvalidResponseError("stream_error_type")
     error_class, scope = _provider_error_classification(status, error_type)
     return _failure(
         plan,

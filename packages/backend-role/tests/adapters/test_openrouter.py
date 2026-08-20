@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+import ast
 import concurrent.futures
 import gzip
+import inspect
 import json
 import threading
 import time
@@ -18,6 +20,7 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 from llmrouter_backend.accounting import PriceComponent, UsageUnit
+from llmrouter_backend.adapters import openrouter as openrouter_module
 from llmrouter_backend.adapters.model import (
     MAXIMUM_REQUEST_TEXT_BYTES,
     MessageRole,
@@ -332,10 +335,20 @@ def test_model_request_rejects_aggregate_bytes_and_invalid_unicode() -> None:
         )
 
 
-def test_non_streaming_maps_deepseek_text_usage_and_safe_headers() -> None:
+@pytest.mark.parametrize(
+    "wire_model",
+    [
+        DEEPSEEK_V4_FLASH_WIRE_MODEL,
+        "xiaomi/mimo-v2.5",
+        "ibm-granite/granite-4.1-8b",
+    ],
+)
+def test_non_streaming_maps_selected_text_model_usage_and_safe_headers(
+    wire_model: str,
+) -> None:
     harness = _Harness(_request())
     with _server(_Reply(body=_completion())) as server:
-        plan = _plan(_endpoint(server))
+        plan = _plan(_endpoint(server), wire_model=wire_model)
         adapter = _adapter(harness)
         result = adapter.execute(plan, harness.progress)
         adapter.close()
@@ -354,7 +367,8 @@ def test_non_streaming_maps_deepseek_text_usage_and_safe_headers() -> None:
     captured = server.captured[0]
     body = json.loads(captured.body)
     assert captured.path == "/api/v1/chat/completions"
-    assert body["model"] == DEEPSEEK_V4_FLASH_WIRE_MODEL
+    assert body["model"] == wire_model
+    assert body["stream"] is False
     assert body["temperature"] == 0.2
     assert body["messages"] == [
         {"role": "user", "content": "Reply with a short test value."}
@@ -362,6 +376,25 @@ def test_non_streaming_maps_deepseek_text_usage_and_safe_headers() -> None:
     assert captured.headers["authorization"] == f"Bearer {_TEST_SECRET.decode()}"
     assert all(lease.closed for lease in harness.leases)
     assert plan.typed_prices[0].price == Decimal("0.01")
+
+
+def test_zero_cached_token_detail_does_not_create_unpriced_usage() -> None:
+    harness = _Harness(_request())
+    completion = json.loads(_completion())
+    completion["usage"]["prompt_tokens_details"]["cached_tokens"] = 0
+    with _server(
+        _Reply(body=json.dumps(completion, separators=(",", ":")).encode())
+    ) as server:
+        adapter = _adapter(harness)
+        result = adapter.execute(_plan(_endpoint(server)), harness.progress)
+        adapter.close()
+
+    assert result.outcome is AttemptOutcome.SUCCEEDED
+    assert {item.unit: item.quantity for item in result.usage} == {
+        UsageUnit.REQUEST: Decimal(1),
+        UsageUnit.INPUT_TOKEN: Decimal(12),
+        UsageUnit.OUTPUT_TOKEN: Decimal(3),
+    }
 
 
 def test_stream_maps_text_final_usage_and_done() -> None:
@@ -378,6 +411,7 @@ def test_stream_maps_text_final_usage_and_done() -> None:
         adapter.close()
 
     assert result.outcome is AttemptOutcome.SUCCEEDED
+    assert json.loads(server.captured[0].body)["stream"] is True
     assert [event.text for event in harness.events[:-1]] == ["one ", "two"]
     assert harness.events[-1].kind is ModelOutputEventKind.COMPLETED
     assert {item.unit: item.quantity for item in result.usage} == {
@@ -385,6 +419,205 @@ def test_stream_maps_text_final_usage_and_done() -> None:
         UsageUnit.INPUT_TOKEN: Decimal(4),
         UsageUnit.OUTPUT_TOKEN: Decimal(2),
     }
+
+
+def test_stream_accepts_official_reasoning_then_text_chunks() -> None:
+    """Ignore optional reasoning data and accept the later public text delta."""
+    chunks = (
+        (
+            b'data: {"id":"gen-1","object":"chat.completion.chunk",'
+            b'"created":1,"model":"example/model","choices":[{"index":0,'
+            b'"delta":{"role":"assistant","content":null,"reasoning":"think"},'
+            b'"finish_reason":null}]}\n\n'
+        ),
+        (
+            b'data: {"id":"gen-1","object":"chat.completion.chunk",'
+            b'"created":1,"model":"example/model","choices":[{"index":0,'
+            b'"delta":{"content":"answer"},"finish_reason":"stop"}]}\n\n'
+        ),
+        (
+            b'data: {"id":"gen-1","object":"chat.completion.chunk",'
+            b'"created":1,"model":"example/model","choices":[],"usage":'
+            b'{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}}\n\n'
+        ),
+        b"data: [DONE]\n\n",
+    )
+    harness = _Harness(_request(ModelOperation.STREAM))
+    with _server(_Reply(content_type="text/event-stream", chunks=chunks)) as server:
+        adapter = _adapter(harness)
+        result = adapter.execute(_plan(_endpoint(server)), harness.progress)
+        adapter.close()
+
+    assert result.outcome is AttemptOutcome.SUCCEEDED
+    assert [event.text for event in harness.events[:-1]] == ["answer"]
+    assert harness.events[-1].kind is ModelOutputEventKind.COMPLETED
+
+
+@pytest.mark.parametrize("finish_reason", ["stop", "length"])
+def test_stream_accepts_repeated_identical_empty_terminal_metadata(
+    finish_reason: str,
+) -> None:
+    first = json.dumps(
+        {
+            "choices": [
+                {"delta": {"content": "answer"}, "finish_reason": finish_reason}
+            ]
+        },
+        separators=(",", ":"),
+    ).encode()
+    repeated = json.dumps(
+        {
+            "choices": [
+                {
+                    "delta": {"content": None, "refusal": None},
+                    "finish_reason": finish_reason,
+                }
+            ]
+        },
+        separators=(",", ":"),
+    ).encode()
+    chunks = (
+        b"data: " + first + b"\n\n",
+        b"data: " + repeated + b"\n\n",
+        (
+            b'data: {"choices":[],"usage":{"prompt_tokens":1,'
+            b'"completion_tokens":1}}\n\n'
+        ),
+        b"data: [DONE]\n\n",
+    )
+    harness = _Harness(_request(ModelOperation.STREAM))
+    with _server(_Reply(content_type="text/event-stream", chunks=chunks)) as server:
+        adapter = _adapter(harness)
+        result = adapter.execute(_plan(_endpoint(server)), harness.progress)
+        adapter.close()
+
+    assert result.outcome is AttemptOutcome.SUCCEEDED
+    assert [event.text for event in harness.events[:-1]] == ["answer"]
+
+
+@pytest.mark.parametrize(
+    ("delta", "finish_reason", "detail_code"),
+    [
+        ({"content": None}, "length", "stream_finish_conflict"),
+        ({"content": "more"}, "stop", "stream_content_after_finish"),
+        (
+            {"content": None, "refusal": {"private": "value"}},
+            "stop",
+            "stream_refusal_type",
+        ),
+    ],
+)
+def test_stream_rejects_unsafe_repeated_terminal_metadata(
+    delta: dict[str, object], finish_reason: str, detail_code: str
+) -> None:
+    repeated = json.dumps(
+        {"choices": [{"delta": delta, "finish_reason": finish_reason}]},
+        separators=(",", ":"),
+    ).encode()
+    chunks = (
+        (
+            b'data: {"choices":[{"delta":{"content":"answer"},'
+            b'"finish_reason":"stop"}]}\n\n'
+        ),
+        b"data: " + repeated + b"\n\n",
+        (
+            b'data: {"choices":[],"usage":{"prompt_tokens":1,'
+            b'"completion_tokens":1}}\n\n'
+        ),
+        b"data: [DONE]\n\n",
+    )
+    harness = _Harness(_request(ModelOperation.STREAM))
+    with _server(_Reply(content_type="text/event-stream", chunks=chunks)) as server:
+        adapter = _adapter(harness)
+        result = adapter.execute(_plan(_endpoint(server)), harness.progress)
+        adapter.close()
+
+    assert result.outcome is AttemptOutcome.INTERRUPTED
+    assert result.failure is not None
+    assert result.failure.evidence.detail_code == detail_code
+
+
+def test_stream_keeps_policy_semantics_for_repeated_terminal_refusal() -> None:
+    chunks = (
+        (
+            b'data: {"choices":[{"delta":{"content":"answer"},'
+            b'"finish_reason":"stop"}]}\n\n'
+        ),
+        (
+            b'data: {"choices":[{"delta":{"content":null,'
+            b'"refusal":"private provider refusal"},"finish_reason":"stop"}]}\n\n'
+        ),
+    )
+    harness = _Harness(_request(ModelOperation.STREAM))
+    with _server(_Reply(content_type="text/event-stream", chunks=chunks)) as server:
+        adapter = _adapter(harness)
+        result = adapter.execute(_plan(_endpoint(server)), harness.progress)
+        adapter.close()
+
+    assert result.outcome is AttemptOutcome.INTERRUPTED
+    assert result.failure is not None
+    assert result.failure.error.error_class is TerminalErrorClass.POLICY
+    assert result.failure.evidence.detail_code == "provider_policy_refusal"
+    assert "private provider refusal" not in repr(result)
+
+
+@pytest.mark.parametrize(
+    ("chunks", "detail_code", "outcome"),
+    [
+        (
+            (
+                b'data: {"choices":[{"delta":{"content":"text"},'
+                b'"finish_reason":"stop"}]}\n\n'
+                b'data: {"choices":[],"usage":{"prompt_tokens":1,'
+                b'"completion_tokens":1}}\n\n'
+            ),
+            "stream_missing_done",
+            AttemptOutcome.INTERRUPTED,
+        ),
+        (
+            (
+                b'data: {"choices":[{"delta":{"content":"text"},'
+                b'"finish_reason":null}]}\n\n'
+                b'data: {"choices":[],"usage":{"prompt_tokens":1,'
+                b'"completion_tokens":1}}\n\ndata: [DONE]\n\n'
+            ),
+            "stream_missing_finish",
+            AttemptOutcome.INTERRUPTED,
+        ),
+        (
+            (
+                b'data: {"choices":[{"delta":{"content":null,'
+                b'"reasoning":"think"},"finish_reason":"stop"}]}\n\n'
+                b'data: {"choices":[],"usage":{"prompt_tokens":1,'
+                b'"completion_tokens":1}}\n\ndata: [DONE]\n\n'
+            ),
+            "stream_missing_content",
+            AttemptOutcome.FAILED,
+        ),
+        (
+            (
+                b'data: {"choices":[{"delta":{"content":"text"},'
+                b'"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
+            ),
+            "stream_missing_usage",
+            AttemptOutcome.INTERRUPTED,
+        ),
+    ],
+)
+def test_stream_reports_the_closed_missing_terminal_condition(
+    chunks: bytes, detail_code: str, outcome: AttemptOutcome
+) -> None:
+    harness = _Harness(_request(ModelOperation.STREAM))
+    with _server(
+        _Reply(content_type="text/event-stream", chunks=(chunks,))
+    ) as server:
+        adapter = _adapter(harness)
+        result = adapter.execute(_plan(_endpoint(server)), harness.progress)
+        adapter.close()
+
+    assert result.outcome is outcome
+    assert result.failure is not None
+    assert result.failure.evidence.detail_code == detail_code
 
 
 @pytest.mark.parametrize(
@@ -865,7 +1098,7 @@ def test_stream_rejects_conflicting_usage_reports() -> None:
 
     assert result.outcome is AttemptOutcome.INTERRUPTED
     assert result.failure is not None
-    assert result.failure.evidence.detail_code == "invalid_stream_response"
+    assert result.failure.evidence.detail_code == "stream_usage_conflict"
 
 
 def test_stream_bounds_the_aggregate_output_event_count() -> None:
@@ -881,7 +1114,89 @@ def test_stream_bounds_the_aggregate_output_event_count() -> None:
     assert result.outcome is AttemptOutcome.INTERRUPTED
     assert len(harness.events) == 10_000
     assert result.failure is not None
-    assert result.failure.evidence.detail_code == "invalid_stream_response"
+    assert result.failure.evidence.detail_code == "stream_output_events_limit"
+
+
+def test_stream_invalid_response_branches_have_fixed_safe_codes() -> None:
+    """Keep every stream parser rejection classified without provider data."""
+    parser_functions = {
+        "_read_stream",
+        "_sse_data",
+        "_json_object",
+        "_unique_json_object",
+        "_invalid_json_constant",
+        "_strict_json_float",
+        "_usage",
+        "_stream_provider_failure",
+        "_validate_response_headers",
+        "_validate_content_type",
+    }
+    expected = {
+        "response_content_length",
+        "response_content_type",
+        "response_header_limits",
+        "response_json_depth",
+        "response_json_duplicate_field",
+        "response_json_encoding",
+        "response_json_non_finite",
+        "response_json_object",
+        "response_json_size",
+        "response_json_syntax",
+        "response_json_value",
+        "response_redirect_history",
+        "response_usage_cached_tokens",
+        "response_usage_details",
+        "response_usage_inconsistent",
+        "response_usage_object",
+        "response_usage_tokens",
+        "stream_body_limit",
+        "stream_buffer_limit",
+        "stream_choice_object",
+        "stream_choices_shape",
+        "stream_content_after_finish",
+        "stream_content_encoding",
+        "stream_content_type",
+        "stream_data_after_done",
+        "stream_delta_limit",
+        "stream_delta_object",
+        "stream_error_object",
+        "stream_error_status",
+        "stream_error_type",
+        "stream_event_limit",
+        "stream_finish_conflict",
+        "stream_finish_type",
+        "stream_finish_value",
+        "stream_output_bytes_limit",
+        "stream_output_events_limit",
+        "stream_refusal_type",
+        "stream_sse_field",
+        "stream_sse_tail",
+        "stream_usage_conflict",
+    }
+    tree = ast.parse(inspect.getsource(openrouter_module))
+    found: set[str] = set()
+    for function in (
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name in parser_functions
+    ):
+        for node in ast.walk(function):
+            if not isinstance(node, ast.Raise) or not isinstance(node.exc, ast.Call):
+                continue
+            call = node.exc
+            if (
+                not isinstance(call.func, ast.Name)
+                or call.func.id != "_InvalidResponseError"
+            ):
+                continue
+            assert len(call.args) == 1
+            argument = call.args[0]
+            assert isinstance(argument, ast.Constant)
+            assert isinstance(argument.value, str)
+            found.add(argument.value)
+
+    assert found == expected
 
 
 @pytest.mark.parametrize(

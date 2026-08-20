@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import time
 import uuid
@@ -27,6 +28,10 @@ router = APIRouter(prefix="/v1", tags=["Requests"])
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+
+    from llmrouter_backend.execution import StreamEvent
+
+    from .model import ScopedRequest
 
 
 def install_model_request_service(app: FastAPI, service: ModelRequestService) -> None:
@@ -62,6 +67,75 @@ async def create_model_request(request: Request) -> Response:
         return JSONResponse(
             result.receipt,
             status_code=result.status_code,
+            headers={"Cache-Control": "no-store"},
+        )
+    except ModelRequestError as error:
+        return _error_response(error)
+
+
+@router.post("/chat/completions", response_model=None)
+async def create_compatible_chat_completion(request: Request) -> Response:
+    """Run one accepted OpenAI-compatible chat completion."""
+    error_request_id = _error_request_id()
+    try:
+        service = _service(request, error_request_id)
+        token = _bearer_token(request, error_request_id)
+        logical_request_id = _single_header(
+            request,
+            "x-llmrouter-request-id",
+            maximum=36,
+            error_request_id=error_request_id,
+        )
+        _require_json_content_type(request, error_request_id)
+        body = await _bounded_body(request, error_request_id)
+        result, stream = await asyncio.to_thread(
+            service.create_compatible_chat,
+            token,
+            logical_request_id,
+            body,
+            error_request_id=error_request_id,
+        )
+        scoped = await asyncio.to_thread(
+            service.authorize_existing,
+            token,
+            logical_request_id,
+            "model.read",
+            error_request_id=error_request_id,
+        )
+        if stream:
+            initial = await asyncio.to_thread(
+                service.events,
+                scoped,
+                logical_request_id,
+                after_sequence=0,
+                error_request_id=error_request_id,
+            )
+            return StreamingResponse(
+                _compatible_records(
+                    request,
+                    service,
+                    scoped,
+                    logical_request_id,
+                    result.receipt,
+                    initial,
+                    error_request_id,
+                ),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-store",
+                    "X-Accel-Buffering": "no",
+                    "X-Content-Type-Options": "nosniff",
+                },
+            )
+        status = await _wait_compatible_status(
+            request,
+            service,
+            scoped,
+            logical_request_id,
+            error_request_id,
+        )
+        return JSONResponse(
+            _compatible_response(status, result.receipt),
             headers={"Cache-Control": "no-store"},
         )
     except ModelRequestError as error:
@@ -208,6 +282,203 @@ async def stream_model_request(request: Request, request_id: str) -> Response:
             "X-Content-Type-Options": "nosniff",
         },
     )
+
+
+async def _wait_compatible_status(
+    request: Request,
+    service: ModelRequestService,
+    scoped: ScopedRequest,
+    request_id: str,
+    error_request_id: str,
+) -> dict[str, object]:
+    deadline = time.monotonic() + 900
+    while time.monotonic() < deadline:
+        status = await asyncio.to_thread(
+            service.status,
+            scoped,
+            request_id,
+            error_request_id=error_request_id,
+        )
+        if status.get("state") in {
+            "succeeded",
+            "failed",
+            "interrupted",
+            "cancelled",
+            "uncertain",
+        }:
+            return status
+        if await request.is_disconnected():
+            raise ModelRequestError(
+                "temporarily_unavailable",
+                503,
+                "The request continues. Read its native status before a retry.",
+                error_request_id,
+                retryable=True,
+            )
+        await asyncio.sleep(0.1)
+    raise ModelRequestError(
+        "temporarily_unavailable",
+        503,
+        "The request continues. Read its native status before a retry.",
+        error_request_id,
+        retryable=True,
+    )
+
+
+async def _compatible_records(  # noqa: PLR0913, PLR0917
+    request: Request,
+    service: ModelRequestService,
+    scoped: ScopedRequest,
+    request_id: str,
+    receipt: dict[str, object],
+    initial: tuple[StreamEvent, ...],
+    error_request_id: str,
+) -> AsyncIterator[str]:
+    cursor = 0
+    pending = initial
+    last_write = time.monotonic()
+    try:
+        while True:
+            for event in pending:
+                cursor = event.sequence
+                record = _compatible_event(event, receipt)
+                if record is not None:
+                    last_write = time.monotonic()
+                    yield record
+                if event.event_name == "request.terminal":
+                    return
+            if await request.is_disconnected():
+                return
+            status = await asyncio.to_thread(
+                service.execution_status,
+                scoped,
+                request_id,
+                error_request_id=error_request_id,
+            )
+            if status.terminal:
+                pending = await asyncio.to_thread(
+                    service.events,
+                    scoped,
+                    request_id,
+                    after_sequence=cursor,
+                    error_request_id=error_request_id,
+                )
+                if pending:
+                    continue
+                return
+            if time.monotonic() - last_write >= KEEPALIVE_SECONDS:
+                last_write = time.monotonic()
+                yield ": keepalive\n\n"
+            await asyncio.sleep(0.1)
+            pending = await asyncio.to_thread(
+                service.events,
+                scoped,
+                request_id,
+                after_sequence=cursor,
+                error_request_id=error_request_id,
+            )
+    finally:
+        with suppress(ModelRequestError):
+            await asyncio.to_thread(
+                service.disconnect,
+                scoped,
+                request_id,
+                error_request_id=error_request_id,
+            )
+
+
+def _compatible_event(
+    event: StreamEvent, receipt: dict[str, object]
+) -> str | None:
+    if event.event_name == "output.delta":
+        delta = event.payload.get("delta")
+        if not isinstance(delta, str):
+            return None
+        return _compatible_sse(
+            {
+                "id": f"chatcmpl-{event.target.public_id}",
+                "object": "chat.completion.chunk",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"content": delta},
+                        "finish_reason": None,
+                    }
+                ],
+                "x_llmrouter_request_id": event.target.public_id,
+                "x_llmrouter_state": "running",
+                "x_llmrouter_status_url": receipt["status_url"],
+            }
+        )
+    if event.event_name != "request.terminal":
+        return None
+    state = event.payload.get("state")
+    if state == "succeeded":
+        terminal = _compatible_sse(
+            {
+                "id": f"chatcmpl-{event.target.public_id}",
+                "object": "chat.completion.chunk",
+                "choices": [
+                    {"index": 0, "delta": {}, "finish_reason": "stop"}
+                ],
+                "x_llmrouter_request_id": event.target.public_id,
+                "x_llmrouter_state": state,
+                "x_llmrouter_status_url": receipt["status_url"],
+            }
+        )
+        return terminal + "data: [DONE]\n\n"
+    return _compatible_sse(
+        {
+            "error": {
+                "code": "request_failed",
+                "message": "The Router could not complete the request.",
+                "type": "router_error",
+            },
+            "x_llmrouter_request_id": event.target.public_id,
+            "x_llmrouter_state": state,
+            "x_llmrouter_status_url": receipt["status_url"],
+        }
+    )
+
+
+def _compatible_sse(document: dict[str, object]) -> str:
+    return (
+        "data: "
+        + json.dumps(
+            document,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        + "\n\n"
+    )
+
+
+def _compatible_response(
+    status: dict[str, object], receipt: dict[str, object]
+) -> dict[str, object]:
+    request_id = str(status["request_id"])
+    document: dict[str, object] = {
+        "id": f"chatcmpl-{request_id}",
+        "object": "chat.completion",
+        "model": status.get("assignment"),
+        "x_llmrouter_request_id": request_id,
+        "x_llmrouter_state": status["state"],
+        "x_llmrouter_status_url": receipt["status_url"],
+    }
+    result = status.get("result")
+    outputs = result.get("outputs") if isinstance(result, dict) else None
+    output = outputs[0] if isinstance(outputs, list) and outputs else None
+    text = output.get("text") if isinstance(output, dict) else None
+    if isinstance(text, str) and status.get("state") == "succeeded":
+        document["choices"] = [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": text},
+                "finish_reason": "stop",
+            }
+        ]
+    return document
 
 
 def _service(request: Request, request_id: str) -> ModelRequestService:

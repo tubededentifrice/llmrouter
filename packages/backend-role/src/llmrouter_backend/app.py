@@ -86,6 +86,7 @@ def _install_complete_local_runtime() -> None:
         replay_path=Path("/local-state/backend-replay/accounting-replay.bin"),
         admin_session=_secret_text(Path(paths["admin_session"] or "")),
         admin_csrf=_secret_text(Path(paths["admin_csrf"] or "")),
+        openrouter_live_flag=os.environ.get("LLMROUTER_LOCAL_OPENROUTER_LIVE"),
     )
 
 

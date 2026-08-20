@@ -45,6 +45,9 @@ from llmrouter_backend.machine_identity import (
 )
 
 SERVICE_ID = "0198a080-0000-7000-8000-000000000101"
+DEEPSEEK_CANONICAL_MODEL_ID = "0198a080-0000-7000-8000-000000000120"
+MIMO_CANONICAL_MODEL_ID = "0198a080-0000-7000-8000-000000000121"
+GRANITE_CANONICAL_MODEL_ID = "0198a080-0000-7000-8000-000000000122"
 WORKSPACE_IDS = (
     "0198a080-0000-7000-8000-000000000102",
     "0198a080-0000-7000-8000-000000000103",
@@ -131,7 +134,7 @@ def _seed_budget(database_url: str, current: datetime) -> None:
 
 
 def _seed_catalog(database_url: str, current: datetime) -> None:
-    """Publish the accepted local OpenRouter and DeepSeek catalog once."""
+    """Publish the accepted local OpenRouter and model catalog once."""
     with psycopg.connect(database_url) as connection:
         active = connection.execute(
             """SELECT EXISTS (
@@ -163,8 +166,20 @@ def _seed_catalog(database_url: str, current: datetime) -> None:
             ),
             CatalogEntry(
                 CatalogKind.MODEL,
-                "0198a080-0000-7000-8000-000000000120",
+                DEEPSEEK_CANONICAL_MODEL_ID,
                 "DeepSeek V4 Flash",
+                frozenset({"chat.complete", "chat.stream"}),
+            ),
+            CatalogEntry(
+                CatalogKind.MODEL,
+                MIMO_CANONICAL_MODEL_ID,
+                "MiMo 2.5",
+                frozenset({"chat.complete", "chat.stream"}),
+            ),
+            CatalogEntry(
+                CatalogKind.MODEL,
+                GRANITE_CANONICAL_MODEL_ID,
+                "Granite 4.1 8B",
                 frozenset({"chat.complete", "chat.stream"}),
             ),
         )

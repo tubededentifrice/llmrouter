@@ -26,6 +26,7 @@ from llmrouter_backend.local_runtime import (
     LocalReplayProtector,
     _accounting_outcome,
     _local_openrouter,
+    _local_openrouter_transport,
     _router,
 )
 from llmrouter_backend.routing import AttemptOutcome as RoutingOutcome
@@ -38,6 +39,15 @@ EVENT_ID = "0198a080-0000-7000-8000-000000000151"
 RESERVATION_ID = "0198a080-0000-7000-8000-000000000152"
 ATTEMPT_ID = "0198a080-0000-7000-8000-000000000153"
 REQUEST_ROW_ID = "0198a080-0000-7000-8000-000000000154"
+
+
+def test_local_openrouter_live_transport_needs_the_exact_guard() -> None:
+    """Keep deterministic local runs offline unless the exact flag is present."""
+    assert isinstance(_local_openrouter_transport(None), httpx.MockTransport)
+    assert isinstance(_local_openrouter_transport("0"), httpx.MockTransport)
+    assert _local_openrouter_transport("1") is None
+    with pytest.raises(RuntimeError, match="flag is invalid"):
+        _local_openrouter_transport("true")
 
 
 def _event(payload: bytes = b'{"usage":"bounded"}') -> CanonicalEvent:
@@ -90,6 +100,7 @@ def test_local_openrouter_requires_bounded_model_and_authorization() -> None:
     )
     assert accepted.status_code == 200
     assert accepted.json()["choices"][0]["message"]["content"] == "local response"
+    assert accepted.json()["usage"]["prompt_tokens_details"] == {"cached_tokens": 0}
 
     denied = _local_openrouter(
         httpx.Request(
