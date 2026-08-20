@@ -21,6 +21,7 @@
     "test": "npm run build:shared-ui && vitest run",
     "security": "npm audit --audit-level=high",
     "react-doctor": "react-doctor apps/admin --json --json-compact --fail-on warning",
+    "react-doctor:embed-example": "react-doctor apps/embed-example --json --json-compact --fail-on warning",
     "build:shared-ui": "node --input-type=module -e \"import('node:fs').then(({existsSync}) => import(existsSync('../opendle-ui/scripts/build-consumer.mjs') ? '../opendle-ui/scripts/build-consumer.mjs' : '@opendle/ui/scripts/build-consumer.mjs'))\""
   },
   "devDependencies": {

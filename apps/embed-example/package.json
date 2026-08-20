@@ -1,0 +1,18 @@
+{
+  "name": "@llmrouter/embed-example",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prebuild": "npm run build:shared-ui --prefix ../..",
+    "predev": "npm run build:shared-ui --prefix ../..",
+    "dev": "vite",
+    "build": "vite build",
+    "test:browser": "node test/browser-proof.mjs"
+  },
+  "dependencies": {
+    "@opendle/ui": "git+https://github.com/tubededentifrice/opendle-ui.git#main",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  }
+}

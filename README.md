@@ -63,6 +63,10 @@ protected external site is [https://llmrouter.opendle.dev](https://llmrouter.ope
 Pangolin and Traefik protect this external route. Agents MUST use the local
 URL directly. Do not use the protected external URL for agent tests.
 
+The [administration embed example](apps/embed-example/README.md) proves the
+service-scoped frame from a distinct localhost origin. It keeps the host
+service token in the example server process.
+
 Useful commands:
 
 ```bash

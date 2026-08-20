@@ -1,0 +1,147 @@
+:root {
+  color: var(--od-color-foreground);
+  background: var(--od-color-background);
+  font-family: var(--od-font-body), sans-serif;
+  font-synthesis: none;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-width: 300px;
+}
+
+body {
+  margin: 0;
+}
+
+button,
+iframe {
+  outline-offset: 3px;
+}
+
+:focus-visible {
+  outline: 3px solid var(--od-color-focus);
+}
+
+.example-host {
+  display: grid;
+  gap: 22px;
+  width: min(1180px, 100%);
+  min-height: 100vh;
+  padding: 32px;
+  margin: 0 auto;
+}
+
+.example-context {
+  display: grid;
+  gap: 18px;
+  padding: 22px;
+}
+
+.example-context-heading,
+.example-embed-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.example-context-heading h2,
+.example-context-heading p,
+.example-embed-heading h2,
+.example-embed-heading p,
+.example-frame-state p {
+  margin: 0;
+}
+
+.example-context-heading p,
+.example-embed-heading p {
+  margin-top: 5px;
+  color: var(--od-color-muted);
+}
+
+.example-context dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.example-context dl > div {
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid var(--od-color-border);
+  border-radius: 9px;
+  background: var(--od-color-surface);
+}
+
+.example-context dt {
+  color: var(--od-color-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.example-context dd {
+  margin: 7px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.example-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.example-embed {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.example-frame {
+  display: block;
+  width: 100%;
+  min-height: 240px;
+  border: 1px solid var(--od-color-border);
+  border-radius: 12px;
+  background: var(--od-color-surface);
+}
+
+.example-frame-state {
+  display: grid;
+  min-height: 240px;
+  place-items: center;
+  padding: 24px;
+  color: var(--od-color-muted);
+  text-align: center;
+}
+
+@media (max-width: 650px) {
+  .example-host {
+    gap: 16px;
+    padding: 18px 12px;
+  }
+
+  .example-context {
+    padding: 16px;
+  }
+
+  .example-context-heading,
+  .example-embed-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .example-context dl {
+    grid-template-columns: 1fr;
+  }
+
+  .example-actions > button {
+    width: 100%;
+    min-height: 44px;
+  }
+}

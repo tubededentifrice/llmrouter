@@ -23,9 +23,12 @@ npm run build
 "${repository_root}/scripts/check-client-packages.sh"
 npm run security
 react_report="$(mktemp)"
-trap 'rm -f "${react_report}"' EXIT
+embed_react_report="$(mktemp)"
+trap 'rm -f "${react_report}" "${embed_react_report}"' EXIT
 npm run --silent react-doctor >"${react_report}"
 node scripts/check-react-doctor.mjs "${react_report}"
+npm run --silent react-doctor:embed-example >"${embed_react_report}"
+node scripts/check-react-doctor.mjs "${embed_react_report}"
 if node scripts/check-react-doctor.mjs \
   scripts/tests/fixtures/react-doctor-invalid.json >/dev/null 2>&1; then
   echo "The React Doctor expected-failure fixture passed unexpectedly." >&2
