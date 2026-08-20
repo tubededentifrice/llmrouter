@@ -198,6 +198,10 @@ export type EmbedSessionRequest = { readonly host_user_subject: string; readonly
 
 export type EmbedSession = { readonly session_id: OpaqueId; readonly bootstrap_token: string; readonly frame_url: string; readonly expires_at: Timestamp; readonly message_version: "1"; };
 
+export type EmbedBootstrapRequest = { readonly bootstrap_token: string; readonly frame_nonce: string; readonly host_origin: string; };
+
+export type EmbedBootstrap = { readonly expires_at: Timestamp; readonly service_id: OpaqueId; readonly workspace_id?: OpaqueId; readonly permissions: ReadonlyArray<"configuration.read" | "configuration.write" | "budget.read" | "budget.write" | "accounting.read" | "request_status.read" | "health.read" | "diagnostic.run">; readonly theme: { readonly mode: "light" | "dark" | "system"; readonly density: "comfortable" | "compact"; readonly corner_style: "square" | "rounded"; }; };
+
 export type AdministratorSessionStart = { readonly purpose: "login" | "recent_authentication"; readonly return_path: string; };
 
 export type AdministratorAuthorization = { readonly authorization_url: string; readonly expires_at: Timestamp; };
@@ -3384,6 +3388,106 @@ export const contractSchemas = {
     ],
     "type": "object"
   },
+  "EmbedBootstrap": {
+    "additionalProperties": false,
+    "properties": {
+      "expires_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "permissions": {
+        "items": {
+          "enum": [
+            "configuration.read",
+            "configuration.write",
+            "budget.read",
+            "budget.write",
+            "accounting.read",
+            "request_status.read",
+            "health.read",
+            "diagnostic.run"
+          ],
+          "type": "string"
+        },
+        "minItems": 1,
+        "type": "array",
+        "uniqueItems": true
+      },
+      "service_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "theme": {
+        "additionalProperties": false,
+        "properties": {
+          "corner_style": {
+            "enum": [
+              "square",
+              "rounded"
+            ],
+            "type": "string"
+          },
+          "density": {
+            "enum": [
+              "comfortable",
+              "compact"
+            ],
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "light",
+              "dark",
+              "system"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode",
+          "density",
+          "corner_style"
+        ],
+        "type": "object"
+      },
+      "workspace_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      }
+    },
+    "required": [
+      "expires_at",
+      "service_id",
+      "permissions",
+      "theme"
+    ],
+    "type": "object"
+  },
+  "EmbedBootstrapRequest": {
+    "additionalProperties": false,
+    "properties": {
+      "bootstrap_token": {
+        "maxLength": 200,
+        "minLength": 43,
+        "type": "string",
+        "writeOnly": true
+      },
+      "frame_nonce": {
+        "maxLength": 200,
+        "minLength": 16,
+        "type": "string"
+      },
+      "host_origin": {
+        "description": "Exact canonical origin that the host sent in the checked handshake.",
+        "format": "uri",
+        "maxLength": 2000,
+        "type": "string"
+      }
+    },
+    "required": [
+      "bootstrap_token",
+      "frame_nonce",
+      "host_origin"
+    ],
+    "type": "object"
+  },
   "EmbedSession": {
     "additionalProperties": false,
     "properties": {
@@ -3419,7 +3523,9 @@ export const contractSchemas = {
     "additionalProperties": false,
     "properties": {
       "allowed_origin": {
+        "description": "Exact canonical HTTPS origin, or HTTP loopback origin for local development.",
         "format": "uri",
+        "maxLength": 2000,
         "type": "string"
       },
       "host_user_subject": {

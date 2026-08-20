@@ -106,6 +106,23 @@ live for less time because it cannot outlive the recent-authentication window.
 An uncertain bootstrap result needs a new embed session. The frame erases the
 bootstrap token after the redemption attempt.
 
+The frame redeems the bootstrap token with
+`POST /v1/administration/embed-sessions/{session_id}/bootstrap`. It sends the
+token, `frame_nonce`, and checked `host_origin` in the closed JSON body and
+sends its exact Router frame origin in the `Origin` header. The Router returns
+only the bounded session scope, permissions, theme, and expiry. It sets a
+Secure, HttpOnly, SameSite=None, host-only session cookie. The cookie and the
+exact Router frame origin are the authority inputs for later frame API calls.
+The frame cannot read the cookie. A mutation from the embedded view MUST use
+this origin-bound cookie authority and MUST fail before lookup when the exact
+Router frame origin is absent or different.
+
+The host backend can revoke a session with
+`DELETE /v1/services/{service_id}/administration/embed-sessions/{session_id}`.
+The bearer token needs the same `host_backend` audience and
+`admin_embed.create` operation as session creation. Expiry or revocation makes
+the embed session cookie invalid immediately.
+
 ## Messages
 
 Frame-to-host message types are:

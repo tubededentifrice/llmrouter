@@ -1194,8 +1194,56 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/EmbedSession'}
+        '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /v1/services/{service_id}/administration/embed-sessions/{session_id}:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+      - name: session_id
+        in: path
+        required: true
+        schema: {$ref: '#/components/schemas/OpaqueId'}
+    delete:
+      tags: [Administration]
+      operationId: revokeAdministrationEmbedSession
+      summary: Revoke one session created by the exact host service.
+      responses:
+        '204': {description: Embed session revoked.}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /v1/administration/embed-sessions/{session_id}/bootstrap:
+    parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema: {$ref: '#/components/schemas/OpaqueId'}
+      - name: Origin
+        in: header
+        required: true
+        schema: {type: string, format: uri, maxLength: 2000}
+    post:
+      tags: [Administration]
+      operationId: bootstrapAdministrationEmbedSession
+      summary: Consume one frame bootstrap secret and start an origin-bound session.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/EmbedBootstrapRequest'}
+      responses:
+        '200':
+          description: >-
+            Bootstrap completed. The Router sets a Secure, HttpOnly,
+            SameSite=None, host-only embed-session cookie.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/EmbedBootstrap'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
   /v1/admin/session-starts:
     post:
       tags: [Authentication]
@@ -3503,7 +3551,11 @@ components:
       properties:
         host_user_subject: {type: string, minLength: 1, maxLength: 200}
         workspace_id: {$ref: '#/components/schemas/OpaqueId'}
-        allowed_origin: {type: string, format: uri}
+        allowed_origin:
+          type: string
+          format: uri
+          maxLength: 2000
+          description: Exact canonical HTTPS origin, or HTTP loopback origin for local development.
         permissions:
           type: array
           minItems: 1
@@ -3528,6 +3580,39 @@ components:
         frame_url: {type: string, format: uri}
         expires_at: {$ref: '#/components/schemas/Timestamp'}
         message_version: {type: string, const: '1'}
+    EmbedBootstrapRequest:
+      type: object
+      additionalProperties: false
+      required: [bootstrap_token, frame_nonce, host_origin]
+      properties:
+        bootstrap_token: {type: string, minLength: 43, maxLength: 200, writeOnly: true}
+        frame_nonce: {type: string, minLength: 16, maxLength: 200}
+        host_origin:
+          type: string
+          format: uri
+          maxLength: 2000
+          description: Exact canonical origin that the host sent in the checked handshake.
+    EmbedBootstrap:
+      type: object
+      additionalProperties: false
+      required: [expires_at, service_id, permissions, theme]
+      properties:
+        expires_at: {$ref: '#/components/schemas/Timestamp'}
+        service_id: {$ref: '#/components/schemas/OpaqueId'}
+        workspace_id: {$ref: '#/components/schemas/OpaqueId'}
+        permissions:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {type: string, enum: [configuration.read, configuration.write, budget.read, budget.write, accounting.read, request_status.read, health.read, diagnostic.run]}
+        theme:
+          type: object
+          additionalProperties: false
+          required: [mode, density, corner_style]
+          properties:
+            mode: {type: string, enum: [light, dark, system]}
+            density: {type: string, enum: [comfortable, compact]}
+            corner_style: {type: string, enum: [square, rounded]}
     AdministratorSessionStart:
       type: object
       additionalProperties: false

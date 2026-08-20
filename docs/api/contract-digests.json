@@ -14,7 +14,7 @@
     },
     {
       "path": "docs/api/embed-protocol.md",
-      "sha256": "7b01be032006ef40a369501a03b1630db511bbc5912a3b61bab197267fc6bc21"
+      "sha256": "bc2e0a535ca52aad38fe9d84aaab21fa5b55b417d15a1b615df12af14213bd6c"
     },
     {
       "path": "docs/api/embedding-protocol.md",
@@ -26,7 +26,7 @@
     },
     {
       "path": "docs/api/openapi.yaml",
-      "sha256": "3c776ca01a4d787fde7c896263db59b044e921c79a70913ef5992fc953842b6c"
+      "sha256": "ea90b947c9305befd97b1a1fc72add8eecd552edefb8e3641ff78bded735e224"
     },
     {
       "path": "docs/api/request-fingerprint.md",
@@ -110,8 +110,10 @@
     "DiagnosticGrant": "16178d92e0d3361b740ecc78b74c18b9ed46b3c8c65fdd2e455639af9facd364",
     "EffectiveConfiguration": "adf6ddfa3b660137e24b229db3948d7dfe08f44c5ddfe5c24874c3f95a056b64",
     "EffectiveItem": "84eb5fc14227b73241580285fe5ba2b504827db8798c9560d58f3fb77f974c61",
+    "EmbedBootstrap": "4ae494fd67e17d90c3cc479e6b470002e578e8e0fe46505d9502f4cb0a68c1ff",
+    "EmbedBootstrapRequest": "04e5dbcfe4885a265b701ad811a24e65a1b4c2e60ae3c608300e043ff3c1f334",
     "EmbedSession": "4b2d8b056e156cc2323aa2f38659627320c10c6ff898b9b513bc0a1b0900fc37",
-    "EmbedSessionRequest": "d257910b89e78a918f1db9a8e9a31b018c66f520a33de1b04c419f6f82053173",
+    "EmbedSessionRequest": "e337b3e226115ceaea9e99f8b350ba0c3567f3648fa5ba6dee3d173224fb1b80",
     "EmbeddingAccounting": "0fc839055750986f76007bb7bdb224e7b5208cc30e95e8844e79d301f32b0ac4",
     "EmbeddingAdmissionReceipt": "0b4dd09e180e85eb6862522a567064578ef8316daf8da93e440d691e0e019f75",
     "EmbeddingInput": "2804fafc872e0c2e8f1d639cd7d2b6fc30baeee48aae7bfdebad67b3398babb6",
@@ -183,6 +185,6 @@
   },
   "contract_set": "llmrouter-v1",
   "generator_version": 1,
-  "source_sha256": "3c776ca01a4d787fde7c896263db59b044e921c79a70913ef5992fc953842b6c",
+  "source_sha256": "ea90b947c9305befd97b1a1fc72add8eecd552edefb8e3641ff78bded735e224",
   "version": "1.0.0"
 }

@@ -37,6 +37,7 @@ FINGERPRINT_SCHEMAS = {
 }
 ADMIN_WRITE_METHODS = {"post", "put", "patch", "delete"}
 PUBLIC_OPERATION_IDS = {
+    "bootstrapAdministrationEmbedSession",
     "completeAdministratorSession",
     "exchangeServiceToken",
     "getContractManifest",

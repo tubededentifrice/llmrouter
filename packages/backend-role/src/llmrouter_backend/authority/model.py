@@ -356,8 +356,8 @@ class EmbedPrincipal:
             raise ValueError(msg)
         if self.recent_auth_at is not None:
             _require_aware(self.recent_auth_at, "recent authentication time")
-            if self.recent_auth_at < self.issued_at:
-                msg = "The recent-authentication time must not precede session issue."
+            if self.recent_auth_at > self.issued_at:
+                msg = "The recent-authentication time must not follow session issue."
                 raise ValueError(msg)
             if self.expires_at > self.recent_auth_at + EMBED_RECENT_AUTH_LIMIT:
                 msg = (
