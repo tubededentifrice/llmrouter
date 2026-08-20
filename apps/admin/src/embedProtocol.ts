@@ -177,6 +177,7 @@ export class FrameProtocolController {
       });
       this.completeBootstrap(result);
     } catch {
+      if (this.isDisposed()) return;
       this.send("frame.error", {
         code: "temporarily_unavailable",
         message: "The embedded administration session did not start.",

@@ -278,4 +278,36 @@ describe("administration frame protocol", () => {
     await Promise.resolve();
     expect(accepted).not.toHaveBeenCalled();
   });
+
+  it("does not report a stale bootstrap failure after host disposal", async () => {
+    const parentWindow = { postMessage: vi.fn() };
+    let rejectBootstrap: ((error: Error) => void) | undefined;
+    const controller = new FrameProtocolController({
+      sessionId,
+      hostOrigin,
+      parentWindow,
+      fetchBootstrap: () =>
+        new Promise((_resolve, reject) => {
+          rejectBootstrap = reject;
+        }),
+      randomId: () => "nonce-message-000001",
+    });
+    const pending = controller.receive({
+      origin: hostOrigin,
+      source: parentWindow,
+      data: envelope("host.bootstrap", {
+        bootstrap_token: bootstrapToken,
+        frame_nonce: controller.frameNonce,
+        host_origin: hostOrigin,
+      }),
+    });
+    await controller.receive({
+      origin: hostOrigin,
+      source: parentWindow,
+      data: envelope("host.dispose", {}, "dispose"),
+    });
+    rejectBootstrap?.(new Error("stale failure"));
+    await pending;
+    expect(parentWindow.postMessage).not.toHaveBeenCalled();
+  });
 });

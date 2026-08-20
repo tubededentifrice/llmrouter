@@ -151,6 +151,11 @@ class EmbedSessionService:
                 request_id=request_id,
                 now=current,
             )
+            if principal.allowed_workspace_ids and (
+                scope.workspace_id not in principal.allowed_workspace_ids
+            ):
+                code = "insufficient_scope"
+                raise EmbedSessionError(code, request_id)
             return authorize(
                 principal,
                 OperationPolicy(

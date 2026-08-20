@@ -265,6 +265,18 @@ def test_frame_read_uses_only_embed_authority_and_exact_workspace() -> None:
             request_id="request-permission",
             now=NOW,
         )
+    from llmrouter_backend.authority import Scope
+
+    with pytest.raises(EmbedSessionError) as missing_workspace:
+        service.authorize_session(
+            "c" * 43,
+            "configuration.read",
+            Scope(SERVICE_ID),
+            request_origin=FRAME_ORIGIN,
+            request_id="request-missing-workspace",
+            now=NOW,
+        )
+    assert missing_workspace.value.code == "insufficient_scope"
 
 
 def test_workspace_token_cannot_create_service_wide_session() -> None:
@@ -436,6 +448,12 @@ def test_embed_snapshot_route_uses_only_hidden_cookie_and_exact_scope() -> None:
         context.authority_path is AuthorityPath.EMBED
         for context in administration.contexts.values()
     )
+    missing_workspace = client.get(
+        "/v1/embed/administration/snapshot",
+        params={"service_id": SERVICE_ID},
+        headers={"cookie": f"__Host-llmrouter-embed={'c' * 43}"},
+    )
+    assert missing_workspace.status_code == 403
     denied = client.get(
         "/v1/embed/administration/snapshot",
         params={"service_id": SERVICE_ID, "workspace_id": "other-workspace"},

@@ -138,6 +138,12 @@ html[data-embed-frame="true"] body {
 .embed-frame-state p {
   margin: 0;
 }
+.embed-frame-state > div {
+  min-width: 0;
+}
+.embed-frame-state h1 {
+  overflow-wrap: anywhere;
+}
 .embed-frame-state p {
   margin-top: 5px;
   color: var(--od-color-muted);
@@ -177,5 +183,9 @@ html[data-embed-mode="dark"] {
   .embed-list > div {
     align-items: flex-start;
     flex-direction: column;
+  }
+  .embed-frame-state h1 {
+    font-size: 26px;
+    line-height: 1.1;
   }
 }
