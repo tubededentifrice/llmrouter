@@ -185,6 +185,7 @@ export function App() {
             src={view.frame.frameUrl}
             title={view.frame.title}
             height={view.height}
+            data-section={view.section}
             sandbox="allow-scripts allow-same-origin"
             referrerPolicy="no-referrer"
           />

@@ -39,6 +39,10 @@ interface HostState {
   workspaceVariant: number;
 }
 
+interface CreateSessionInput {
+  readonly expected_revision: string;
+}
+
 export class ExampleHostService {
   constructor(
     private readonly configuration: ExampleHostConfiguration,
@@ -85,7 +89,17 @@ export class ExampleHostService {
         response.status,
         "The Router session request failed.",
       );
-    return (await response.json()) as CreatedEmbedSession;
+    const created: unknown = await response.json();
+    if (
+      typeof created !== "object" ||
+      created === null ||
+      !("session_id" in created) ||
+      typeof created.session_id !== "string" ||
+      created.session_id === "" ||
+      created.session_id.length > 200
+    )
+      throw new PublicHostError(502, "The Router session response is invalid.");
+    return created as CreatedEmbedSession;
   }
 
   async revokeSession(sessionId: string): Promise<void> {
@@ -188,6 +202,7 @@ export default defineConfig(() => {
 
 function exampleHostPlugin(configuration: ExampleHostConfiguration): Plugin {
   const states = new Map<string, HostState>();
+  const requestLocks = new Map<string, Promise<void>>();
   const service = new ExampleHostService(configuration, {
     fetcher: fetch,
     randomId: randomUUID,
@@ -201,7 +216,7 @@ function exampleHostPlugin(configuration: ExampleHostConfiguration): Plugin {
       next();
       return;
     }
-    void handleApi(request, response, service, states);
+    void handleApi(request, response, service, states, requestLocks);
   };
   return {
     name: "llmrouter-embed-example-host",
@@ -219,6 +234,7 @@ async function handleApi(
   response: ServerResponse,
   service: ExampleHostService,
   states: Map<string, HostState>,
+  requestLocks: Map<string, Promise<void>>,
 ): Promise<void> {
   response.setHeader("Cache-Control", "no-store");
   response.setHeader("X-Content-Type-Options", "nosniff");
@@ -226,52 +242,65 @@ async function handleApi(
     if (request.method !== "GET" && request.headers.origin !== hostOrigin) {
       throw new PublicHostError(403, "The example host origin is invalid.");
     }
-    const { id, state } = stateForRequest(request, response, service, states);
-    const url = new URL(request.url ?? "/", hostOrigin);
-    if (url.pathname === "/api/context" && request.method === "GET") {
-      sendJson(response, 200, state.context);
-      return;
-    }
-    if (url.pathname === "/api/context" && request.method === "POST") {
-      const body = await readJson(request);
-      const action = parseContextAction(body);
-      if (state.activeSessionId !== null) {
-        await service.revokeSession(state.activeSessionId);
-        state.activeSessionId = null;
-      }
-      const nextState = service.changeContext(state, action);
-      states.set(id, nextState);
-      sendJson(response, 200, nextState.context);
-      return;
-    }
-    if (url.pathname === "/api/embed-session" && request.method === "POST") {
-      await readJson(request);
-      if (state.activeSessionId !== null) {
-        await service.revokeSession(state.activeSessionId);
-        state.activeSessionId = null;
-      }
-      const created = await service.createSession(state.context);
-      state.activeSessionId = created.session_id;
-      sendJson(response, 201, created);
-      return;
-    }
-    const sessionMatch = /^\/api\/embed-session\/([^/]+)$/.exec(url.pathname);
-    if (sessionMatch !== null && request.method === "DELETE") {
-      const sessionId = decodeURIComponent(sessionMatch[1] ?? "");
-      if (state.activeSessionId !== sessionId) {
-        sendJson(response, 404, {
-          error: "The example host session is not active.",
-        });
+    const id = stateIdForRequest(request, response, service, states);
+    await serializeRequest(id, requestLocks, async () => {
+      const state = states.get(id);
+      if (state === undefined)
+        throw new PublicHostError(
+          500,
+          "The example host state is unavailable.",
+        );
+      const url = new URL(request.url ?? "/", hostOrigin);
+      if (url.pathname === "/api/context" && request.method === "GET") {
+        sendJson(response, 200, state.context);
         return;
       }
-      await service.revokeSession(sessionId);
-      state.activeSessionId = null;
-      response.statusCode = 204;
-      response.end();
-      return;
-    }
-    sendJson(response, 404, {
-      error: "The example host route does not exist.",
+      if (url.pathname === "/api/context" && request.method === "POST") {
+        const body = await readJson(request);
+        const action = parseContextAction(body);
+        if (state.activeSessionId !== null) {
+          await service.revokeSession(state.activeSessionId);
+          state.activeSessionId = null;
+        }
+        const nextState = service.changeContext(state, action);
+        states.set(id, nextState);
+        sendJson(response, 200, nextState.context);
+        return;
+      }
+      if (url.pathname === "/api/embed-session" && request.method === "POST") {
+        const input = parseCreateSessionInput(await readJson(request));
+        if (input.expected_revision !== state.context.revision)
+          throw new PublicHostError(
+            409,
+            "The example host authorization changed before session creation.",
+          );
+        if (state.activeSessionId !== null) {
+          await service.revokeSession(state.activeSessionId);
+          state.activeSessionId = null;
+        }
+        const created = await service.createSession(state.context);
+        state.activeSessionId = created.session_id;
+        sendJson(response, 201, created);
+        return;
+      }
+      const sessionMatch = /^\/api\/embed-session\/([^/]+)$/.exec(url.pathname);
+      if (sessionMatch !== null && request.method === "DELETE") {
+        const sessionId = decodeURIComponent(sessionMatch[1] ?? "");
+        if (state.activeSessionId !== sessionId) {
+          sendJson(response, 404, {
+            error: "The example host session is not active.",
+          });
+          return;
+        }
+        await service.revokeSession(sessionId);
+        state.activeSessionId = null;
+        response.statusCode = 204;
+        response.end();
+        return;
+      }
+      sendJson(response, 404, {
+        error: "The example host route does not exist.",
+      });
     });
   } catch (error) {
     const status = error instanceof PublicHostError ? error.status : 400;
@@ -283,12 +312,12 @@ async function handleApi(
   }
 }
 
-function stateForRequest(
+function stateIdForRequest(
   request: IncomingMessage,
   response: ServerResponse,
   service: ExampleHostService,
   states: Map<string, HostState>,
-): { readonly id: string; readonly state: HostState } {
+): string {
   const id = cookieValue(request.headers.cookie, cookieName) ?? randomUUID();
   const state = states.get(id) ?? service.initialState();
   states.set(id, state);
@@ -298,7 +327,27 @@ function stateForRequest(
       `${cookieName}=${id}; HttpOnly; SameSite=Strict; Path=/; Max-Age=3600`,
     );
   }
-  return { id, state };
+  return id;
+}
+
+async function serializeRequest(
+  id: string,
+  requestLocks: Map<string, Promise<void>>,
+  operation: () => Promise<void>,
+): Promise<void> {
+  const previous = requestLocks.get(id) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  requestLocks.set(id, current);
+  await previous.catch(() => undefined);
+  try {
+    await operation();
+  } finally {
+    release();
+    if (requestLocks.get(id) === current) requestLocks.delete(id);
+  }
 }
 
 function configurationFromEnvironment(): ExampleHostConfiguration {
@@ -341,6 +390,22 @@ function parseContextAction(value: unknown): ContextAction {
     throw new PublicHostError(400, "The example context action is invalid.");
   }
   return value.action as ContextAction;
+}
+
+function parseCreateSessionInput(value: unknown): CreateSessionInput {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    Object.keys(value).length !== 1 ||
+    !("expected_revision" in value) ||
+    typeof value.expected_revision !== "string" ||
+    value.expected_revision === "" ||
+    value.expected_revision.length > 200
+  ) {
+    throw new PublicHostError(400, "The example session request is invalid.");
+  }
+  return { expected_revision: value.expected_revision };
 }
 
 async function readJson(request: IncomingMessage): Promise<unknown> {

@@ -53,11 +53,18 @@ interface ActiveSession {
   readonly frameUrl: string;
   readonly expiresAt: string;
   bootstrapToken: string;
-  bootstrapped: boolean;
+  bootstrapSent: boolean;
+  bootstrapConfirmed: boolean;
   readonly seen: Set<string>;
 }
 
 const maximumMessageIds = 256;
+const allowedExamplePermissions = new Set([
+  "health.read",
+  "configuration.read",
+  "request_status.read",
+  "accounting.read",
+]);
 
 export class HostProtocolController {
   private context: HostContext | null = null;
@@ -65,6 +72,7 @@ export class HostProtocolController {
   private generation = 0;
   private expiryTimer: number | null = null;
   private stopped = false;
+  private revokeUncertain = false;
   private view: HostView = {
     phase: "empty",
     message: "The host context is not loaded.",
@@ -83,13 +91,14 @@ export class HostProtocolController {
     }
   }
 
-  async replaceContext(context: HostContext): Promise<void> {
-    if (this.stopped) return;
+  async replaceContext(context: HostContext, force = false): Promise<void> {
+    if (this.stopped || this.revokeUncertain) return;
     if (!validContext(context)) {
       await this.clear("The host context is invalid.");
       return;
     }
-    if (sameContext(this.context, context) && this.session !== null) return;
+    if (!force && sameContext(this.context, context) && this.session !== null)
+      return;
     this.context = context;
     const generation = ++this.generation;
     const revoked = await this.disposeSession();
@@ -110,7 +119,7 @@ export class HostProtocolController {
     });
     let created: CreatedEmbedSession;
     try {
-      created = await this.options.api.createSession();
+      created = await this.options.api.createSession(context.revision);
     } catch {
       if (generation === this.generation)
         this.publish({
@@ -120,19 +129,33 @@ export class HostProtocolController {
         });
       return;
     }
+    const createdId = createdSessionId(created);
     if (!this.isCurrent(generation)) {
-      await this.options.api
-        .revokeSession(created.session_id)
-        .catch(() => undefined);
       eraseCreatedSession(created);
+      if (createdId === null) {
+        this.failClosedAfterUncertainRevoke();
+        return;
+      }
+      try {
+        await this.options.api.revokeSession(createdId);
+      } catch {
+        this.failClosedAfterUncertainRevoke();
+      }
       return;
     }
     const session = parseCreatedSession(created, this.options);
     eraseCreatedSession(created);
     if (session === null) {
-      await this.options.api
-        .revokeSession(created.session_id)
-        .catch(() => undefined);
+      if (createdId === null) {
+        this.failClosedAfterUncertainRevoke();
+        return;
+      }
+      try {
+        await this.options.api.revokeSession(createdId);
+      } catch {
+        this.failClosedAfterUncertainRevoke();
+        return;
+      }
       this.publish({
         phase: "error",
         message: "The Router returned an invalid embed session.",
@@ -177,10 +200,13 @@ export class HostProtocolController {
       this.bootstrap(session, envelope.payload, frameWindow);
       return;
     }
-    if (!session.bootstrapped) return;
     if (envelope.type === "frame.bootstrapped") {
+      if (!session.bootstrapSent || session.bootstrapConfirmed) return;
       this.bootstrapped(session, envelope.payload);
-    } else if (envelope.type === "frame.height_changed") {
+      return;
+    }
+    if (!session.bootstrapConfirmed) return;
+    if (envelope.type === "frame.height_changed") {
       const height = envelope.payload.height_px;
       if (
         Object.keys(envelope.payload).length === 1 &&
@@ -201,12 +227,19 @@ export class HostProtocolController {
         this.publish({ section });
       }
     } else if (envelope.type === "frame.session_expired") {
-      await this.renew("The Router session expired. The host is renewing it.");
+      if (
+        hasExactKeys(envelope.payload, ["expired_at"]) &&
+        envelope.payload.expired_at === session.expiresAt
+      )
+        await this.renew(
+          "The Router session expired. The host is renewing it.",
+        );
     } else if (envelope.type === "frame.error") {
-      this.publish({
-        phase: "error",
-        message: "The embedded Router view reported a safe error.",
-      });
+      if (validFrameError(envelope.payload))
+        this.publish({
+          phase: "error",
+          message: "The embedded Router view reported a safe error.",
+        });
     }
   }
 
@@ -226,12 +259,9 @@ export class HostProtocolController {
     message = "The host is renewing the Router session.",
   ): Promise<void> {
     const context = this.context;
-    if (context === null || this.stopped) return;
+    if (context === null || this.stopped || this.revokeUncertain) return;
     this.publish({ phase: "loading", message, frame: null });
-    await this.replaceContext({
-      ...context,
-      revision: `${context.revision}:renew`,
-    });
+    await this.replaceContext(context, true);
   }
 
   async stop(): Promise<void> {
@@ -251,13 +281,14 @@ export class HostProtocolController {
       session.bootstrapToken === "" ||
       !hasExactKeys(payload, ["frame_nonce"]) ||
       typeof payload.frame_nonce !== "string" ||
-      payload.frame_nonce.length < 16
+      payload.frame_nonce.length < 16 ||
+      payload.frame_nonce.length > 200
     ) {
       return;
     }
     const token = session.bootstrapToken;
     session.bootstrapToken = "";
-    session.bootstrapped = true;
+    session.bootstrapSent = true;
     frameWindow.postMessage(
       this.envelope("host.bootstrap", session.id, {
         bootstrap_token: token,
@@ -300,6 +331,7 @@ export class HostProtocolController {
       () => void this.renew(),
       Math.max(0, delay - 1_000),
     );
+    session.bootstrapConfirmed = true;
     this.publish({
       phase: "active",
       message: "The host authorized this exact Router scope.",
@@ -309,7 +341,7 @@ export class HostProtocolController {
   private send(type: string, payload: Record<string, unknown>): void {
     const session = this.session;
     const frameWindow = this.options.frameWindow();
-    if (session === null || !session.bootstrapped || frameWindow === null)
+    if (session === null || !session.bootstrapConfirmed || frameWindow === null)
       return;
     frameWindow.postMessage(
       this.envelope(type, session.id, payload),
@@ -346,7 +378,7 @@ export class HostProtocolController {
     this.session = null;
     if (session === null) return true;
     const frameWindow = this.options.frameWindow();
-    if (frameWindow !== null && session.bootstrapped) {
+    if (frameWindow !== null && session.bootstrapSent) {
       frameWindow.postMessage(
         this.envelope("host.dispose", session.id, {}),
         this.options.routerOrigin,
@@ -359,13 +391,20 @@ export class HostProtocolController {
       await this.options.api.revokeSession(session.id);
       return true;
     } catch {
-      this.publish({
-        phase: "error",
-        message: "The host could not revoke the old Router session.",
-        frame: null,
-      });
+      this.failClosedAfterUncertainRevoke();
       return false;
     }
+  }
+
+  private failClosedAfterUncertainRevoke(): void {
+    this.revokeUncertain = true;
+    ++this.generation;
+    this.publish({
+      phase: "error",
+      message:
+        "The old Router session state is uncertain. Reload the host before a new session starts.",
+      frame: null,
+    });
   }
 
   private publish(change: Partial<HostView>): void {
@@ -380,18 +419,22 @@ export class HostProtocolController {
 
 function parseCreatedSession(
   value: CreatedEmbedSession,
-  options: Pick<HostProtocolOptions, "hostOrigin" | "routerOrigin">,
+  options: Pick<HostProtocolOptions, "hostOrigin" | "now" | "routerOrigin">,
 ): ActiveSession | null {
   try {
     const messageVersion: unknown = value.message_version;
     const url = new URL(value.frame_url);
     const sessionValues = url.searchParams.getAll("session_id");
     const hostValues = url.searchParams.getAll("host_origin");
+    const expiresAt = Date.parse(value.expires_at);
+    const now = (options.now ?? Date.now)();
     if (
       messageVersion !== EMBED_VERSION ||
       value.session_id === "" ||
       value.session_id.length > 200 ||
+      typeof value.bootstrap_token !== "string" ||
       value.bootstrap_token.length < 43 ||
+      value.bootstrap_token.length > 512 ||
       url.origin !== options.routerOrigin ||
       url.pathname !== "/service-administration" ||
       url.username !== "" ||
@@ -402,7 +445,12 @@ function parseCreatedSession(
       sessionValues[0] !== value.session_id ||
       hostValues.length !== 1 ||
       hostValues[0] !== options.hostOrigin ||
-      !Number.isFinite(Date.parse(value.expires_at))
+      [...url.searchParams.keys()].some(
+        (key) => key !== "session_id" && key !== "host_origin",
+      ) ||
+      !Number.isFinite(expiresAt) ||
+      expiresAt <= now ||
+      expiresAt > now + 300_000
     ) {
       return null;
     }
@@ -411,12 +459,24 @@ function parseCreatedSession(
       frameUrl: url.href,
       expiresAt: value.expires_at,
       bootstrapToken: value.bootstrap_token,
-      bootstrapped: false,
+      bootstrapSent: false,
+      bootstrapConfirmed: false,
       seen: new Set(),
     };
   } catch {
     return null;
   }
+}
+
+function createdSessionId(value: unknown): string | null {
+  if (
+    !isRecord(value) ||
+    typeof value.session_id !== "string" ||
+    value.session_id === "" ||
+    value.session_id.length > 200
+  )
+    return null;
+  return value.session_id;
 }
 
 function eraseCreatedSession(value: CreatedEmbedSession): void {
@@ -427,15 +487,26 @@ function eraseCreatedSession(value: CreatedEmbedSession): void {
   }
 }
 
-function validContext(value: HostContext): boolean {
+function validContext(value: unknown): value is HostContext {
   return (
-    value.revision !== "" &&
-    value.service_id !== "" &&
-    value.host_user_subject !== "" &&
-    value.workspace_id !== "" &&
+    isRecord(value) &&
+    validBoundedIdentity(value.revision) &&
+    validBoundedIdentity(value.service_id) &&
+    validBoundedIdentity(value.host_user_subject) &&
+    validBoundedIdentity(value.workspace_id) &&
+    typeof value.membership === "boolean" &&
+    Array.isArray(value.permissions) &&
     value.permissions.length > 0 &&
-    value.permissions.every((item) => typeof item === "string" && item !== "")
+    value.permissions.length <= allowedExamplePermissions.size &&
+    new Set(value.permissions).size === value.permissions.length &&
+    value.permissions.every(
+      (item) => typeof item === "string" && allowedExamplePermissions.has(item),
+    )
   );
+}
+
+function validBoundedIdentity(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 200;
 }
 
 function sameContext(left: HostContext | null, right: HostContext): boolean {
@@ -484,6 +555,27 @@ function knownFrameType(value: string): boolean {
     "frame.session_expired",
     "frame.error",
   ].includes(value);
+}
+
+function validFrameError(value: Record<string, unknown>): boolean {
+  return (
+    hasExactKeys(value, ["code", "message", "retryable"]) &&
+    typeof value.code === "string" &&
+    [
+      "session_expired",
+      "origin_mismatch",
+      "unsupported_message_version",
+      "permission_denied",
+      "workspace_unavailable",
+      "revision_conflict",
+      "temporarily_unavailable",
+      "internal_error",
+    ].includes(value.code) &&
+    typeof value.message === "string" &&
+    value.message.length > 0 &&
+    value.message.length <= 500 &&
+    typeof value.retryable === "boolean"
+  );
 }
 
 function remember(values: Set<string>, value: string): void {

@@ -106,6 +106,49 @@ try {
     stdio: "ignore",
   });
   await waitForUrl(hostOrigin);
+  const raceContextResponse = await fetch(`${hostOrigin}/api/context`);
+  const raceContext = await raceContextResponse.json();
+  const raceCookie = raceContextResponse.headers
+    .get("set-cookie")
+    ?.split(";", 1)[0];
+  assert(
+    raceCookie !== undefined,
+    "The example host did not set its state cookie.",
+  );
+  const raceCreate = fetch(`${hostOrigin}/api/embed-session`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Cookie: raceCookie,
+      Origin: hostOrigin,
+    },
+    body: JSON.stringify({ expected_revision: raceContext.revision }),
+  });
+  await delay(10);
+  const raceChange = fetch(`${hostOrigin}/api/context`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Cookie: raceCookie,
+      Origin: hostOrigin,
+    },
+    body: JSON.stringify({ action: "switch_workspace" }),
+  });
+  const [raceCreateResponse, raceChangeResponse] = await Promise.all([
+    raceCreate,
+    raceChange,
+  ]);
+  assert(
+    raceCreateResponse.status === 201 && raceChangeResponse.status === 200,
+    "The serialized context race did not complete.",
+  );
+  assert(
+    sessions.size === 0,
+    "A concurrent context change left an old-scope Router session active.",
+  );
+  sessions.clear();
+  createCount = 0;
+  revokeCount = 0;
   const wrongOrigin = await fetch(`${hostOrigin}/api/context`, {
     method: "POST",
     headers: {
@@ -149,6 +192,34 @@ try {
     String(firstFrame).includes("browser-session-1"),
     "The first frame did not start.",
   );
+  const firstHeight = await evaluate(
+    cdp,
+    `document.querySelector("iframe").getAttribute("height")`,
+  );
+  assert(firstHeight === "360", "The frame height message was not applied.");
+  await waitForExpression(
+    cdp,
+    `document.querySelector("iframe")?.dataset.section === "requests"`,
+  );
+  const rejectedMessageState = await evaluate(
+    cdp,
+    `(() => {
+      const frame = document.querySelector("iframe");
+      const source = frame.contentWindow;
+      const base = {protocol: "llmrouter-admin-embed", version: "1", session_id: "browser-session-1", type: "frame.height_changed", payload: {height_px: 999}};
+      dispatchEvent(new MessageEvent("message", {origin: "http://127.0.0.1:5999", source, data: {...base, message_id: "wrong-origin"}}));
+      dispatchEvent(new MessageEvent("message", {origin: ${JSON.stringify(routerOrigin)}, source: window, data: {...base, message_id: "wrong-source"}}));
+      dispatchEvent(new MessageEvent("message", {origin: ${JSON.stringify(routerOrigin)}, source, data: {...base, session_id: "wrong-session", message_id: "wrong-session"}}));
+      dispatchEvent(new MessageEvent("message", {origin: ${JSON.stringify(routerOrigin)}, source, data: {...base, version: "2", message_id: "wrong-version"}}));
+      dispatchEvent(new MessageEvent("message", {origin: ${JSON.stringify(routerOrigin)}, source, data: {...base, message_id: "frame-height"}}));
+      return {height: frame.getAttribute("height"), section: frame.dataset.section};
+    })()`,
+  );
+  assert(
+    rejectedMessageState.height === "360" &&
+      rejectedMessageState.section === "requests",
+    `The host accepted an invalid or replayed frame message: ${JSON.stringify(rejectedMessageState)}.`,
+  );
   await cdp.send("Emulation.setDeviceMetricsOverride", {
     width: 320,
     height: 800,
@@ -188,9 +259,86 @@ try {
     revokeCount >= 1,
     "The workspace switch did not revoke the old session.",
   );
+  for (const label of ["Switch user", "Change permissions", "Renew session"]) {
+    const previousCreateCount = createCount;
+    await evaluate(
+      cdp,
+      `([...document.querySelectorAll("button")].find((button) => button.textContent.includes(${JSON.stringify(label)}))).click()`,
+    );
+    try {
+      await waitForExpression(
+        cdp,
+        `document.body.textContent.includes("authorized this exact Router scope") && document.querySelector("iframe")?.getAttribute("src").includes("browser-session-${previousCreateCount + 1}")`,
+      );
+    } catch {
+      const state = await evaluate(
+        cdp,
+        `({text: document.body.innerText, frame: document.querySelector("iframe")?.getAttribute("src")})`,
+      );
+      throw new Error(
+        `${label} did not activate its replacement frame: ${JSON.stringify(state)}.`,
+      );
+    }
+    assert(
+      createCount === previousCreateCount + 1,
+      `${label} did not create one replacement session.`,
+    );
+  }
+  const expiringSessionId = `browser-session-${createCount}`;
+  const expiringSession = sessions.get(expiringSessionId);
+  assert(expiringSession !== undefined, "The active session cannot expire.");
+  const beforeExpiry = createCount;
+  await evaluate(
+    cdp,
+    `(() => {
+      const frame = document.querySelector("iframe");
+      dispatchEvent(new MessageEvent("message", {
+        origin: ${JSON.stringify(routerOrigin)},
+        source: frame.contentWindow,
+        data: {
+          protocol: "llmrouter-admin-embed",
+          version: "1",
+          session_id: ${JSON.stringify(expiringSessionId)},
+          message_id: "browser-expiry",
+          type: "frame.session_expired",
+          payload: {expired_at: ${JSON.stringify(expiringSession.expiresAt)}}
+        }
+      }));
+    })()`,
+  );
+  await waitForExpression(
+    cdp,
+    `document.body.textContent.includes("authorized this exact Router scope") && document.querySelector("iframe")?.getAttribute("src").includes("browser-session-${beforeExpiry + 1}")`,
+  );
+  assert(createCount === beforeExpiry + 1, "Frame expiry did not renew once.");
+  const beforeMembershipLoss = createCount;
+  await evaluate(
+    cdp,
+    `([...document.querySelectorAll("button")].find((button) => button.textContent.includes("Remove membership"))).click()`,
+  );
+  await waitForExpression(
+    cdp,
+    `document.body.textContent.includes("No membership") && document.querySelector("iframe") === null`,
+  );
+  assert(
+    createCount === beforeMembershipLoss,
+    "Membership loss created a Router session.",
+  );
+  await evaluate(
+    cdp,
+    `([...document.querySelectorAll("button")].find((button) => button.textContent.includes("Restore membership"))).click()`,
+  );
+  await waitForExpression(
+    cdp,
+    `document.body.textContent.includes("authorized this exact Router scope") && document.querySelector("iframe")?.getAttribute("src").includes("browser-session-${beforeMembershipLoss + 1}")`,
+  );
+  assert(
+    [...sessions.keys()].length === 1,
+    "The host left an old Router session after authority changes.",
+  );
   cdp.close();
   process.stdout.write(
-    "Embed example browser proof passed: 2 sessions, old scope revoked, keyboard focus, 320 px layout.\n",
+    "Embed example browser proof passed: context changes, renewal, membership loss and restore, bounded sizing, keyboard focus, and 320 px layout.\n",
   );
 } finally {
   chrome?.kill("SIGTERM");
@@ -213,6 +361,7 @@ function frameScript(sessionId, session) {
       document.querySelector("#scope").textContent = proof.session.workspaceId;
       send("frame.bootstrapped", {expires_at: proof.session.expiresAt, service_id: ${JSON.stringify(serviceId)}, workspace_id: proof.session.workspaceId}, "frame-bootstrapped");
       send("frame.height_changed", {height_px: 360}, "frame-height");
+      send("frame.navigation_changed", {section: "requests"}, "frame-navigation");
     });
     send("frame.ready", {frame_nonce: nonce}, "frame-ready");
   `;

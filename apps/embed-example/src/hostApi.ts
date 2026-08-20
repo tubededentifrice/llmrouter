@@ -28,7 +28,10 @@ export interface HostApi {
     action: ContextAction,
     signal?: AbortSignal,
   ): Promise<HostContext>;
-  createSession(signal?: AbortSignal): Promise<CreatedEmbedSession>;
+  createSession(
+    expectedRevision: string,
+    signal?: AbortSignal,
+  ): Promise<CreatedEmbedSession>;
   revokeSession(sessionId: string): Promise<void>;
 }
 
@@ -38,12 +41,12 @@ export function createHostApi(fetcher: typeof fetch = fetch): HostApi {
       requestContext(fetcher, "/api/context", undefined, signal),
     changeContext: (action, signal) =>
       requestContext(fetcher, "/api/context", { action }, signal),
-    createSession: async (signal) => {
+    createSession: async (expectedRevision, signal) => {
       const response = await fetcher("/api/embed-session", {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
-        body: "{}",
+        body: JSON.stringify({ expected_revision: expectedRevision }),
         ...(signal === undefined ? {} : { signal }),
       });
       if (!response.ok) throw new Error(await safeError(response));

@@ -73,7 +73,9 @@ function fixture(session: CreatedEmbedSession = created()) {
       messages.push({ message, origin });
     }),
   };
-  const createSession = vi.fn(() => Promise.resolve({ ...session }));
+  const createSession = vi.fn<HostApi["createSession"]>(() =>
+    Promise.resolve({ ...session }),
+  );
   const revokeSession = vi.fn(() => Promise.resolve());
   const api: HostApi = {
     context: vi.fn(() => Promise.resolve(context())),
@@ -219,7 +221,36 @@ describe("example host protocol", () => {
       frame: null,
     });
     expect(value.createSession).toHaveBeenCalledTimes(1);
+    await value.controller.renew();
+    expect(value.createSession).toHaveBeenCalledTimes(1);
     await value.controller.replaceContext(context({ revision: "restored" }));
+    expect(value.createSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails closed when stale-session cleanup is uncertain", async () => {
+    let resolveFirst!: (value: CreatedEmbedSession) => void;
+    const first = new Promise<CreatedEmbedSession>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const value = fixture();
+    value.createSession.mockReturnValueOnce(first).mockResolvedValueOnce(
+      created({
+        session_id: "session-new",
+        frame_url: `${routerOrigin}/service-administration?session_id=session-new&host_origin=${encodeURIComponent(hostOrigin)}`,
+      }),
+    );
+    value.revokeSession.mockRejectedValueOnce(new Error("uncertain revoke"));
+    const oldRequest = value.controller.replaceContext(context());
+    await vi.waitFor(() => {
+      expect(value.createSession).toHaveBeenCalledOnce();
+    });
+    const newRequest = value.controller.replaceContext(
+      context({ revision: "new", workspace_id: "workspace-example-b" }),
+    );
+    resolveFirst(created());
+    await Promise.all([oldRequest, newRequest]);
+    await value.controller.renew();
+    expect(value.views.at(-1)).toMatchObject({ phase: "error", frame: null });
     expect(value.createSession).toHaveBeenCalledTimes(2);
   });
 
@@ -243,6 +274,49 @@ describe("example host protocol", () => {
     await value.controller.replaceContext(context());
     expect(value.views.at(-1)).toMatchObject({ phase: "error", frame: null });
     expect(value.revokeSession).toHaveBeenCalledWith(sessionId);
+  });
+
+  it("fails closed for a malformed create response with no cleanup identity", async () => {
+    const value = fixture();
+    value.createSession.mockResolvedValueOnce(null as never);
+    await value.controller.replaceContext(context());
+    await value.controller.renew();
+    expect(value.views.at(-1)).toMatchObject({ phase: "error", frame: null });
+    expect(value.createSession).toHaveBeenCalledOnce();
+    expect(value.revokeSession).not.toHaveBeenCalled();
+  });
+
+  it("rejects an expired or overlong session before it loads a frame", async () => {
+    await Promise.all(
+      ["2026-08-20T11:59:59Z", "2026-08-20T12:05:01Z"].map(
+        async (expires_at) => {
+          const value = fixture(created({ expires_at }));
+          await value.controller.replaceContext(context());
+          expect(value.views.at(-1)).toMatchObject({
+            phase: "error",
+            frame: null,
+          });
+          expect(value.revokeSession).toHaveBeenCalledWith(sessionId);
+        },
+      ),
+    );
+  });
+
+  it("rejects unknown or duplicate permissions from the host context", async () => {
+    await Promise.all(
+      [
+        ["configuration.read", "configuration.read"],
+        ["configuration.read", "configuration.write"],
+      ].map(async (permissions) => {
+        const value = fixture();
+        await value.controller.replaceContext(context({ permissions }));
+        expect(value.views.at(-1)).toMatchObject({
+          phase: "error",
+          frame: null,
+        });
+        expect(value.createSession).not.toHaveBeenCalled();
+      }),
+    );
   });
 
   it("renews before expiry and after a frame expiry message", async () => {
@@ -274,12 +348,46 @@ describe("example host protocol", () => {
       origin: routerOrigin,
       source: signalled.frameWindow,
       data: envelope(
+        "frame.bootstrapped",
+        {
+          expires_at: "2026-08-20T12:05:00Z",
+          service_id: serviceId,
+          workspace_id: "workspace-example-a",
+        },
+        "signalled-active",
+      ),
+    });
+    await signalled.controller.receive({
+      origin: routerOrigin,
+      source: signalled.frameWindow,
+      data: envelope(
         "frame.session_expired",
         { expired_at: "2026-08-20T12:05:00Z" },
         "expiry-signal",
       ),
     });
     expect(signalled.createSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores lifecycle messages before confirmation and malformed expiry", async () => {
+    const value = fixture();
+    await start(value);
+    await value.controller.receive({
+      origin: routerOrigin,
+      source: value.frameWindow,
+      data: envelope(
+        "frame.height_changed",
+        { height_px: 999 },
+        "height-before-confirmation",
+      ),
+    });
+    await value.controller.receive({
+      origin: routerOrigin,
+      source: value.frameWindow,
+      data: envelope("frame.session_expired", {}, "malformed-expiry"),
+    });
+    expect(value.views.at(-1)?.height).toBe(420);
+    expect(value.createSession).toHaveBeenCalledOnce();
   });
 
   it("applies bounded frame height and safe navigation after bootstrap", async () => {
@@ -366,7 +474,7 @@ describe("example host protocol", () => {
     expect(value.revokeSession).toHaveBeenCalledWith(sessionId);
   });
 
-  it("keeps secrets out of view state and built browser source", async () => {
+  it("keeps secrets out of view state and browser source", async () => {
     const value = fixture();
     await start(value);
     expect(JSON.stringify(value.views)).not.toContain(bootstrapToken);
