@@ -9,7 +9,17 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 COMPOSE_PATH = REPOSITORY_ROOT / "docker-compose.dev.yml"
 IMMUTABLE_IMAGE = re.compile(r"^[^\s@]+(?:[:][^\s@]+)?@sha256:[0-9a-f]{64}$")
-PORT_BINDING = re.compile(r'^\s+- "(?P<binding>[^\"]*\d+:\d+)"$', re.MULTILINE)
+PORT_BINDING = re.compile(
+    r"^\s+-\s+['\"]?(?P<binding>[^'\"\s#]*\d+:\d+(?:/tcp)?)['\"]?\s*$",
+    re.MULTILINE,
+)
+EXPECTED_PORT_BINDINGS = {
+    "127.0.0.1:5434:5432",
+    "127.0.0.1:8010:8000",
+    "127.0.0.1:5174:5173",
+    "127.0.0.1:5175:5173",
+    "127.0.0.1:5176:5176",
+}
 
 
 def main() -> None:
@@ -32,9 +42,14 @@ def main() -> None:
         IMMUTABLE_IMAGE.fullmatch(image) is None for image in images
     ):
         raise SystemExit("A local development image is not immutable.")
-    for match in PORT_BINDING.finditer(text):
-        if not match.group("binding").startswith("127.0.0.1:"):
-            raise SystemExit("A local development service has a public port binding.")
+    port_bindings = {
+        match.group("binding").removesuffix("/tcp")
+        for match in PORT_BINDING.finditer(text)
+    }
+    if port_bindings != EXPECTED_PORT_BINDINGS or re.search(
+        r"^\s+published:\s*", text, re.MULTILINE
+    ):
+        raise SystemExit("A local development service has a public port binding.")
     forbidden = ("LLMROUTER_OPENROUTER_API_KEY:", "sk-or-", "OPENROUTER_API_KEY=")
     if any(value in text for value in forbidden):
         raise SystemExit("The local Compose file contains provider secret material.")

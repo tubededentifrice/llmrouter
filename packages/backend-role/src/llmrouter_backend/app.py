@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import stat
 from base64 import urlsafe_b64decode
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 from llmrouter_backend.administration.http import router as administration_router
+from llmrouter_backend.administration.service import AdministrationService
 from llmrouter_backend.embed_sessions import (
     EmbedSessionRepository,
     EmbedSessionService,
@@ -19,6 +21,7 @@ from llmrouter_backend.embed_sessions import (
 from llmrouter_backend.embed_sessions.http import router as embed_session_router
 from llmrouter_backend.machine_identity import MachineCredentialRepository
 from llmrouter_backend.model_requests.http import router as model_request_router
+from llmrouter_backend.model_requests.service import ModelRequestService
 
 _DEPLOYMENT_KEY_BYTES = 32
 
@@ -56,10 +59,16 @@ def _install_local_embed_service() -> None:
 
 def _secret_bytes(path: Path) -> bytes:
     """Read one generated base64url deployment key without displaying it."""
-    if path.is_symlink() or not path.is_file():
-        message = "A local secret file is unavailable."
-        raise RuntimeError(message)
-    value = path.read_text(encoding="ascii").strip()
+    unavailable = "A local secret file is unavailable."
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(descriptor, "rb", closefd=True) as secret:
+            metadata = os.fstat(secret.fileno())
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                raise RuntimeError(unavailable)
+            value = secret.read().decode("ascii").strip()
+    except (OSError, UnicodeError) as error:
+        raise RuntimeError(unavailable) from error
     try:
         decoded = urlsafe_b64decode(value + "=")
     except ValueError as error:
@@ -82,7 +91,7 @@ async def health() -> dict[str, str]:
 
 @app.get("/ready", include_in_schema=False, response_model=None)
 def ready() -> dict[str, str] | JSONResponse:
-    """Return readiness only when the migrated database is available."""
+    """Return the database and installed runtime component state."""
     database_url = os.environ.get("LLMROUTER_DATABASE_URL")
     if database_url is None:
         return JSONResponse({"status": "not_ready"}, status_code=503)
@@ -93,4 +102,25 @@ def ready() -> dict[str, str] | JSONResponse:
         return JSONResponse({"status": "not_ready"}, status_code=503)
     if row != ("router.services",):
         return JSONResponse({"status": "not_ready"}, status_code=503)
-    return {"status": "ready"}
+    components = {
+        "administration": isinstance(
+            getattr(app.state, "administration_service", None),
+            AdministrationService,
+        ),
+        "embed_sessions": isinstance(
+            getattr(app.state, "embed_session_service", None),
+            EmbedSessionService,
+        ),
+        "model_requests": isinstance(
+            getattr(app.state, "model_request_service", None),
+            ModelRequestService,
+        ),
+    }
+    complete = all(components.values())
+    return {
+        "status": "ready" if complete else "partial",
+        "administration": "ready" if components["administration"] else "unavailable",
+        "database": "ready",
+        "embed_sessions": "ready" if components["embed_sessions"] else "unavailable",
+        "model_requests": "ready" if components["model_requests"] else "unavailable",
+    }

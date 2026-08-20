@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import stat
 from base64 import urlsafe_b64decode
 from datetime import UTC, datetime
 from pathlib import Path
@@ -71,7 +72,7 @@ def main() -> None:
     token = machine.exchange(
         request_id="local-example-token",
         service_id=SERVICE_ID,
-        bootstrap_secret=bootstrap_path.read_text(encoding="ascii").strip(),
+        bootstrap_secret=_read_secret(bootstrap_path),
         audience=Audience.HOST_BACKEND,
         operations=frozenset({"admin_embed.create"}),
         workspace_ids=frozenset(WORKSPACE_IDS),
@@ -134,10 +135,8 @@ def _required_environment(name: str) -> str:
 
 
 def _secret_bytes(path: Path) -> bytes:
-    if path.is_symlink() or not path.is_file():
-        raise SystemExit("A local deployment key is unavailable.")
     try:
-        value = urlsafe_b64decode(path.read_text(encoding="ascii").strip() + "=")
+        value = urlsafe_b64decode(_read_secret(path) + "=")
     except ValueError as error:
         raise SystemExit("A local deployment key is invalid.") from error
     if len(value) != 32:
@@ -146,10 +145,44 @@ def _secret_bytes(path: Path) -> bytes:
 
 
 def _write_secret(path: Path, value: str) -> None:
-    if path.is_symlink():
-        raise SystemExit("A local secret path is unsafe.")
-    path.write_text(value + "\n", encoding="ascii")
-    path.chmod(0o600)
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    file_flags = os.O_WRONLY | os.O_NOFOLLOW
+    directory = os.open(path.parent, directory_flags)
+    try:
+        try:
+            descriptor = os.open(path.name, file_flags, dir_fd=directory)
+        except FileNotFoundError:
+            descriptor = os.open(
+                path.name,
+                file_flags | os.O_CREAT | os.O_EXCL,
+                0o600,
+                dir_fd=directory,
+            )
+        with os.fdopen(descriptor, "wb", closefd=True) as secret:
+            metadata = os.fstat(secret.fileno())
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                raise SystemExit("A local secret path is unsafe.")
+            os.fchmod(secret.fileno(), 0o600)
+            os.ftruncate(secret.fileno(), 0)
+            secret.write((value + "\n").encode("ascii"))
+            secret.flush()
+            os.fsync(secret.fileno())
+    except OSError as error:
+        raise SystemExit("A local secret path is unsafe.") from error
+    finally:
+        os.close(directory)
+
+
+def _read_secret(path: Path) -> str:
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(descriptor, "rb", closefd=True) as secret:
+            metadata = os.fstat(secret.fileno())
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                raise SystemExit("A local secret path is unsafe.")
+            return secret.read().decode("ascii").strip()
+    except (OSError, UnicodeError) as error:
+        raise SystemExit("A local secret path is unsafe.") from error
 
 
 if __name__ == "__main__":

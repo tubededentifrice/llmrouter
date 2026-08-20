@@ -62,8 +62,12 @@ The command creates mode-0600 local database credentials in the ignored
 `.local-development/` directory. It starts PostgreSQL, applies all migrations,
 starts the backend, starts the administration UI, and starts the embed example.
 It also starts a local worker that renews the short-lived example host token.
-The command waits for readiness before it returns. No service publishes a
-non-loopback host port.
+The command waits for the available runtime foundation before it returns. No
+service publishes a non-loopback host port. The `/ready` response reports each
+runtime component. Until the MVP end-to-end composition task installs the
+administration and model-request services, it reports those components as
+`unavailable` and reports the overall state as `partial`. Their routes fail
+safely with status 503 during this intermediate state.
 
 Use these local addresses:
 

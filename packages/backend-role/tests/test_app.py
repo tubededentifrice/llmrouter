@@ -1,6 +1,8 @@
 """Tests for the backend role application."""
 
+import importlib
 from http import HTTPStatus
+from typing import Self
 
 import pytest
 from fastapi.routing import APIRoute
@@ -44,3 +46,40 @@ def test_readiness_fails_safely_without_database_configuration(
     response = TestClient(app).get("/ready")
     assert response.status_code == HTTPStatus.SERVICE_UNAVAILABLE
     assert response.json() == {"status": "not_ready"}
+
+
+def test_runtime_component_state_is_named(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Do not report an incomplete runtime as fully ready."""
+
+    class FakeResult:
+        def fetchone(self) -> tuple[str]:
+            return ("router.services",)
+
+    class FakeConnection:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def execute(self, _statement: str) -> FakeResult:
+            return FakeResult()
+
+    monkeypatch.setenv("LLMROUTER_DATABASE_URL", "postgresql://local/test")
+    application_module = importlib.import_module("llmrouter_backend.app")
+    monkeypatch.setattr(
+        application_module.psycopg,
+        "connect",
+        lambda *_args, **_kwargs: FakeConnection(),
+    )
+    response = TestClient(app).get("/ready")
+    assert response.status_code == HTTPStatus.OK
+    assert response.json() == {
+        "status": "partial",
+        "administration": "unavailable",
+        "database": "ready",
+        "embed_sessions": "unavailable",
+        "model_requests": "unavailable",
+    }
