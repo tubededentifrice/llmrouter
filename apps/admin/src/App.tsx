@@ -3,6 +3,7 @@ import {
   useEffect,
   useMemo,
   useReducer,
+  useRef,
   useState,
   type ReactNode,
   type SubmitEvent,
@@ -22,6 +23,7 @@ import {
 } from "@opendle/ui";
 import {
   AdministrationApiError,
+  configurationRevisionForScope,
   createFetchAdministrationClient,
   errorMessage,
   type AccountingSummary,
@@ -63,7 +65,8 @@ const sections: readonly {
 ];
 
 function initialScope(): ScopeSelection {
-  const query = new URLSearchParams(globalThis.location?.search ?? "");
+  const search = "location" in globalThis ? globalThis.location.search : "";
+  const query = new URLSearchParams(search);
   return {
     mode: query.get("view") === "service" ? "service" : "global",
     serviceId: query.get("service_id") ?? "",
@@ -90,16 +93,9 @@ function revisionLabel(revision: string): string {
     : revision;
 }
 
-function activeScopeRevision(snapshot: AdministrationSnapshot): string | null {
-  const effectiveItems = [
-    ...snapshot.providers,
-    ...snapshot.routes,
-    ...snapshot.assignments,
-  ];
-  return (
-    effectiveItems.find((item) => item.inherited === false)?.active_revision ??
-    null
-  );
+function formText(values: FormData, name: string): string {
+  const value = values.get(name);
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function ScopeBanner({
@@ -156,8 +152,8 @@ function ScopeForm({
     const values = new FormData(event.currentTarget);
     onApply({
       mode: values.get("mode") === "service" ? "service" : "global",
-      serviceId: String(values.get("service_id") ?? "").trim(),
-      workspaceId: String(values.get("workspace_id") ?? "").trim(),
+      serviceId: formText(values, "service_id"),
+      workspaceId: formText(values, "workspace_id"),
     });
   }
   return (
@@ -301,7 +297,12 @@ function CredentialForm({
     }
   }
   return (
-    <form className="configuration-form" onSubmit={submit}>
+    <form
+      className="configuration-form"
+      onSubmit={(event) => {
+        void submit(event);
+      }}
+    >
       <h3>Store OpenRouter credential</h3>
       <p>The secret is write-only. This field clears after each submit.</p>
       <div className="form-grid">
@@ -310,7 +311,9 @@ function CredentialForm({
           <input
             maxLength={200}
             value={safeLabel}
-            onChange={(event) => setSafeLabel(event.target.value)}
+            onChange={(event) => {
+              setSafeLabel(event.target.value);
+            }}
             autoComplete="off"
           />
         </label>
@@ -320,7 +323,9 @@ function CredentialForm({
             required
             type="password"
             value={secret}
-            onChange={(event) => setSecret(event.target.value)}
+            onChange={(event) => {
+              setSecret(event.target.value);
+            }}
             autoComplete="new-password"
             spellCheck={false}
           />
@@ -387,6 +392,7 @@ function ProviderForm({
   client,
   scope,
   credentials,
+  canBrowseCredentials,
   expectedRevision,
   onChanged,
   onNotice,
@@ -394,6 +400,7 @@ function ProviderForm({
   readonly client: AdministrationClient;
   readonly scope: ScopeSelection;
   readonly credentials: readonly Credential[];
+  readonly canBrowseCredentials: boolean;
   readonly expectedRevision: string | null;
   readonly onChanged: () => Promise<void>;
   readonly onNotice: (notice: Notice) => void;
@@ -445,7 +452,12 @@ function ProviderForm({
     return options;
   }, []);
   return (
-    <form className="configuration-form" onSubmit={submit}>
+    <form
+      className="configuration-form"
+      onSubmit={(event) => {
+        void submit(event);
+      }}
+    >
       <h3>Add OpenRouter instance</h3>
       <p>
         The endpoint and supported operations use the accepted OpenRouter
@@ -458,19 +470,38 @@ function ProviderForm({
             required
             maxLength={200}
             value={displayName}
-            onChange={(event) => setDisplayName(event.target.value)}
+            onChange={(event) => {
+              setDisplayName(event.target.value);
+            }}
           />
         </label>
         <label>
-          Credential
-          <select
-            required
-            value={credentialId}
-            onChange={(event) => setCredentialId(event.target.value)}
-          >
-            <option value="">Select write-only credential</option>
-            {credentialOptions}
-          </select>
+          {canBrowseCredentials
+            ? "Credential"
+            : "Eligible credential reference ID"}
+          {canBrowseCredentials ? (
+            <select
+              required
+              value={credentialId}
+              onChange={(event) => {
+                setCredentialId(event.target.value);
+              }}
+            >
+              <option value="">Select write-only credential</option>
+              {credentialOptions}
+            </select>
+          ) : (
+            <input
+              required
+              maxLength={200}
+              value={credentialId}
+              onChange={(event) => {
+                setCredentialId(event.target.value);
+              }}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          )}
         </label>
       </div>
       <Button type="submit" disabled={submitting || credentialId === ""}>
@@ -484,12 +515,14 @@ function ProviderTable({
   client,
   scope,
   values,
+  writable,
   onChanged,
   onNotice,
 }: {
   readonly client: AdministrationClient;
   readonly scope: ScopeSelection;
   readonly values: readonly ProviderInstance[];
+  readonly writable: boolean;
   readonly onChanged: () => Promise<void>;
   readonly onNotice: (notice: Notice) => void;
 }) {
@@ -559,7 +592,7 @@ function ProviderTable({
                   />
                 </td>
                 <td>
-                  {item.inherited || item.state === "retired" ? (
+                  {!writable || item.inherited || item.state === "retired" ? (
                     <span className="muted-action">Read only</span>
                   ) : (
                     <Button variant="quiet" onClick={() => void change(item)}>
@@ -693,7 +726,12 @@ function RouteForm({
     return options;
   }, []);
   return (
-    <form className="configuration-form" onSubmit={submit}>
+    <form
+      className="configuration-form"
+      onSubmit={(event) => {
+        void submit(event);
+      }}
+    >
       <h3>Add provider-model route</h3>
       <p>
         DeepSeek V4 Flash is the default live-test route. Prices are USD per one
@@ -705,7 +743,9 @@ function RouteForm({
           <select
             required
             value={form.providerId}
-            onChange={(event) => updateForm({ providerId: event.target.value })}
+            onChange={(event) => {
+              updateForm({ providerId: event.target.value });
+            }}
           >
             <option value="">Select instance</option>
             {providerOptions}
@@ -718,9 +758,9 @@ function RouteForm({
             pattern={canonicalUuidPattern}
             placeholder="Canonical model UUID"
             value={form.canonicalModelId}
-            onChange={(event) =>
-              updateForm({ canonicalModelId: event.target.value })
-            }
+            onChange={(event) => {
+              updateForm({ canonicalModelId: event.target.value });
+            }}
           />
         </label>
         <label>
@@ -728,7 +768,9 @@ function RouteForm({
           <input
             required
             value={form.wireModel}
-            onChange={(event) => updateForm({ wireModel: event.target.value })}
+            onChange={(event) => {
+              updateForm({ wireModel: event.target.value });
+            }}
           />
         </label>
         <label>
@@ -739,7 +781,9 @@ function RouteForm({
             pattern="(0|[1-9][0-9]*)(\.[0-9]+)?"
             placeholder="Explicit USD price"
             value={form.inputPrice}
-            onChange={(event) => updateForm({ inputPrice: event.target.value })}
+            onChange={(event) => {
+              updateForm({ inputPrice: event.target.value });
+            }}
           />
         </label>
         <label>
@@ -750,9 +794,9 @@ function RouteForm({
             pattern="(0|[1-9][0-9]*)(\.[0-9]+)?"
             placeholder="Explicit USD price"
             value={form.outputPrice}
-            onChange={(event) =>
-              updateForm({ outputPrice: event.target.value })
-            }
+            onChange={(event) => {
+              updateForm({ outputPrice: event.target.value });
+            }}
           />
         </label>
       </div>
@@ -767,12 +811,14 @@ function RouteTable({
   client,
   scope,
   values,
+  writable,
   onChanged,
   onNotice,
 }: {
   readonly client: AdministrationClient;
   readonly scope: ScopeSelection;
   readonly values: readonly ProviderModelRoute[];
+  readonly writable: boolean;
   readonly onChanged: () => Promise<void>;
   readonly onNotice: (notice: Notice) => void;
 }) {
@@ -846,7 +892,7 @@ function RouteTable({
                   />
                 </td>
                 <td>
-                  {item.inherited || item.state === "retired" ? (
+                  {!writable || item.inherited || item.state === "retired" ? (
                     <span className="muted-action">Read only</span>
                   ) : (
                     <Button variant="quiet" onClick={() => void change(item)}>
@@ -871,10 +917,11 @@ function ConfigurationView(props: {
   readonly onNotice: (notice: Notice) => void;
 }) {
   const { client, scope, snapshot, onChanged, onNotice } = props;
-  const expectedRevision = activeScopeRevision(snapshot);
+  const expectedRevision = configurationRevisionForScope(snapshot, scope);
+  const serviceConfigurationWritable = scope.workspaceId === "";
   return (
     <div className="panel-stack">
-      {scope.mode === "global" ? (
+      {scope.mode === "global" && serviceConfigurationWritable ? (
         <Panel>
           <PanelHeader
             kicker="Write-only secret control"
@@ -901,24 +948,41 @@ function ConfigurationView(props: {
           </div>
         </Panel>
       )}
+      {!serviceConfigurationWritable ? (
+        <Panel className="permission-note">
+          <Icon name="lock" />
+          <div>
+            <h2>Provider configuration stays at service level</h2>
+            <p>
+              This workspace view shows effective provider and route state. Load
+              the service-level scope to create, disable, or restore these
+              items.
+            </p>
+          </div>
+        </Panel>
+      ) : null}
       <Panel>
         <PanelHeader
           kicker="Provider access"
           title="OpenRouter instances"
           description="Create one accepted OpenRouter endpoint and inspect its effective source."
         />
-        <ProviderForm
-          client={client}
-          scope={scope}
-          credentials={snapshot.credentials}
-          expectedRevision={expectedRevision}
-          onChanged={onChanged}
-          onNotice={onNotice}
-        />
+        {serviceConfigurationWritable ? (
+          <ProviderForm
+            client={client}
+            scope={scope}
+            credentials={snapshot.credentials}
+            canBrowseCredentials={scope.mode === "global"}
+            expectedRevision={expectedRevision}
+            onChanged={onChanged}
+            onNotice={onNotice}
+          />
+        ) : null}
         <ProviderTable
           client={client}
           scope={scope}
           values={snapshot.providers}
+          writable={serviceConfigurationWritable}
           onChanged={onChanged}
           onNotice={onNotice}
         />
@@ -929,18 +993,21 @@ function ConfigurationView(props: {
           title="OpenRouter routes"
           description="Connect a canonical model to the exact OpenRouter wire model and prices."
         />
-        <RouteForm
-          client={client}
-          scope={scope}
-          providers={snapshot.providers}
-          expectedRevision={expectedRevision}
-          onChanged={onChanged}
-          onNotice={onNotice}
-        />
+        {serviceConfigurationWritable ? (
+          <RouteForm
+            client={client}
+            scope={scope}
+            providers={snapshot.providers}
+            expectedRevision={expectedRevision}
+            onChanged={onChanged}
+            onNotice={onNotice}
+          />
+        ) : null}
         <RouteTable
           client={client}
           scope={scope}
           values={snapshot.routes}
+          writable={serviceConfigurationWritable}
           onChanged={onChanged}
           onNotice={onNotice}
         />
@@ -998,7 +1065,12 @@ function AssignmentForm({
     }
   }
   return (
-    <form className="configuration-form" onSubmit={submit}>
+    <form
+      className="configuration-form"
+      onSubmit={(event) => {
+        void submit(event);
+      }}
+    >
       <h3>Publish complete fallback chain</h3>
       <p>
         Put one route ID on each line. The first line is the primary route.
@@ -1011,7 +1083,9 @@ function AssignmentForm({
             required
             maxLength={100}
             value={name}
-            onChange={(event) => setName(event.target.value)}
+            onChange={(event) => {
+              setName(event.target.value);
+            }}
           />
         </label>
         <label>
@@ -1022,7 +1096,9 @@ function AssignmentForm({
             min={100}
             max={120000}
             value={timeout}
-            onChange={(event) => setTimeoutValue(event.target.value)}
+            onChange={(event) => {
+              setTimeoutValue(event.target.value);
+            }}
           />
         </label>
       </div>
@@ -1032,7 +1108,9 @@ function AssignmentForm({
           required
           rows={Math.max(3, candidates.length + 1)}
           value={orderedRoutes}
-          onChange={(event) => setOrderedRoutes(event.target.value)}
+          onChange={(event) => {
+            setOrderedRoutes(event.target.value);
+          }}
           placeholder={routes
             .map((item) => item.provider_model_route_id)
             .join("\n")}
@@ -1124,7 +1202,9 @@ function AssignmentTable({
                         <div>
                           <code>{candidate.provider_model_route_id}</code>
                           <small>
-                            {index === 0 ? "Primary" : `Fallback ${index}`}
+                            {index === 0
+                              ? "Primary"
+                              : `Fallback ${String(index)}`}
                           </small>
                         </div>
                       </li>
@@ -1178,7 +1258,10 @@ function AssignmentsView(props: {
         client={props.client}
         scope={props.scope}
         routes={props.snapshot.routes}
-        expectedRevision={activeScopeRevision(props.snapshot)}
+        expectedRevision={configurationRevisionForScope(
+          props.snapshot,
+          props.scope,
+        )}
         onChanged={props.onChanged}
         onNotice={props.onNotice}
       />
@@ -1338,7 +1421,8 @@ export function AdministrationDashboard({
     (_current: Section, next: Section) => next,
     initialSection,
   );
-  const page = sections.find((item) => item.id === section) ?? sections[0]!;
+  const page = sections.find((item) => item.id === section) ?? sections.at(0);
+  if (page === undefined) return null;
   const stale = notice?.staleRevision === true;
   return (
     <div className="application-shell">
@@ -1358,7 +1442,9 @@ export function AdministrationDashboard({
               key={item.id}
               type="button"
               aria-current={section === item.id ? "page" : undefined}
-              onClick={() => setSection(item.id)}
+              onClick={() => {
+                setSection(item.id);
+              }}
             >
               <Icon name={item.icon} size={17} />
               <span>{item.label}</span>
@@ -1500,7 +1586,12 @@ export function AdministrationStateView({
           onReload={onReload}
         />
       ) : null}
-      <PersistentNotice notice={notice} onDismiss={() => onNotice(null)} />
+      <PersistentNotice
+        notice={notice}
+        onDismiss={() => {
+          onNotice(null);
+        }}
+      />
     </>
   );
 }
@@ -1523,8 +1614,11 @@ export function App({ client: suppliedClient, startingScope }: AppProps = {}) {
     (_current: Notice | null, next: Notice | null) => next,
     null,
   );
+  const loadGeneration = useRef(0);
   const load = useCallback(
     async (signal?: AbortSignal) => {
+      if (signal?.aborted) return;
+      const generation = ++loadGeneration.current;
       if (scope.serviceId === "") {
         setSnapshot(null);
         setLoading(false);
@@ -1534,30 +1628,44 @@ export function App({ client: suppliedClient, startingScope }: AppProps = {}) {
       setLoading(true);
       setFailure(null);
       try {
-        setSnapshot(await client.load(scope, signal));
+        const nextSnapshot = await client.load(scope, signal);
+        if (generation === loadGeneration.current && !signal?.aborted) {
+          setSnapshot(nextSnapshot);
+        }
       } catch (error) {
-        if (!(error instanceof DOMException && error.name === "AbortError")) {
+        if (
+          generation === loadGeneration.current &&
+          !(error instanceof DOMException && error.name === "AbortError")
+        ) {
           setFailure(errorMessage(error));
         }
       } finally {
-        if (!signal?.aborted) setLoading(false);
+        if (generation === loadGeneration.current && !signal?.aborted) {
+          setLoading(false);
+        }
       }
     },
     [client, scope],
   );
   useEffect(() => {
     const controller = new AbortController();
-    void load(controller.signal);
-    return () => controller.abort();
+    void Promise.resolve().then(() => load(controller.signal));
+    return () => {
+      controller.abort();
+    };
   }, [load]);
   function applyScope(next: ScopeSelection) {
+    loadGeneration.current += 1;
     setNotice(null);
+    setSnapshot(null);
+    setFailure(null);
+    setLoading(next.serviceId !== "");
     setScope(next);
     const query = new URLSearchParams();
     query.set("view", next.mode);
     if (next.serviceId !== "") query.set("service_id", next.serviceId);
     if (next.workspaceId !== "") query.set("workspace_id", next.workspaceId);
-    globalThis.history?.replaceState(null, "", `?${query.toString()}`);
+    globalThis.history.replaceState(null, "", `?${query.toString()}`);
   }
   return (
     <ShellErrorBoundary

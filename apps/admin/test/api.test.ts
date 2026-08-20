@@ -19,33 +19,42 @@ function json(value: unknown, status = 200): Response {
   });
 }
 
+function requestUrl(input: string | URL | Request): string {
+  if (typeof input === "string") return input;
+  return input instanceof URL ? input.toString() : input.url;
+}
+
 describe("administration API client", () => {
   it("loads only bounded exact-scope routes", async () => {
     const paths: string[] = [];
-    const fetcher = vi.fn(async (input: string | URL | Request) => {
-      const path = String(input);
+    const fetcher = vi.fn((input: string | URL | Request) => {
+      const path = requestUrl(input);
       paths.push(path);
       if (path.includes("/state"))
-        return json({
-          kind: "workspace",
-          service_id: "service-one",
-          workspace_id: "workspace-one",
-          display_name: "Workspace",
-          state: "active",
-          revision: "revision-1",
-        });
+        return Promise.resolve(
+          json({
+            kind: "workspace",
+            service_id: "service-one",
+            workspace_id: "workspace-one",
+            display_name: "Workspace",
+            state: "active",
+            revision: "revision-1",
+          }),
+        );
       if (path.includes("/accounting/summary"))
-        return json({
-          from: "2026-08-13T00:00:00.000Z",
-          to: "2026-08-20T00:00:00.000Z",
-          currency: "USD",
-          logical_requests: 0,
-          attempts: 0,
-          usage: [],
-          cost: "0",
-          corrections: "0",
-        });
-      return json({ items: [], next_cursor: null });
+        return Promise.resolve(
+          json({
+            from: "2026-08-13T00:00:00.000Z",
+            to: "2026-08-20T00:00:00.000Z",
+            currency: "USD",
+            logical_requests: 0,
+            attempts: 0,
+            usage: [],
+            cost: "0",
+            corrections: "0",
+          }),
+        );
+      return Promise.resolve(json({ items: [], next_cursor: null }));
     });
     const client = createFetchAdministrationClient({
       fetcher,
@@ -53,11 +62,27 @@ describe("administration API client", () => {
     });
     const result = await client.load(scope);
     expect(result.state.workspace_id).toBe("workspace-one");
-    expect(paths).toHaveLength(7);
+    expect(paths).toHaveLength(6);
+    expect(paths.every((path) => !path.includes("/credentials"))).toBe(true);
     expect(paths.every((path) => path.includes("/v1/admin/"))).toBe(true);
     expect(
       paths
-        .filter((path) => path.includes("/services/"))
+        .filter(
+          (path) =>
+            path.includes("provider-instances") ||
+            path.includes("provider-model-routes"),
+        )
+        .every((path) => !path.includes("workspace_id=")),
+    ).toBe(true);
+    expect(
+      paths
+        .filter(
+          (path) =>
+            path.includes("/state") ||
+            path.includes("assignments") ||
+            path.includes("model-requests") ||
+            path.includes("accounting/summary"),
+        )
         .every((path) => path.includes("workspace_id=workspace-one")),
     ).toBe(true);
     expect(
@@ -70,19 +95,21 @@ describe("administration API client", () => {
   it("sends protected mutation headers and does not expect a secret response", async () => {
     let received: RequestInit | undefined;
     const fetcher = vi.fn(
-      async (_input: string | URL | Request, init?: RequestInit) => {
+      (_input: string | URL | Request, init?: RequestInit) => {
         received = init;
-        return json(
-          {
-            credential_id: "credential-1",
-            owner_scope: "service-one",
-            provider_catalog_id: "openai_compatible.v1",
-            state: "active",
-            revision: "revision-1",
-            created_at: "2026-08-20T00:00:00Z",
-            fingerprint: "safe",
-          },
-          201,
+        return Promise.resolve(
+          json(
+            {
+              credential_id: "credential-1",
+              owner_scope: "service-one",
+              provider_catalog_id: "openai_compatible.v1",
+              state: "active",
+              revision: "revision-1",
+              created_at: "2026-08-20T00:00:00Z",
+              fingerprint: "safe",
+            },
+            201,
+          ),
         );
       },
     );
@@ -101,23 +128,28 @@ describe("administration API client", () => {
     );
     expect(headers.get("Idempotency-Key")?.length).toBeGreaterThan(15);
     expect(received?.credentials).toBe("same-origin");
-    expect(String(received?.body)).toContain("test-secret-never-returned");
+    const receivedBody = received?.body;
+    expect(typeof receivedBody === "string" ? receivedBody : "").toContain(
+      "test-secret-never-returned",
+    );
     expect(JSON.stringify(result)).not.toContain("test-secret-never-returned");
   });
 
   it("reports safe API, stale revision, and offline errors", async () => {
     const staleClient = createFetchAdministrationClient({
       csrfToken: "csrf-token-with-at-least-thirty-two-characters",
-      fetcher: vi.fn(async () =>
-        json(
-          {
-            error: {
-              code: "configuration_revision_conflict",
-              message: "Read the current active revision.",
-              request_id: "safe-request-1",
+      fetcher: vi.fn(() =>
+        Promise.resolve(
+          json(
+            {
+              error: {
+                code: "configuration_revision_conflict",
+                message: "Read the current active revision.",
+                request_id: "safe-request-1",
+              },
             },
-          },
-          409,
+            409,
+          ),
         ),
       ),
     });
@@ -130,9 +162,9 @@ describe("administration API client", () => {
     });
 
     const offlineClient = createFetchAdministrationClient({
-      fetcher: vi.fn(async () => {
-        throw new TypeError("private network detail");
-      }),
+      fetcher: vi.fn(() =>
+        Promise.reject(new TypeError("private network detail")),
+      ),
     });
     await expect(offlineClient.load(scope)).rejects.toMatchObject({
       code: "offline",
@@ -153,12 +185,39 @@ describe("administration API client", () => {
   });
 
   it("preserves abort signals during an exact-scope switch", async () => {
-    const fetcher = vi.fn(async () => {
-      throw new DOMException("The request was aborted.", "AbortError");
-    });
+    const fetcher = vi.fn(() =>
+      Promise.reject(
+        new DOMException("The request was aborted.", "AbortError"),
+      ),
+    );
     const client = createFetchAdministrationClient({ fetcher });
     await expect(client.load(scope)).rejects.toMatchObject({
       name: "AbortError",
     });
+  });
+
+  it("keeps workspace identity only on workspace-capable mutations", async () => {
+    const paths: string[] = [];
+    const fetcher = vi.fn((input: string | URL | Request) => {
+      paths.push(requestUrl(input));
+      return Promise.resolve(
+        json({
+          resource_id: "resource-1",
+          active_revision: "revision-1",
+          distribution_state: "current",
+          operation_id: "operation-1",
+        }),
+      );
+    });
+    const client = createFetchAdministrationClient({
+      csrfToken: "csrf-token-with-at-least-thirty-two-characters",
+      fetcher,
+    });
+    await client.putProvider(scope, null, {});
+    await client.putRoute(scope, null, {});
+    await client.putAssignment(scope, "general", {});
+    expect(paths[0]).not.toContain("workspace_id=");
+    expect(paths[1]).not.toContain("workspace_id=");
+    expect(paths[2]).toContain("workspace_id=workspace-one");
   });
 });

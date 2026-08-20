@@ -127,6 +127,23 @@ export interface AdministrationSnapshot {
   readonly accounting: AccountingSummary;
 }
 
+export function configurationRevisionForScope(
+  snapshot: AdministrationSnapshot,
+  scope: ScopeSelection,
+): string | null {
+  const sourceLayer = scope.workspaceId === "" ? "service" : "workspace";
+  const effectiveItems = [
+    ...snapshot.providers,
+    ...snapshot.routes,
+    ...snapshot.assignments,
+  ];
+  return (
+    effectiveItems.find(
+      (item) => !item.inherited && item.source_layer === sourceLayer,
+    )?.active_revision ?? null
+  );
+}
+
 export interface ConfigurationWriteResult {
   readonly resource_id: string;
   readonly active_revision: string;
@@ -209,10 +226,7 @@ export interface FetchAdministrationClientOptions {
 const jsonHeaders = { "Content-Type": "application/json" } as const;
 
 function randomKey(): string {
-  return (
-    globalThis.crypto?.randomUUID() ??
-    `${Date.now()}-${Math.random().toString(36).slice(2)}-administration`
-  );
+  return globalThis.crypto.randomUUID();
 }
 
 export function createFetchAdministrationClient({
@@ -278,10 +292,18 @@ export function createFetchAdministrationClient({
     return (await response.json()) as T;
   }
 
-  function servicePath(scope: ScopeSelection, suffix: string): string {
-    const [suffixPath, suffixQuery] = suffix.split("?", 2);
-    const query = new URLSearchParams(suffixQuery ?? "");
-    if (scope.workspaceId !== "") query.set("workspace_id", scope.workspaceId);
+  function servicePath(
+    scope: ScopeSelection,
+    suffix: string,
+    includeWorkspace = false,
+  ): string {
+    const separator = suffix.indexOf("?");
+    const suffixPath = separator === -1 ? suffix : suffix.slice(0, separator);
+    const suffixQuery = separator === -1 ? "" : suffix.slice(separator + 1);
+    const query = new URLSearchParams(suffixQuery);
+    if (includeWorkspace && scope.workspaceId !== "") {
+      query.set("workspace_id", scope.workspaceId);
+    }
     const encodedService = encodeURIComponent(scope.serviceId);
     const serialized = query.toString();
     return `/v1/admin/services/${encodedService}/${suffixPath}${serialized === "" ? "" : `?${serialized}`}`;
@@ -291,11 +313,14 @@ export function createFetchAdministrationClient({
     scope: ScopeSelection,
     collection: string,
     id: string | null,
+    includeWorkspace = false,
   ): string {
-    const base = servicePath(scope, collection);
+    const base = servicePath(scope, collection, includeWorkspace);
     if (id === null) return base;
-    const [path, query] = base.split("?", 2);
-    return `${path}/${encodeURIComponent(id)}${query === undefined ? "" : `?${query}`}`;
+    const separator = base.indexOf("?");
+    const path = separator === -1 ? base : base.slice(0, separator);
+    const query = separator === -1 ? "" : base.slice(separator);
+    return `${path}/${encodeURIComponent(id)}${query}`;
   }
 
   async function page<T>(
@@ -331,10 +356,10 @@ export function createFetchAdministrationClient({
         accounting,
       ] = await Promise.all([
         request<ScopedState>(
-          servicePath(scope, "state"),
+          servicePath(scope, "state", true),
           signal === undefined ? {} : { signal },
         ),
-        scope.mode === "global"
+        scope.mode === "global" && scope.workspaceId === ""
           ? page<Credential>("/v1/admin/credentials?limit=100", signal)
           : Promise.resolve([]),
         page<ProviderInstance>(
@@ -345,9 +370,12 @@ export function createFetchAdministrationClient({
           servicePath(scope, "provider-model-routes?limit=100"),
           signal,
         ),
-        page<Assignment>(servicePath(scope, "assignments?limit=100"), signal),
+        page<Assignment>(
+          servicePath(scope, "assignments?limit=100", true),
+          signal,
+        ),
         page<RequestStatus>(
-          servicePath(scope, "model-requests?limit=100"),
+          servicePath(scope, "model-requests?limit=100", true),
           signal,
         ),
         request<AccountingSummary>(
@@ -400,7 +428,7 @@ export function createFetchAdministrationClient({
 
     putAssignment(scope, name, input) {
       return request<ConfigurationWriteResult>(
-        configurationPath(scope, "assignments", name),
+        configurationPath(scope, "assignments", name, true),
         { method: "PUT", body: JSON.stringify(input) },
         true,
       );

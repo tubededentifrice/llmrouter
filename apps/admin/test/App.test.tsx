@@ -11,16 +11,21 @@ import {
   StateMessage,
   type AppProps,
 } from "../src/App.js";
-import type {
-  AdministrationClient,
-  AdministrationSnapshot,
-  ScopeSelection,
+import {
+  configurationRevisionForScope,
+  type AdministrationClient,
+  type AdministrationSnapshot,
+  type ScopeSelection,
 } from "../src/api.js";
 
 const globalScope: ScopeSelection = {
   mode: "global",
   serviceId: "0198a080-0000-7000-8000-000000000001",
   workspaceId: "0198a080-0000-7000-8000-000000000002",
+};
+const serviceLevelScope: ScopeSelection = {
+  ...globalScope,
+  workspaceId: "",
 };
 const styles = readFileSync(
   new URL("../src/styles.css", import.meta.url),
@@ -141,7 +146,7 @@ const client: AdministrationClient = {
 
 function dashboard(
   section: "configuration" | "assignments" | "requests" | "accounting",
-  scope = globalScope,
+  scope = serviceLevelScope,
 ): string {
   return renderToStaticMarkup(
     <AdministrationDashboard
@@ -185,6 +190,7 @@ describe("administration app states", () => {
 
   it("keeps focus and phone table behavior in the app stylesheet", () => {
     expect(styles).toContain(":focus-visible");
+    expect(styles).toContain("clip-path: inset(50%)");
     expect(styles).toContain("overflow-x: auto");
     expect(styles).toContain("@media (max-width: 600px)");
     expect(styles).toContain("grid-template-columns: 1fr");
@@ -203,7 +209,7 @@ describe("administration app states", () => {
         notice={success}
         onNotice={vi.fn()}
         onReload={vi.fn()}
-        scope={globalScope}
+        scope={serviceLevelScope}
         snapshot={snapshot}
       />,
     );
@@ -215,7 +221,7 @@ describe("administration app states", () => {
         notice={success}
         onNotice={vi.fn()}
         onReload={vi.fn()}
-        scope={globalScope}
+        scope={serviceLevelScope}
         snapshot={snapshot}
       />,
     );
@@ -226,13 +232,22 @@ describe("administration app states", () => {
       'type="password" autoComplete="new-password" spellCheck="false" value=""',
     );
   });
+
+  it("selects the active revision from the exact configuration layer", () => {
+    expect(configurationRevisionForScope(snapshot, serviceLevelScope)).toBe(
+      "provider-revision-1",
+    );
+    expect(configurationRevisionForScope(snapshot, globalScope)).toBe(
+      "assignment-revision-1",
+    );
+  });
 });
 
 describe("protected administration dashboard", () => {
   it("shows exact scope, write-only secret controls, and effective configuration", () => {
     const html = dashboard("configuration");
     expect(html).toContain(globalScope.serviceId);
-    expect(html).toContain(globalScope.workspaceId);
+    expect(html).toContain("Service level");
     expect(html).toContain('type="password"');
     expect(html).toContain('autoComplete="new-password"');
     expect(html).toContain("safe-fingerprint");
@@ -278,11 +293,23 @@ describe("protected administration dashboard", () => {
   });
 
   it("keeps provider secret custody out of the service view", () => {
-    const serviceScope: ScopeSelection = { ...globalScope, mode: "service" };
+    const serviceScope: ScopeSelection = {
+      ...serviceLevelScope,
+      mode: "service",
+    };
     const html = dashboard("configuration", serviceScope);
     expect(html).toContain("Secret custody stays global");
     expect(html).not.toContain("Store OpenRouter credential");
+    expect(html).toContain("Eligible credential reference ID");
     expect(html).toContain("Exact administration scope");
+  });
+
+  it("keeps service-owned provider changes out of a workspace view", () => {
+    const html = dashboard("configuration", globalScope);
+    expect(html).toContain("Provider configuration stays at service level");
+    expect(html).not.toContain("Add OpenRouter instance");
+    expect(html).not.toContain("Add provider-model route");
+    expect(html).toContain("Read only");
   });
 
   it("shows clear empty table states", () => {
