@@ -15,6 +15,19 @@ is necessary for security, reliability, or accounting.
 Do not put secrets, API credentials, private prompts, model responses, private
 runtime data, or unpublished third-party data in Git.
 
+## Shared OpenDLE code
+
+Before adding backend behavior, check `../opendle-lib` and the sibling
+projects. If the behavior has credible reuse in more than one OpenDLE project,
+put the framework-neutral code and its tests in `../opendle-lib`, then use the
+direct Git `main` dependency here. Keep Router policy, routes, data models,
+and service adapters local. Do not copy shared code between projects. One
+tested implementation makes fixes and security updates apply to all consumers.
+
+Before adding a reusable frontend component, token, or interaction pattern,
+check `../opendle-ui` and put the shared item there first. Keep only
+Router-specific data, copy, routes, domain state, and host composition here.
+
 ## Development site access
 
 The administration development site runs at `http://127.0.0.1:5174` and is
