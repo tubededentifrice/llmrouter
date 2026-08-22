@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 import uuid
 from datetime import UTC, datetime
@@ -23,6 +24,7 @@ router = APIRouter(prefix="/v1/admin", tags=["Authentication"])
 _COOKIE = "__Host-llmrouter-admin"
 _LOCAL_COOKIE = "__Host-llmrouter-local-admin"
 _LOCAL_PORT = 5174
+_LOCAL_ORIGIN = f"http://127.0.0.1:{_LOCAL_PORT}"
 _MAXIMUM_START_BYTES = 4096
 _MAXIMUM_CALLBACK_VALUE = 4096
 _MINIMUM_STATE_CHARACTERS = 32
@@ -125,6 +127,28 @@ def get_session(request: Request) -> Response:
 
 @router.delete("/session", response_model=None)
 def delete_session(request: Request) -> Response:
+    local_token = request.cookies.get(_LOCAL_COOKIE, "")
+    if local_token:
+        local = getattr(request.app.state, "local_admin_authority", None)
+        if (
+            local is None
+            or not _exact_local_request(request)
+            or not local.valid_session(local_token)
+        ):
+            return _error(AdministratorAuthError("invalid_token", str(uuid.uuid4())))
+        csrf_values = request.headers.getlist("x-csrf-token")
+        if request.headers.getlist("origin") != [_LOCAL_ORIGIN] or not (
+            len(csrf_values) == 1 and hmac.compare_digest(csrf_values[0], local.csrf)
+        ):
+            return _error(
+                AdministratorAuthError("insufficient_scope", str(uuid.uuid4()))
+            )
+        response = Response(status_code=204, headers={"Cache-Control": "no-store"})
+        response.headers["Set-Cookie"] = (
+            f"{_LOCAL_COOKIE}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Strict"
+        )
+        return response
+
     token = request.cookies.get(_COOKIE, "")
     try:
         _repository(request).logout(

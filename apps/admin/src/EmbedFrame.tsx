@@ -354,7 +354,7 @@ function EmbedSectionView({
     );
   }
   const value = snapshot.accounting;
-  if (value === undefined)
+  if (value == null)
     return (
       <FrameEmpty message="This grant does not permit accounting reads." />
     );

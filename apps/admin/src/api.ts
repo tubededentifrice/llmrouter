@@ -76,6 +76,7 @@ export interface ProviderInstance {
   readonly display_name: string;
   readonly endpoint: string;
   readonly credential_id: string;
+  readonly eligible_service_ids: readonly string[];
   readonly state: "active" | "disabled" | "retired";
   readonly active_revision: string;
   readonly inherited: boolean;
@@ -98,6 +99,7 @@ export interface ProviderModelRoute {
   readonly canonical_model_id: string;
   readonly wire_model: string;
   readonly capabilities: readonly string[];
+  readonly eligible_service_ids: readonly string[];
   readonly settings: RegisteredDocument;
   readonly price_authority: {
     readonly mode: "manual" | "source";
@@ -154,20 +156,39 @@ export interface AccountingSummary {
 }
 
 export interface AdministrationSnapshot {
-  readonly state: ScopedState;
+  readonly state: ScopedState | null;
   readonly credentials: readonly Credential[];
   readonly providers: readonly ProviderInstance[];
   readonly routes: readonly ProviderModelRoute[];
   readonly assignments: readonly Assignment[];
   readonly requests: readonly RequestStatus[];
-  readonly accounting: AccountingSummary;
+  readonly accounting: AccountingSummary | null;
+  readonly configuration_revision: string | null;
+  readonly failures: Readonly<
+    Partial<
+      Record<
+        | "state"
+        | "credentials"
+        | "providers"
+        | "routes"
+        | "assignments"
+        | "requests"
+        | "accounting",
+        string
+      >
+    >
+  >;
 }
 
 export function configurationRevisionForScope(
   snapshot: AdministrationSnapshot,
   scope: ScopeSelection,
 ): string | null {
-  const sourceLayer = scope.workspaceId === "" ? "service" : "workspace";
+  if (snapshot.configuration_revision !== null) {
+    return snapshot.configuration_revision;
+  }
+  const sourceLayer =
+    scope.workspaceId === "" ? scope.serviceId : scope.workspaceId;
   const effectiveItems = [
     ...snapshot.providers,
     ...snapshot.routes,
@@ -190,6 +211,7 @@ export interface ConfigurationWriteResult {
 interface Page<T> {
   readonly items: readonly T[];
   readonly next_cursor: string | null;
+  readonly configuration_revision?: string | null;
 }
 
 interface ApiErrorDocument {
@@ -206,6 +228,7 @@ export class AdministrationApiError extends Error {
   public readonly requestId: string | null;
   public readonly status: number;
   public readonly staleRevision: boolean;
+  public readonly outcomeUncertain: boolean;
 
   public constructor(
     message: string,
@@ -213,6 +236,7 @@ export class AdministrationApiError extends Error {
       readonly code: string;
       readonly requestId: string | null;
       readonly status: number;
+      readonly outcomeUncertain?: boolean;
     },
   ) {
     super(message);
@@ -222,6 +246,7 @@ export class AdministrationApiError extends Error {
     this.status = options.status;
     this.staleRevision =
       options.status === 409 && options.code.includes("revision");
+    this.outcomeUncertain = options.outcomeUncertain ?? false;
   }
 }
 
@@ -256,6 +281,15 @@ export interface AdministrationClient {
     readonly secret: string;
     readonly safeLabel: string;
   }): Promise<Credential>;
+  changeCredential(
+    credentialId: string,
+    action: "rotate" | "disable" | "retire",
+    input: {
+      readonly expectedRevision: string;
+      readonly reason: string;
+      readonly replacementSecret?: string;
+    },
+  ): Promise<Credential>;
   putProvider(
     scope: ScopeSelection,
     id: string | null,
@@ -293,6 +327,19 @@ export type LocalAdministratorSession =
   | { readonly state: "required" }
   | { readonly state: "oidc_required" }
   | { readonly state: "unavailable" };
+
+export function scheduleAdministrationSessionInspection(
+  inspect: () => void,
+  schedule: (callback: () => void) => void = queueMicrotask,
+): () => void {
+  let active = true;
+  schedule(() => {
+    if (active) inspect();
+  });
+  return () => {
+    active = false;
+  };
+}
 
 export async function inspectLocalAdministratorSession(
   fetcher: typeof fetch = globalThis.fetch.bind(globalThis),
@@ -520,8 +567,15 @@ export function createFetchAdministrationClient({
         throw error;
       }
       throw new AdministrationApiError(
-        "The administration service is offline. No change was sent.",
-        { code: "offline", requestId: null, status: 0 },
+        mutation
+          ? "The connection failed during the change. The outcome is uncertain. Refresh current data before you try another change."
+          : "The administration service is offline.",
+        {
+          code: "offline",
+          requestId: null,
+          status: 0,
+          outcomeUncertain: mutation,
+        },
       );
     }
     if (!response.ok) {
@@ -592,31 +646,42 @@ export function createFetchAdministrationClient({
     return `${path}/${encodeURIComponent(id)}${query}`;
   }
 
-  async function page<T>(
-    path: string,
-    signal?: AbortSignal,
-  ): Promise<readonly T[]> {
-    const value = await request<Page<T>>(
-      path,
-      signal === undefined ? {} : { signal },
-    );
-    return value.items;
-  }
-
+  // The caller supplies T because the closed HTTP contract owns each item shape.
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
   async function allPages<T>(
     initialPath: string,
     signal?: AbortSignal,
-  ): Promise<readonly T[]> {
+  ): Promise<{
+    readonly items: readonly T[];
+    readonly configurationRevision: string | null | undefined;
+  }> {
     const items: T[] = [];
     const cursors = new Set<string>();
+    let configurationRevision: string | null | undefined;
     let path = initialPath;
     for (let pageNumber = 0; pageNumber < 100; pageNumber += 1) {
       const value = await request<Page<T>>(
         path,
         signal === undefined ? {} : { signal },
       );
+      if (value.configuration_revision !== undefined) {
+        if (
+          configurationRevision !== undefined &&
+          value.configuration_revision !== configurationRevision
+        ) {
+          throw new AdministrationApiError(
+            "The configuration changed while its list was loading. Refresh and try again.",
+            {
+              code: "configuration_revision_conflict",
+              requestId: null,
+              status: 409,
+            },
+          );
+        }
+        configurationRevision = value.configuration_revision;
+      }
       items.push(...value.items);
-      if (value.next_cursor === null) return items;
+      if (value.next_cursor === null) return { items, configurationRevision };
       if (cursors.has(value.next_cursor)) {
         throw new AdministrationApiError(
           "The administration list did not complete. Try again.",
@@ -636,11 +701,15 @@ export function createFetchAdministrationClient({
 
   return {
     listServices(signal) {
-      return allPages<ServiceSummary>("/v1/admin/services", signal);
+      return allPages<ServiceSummary>("/v1/admin/services", signal).then(
+        (result) => result.items,
+      );
     },
 
     listCredentials(signal) {
-      return allPages<Credential>("/v1/admin/credentials", signal);
+      return allPages<Credential>("/v1/admin/credentials", signal).then(
+        (result) => result.items,
+      );
     },
 
     createService(input) {
@@ -703,37 +772,96 @@ export function createFetchAdministrationClient({
         accountingQuery.set("workspace_id", scope.workspaceId);
       }
       const serviceBase = `/v1/admin/services/${encodeURIComponent(scope.serviceId)}`;
-      const [
-        state,
-        credentials,
-        providers,
-        routes,
-        assignments,
-        requests,
-        accounting,
-      ] = await Promise.all([
+      const results = await Promise.allSettled([
         request<ScopedState>(
           servicePath(scope, "state", true),
           signal === undefined ? {} : { signal },
         ),
         scope.mode === "global" && scope.workspaceId === ""
-          ? page<Credential>("/v1/admin/credentials", signal)
-          : Promise.resolve([]),
-        page<ProviderInstance>(
+          ? allPages<Credential>("/v1/admin/credentials", signal)
+          : Promise.resolve({ items: [], configurationRevision: undefined }),
+        allPages<ProviderInstance>(
           servicePath(scope, "provider-instances"),
           signal,
         ),
-        page<ProviderModelRoute>(
+        allPages<ProviderModelRoute>(
           servicePath(scope, "provider-model-routes"),
           signal,
         ),
-        page<Assignment>(servicePath(scope, "assignments", true), signal),
-        page<RequestStatus>(servicePath(scope, "model-requests", true), signal),
+        allPages<Assignment>(servicePath(scope, "assignments", true), signal),
+        allPages<RequestStatus>(
+          servicePath(scope, "model-requests", true),
+          signal,
+        ),
         request<AccountingSummary>(
           `${serviceBase}/accounting/summary?${accountingQuery.toString()}`,
           signal === undefined ? {} : { signal },
         ),
-      ]);
+      ] as const);
+      const names = [
+        "state",
+        "credentials",
+        "providers",
+        "routes",
+        "assignments",
+        "requests",
+        "accounting",
+      ] as const;
+      const failures: Partial<Record<(typeof names)[number], string>> = {};
+      for (const [index, settled] of results.entries()) {
+        const result: PromiseSettledResult<unknown> = settled;
+        const name = names[index];
+        if (name === undefined) {
+          throw new Error("The selected administration read is invalid.");
+        }
+        if (result.status !== "rejected") continue;
+        if (
+          result.reason instanceof DOMException &&
+          result.reason.name === "AbortError"
+        ) {
+          throw result.reason;
+        }
+        failures[name] =
+          name === "accounting" &&
+          result.reason instanceof AdministrationApiError &&
+          result.reason.status === 400
+            ? "Accounting is not available because this scope has no configured currency."
+            : errorMessage(result.reason);
+      }
+      const state = results[0].status === "fulfilled" ? results[0].value : null;
+      const credentials =
+        results[1].status === "fulfilled" ? results[1].value.items : [];
+      const providers =
+        results[2].status === "fulfilled" ? results[2].value.items : [];
+      const routes =
+        results[3].status === "fulfilled" ? results[3].value.items : [];
+      const assignments =
+        results[4].status === "fulfilled" ? results[4].value.items : [];
+      const requests =
+        results[5].status === "fulfilled" ? results[5].value.items : [];
+      const accounting =
+        results[6].status === "fulfilled" ? results[6].value : null;
+      const configurationRevisions = [
+        results[2],
+        results[3],
+        results[4],
+      ].flatMap((result) =>
+        result.status === "fulfilled" &&
+        result.value.configurationRevision != null
+          ? [result.value.configurationRevision]
+          : [],
+      );
+      const configurationRevision = configurationRevisions[0] ?? null;
+      if (
+        configurationRevisions.some(
+          (revision) => revision !== configurationRevision,
+        )
+      ) {
+        failures.providers =
+          "The configuration changed while selected data was loading. Refresh the service.";
+        failures.routes = failures.providers;
+        failures.assignments = failures.providers;
+      }
       return {
         state,
         credentials,
@@ -742,6 +870,8 @@ export function createFetchAdministrationClient({
         assignments,
         requests,
         accounting,
+        configuration_revision: configurationRevision,
+        failures,
       };
     },
 
@@ -755,6 +885,23 @@ export function createFetchAdministrationClient({
             provider_catalog_id: "openai_compatible.v1",
             secret: input.secret,
             safe_label: input.safeLabel === "" ? null : input.safeLabel,
+          }),
+        },
+        true,
+      );
+    },
+
+    changeCredential(credentialId, action, input) {
+      return request<Credential>(
+        `/v1/admin/credentials/${encodeURIComponent(credentialId)}/${action}`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            expected_revision: input.expectedRevision,
+            reason: input.reason,
+            ...(input.replacementSecret === undefined
+              ? {}
+              : { replacement_secret: input.replacementSecret }),
           }),
         },
         true,

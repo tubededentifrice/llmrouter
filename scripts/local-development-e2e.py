@@ -255,9 +255,7 @@ def _prepare() -> None:
     cancelled_status = _wait_terminal(data_token, cancel_id)
     assert cancelled_status["state"] in {"cancelled", "uncertain"}
 
-    recovery_id = _uuidv7()
-    recovery_body = _model_body("Wait for restart recovery.")
-    _create(data_token, recovery_id, recovery_body)
+    recovery_id = _admit_restart_recovery(data_token)
     _write_state(
         {
             "cancel_id": cancel_id,
@@ -396,6 +394,8 @@ def _prove_global_administration() -> None:
         )
         admin_secret = _secret(STATE_DIRECTORY / "administrator-session")
         browser.activate_administrator(admin_secret)
+        browser.wait_for_text("Effective configuration")
+        browser.click_button("Effective configuration")
         browser.wait_for_text("Local OpenRouter")
         admin_text = browser.body_text()
         assert "LLM Router" in admin_text and "Administration" in admin_text
@@ -404,8 +404,8 @@ def _prove_global_administration() -> None:
         assert "deepseek/deepseek-v4-flash" in admin_text
         assert browser.evaluate(
             """(() => {
-              const input = document.querySelector('input[type="password"]');
-              return input !== null && input.value === "";
+              return [...document.querySelectorAll('input[type="password"]')]
+                .every((input) => input.value === "");
             })()"""
         )
         assert not browser.evaluate(
@@ -417,6 +417,54 @@ def _prove_global_administration() -> None:
         assert "general" in assignment_text
         assert "Primary" in assignment_text and "Fallback 1" in assignment_text
         assert "active" in assignment_text
+        browser.click_button("Provider credentials")
+        browser.wait_for_text("Store OpenRouter credential")
+        credential_count = browser.evaluate(
+            'document.querySelectorAll("table tbody tr").length'
+        )
+        assert isinstance(credential_count, int)
+        credential_ids = browser.evaluate(
+            """[...document.querySelectorAll("table tbody tr small")]
+              .map((item) => item.textContent?.trim())"""
+        )
+        assert isinstance(credential_ids, list)
+        browser.fill_labeled_input("Safe label", "Browser lifecycle proof")
+        browser.fill_labeled_input(
+            "Provider secret", secrets.token_urlsafe(32), secret=True
+        )
+        browser.click_button("Store credential")
+        browser.wait_for_text("The write-only OpenRouter credential was stored.")
+        browser.wait_until(
+            lambda: (
+                browser.evaluate('document.querySelectorAll("table tbody tr").length')
+                == credential_count + 1
+            ),
+            "The new credential did not become selectable after refresh.",
+        )
+        assert browser.evaluate(
+            """(() => [...document.querySelectorAll('input[type="password"]')]
+              .every((input) => input.value === ""))()"""
+        )
+        new_credential_ids = browser.evaluate(
+            """[...document.querySelectorAll("table tbody tr small")]
+              .map((item) => item.textContent?.trim())"""
+        )
+        assert isinstance(new_credential_ids, list)
+        created_ids = [
+            item
+            for item in new_credential_ids
+            if isinstance(item, str) and item not in credential_ids
+        ]
+        assert len(created_ids) == 1
+        created_id = created_ids[0]
+        browser.change_credential(created_id, "replace", secrets.token_urlsafe(32))
+        browser.wait_for_text("The credential was replaced.")
+        browser.change_credential(created_id, "disable")
+        browser.wait_for_text("The credential was disabled.")
+        browser.change_credential(created_id, "retire")
+        browser.wait_for_text("The credential was retired.")
+        browser.click_button("Sign out")
+        browser.wait_for_text("Activate administrator session")
 
 
 class _CdpBrowser:
@@ -495,7 +543,7 @@ class _CdpBrowser:
                     targets = response.json()
                     page = next(item for item in targets if item["type"] == "page")
                     return str(page["webSocketDebuggerUrl"])
-            except (httpx.HTTPError, StopIteration):
+            except httpx.HTTPError, StopIteration:
                 pass
             time.sleep(0.1)
         raise AssertionError("The local browser debugging endpoint did not start.")
@@ -577,6 +625,61 @@ class _CdpBrowser:
             }})()"""
         )
         assert clicked is True
+
+    def fill_labeled_input(
+        self, label: str, value: str, *, secret: bool = False
+    ) -> None:
+        filled = self.evaluate(
+            f"""(() => {{
+              const control = [...document.querySelectorAll("label")]
+                .find((item) => item.textContent?.includes({json.dumps(label)}))
+                ?.querySelector("input");
+              if (!(control instanceof HTMLInputElement)) return false;
+              if ({json.dumps(secret)} && control.type !== "password") return false;
+              const setter = Object.getOwnPropertyDescriptor(
+                HTMLInputElement.prototype, "value"
+              )?.set;
+              setter?.call(control, {json.dumps(value)});
+              control.dispatchEvent(new Event("input", {{ bubbles: true }}));
+              return true;
+            }})()"""
+        )
+        assert filled is True
+
+    def change_credential(
+        self,
+        credential_id: str,
+        action: str,
+        replacement_secret: str | None = None,
+    ) -> None:
+        if action not in {"replace", "disable", "retire"}:
+            raise AssertionError("The browser credential action is invalid.")
+        changed = self.evaluate(
+            f"""(() => {{
+              const rows = [...document.querySelectorAll("table tbody tr")];
+              const row = rows.find((item) =>
+                item.querySelector("small")?.textContent?.trim()
+                  === {json.dumps(credential_id)}
+              );
+              if (!(row instanceof HTMLTableRowElement)) return false;
+              if ({json.dumps(replacement_secret)} !== null) {{
+                const input = row.querySelector('input[type="password"]');
+                if (!(input instanceof HTMLInputElement)) return false;
+                const setter = Object.getOwnPropertyDescriptor(
+                  HTMLInputElement.prototype, "value"
+                )?.set;
+                setter?.call(input, {json.dumps(replacement_secret)});
+                input.dispatchEvent(new Event("input", {{ bubbles: true }}));
+              }}
+              const button = [...row.querySelectorAll("button")]
+                .find((item) => item.textContent?.trim().toLowerCase()
+                  === {json.dumps(action)});
+              if (button === undefined) return false;
+              button.click();
+              return true;
+            }})()"""
+        )
+        assert changed is True
 
     def activate_administrator(self, secret: str) -> None:
         activated = self.evaluate(
@@ -664,7 +767,7 @@ class _CdpBrowser:
             try:
                 if check():
                     return
-            except (AssertionError, KeyError):
+            except AssertionError, KeyError:
                 pass
             time.sleep(0.1)
         raise AssertionError(message)
@@ -838,6 +941,38 @@ def _wait_attempt_started(request_id: str, *, candidate_ordinal: int) -> None:
             return
         time.sleep(0.1)
     raise AssertionError("The cancellable provider attempt did not start.")
+
+
+def _admit_restart_recovery(data_token: str) -> str:
+    """Admit work and cross the durable no-repeat boundary before SIGKILL."""
+    recovery_id = _uuidv7()
+    recovery_body = _model_body("Wait for restart recovery.")
+    _create(data_token, recovery_id, recovery_body)
+    _wait_attempt_dispatched(recovery_id, candidate_ordinal=2)
+    return recovery_id
+
+
+def _wait_attempt_dispatched(request_id: str, *, candidate_ordinal: int) -> None:
+    """Wait until exact provider dispatch evidence is durable."""
+    for _attempt in range(100):
+        with psycopg_connect() as connection:
+            dispatched = connection.execute(
+                """SELECT EXISTS (
+                       SELECT 1
+                       FROM router.routing_attempt_dispatches AS dispatch
+                       JOIN router.provider_attempts AS attempt
+                         ON attempt.id = dispatch.attempt_id
+                       WHERE attempt.request_row_id = (
+                           SELECT row_id FROM router.logical_requests
+                           WHERE request_id = %s
+                       ) AND attempt.candidate_ordinal = %s
+                   )""",
+                (request_id, candidate_ordinal),
+            ).fetchone()
+        if dispatched == (True,):
+            return
+        time.sleep(0.1)
+    raise AssertionError("The restart provider attempt did not become dispatched.")
 
 
 def _events(token: str, request_id: str) -> str:

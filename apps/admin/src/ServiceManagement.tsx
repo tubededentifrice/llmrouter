@@ -655,6 +655,17 @@ export function ServiceManagement({
     [services],
   );
 
+  async function refreshCommitted(message: string) {
+    onSuccess(message);
+    try {
+      await onChanged();
+    } catch (error) {
+      onError(
+        `${message} The change was committed, but current data did not refresh. ${errorMessage(error)}`,
+      );
+    }
+  }
+
   async function create(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     dispatch({ type: "busy", value: true });
@@ -666,13 +677,23 @@ export function ServiceManagement({
         bootstrapScope: modelAccess,
       });
       onSelect(created.service_id);
-      onBootstrapPending(created);
-      await onChanged();
+      const hasOneTimeSecret =
+        created.bootstrap_secret_available &&
+        created.bootstrap_secret !== undefined;
+      onBootstrapPending(hasOneTimeSecret ? created : null);
+      await refreshCommitted(
+        hasOneTimeSecret
+          ? "The service was created. Store its one-time access key."
+          : "The service already exists. The one-time access key is not available again.",
+      );
       dispatch({ type: "close_create" });
-      onSuccess("The service was created. Store its one-time access key.");
+      if (!hasOneTimeSecret) onContinueSetup();
     } catch (error) {
-      if (error instanceof AdministrationApiError && error.staleRevision) {
-        await onChanged();
+      if (
+        error instanceof AdministrationApiError &&
+        (error.staleRevision || error.outcomeUncertain)
+      ) {
+        await onChanged().catch(() => undefined);
       }
       onError(errorMessage(error));
     } finally {
@@ -692,11 +713,13 @@ export function ServiceManagement({
         newParentServiceId: formText(values, "parent_service_id") || null,
         reason: "Update the service name and parent",
       });
-      await onChanged();
-      onSuccess("The service name and parent were updated.");
+      await refreshCommitted("The service name and parent were updated.");
     } catch (error) {
-      if (error instanceof AdministrationApiError && error.staleRevision) {
-        await onChanged();
+      if (
+        error instanceof AdministrationApiError &&
+        (error.staleRevision || error.outcomeUncertain)
+      ) {
+        await onChanged().catch(() => undefined);
       }
       onError(errorMessage(error));
     } finally {
@@ -718,11 +741,13 @@ export function ServiceManagement({
         newParentServiceId: parentServiceId,
         reason: "Reattach the service in the inheritance tree",
       });
-      await onChanged();
-      onSuccess("The service was moved to its new parent.");
+      await refreshCommitted("The service was moved to its new parent.");
     } catch (error) {
-      if (error instanceof AdministrationApiError && error.staleRevision) {
-        await onChanged();
+      if (
+        error instanceof AdministrationApiError &&
+        (error.staleRevision || error.outcomeUncertain)
+      ) {
+        await onChanged().catch(() => undefined);
       }
       onError(errorMessage(error));
     } finally {
@@ -738,13 +763,15 @@ export function ServiceManagement({
         expectedRevision: selected.revision,
         reason: `${action[0]?.toUpperCase() ?? ""}${action.slice(1)} the service from global administration`,
       });
-      await onChanged();
-      onSuccess(
+      await refreshCommitted(
         `The service is now ${action === "restore" ? "active" : action === "disable" ? "disabled" : "retired"}.`,
       );
     } catch (error) {
-      if (error instanceof AdministrationApiError && error.staleRevision) {
-        await onChanged();
+      if (
+        error instanceof AdministrationApiError &&
+        (error.staleRevision || error.outcomeUncertain)
+      ) {
+        await onChanged().catch(() => undefined);
       }
       onError(errorMessage(error));
     } finally {

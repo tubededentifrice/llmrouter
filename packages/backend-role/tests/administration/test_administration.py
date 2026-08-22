@@ -29,6 +29,7 @@ from llmrouter_backend.configuration import (
     ConfigurationWriteResult,
     DistributionState,
     EffectiveConfiguration,
+    EffectiveItem,
     RevisionLayer,
 )
 from llmrouter_backend.credential_store import (
@@ -115,15 +116,47 @@ class FakeConfiguration:
     def effective(
         self, _context: RequestContext, _scope: ConfigurationScope
     ) -> EffectiveConfiguration:
+        if self.layer is not None:
+            revision = self.layer.revision_id
+            source = self.layer.scope.source_layer
+
+            def item(identity: str, value: object) -> EffectiveItem:
+                return EffectiveItem(
+                    identity,
+                    SERVICE_ID,
+                    source,
+                    value.state,  # type: ignore[attr-defined]
+                    False,
+                    revision,
+                    value,
+                )
+
+            content = self.layer.content
+            providers = tuple(
+                item(value.provider_instance_id, value)
+                for value in content.provider_instances
+            )
+            routes = tuple(
+                item(value.provider_model_route_id, value)
+                for value in content.provider_model_routes
+            )
+            assignments = tuple(
+                item(value.name, value) for value in content.assignments
+            )
+        else:
+            revision = str(uuid.UUID(int=9))
+            providers = ()
+            routes = ()
+            assignments = ()
         return EffectiveConfiguration(
             SERVICE_ID,
             None,
-            str(uuid.UUID(int=9)),
+            revision,
             DistributionState.CURRENT,
             (),
-            (),
-            (),
-            (),
+            providers,
+            routes,
+            assignments,
         )
 
     def publish(
@@ -432,7 +465,10 @@ def _headers(*, mutation: bool = False) -> dict[str, str]:
 
 
 def _provider_instance_body(
-    *, state: str = "active", expected_revision: str | None = None
+    *,
+    state: str = "active",
+    expected_revision: str | None = None,
+    eligible_service_ids: list[str] | None = None,
 ) -> dict[str, object]:
     return {
         "provider_catalog_id": "openai_compatible.v1",
@@ -450,6 +486,45 @@ def _provider_instance_body(
         },
         "expected_revision": expected_revision,
         "reason": "Change the OpenRouter instance",
+        "eligible_service_ids": eligible_service_ids or [],
+    }
+
+
+def _provider_model_route_body(
+    *,
+    expected_revision: str | None = None,
+    eligible_service_ids: list[str] | None = None,
+) -> dict[str, object]:
+    return {
+        "provider_instance_id": str(uuid.UUID(int=40)),
+        "canonical_model_id": str(uuid.UUID(int=41)),
+        "wire_model": "deepseek/deepseek-v4-flash",
+        "capabilities": ["chat.complete", "chat.stream"],
+        "settings": {
+            "schema_name": "adapter.openai_compatible.route",
+            "major_version": 1,
+            "document": {},
+        },
+        "price_authority": {
+            "mode": "manual",
+            "source_name": None,
+            "lookup_identifier": None,
+        },
+        "prices": [
+            {
+                "unit": "input_token",
+                "price": "0.1",
+                "currency": "USD",
+                "raw_source_value": "0.1",
+                "unit_quantity": "1",
+            }
+        ],
+        "synchronization_schedule": "0 0 * * 0",
+        "stale_after_seconds": 1_209_600,
+        "state": "active",
+        "expected_revision": expected_revision,
+        "reason": "Change the OpenRouter model route",
+        "eligible_service_ids": eligible_service_ids or [],
     }
 
 
@@ -538,7 +613,61 @@ def test_provider_configuration_write_requires_recent_authentication(
         headers=_headers(),
     )
     assert listing.status_code == 200
-    assert listing.json() == {"items": [], "next_cursor": None}
+    assert (
+        listing.json()["configuration_revision"] == response.json()["active_revision"]
+    )
+    assert listing.json()["items"][0]["eligible_service_ids"] == []
+
+
+def test_provider_listing_returns_safe_eligibility_metadata(
+    administration: tuple[TestClient, FakeAuthority, FakeCredentials],
+) -> None:
+    client, _authority, _credentials = administration
+    eligible = [str(uuid.UUID(int=70)), str(uuid.UUID(int=71))]
+    created = client.post(
+        f"/v1/admin/services/{SERVICE_ID}/provider-instances",
+        headers=_headers(mutation=True),
+        json=_provider_instance_body(eligible_service_ids=eligible),
+    )
+    listing = client.get(
+        f"/v1/admin/services/{SERVICE_ID}/provider-instances",
+        headers=_headers(),
+    )
+
+    assert created.status_code == 201, created.text
+    assert listing.status_code == 200
+    assert listing.json()["configuration_revision"] == created.json()["active_revision"]
+    assert listing.json()["items"][0]["eligible_service_ids"] == eligible
+
+
+def test_provider_route_listing_returns_safe_eligibility_metadata(
+    administration: tuple[TestClient, FakeAuthority, FakeCredentials],
+) -> None:
+    client, _authority, _credentials = administration
+    eligible = [str(uuid.UUID(int=72)), str(uuid.UUID(int=73))]
+    provider = client.post(
+        f"/v1/admin/services/{SERVICE_ID}/provider-instances",
+        headers=_headers(mutation=True),
+        json=_provider_instance_body(),
+    )
+    created = client.post(
+        f"/v1/admin/services/{SERVICE_ID}/provider-model-routes",
+        headers=_headers(mutation=True),
+        json=_provider_model_route_body(
+            expected_revision=provider.json()["active_revision"],
+            eligible_service_ids=eligible,
+        ),
+    )
+    listing = client.get(
+        f"/v1/admin/services/{SERVICE_ID}/provider-model-routes",
+        headers=_headers(),
+    )
+
+    assert provider.status_code == 201, provider.text
+    assert created.status_code == 201, created.text
+    assert listing.status_code == 200
+    assert listing.json()["configuration_revision"] == created.json()["active_revision"]
+    assert listing.json()["items"][0]["eligible_service_ids"] == eligible
 
 
 def test_provider_instance_disable_and_restore_use_expected_revisions(

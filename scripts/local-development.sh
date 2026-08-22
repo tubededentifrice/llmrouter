@@ -171,7 +171,7 @@ main() {
       compose down --volumes --remove-orphans
       if [[ -d "${state_directory}/backend-replay" ]]; then
         compose run --rm --no-deps backend /bin/sh -euc \
-          'rm -f /local-state/backend-replay/accounting-replay.bin /local-state/backend-replay/accounting-replay.bin.lock /local-state/backend-replay/accounting-replay.bin.owner /local-state/backend-replay/accounting-replay.bin.state; rmdir /local-state/backend-replay' \
+          'find /local-state/backend-replay -maxdepth 1 -type f \( -name "accounting-replay.bin" -o -name "accounting-replay.bin.lock" -o -name "accounting-replay.bin.owner" -o -name "accounting-replay.bin.state" -o -name ".accounting-replay.bin.*.tmp" \) -delete; rmdir /local-state/backend-replay' \
           >/dev/null
         compose down --volumes --remove-orphans >/dev/null
       fi

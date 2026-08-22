@@ -20,6 +20,7 @@ CHECK_PATH = REPOSITORY_ROOT / "scripts/check-local-development.py"
 COMPOSE_PATH = REPOSITORY_ROOT / "docker-compose.dev.yml"
 BOOTSTRAP_PATH = REPOSITORY_ROOT / "scripts/local-development-bootstrap.py"
 LIVE_PATH = REPOSITORY_ROOT / "scripts/local-development-live-openrouter.py"
+E2E_PATH = REPOSITORY_ROOT / "scripts/local-development-e2e.py"
 
 
 def _check_module() -> ModuleType:
@@ -47,6 +48,17 @@ def _bootstrap_module() -> ModuleType:
 def _live_module() -> ModuleType:
     specification = importlib.util.spec_from_file_location(
         "local_development_live_openrouter", LIVE_PATH
+    )
+    assert specification is not None
+    assert specification.loader is not None
+    module = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module)
+    return module
+
+
+def _e2e_module() -> ModuleType:
+    specification = importlib.util.spec_from_file_location(
+        "local_development_e2e", E2E_PATH
     )
     assert specification is not None
     assert specification.loader is not None
@@ -265,6 +277,49 @@ def test_local_proof_resets_and_stops_the_deployment() -> None:
     assert 'local-development.sh" e2e' in proof
     assert 'local-development.sh" stop' in proof
     assert "trap" in proof
+
+
+def test_restart_recovery_waits_for_durable_provider_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cross the no-repeat dispatch boundary before the proof sends SIGKILL."""
+    module = _e2e_module()
+    calls: list[tuple[object, ...]] = []
+    request_id = "0198b08f-7000-7000-8000-000000000040"
+    monkeypatch.setattr(module, "_uuidv7", lambda: request_id)
+    monkeypatch.setattr(
+        module,
+        "_create",
+        lambda token, identity, body: calls.append(
+            ("create", token, identity, body["messages"][0]["content"])
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "_wait_attempt_dispatched",
+        lambda identity, *, candidate_ordinal: calls.append(
+            ("dispatch", identity, candidate_ordinal)
+        ),
+    )
+
+    result = module._admit_restart_recovery("data-token")  # noqa: SLF001
+
+    assert result == request_id
+    assert calls == [
+        ("create", "data-token", request_id, "Wait for restart recovery."),
+        ("dispatch", request_id, 2),
+    ]
+
+
+def test_local_reset_removes_interrupted_replay_writes() -> None:
+    """Remove only bounded replay files, including a SIGKILL temporary write."""
+    script = (REPOSITORY_ROOT / "scripts/local-development.sh").read_text(
+        encoding="utf-8"
+    )
+    reset = script[script.index("    reset)") : script.index("    status)")]
+    assert "find /local-state/backend-replay -maxdepth 1 -type f" in reset
+    assert '-name ".accounting-replay.bin.*.tmp"' in reset
+    assert "-delete; rmdir /local-state/backend-replay" in reset
 
 
 def test_live_openrouter_proof_is_guarded_and_always_resets() -> None:

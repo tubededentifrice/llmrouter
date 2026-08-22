@@ -26,7 +26,7 @@
     },
     {
       "path": "docs/api/openapi.yaml",
-      "sha256": "0f002726831b33ffb6f4f7e6ab85a8d819cfea10c76c8beea7f74cf2c20d11fb"
+      "sha256": "88142b071871b5c95d964efd24462c5e4ae7b4eada6a5637c404df45d428b9ea"
     },
     {
       "path": "docs/api/request-fingerprint.md",
@@ -44,12 +44,12 @@
   "component_schemas": {
     "AccountingSummary": "214868b47f97be868b0b4e3de92614f6c997e9cb5351907484d8499a983267f3",
     "AdministrationAssignment": "0c458293ce1dd3c42a380f46f2b26c48b48be70d036861dbe8462f237ce50299",
-    "AdministrationAssignmentPage": "fe0fc196b6e53a6076b1cb555b7b2f3858a1972ae5ff5baa6571844bb7384b6c",
+    "AdministrationAssignmentPage": "1f2d589d7c12e61cd83a2713e50613960d0262c4d0e5e1c800e9e30bed4f733b",
     "AdministrationChange": "73028097433a5aafd20854e850b5b68b22a4286cf45b00188de1af5ebcb77739",
-    "AdministrationProviderInstance": "c524f1071315ff12e0ccb1f78248e9ef46a0e89eed0888c867bc6e431f6aed6b",
-    "AdministrationProviderInstancePage": "82cd86fa3401a88e599ed41bf978aeaac34f408db43e73bdd4e34e8b7e73ba59",
-    "AdministrationProviderModelRoute": "a101c8508a19834ec8a13f49160d584b9191dafcb1e30e3ff914abb877f40a61",
-    "AdministrationProviderModelRoutePage": "d5420d73a1b5451a8d60a34dd6ae5794de31c4ff802a019adda79c65e5cfb0f4",
+    "AdministrationProviderInstance": "74f375f0f798dd96a8af6500089ab05d0f7fee0f4a9ed2b63ad2d2e03e1424f8",
+    "AdministrationProviderInstancePage": "3fd75cd20f4c79526dd3182ccd75671d4b3b83b24a0483946e6dd8a30e1bcb4e",
+    "AdministrationProviderModelRoute": "296cb693d29b41047b3f2a54feb8da52f193e6982240803b7122e368d29183d3",
+    "AdministrationProviderModelRoutePage": "8715436997084f53870c2ab0f7c96f1909a9072de6c31cf4349f7a3a77c3b039",
     "AdministrationPutAssignment": "733f874a28fbf20f0df7217f709a7f21676270b9d31cb9fcc4f29aa7dc2d0c9e",
     "AdministrationPutProviderInstance": "053f14a411b0c3b94d37be3628d97ed04da5485194d2f701a896794ef7d101ac",
     "AdministrationPutProviderModelRoute": "ac10174f281bd7dac4c960a6282973c56f269ff5f568866891c4aa6a33a26431",
@@ -193,6 +193,6 @@
   },
   "contract_set": "llmrouter-v1",
   "generator_version": 1,
-  "source_sha256": "0f002726831b33ffb6f4f7e6ab85a8d819cfea10c76c8beea7f74cf2c20d11fb",
+  "source_sha256": "88142b071871b5c95d964efd24462c5e4ae7b4eada6a5637c404df45d428b9ea",
   "version": "1.0.0"
 }

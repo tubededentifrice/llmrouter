@@ -777,6 +777,7 @@ AdministrationAssignment = TypedDict('AdministrationAssignment', {
 AdministrationAssignmentPage = TypedDict('AdministrationAssignmentPage', {
     'items': 'list[AdministrationAssignment]',
     'next_cursor': 'NotRequired[str | None]',
+    'configuration_revision': 'OpaqueId | None',
 })
 
 CreateDiagnosticGrant = TypedDict('CreateDiagnosticGrant', {
@@ -882,6 +883,7 @@ AdministrationProviderInstance = TypedDict('AdministrationProviderInstance', {
     'display_name': 'str',
     'endpoint': 'str',
     'credential_id': 'OpaqueId',
+    'eligible_service_ids': 'list[OpaqueId]',
     'state': 'Literal["active", "disabled", "retired"]',
     'active_revision': 'OpaqueId',
     'inherited': 'bool',
@@ -891,6 +893,7 @@ AdministrationProviderInstance = TypedDict('AdministrationProviderInstance', {
 AdministrationProviderInstancePage = TypedDict('AdministrationProviderInstancePage', {
     'items': 'list[AdministrationProviderInstance]',
     'next_cursor': 'NotRequired[str | None]',
+    'configuration_revision': 'OpaqueId | None',
 })
 
 AdministrationPutProviderModelRoute = TypedDict('AdministrationPutProviderModelRoute', {
@@ -919,6 +922,7 @@ AdministrationProviderModelRoute = TypedDict('AdministrationProviderModelRoute',
     'canonical_model_id': 'OpaqueId',
     'wire_model': 'str',
     'capabilities': 'list[str]',
+    'eligible_service_ids': 'list[OpaqueId]',
     'settings': 'RegisteredDocument',
     'embedding_model_space_id': 'NotRequired[OpaqueId]',
     'embedding_dimensions': 'NotRequired[int]',
@@ -936,6 +940,7 @@ AdministrationProviderModelRoute = TypedDict('AdministrationProviderModelRoute',
 AdministrationProviderModelRoutePage = TypedDict('AdministrationProviderModelRoutePage', {
     'items': 'list[AdministrationProviderModelRoute]',
     'next_cursor': 'NotRequired[str | None]',
+    'configuration_revision': 'OpaqueId | None',
 })
 
 PriceComponent = TypedDict('PriceComponent', {
@@ -1584,6 +1589,16 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
   "AdministrationAssignmentPage": {
     "additionalProperties": false,
     "properties": {
+      "configuration_revision": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
       "items": {
         "items": {
           "$ref": "#/components/schemas/AdministrationAssignment"
@@ -1598,7 +1613,8 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
       }
     },
     "required": [
-      "items"
+      "items",
+      "configuration_revision"
     ],
     "type": "object"
   },
@@ -1655,6 +1671,14 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
         "minLength": 1,
         "type": "string"
       },
+      "eligible_service_ids": {
+        "items": {
+          "$ref": "#/components/schemas/OpaqueId"
+        },
+        "maxItems": 1000,
+        "type": "array",
+        "uniqueItems": true
+      },
       "endpoint": {
         "format": "uri",
         "type": "string"
@@ -1694,6 +1718,7 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
       "display_name",
       "endpoint",
       "credential_id",
+      "eligible_service_ids",
       "state",
       "active_revision",
       "inherited"
@@ -1703,6 +1728,16 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
   "AdministrationProviderInstancePage": {
     "additionalProperties": false,
     "properties": {
+      "configuration_revision": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
       "items": {
         "items": {
           "$ref": "#/components/schemas/AdministrationProviderInstance"
@@ -1717,7 +1752,8 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
       }
     },
     "required": [
-      "items"
+      "items",
+      "configuration_revision"
     ],
     "type": "object"
   },
@@ -1756,6 +1792,14 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
         "items": {
           "type": "string"
         },
+        "type": "array",
+        "uniqueItems": true
+      },
+      "eligible_service_ids": {
+        "items": {
+          "$ref": "#/components/schemas/OpaqueId"
+        },
+        "maxItems": 1000,
         "type": "array",
         "uniqueItems": true
       },
@@ -1847,6 +1891,7 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
       "canonical_model_id",
       "wire_model",
       "capabilities",
+      "eligible_service_ids",
       "settings",
       "price_authority",
       "prices",
@@ -1863,6 +1908,16 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
   "AdministrationProviderModelRoutePage": {
     "additionalProperties": false,
     "properties": {
+      "configuration_revision": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
       "items": {
         "items": {
           "$ref": "#/components/schemas/AdministrationProviderModelRoute"
@@ -1877,7 +1932,8 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
       }
     },
     "required": [
-      "items"
+      "items",
+      "configuration_revision"
     ],
     "type": "object"
   },

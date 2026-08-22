@@ -17,6 +17,7 @@ import { scheduleFrameStart } from "../src/embedProtocol.js";
 import { ServiceManagement } from "../src/ServiceManagement.js";
 import {
   configurationRevisionForScope,
+  scheduleAdministrationSessionInspection,
   type AdministrationClient,
   type AdministrationSnapshot,
   type ScopeSelection,
@@ -73,11 +74,12 @@ const snapshot: AdministrationSnapshot = {
     {
       provider_instance_id: "provider-1",
       owner_scope: globalScope.serviceId,
-      source_layer: "service",
+      source_layer: serviceLevelScope.serviceId,
       provider_catalog_id: "openai_compatible.v1",
       display_name: "OpenRouter",
       endpoint: "https://openrouter.ai/api/v1",
       credential_id: "credential-1",
+      eligible_service_ids: [],
       state: "active",
       active_revision: "provider-revision-1",
       inherited: false,
@@ -95,11 +97,12 @@ const snapshot: AdministrationSnapshot = {
     {
       provider_model_route_id: "route-1",
       owner_scope: globalScope.serviceId,
-      source_layer: "service",
+      source_layer: serviceLevelScope.serviceId,
       provider_instance_id: "provider-1",
       canonical_model_id: "deepseek-v4-flash",
       wire_model: "deepseek/deepseek-v4-flash",
       capabilities: ["chat.complete", "chat.stream"],
+      eligible_service_ids: [],
       settings: {
         schema_name: "adapter.openai_compatible.route",
         major_version: 1,
@@ -122,7 +125,7 @@ const snapshot: AdministrationSnapshot = {
     {
       name: "general",
       owner_scope: globalScope.serviceId,
-      source_layer: "workspace",
+      source_layer: globalScope.workspaceId,
       state: "active",
       inherited: false,
       active_revision: "assignment-revision-1",
@@ -151,6 +154,8 @@ const snapshot: AdministrationSnapshot = {
     cost: "0.0001",
     corrections: "0",
   },
+  configuration_revision: null,
+  failures: {},
 };
 
 const client: AdministrationClient = {
@@ -161,6 +166,7 @@ const client: AdministrationClient = {
   changeService: vi.fn(),
   load: vi.fn(),
   createCredential: vi.fn(),
+  changeCredential: vi.fn(),
   putProvider: vi.fn(),
   putRoute: vi.fn(),
   putAssignment: vi.fn(),
@@ -193,6 +199,26 @@ function dashboard(
 }
 
 describe("administration app states", () => {
+  it("does not rotate the session proof from a temporary Strict Mode effect", () => {
+    const callbacks: (() => void)[] = [];
+    const inspect = vi.fn();
+    const cancel = scheduleAdministrationSessionInspection(
+      inspect,
+      (callback) => {
+        callbacks.push(callback);
+      },
+    );
+    cancel();
+    callbacks[0]?.();
+    expect(inspect).not.toHaveBeenCalled();
+
+    scheduleAdministrationSessionInspection(inspect, (callback) => {
+      callbacks.push(callback);
+    });
+    callbacks[1]?.();
+    expect(inspect).toHaveBeenCalledOnce();
+  });
+
   it("does not consume an embed token from a temporary Strict Mode effect", () => {
     const callbacks: (() => void)[] = [];
     const start = vi.fn();

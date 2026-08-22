@@ -140,7 +140,7 @@ export type AdministrationPutAssignment = { readonly expected_revision: OpaqueId
 
 export type AdministrationAssignment = { readonly name: AssignmentName; readonly owner_scope: "global" | "service" | "workspace"; readonly source_layer: OpaqueId; readonly state: "active" | "disabled" | "retired"; readonly inherited: boolean; readonly active_revision: OpaqueId; readonly candidates: ReadonlyArray<{ readonly provider_model_route_id: OpaqueId; readonly attempt_timeout_ms?: number; }>; readonly required_capabilities?: ReadonlyArray<string>; };
 
-export type AdministrationAssignmentPage = { readonly items: ReadonlyArray<AdministrationAssignment>; readonly next_cursor?: string | null; };
+export type AdministrationAssignmentPage = { readonly items: ReadonlyArray<AdministrationAssignment>; readonly next_cursor?: string | null; readonly configuration_revision: OpaqueId | null; };
 
 export type CreateDiagnosticGrant = { readonly workspace_id?: OpaqueId; readonly exact_route: OpaqueId; readonly reason: string; };
 
@@ -160,15 +160,15 @@ export type ProviderModelRoutePage = { readonly items: ReadonlyArray<ProviderMod
 
 export type AdministrationPutProviderInstance = { readonly provider_catalog_id: OpaqueId; readonly display_name: string; readonly endpoint: string; readonly credential_id: OpaqueId; readonly state: "active" | "disabled" | "retired"; readonly settings: RegisteredDocument; readonly expected_revision: OpaqueId | null; readonly eligible_service_ids?: ReadonlyArray<OpaqueId>; readonly reason: string; };
 
-export type AdministrationProviderInstance = { readonly provider_instance_id: OpaqueId; readonly owner_scope: OpaqueId; readonly source_layer: OpaqueId; readonly provider_catalog_id: OpaqueId; readonly display_name: string; readonly endpoint: string; readonly credential_id: OpaqueId; readonly state: "active" | "disabled" | "retired"; readonly active_revision: OpaqueId; readonly inherited: boolean; readonly settings?: RegisteredDocument; };
+export type AdministrationProviderInstance = { readonly provider_instance_id: OpaqueId; readonly owner_scope: OpaqueId; readonly source_layer: OpaqueId; readonly provider_catalog_id: OpaqueId; readonly display_name: string; readonly endpoint: string; readonly credential_id: OpaqueId; readonly eligible_service_ids: ReadonlyArray<OpaqueId>; readonly state: "active" | "disabled" | "retired"; readonly active_revision: OpaqueId; readonly inherited: boolean; readonly settings?: RegisteredDocument; };
 
-export type AdministrationProviderInstancePage = { readonly items: ReadonlyArray<AdministrationProviderInstance>; readonly next_cursor?: string | null; };
+export type AdministrationProviderInstancePage = { readonly items: ReadonlyArray<AdministrationProviderInstance>; readonly next_cursor?: string | null; readonly configuration_revision: OpaqueId | null; };
 
 export type AdministrationPutProviderModelRoute = { readonly provider_instance_id: OpaqueId; readonly canonical_model_id: OpaqueId; readonly wire_model: string; readonly capabilities: ReadonlyArray<string>; readonly settings: RegisteredDocument; readonly embedding_model_space_id?: OpaqueId; readonly embedding_dimensions?: number; readonly price_authority: PriceAuthority; readonly prices: ReadonlyArray<PriceComponent>; readonly synchronization_schedule: string; readonly stale_after_seconds: number; readonly state: "active" | "disabled" | "retired"; readonly expected_revision: OpaqueId | null; readonly eligible_service_ids?: ReadonlyArray<OpaqueId>; readonly reason: string; };
 
-export type AdministrationProviderModelRoute = { readonly provider_model_route_id: OpaqueId; readonly owner_scope: OpaqueId; readonly source_layer: OpaqueId; readonly provider_instance_id: OpaqueId; readonly canonical_model_id: OpaqueId; readonly wire_model: string; readonly capabilities: ReadonlyArray<string>; readonly settings: RegisteredDocument; readonly embedding_model_space_id?: OpaqueId; readonly embedding_dimensions?: number; readonly price_authority: PriceAuthority; readonly prices: ReadonlyArray<PriceComponent>; readonly synchronization_schedule: string; readonly stale_after_seconds: number; readonly price_version: OpaqueId | null; readonly synchronization_state: "manual" | "current" | "stale" | "missing" | "failed"; readonly state: "active" | "disabled" | "retired"; readonly active_revision: OpaqueId; readonly inherited: boolean; };
+export type AdministrationProviderModelRoute = { readonly provider_model_route_id: OpaqueId; readonly owner_scope: OpaqueId; readonly source_layer: OpaqueId; readonly provider_instance_id: OpaqueId; readonly canonical_model_id: OpaqueId; readonly wire_model: string; readonly capabilities: ReadonlyArray<string>; readonly eligible_service_ids: ReadonlyArray<OpaqueId>; readonly settings: RegisteredDocument; readonly embedding_model_space_id?: OpaqueId; readonly embedding_dimensions?: number; readonly price_authority: PriceAuthority; readonly prices: ReadonlyArray<PriceComponent>; readonly synchronization_schedule: string; readonly stale_after_seconds: number; readonly price_version: OpaqueId | null; readonly synchronization_state: "manual" | "current" | "stale" | "missing" | "failed"; readonly state: "active" | "disabled" | "retired"; readonly active_revision: OpaqueId; readonly inherited: boolean; };
 
-export type AdministrationProviderModelRoutePage = { readonly items: ReadonlyArray<AdministrationProviderModelRoute>; readonly next_cursor?: string | null; };
+export type AdministrationProviderModelRoutePage = { readonly items: ReadonlyArray<AdministrationProviderModelRoute>; readonly next_cursor?: string | null; readonly configuration_revision: OpaqueId | null; };
 
 export type PriceComponent = { readonly unit: "input_token" | "output_token" | "cached_token" | "request" | "image" | "audio_second" | "search" | "tool_unit" | "other"; readonly price: NonNegativeDecimal; readonly currency: string; readonly raw_source_value: string; readonly unit_quantity: PositiveDecimal; };
 
@@ -425,6 +425,16 @@ export const contractSchemas = {
   "AdministrationAssignmentPage": {
     "additionalProperties": false,
     "properties": {
+      "configuration_revision": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
       "items": {
         "items": {
           "$ref": "#/components/schemas/AdministrationAssignment"
@@ -439,7 +449,8 @@ export const contractSchemas = {
       }
     },
     "required": [
-      "items"
+      "items",
+      "configuration_revision"
     ],
     "type": "object"
   },
@@ -496,6 +507,14 @@ export const contractSchemas = {
         "minLength": 1,
         "type": "string"
       },
+      "eligible_service_ids": {
+        "items": {
+          "$ref": "#/components/schemas/OpaqueId"
+        },
+        "maxItems": 1000,
+        "type": "array",
+        "uniqueItems": true
+      },
       "endpoint": {
         "format": "uri",
         "type": "string"
@@ -535,6 +554,7 @@ export const contractSchemas = {
       "display_name",
       "endpoint",
       "credential_id",
+      "eligible_service_ids",
       "state",
       "active_revision",
       "inherited"
@@ -544,6 +564,16 @@ export const contractSchemas = {
   "AdministrationProviderInstancePage": {
     "additionalProperties": false,
     "properties": {
+      "configuration_revision": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
       "items": {
         "items": {
           "$ref": "#/components/schemas/AdministrationProviderInstance"
@@ -558,7 +588,8 @@ export const contractSchemas = {
       }
     },
     "required": [
-      "items"
+      "items",
+      "configuration_revision"
     ],
     "type": "object"
   },
@@ -597,6 +628,14 @@ export const contractSchemas = {
         "items": {
           "type": "string"
         },
+        "type": "array",
+        "uniqueItems": true
+      },
+      "eligible_service_ids": {
+        "items": {
+          "$ref": "#/components/schemas/OpaqueId"
+        },
+        "maxItems": 1000,
         "type": "array",
         "uniqueItems": true
       },
@@ -688,6 +727,7 @@ export const contractSchemas = {
       "canonical_model_id",
       "wire_model",
       "capabilities",
+      "eligible_service_ids",
       "settings",
       "price_authority",
       "prices",
@@ -704,6 +744,16 @@ export const contractSchemas = {
   "AdministrationProviderModelRoutePage": {
     "additionalProperties": false,
     "properties": {
+      "configuration_revision": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
       "items": {
         "items": {
           "$ref": "#/components/schemas/AdministrationProviderModelRoute"
@@ -718,7 +768,8 @@ export const contractSchemas = {
       }
     },
     "required": [
-      "items"
+      "items",
+      "configuration_revision"
     ],
     "type": "object"
   },

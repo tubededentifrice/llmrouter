@@ -40,6 +40,7 @@ import {
   endAdministratorSession,
   errorMessage,
   inspectLocalAdministratorSession,
+  scheduleAdministrationSessionInspection,
   startPocketIDAdministratorSession,
   startPocketIDRecentAuthentication,
   type AccountingSummary,
@@ -85,6 +86,26 @@ function errorNotice(error: unknown): Notice {
   };
 }
 
+function committedRefreshNotice(message: string, error: unknown): Notice {
+  return {
+    tone: "error",
+    message: `${message} The change was committed, but current data did not refresh. ${errorMessage(error)}`,
+  };
+}
+
+async function refreshAfterCommit(
+  message: string,
+  onChanged: () => Promise<void>,
+  onNotice: (notice: Notice) => void,
+): Promise<void> {
+  onNotice({ tone: "success", message });
+  try {
+    await onChanged();
+  } catch (error) {
+    onNotice(committedRefreshNotice(message, error));
+  }
+}
+
 interface SectionItem {
   readonly id: Section;
   readonly label: string;
@@ -108,6 +129,10 @@ const serviceSections: readonly SectionItem[] = [
 const sections = [...globalSections, ...serviceSections];
 const emptyServices: readonly ServiceSummary[] = [];
 const emptyCredentials: readonly Credential[] = [];
+type GlobalFailures = Readonly<
+  Partial<Record<"services" | "credentials", string>>
+>;
+const emptyGlobalFailures: GlobalFailures = {};
 
 function initialScope(): ScopeSelection {
   const search = "location" in globalThis ? globalThis.location.search : "";
@@ -210,6 +235,20 @@ function Revision({
   );
 }
 
+function ScopedReadFailure({
+  title,
+  message,
+}: {
+  readonly title: string;
+  readonly message: string;
+}) {
+  return (
+    <StatePanel kind="error" title={title}>
+      {message}
+    </StatePanel>
+  );
+}
+
 function CredentialForm({
   client,
   ownerScope,
@@ -235,13 +274,21 @@ function CredentialForm({
       });
       setSecret("");
       setSafeLabel("");
-      onNotice({
-        tone: "success",
-        message: "The write-only OpenRouter credential was stored.",
-      });
-      await onChanged();
     } catch (error) {
       onNotice(errorNotice(error));
+      setSecret("");
+      setSubmitting(false);
+      return;
+    }
+    const message = "The write-only OpenRouter credential was stored.";
+    onNotice({
+      tone: "success",
+      message,
+    });
+    try {
+      await onChanged();
+    } catch (error) {
+      onNotice(committedRefreshNotice(message, error));
     } finally {
       setSecret("");
       setSubmitting(false);
@@ -294,9 +341,15 @@ function CredentialForm({
 }
 
 function CredentialTable({
+  client,
   values,
+  onChanged,
+  onNotice,
 }: {
+  readonly client: AdministrationClient;
   readonly values: readonly Credential[];
+  readonly onChanged: () => Promise<void>;
+  readonly onNotice: (notice: Notice) => void;
 }) {
   return (
     <div className="table-scroll">
@@ -307,35 +360,142 @@ function CredentialTable({
             <th>Owner</th>
             <th>State</th>
             <th>Revision</th>
+            <th>
+              <span className="sr-only">Actions</span>
+            </th>
           </tr>
         </thead>
         <tbody>
           {values.length === 0 ? (
-            <EmptyRow columns={4}>
+            <EmptyRow columns={5}>
               No credential metadata is in this authority.
             </EmptyRow>
           ) : (
             values.map((item) => (
-              <tr key={item.credential_id}>
-                <td>
-                  <strong>{item.fingerprint}</strong>
-                  <small>{item.credential_id}</small>
-                </td>
-                <td>{item.owner_scope}</td>
-                <td>
-                  <StatusPill tone={toneForState(item.state)}>
-                    {item.state}
-                  </StatusPill>
-                </td>
-                <td>
-                  <Revision value={item.revision} />
-                </td>
-              </tr>
+              <CredentialRow
+                key={item.credential_id}
+                client={client}
+                item={item}
+                onChanged={onChanged}
+                onNotice={onNotice}
+              />
             ))
           )}
         </tbody>
       </table>
     </div>
+  );
+}
+
+function CredentialRow({
+  client,
+  item,
+  onChanged,
+  onNotice,
+}: {
+  readonly client: AdministrationClient;
+  readonly item: Credential;
+  readonly onChanged: () => Promise<void>;
+  readonly onNotice: (notice: Notice) => void;
+}) {
+  const [replacementSecret, setReplacementSecret] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function change(action: "rotate" | "disable" | "retire") {
+    setBusy(true);
+    const stateMessage =
+      action === "rotate"
+        ? "The credential was replaced."
+        : action === "disable"
+          ? "The credential was disabled."
+          : "The credential was retired.";
+    try {
+      await client.changeCredential(item.credential_id, action, {
+        expectedRevision: item.revision,
+        reason: `${action === "rotate" ? "Replace" : action === "disable" ? "Disable" : "Retire"} the provider credential`,
+        ...(action === "rotate" ? { replacementSecret } : {}),
+      });
+    } catch (error) {
+      onNotice(errorNotice(error));
+      setReplacementSecret("");
+      setBusy(false);
+      return;
+    }
+    setReplacementSecret("");
+    onNotice({ tone: "success", message: stateMessage });
+    try {
+      await onChanged();
+    } catch (error) {
+      onNotice(committedRefreshNotice(stateMessage, error));
+    } finally {
+      setReplacementSecret("");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <tr>
+      <td>
+        <strong>{item.fingerprint}</strong>
+        <small>{item.credential_id}</small>
+      </td>
+      <td>{item.owner_scope}</td>
+      <td>
+        <StatusPill tone={toneForState(item.state)}>{item.state}</StatusPill>
+      </td>
+      <td>
+        <Revision value={item.revision} />
+      </td>
+      <td>
+        {item.state === "retired" ? (
+          <span className="muted-action">Read only</span>
+        ) : (
+          <div className="credential-actions">
+            <label>
+              <span className="sr-only">
+                Replacement secret for {item.fingerprint}
+              </span>
+              <input
+                type="password"
+                value={replacementSecret}
+                placeholder="Write-only replacement"
+                autoComplete="new-password"
+                spellCheck={false}
+                onChange={(event) => {
+                  setReplacementSecret(event.currentTarget.value);
+                }}
+              />
+            </label>
+            <Button
+              type="button"
+              variant="quiet"
+              disabled={busy || replacementSecret === ""}
+              onClick={() => void change("rotate")}
+            >
+              Replace
+            </Button>
+            {item.state === "active" ? (
+              <Button
+                type="button"
+                variant="quiet"
+                disabled={busy}
+                onClick={() => void change("disable")}
+              >
+                Disable
+              </Button>
+            ) : null}
+            <Button
+              type="button"
+              variant="quiet"
+              disabled={busy}
+              onClick={() => void change("retire")}
+            >
+              Retire
+            </Button>
+          </div>
+        )}
+      </td>
+    </tr>
   );
 }
 
@@ -381,11 +541,11 @@ function ProviderForm({
         reason: "Create the OpenRouter provider instance",
         eligible_service_ids: [],
       });
-      onNotice({
-        tone: "success",
-        message: `Provider instance published at ${revisionLabel(result.active_revision)} (${result.distribution_state}).`,
-      });
-      await onChanged();
+      await refreshAfterCommit(
+        `Provider instance published at ${revisionLabel(result.active_revision)} (${result.distribution_state}).`,
+        onChanged,
+        onNotice,
+      );
     } catch (error) {
       onNotice(errorNotice(error));
     } finally {
@@ -496,14 +656,14 @@ function ProviderTable({
           settings: item.settings,
           expected_revision: item.active_revision,
           reason: `${nextState === "active" ? "Restore" : "Disable"} the provider instance`,
-          eligible_service_ids: [],
+          eligible_service_ids: item.eligible_service_ids,
         },
       );
-      onNotice({
-        tone: "success",
-        message: `Provider instance ${nextState}. Active revision ${revisionLabel(result.active_revision)}.`,
-      });
-      await onChanged();
+      await refreshAfterCommit(
+        `Provider instance ${nextState}. Active revision ${revisionLabel(result.active_revision)}.`,
+        onChanged,
+        onNotice,
+      );
     } catch (error) {
       onNotice(errorNotice(error));
     }
@@ -519,14 +679,13 @@ function ProviderTable({
         settings: item.settings,
         expected_revision: expectedRevision,
         reason: "Override the inherited provider connection for this service",
-        eligible_service_ids: [],
+        eligible_service_ids: item.eligible_service_ids,
       });
-      onNotice({
-        tone: "success",
-        message:
-          "The inherited provider connection was copied to this service.",
-      });
-      await onChanged();
+      await refreshAfterCommit(
+        "The inherited provider connection was copied to this service.",
+        onChanged,
+        onNotice,
+      );
     } catch (error) {
       onNotice(errorNotice(error));
     }
@@ -689,11 +848,11 @@ function RouteForm({
         reason: "Create the OpenRouter model route",
         eligible_service_ids: [],
       });
-      onNotice({
-        tone: "success",
-        message: `Model route published at ${revisionLabel(result.active_revision)} (${result.distribution_state}).`,
-      });
-      await onChanged();
+      await refreshAfterCommit(
+        `Model route published at ${revisionLabel(result.active_revision)} (${result.distribution_state}).`,
+        onChanged,
+        onNotice,
+      );
     } catch (error) {
       onNotice(errorNotice(error));
     } finally {
@@ -833,14 +992,14 @@ function RouteTable({
           state: nextState,
           expected_revision: item.active_revision,
           reason: `${nextState === "active" ? "Restore" : "Disable"} the provider-model route`,
-          eligible_service_ids: [],
+          eligible_service_ids: item.eligible_service_ids,
         },
       );
-      onNotice({
-        tone: "success",
-        message: `Provider-model route ${nextState}. Active revision ${revisionLabel(result.active_revision)}.`,
-      });
-      await onChanged();
+      await refreshAfterCommit(
+        `Provider-model route ${nextState}. Active revision ${revisionLabel(result.active_revision)}.`,
+        onChanged,
+        onNotice,
+      );
     } catch (error) {
       onNotice(errorNotice(error));
     }
@@ -860,13 +1019,13 @@ function RouteTable({
         state: item.state,
         expected_revision: expectedRevision,
         reason: "Override the inherited model route for this service",
-        eligible_service_ids: [],
+        eligible_service_ids: item.eligible_service_ids,
       });
-      onNotice({
-        tone: "success",
-        message: "The inherited model route was copied to this service.",
-      });
-      await onChanged();
+      await refreshAfterCommit(
+        "The inherited model route was copied to this service.",
+        onChanged,
+        onNotice,
+      );
     } catch (error) {
       onNotice(errorNotice(error));
     }
@@ -949,7 +1108,8 @@ function ConfigurationView(props: {
 }) {
   const { client, scope, snapshot, onChanged, onNotice } = props;
   const expectedRevision = configurationRevisionForScope(snapshot, scope);
-  const serviceConfigurationWritable = scope.workspaceId === "";
+  const serviceConfigurationWritable =
+    scope.workspaceId === "" && snapshot.failures.state === undefined;
   return (
     <div className="panel-stack">
       <PageHeading
@@ -986,16 +1146,23 @@ function ConfigurationView(props: {
           title="Provider connections"
           description="These are the provider connections that this service can use."
         />
-        <ProviderTable
-          client={client}
-          scope={scope}
-          values={snapshot.providers}
-          services={props.services}
-          writable={serviceConfigurationWritable}
-          expectedRevision={expectedRevision}
-          onChanged={onChanged}
-          onNotice={onNotice}
-        />
+        {snapshot.failures.providers === undefined ? (
+          <ProviderTable
+            client={client}
+            scope={scope}
+            values={snapshot.providers}
+            services={props.services}
+            writable={serviceConfigurationWritable}
+            expectedRevision={expectedRevision}
+            onChanged={onChanged}
+            onNotice={onNotice}
+          />
+        ) : (
+          <ScopedReadFailure
+            title="Provider connections are not available"
+            message={snapshot.failures.providers}
+          />
+        )}
       </Panel>
       <Panel>
         <PanelHeader
@@ -1003,18 +1170,27 @@ function ConfigurationView(props: {
           title="Model routes"
           description="These are the models and provider routes that assignments can use."
         />
-        <RouteTable
-          client={client}
-          scope={scope}
-          values={snapshot.routes}
-          services={props.services}
-          writable={serviceConfigurationWritable}
-          expectedRevision={expectedRevision}
-          onChanged={onChanged}
-          onNotice={onNotice}
-        />
+        {snapshot.failures.routes === undefined ? (
+          <RouteTable
+            client={client}
+            scope={scope}
+            values={snapshot.routes}
+            services={props.services}
+            writable={serviceConfigurationWritable}
+            expectedRevision={expectedRevision}
+            onChanged={onChanged}
+            onNotice={onNotice}
+          />
+        ) : (
+          <ScopedReadFailure
+            title="Model routes are not available"
+            message={snapshot.failures.routes}
+          />
+        )}
       </Panel>
-      {serviceConfigurationWritable ? (
+      {serviceConfigurationWritable &&
+      snapshot.failures.providers === undefined &&
+      snapshot.failures.credentials === undefined ? (
         <Panel>
           <PanelHeader
             kicker="Set on this service"
@@ -1032,7 +1208,9 @@ function ConfigurationView(props: {
           />
         </Panel>
       ) : null}
-      {serviceConfigurationWritable ? (
+      {serviceConfigurationWritable &&
+      snapshot.failures.providers === undefined &&
+      snapshot.failures.routes === undefined ? (
         <Panel>
           <PanelHeader
             kicker="Set on this service"
@@ -1092,11 +1270,11 @@ function AssignmentForm({
         required_capabilities: ["chat.complete", "chat.stream"],
         reason: "Publish the ordered MVP fallback chain",
       });
-      onNotice({
-        tone: "success",
-        message: `Assignment published at ${revisionLabel(result.active_revision)} (${result.distribution_state}).`,
-      });
-      await onChanged();
+      await refreshAfterCommit(
+        `Assignment published at ${revisionLabel(result.active_revision)} (${result.distribution_state}).`,
+        onChanged,
+        onNotice,
+      );
     } catch (error) {
       onNotice(errorNotice(error));
     } finally {
@@ -1201,7 +1379,7 @@ function AssignmentForm({
       </div>
       <ol className="fallback-preview" aria-label="Ordered fallback preview">
         {candidates.map((candidate, index) => (
-          <li key={candidate}>
+          <li key={`${candidate}-${String(index)}`}>
             <span>{index + 1}</span>
             <strong>
               {routes.find(
@@ -1232,6 +1410,7 @@ function AssignmentTable({
   values,
   routes,
   services,
+  writable,
   expectedRevision,
   onChanged,
   onNotice,
@@ -1241,6 +1420,7 @@ function AssignmentTable({
   readonly values: readonly Assignment[];
   readonly routes: readonly ProviderModelRoute[];
   readonly services: readonly ServiceSummary[];
+  readonly writable: boolean;
   readonly expectedRevision: string | null;
   readonly onChanged: () => Promise<void>;
   readonly onNotice: (notice: Notice) => void;
@@ -1255,11 +1435,11 @@ function AssignmentTable({
         required_capabilities: item.required_capabilities,
         reason: `${nextState === "active" ? "Restore" : "Disable"} the assignment`,
       });
-      onNotice({
-        tone: "success",
-        message: `Assignment ${nextState}. Active revision ${revisionLabel(result.active_revision)}.`,
-      });
-      await onChanged();
+      await refreshAfterCommit(
+        `Assignment ${nextState}. Active revision ${revisionLabel(result.active_revision)}.`,
+        onChanged,
+        onNotice,
+      );
     } catch (error) {
       onNotice(errorNotice(error));
     }
@@ -1273,12 +1453,11 @@ function AssignmentTable({
         required_capabilities: item.required_capabilities,
         reason: "Override the inherited assignment for this service",
       });
-      onNotice({
-        tone: "success",
-        message:
-          "The complete inherited fallback chain was copied to this service.",
-      });
-      await onChanged();
+      await refreshAfterCommit(
+        "The complete inherited fallback chain was copied to this service.",
+        onChanged,
+        onNotice,
+      );
     } catch (error) {
       onNotice(errorNotice(error));
     }
@@ -1351,7 +1530,7 @@ function AssignmentTable({
                   />
                 </td>
                 <td>
-                  {item.state === "retired" ? (
+                  {!writable || item.state === "retired" ? (
                     <span className="muted-action">Read only</span>
                   ) : item.inherited ? (
                     <Button variant="quiet" onClick={() => void override(item)}>
@@ -1387,30 +1566,42 @@ function AssignmentsView(props: {
         title="Assignments and ordered fallbacks"
         description="An assignment set on this service replaces the complete inherited fallback chain with the order that you choose."
       />
-      <AssignmentForm
-        client={props.client}
-        scope={props.scope}
-        routes={props.snapshot.routes}
-        expectedRevision={configurationRevisionForScope(
-          props.snapshot,
-          props.scope,
-        )}
-        onChanged={props.onChanged}
-        onNotice={props.onNotice}
-      />
-      <AssignmentTable
-        client={props.client}
-        scope={props.scope}
-        values={props.snapshot.assignments}
-        routes={props.snapshot.routes}
-        services={props.services}
-        expectedRevision={configurationRevisionForScope(
-          props.snapshot,
-          props.scope,
-        )}
-        onChanged={props.onChanged}
-        onNotice={props.onNotice}
-      />
+      {props.snapshot.failures.assignments === undefined &&
+      props.snapshot.failures.routes === undefined &&
+      props.snapshot.failures.state === undefined ? (
+        <AssignmentForm
+          client={props.client}
+          scope={props.scope}
+          routes={props.snapshot.routes}
+          expectedRevision={configurationRevisionForScope(
+            props.snapshot,
+            props.scope,
+          )}
+          onChanged={props.onChanged}
+          onNotice={props.onNotice}
+        />
+      ) : null}
+      {props.snapshot.failures.assignments === undefined ? (
+        <AssignmentTable
+          client={props.client}
+          scope={props.scope}
+          values={props.snapshot.assignments}
+          routes={props.snapshot.routes}
+          services={props.services}
+          writable={props.snapshot.failures.state === undefined}
+          expectedRevision={configurationRevisionForScope(
+            props.snapshot,
+            props.scope,
+          )}
+          onChanged={props.onChanged}
+          onNotice={props.onNotice}
+        />
+      ) : (
+        <ScopedReadFailure
+          title="Assignments are not available"
+          message={props.snapshot.failures.assignments}
+        />
+      )}
     </Panel>
   );
 }
@@ -1907,11 +2098,13 @@ function SelectedServiceState({
 function GlobalCredentialsView({
   client,
   credentials,
+  failure,
   onChanged,
   onNotice,
 }: {
   readonly client: AdministrationClient;
   readonly credentials: readonly Credential[];
+  readonly failure?: string;
   readonly onChanged: () => Promise<void>;
   readonly onNotice: (notice: Notice) => void;
 }) {
@@ -1928,13 +2121,28 @@ function GlobalCredentialsView({
           title="Stored provider credentials"
           description="Secret values never return to this application."
         />
-        <CredentialForm
-          client={client}
-          ownerScope="global"
-          onChanged={onChanged}
-          onNotice={onNotice}
-        />
-        <CredentialTable values={credentials} />
+        {failure === undefined ? (
+          <CredentialForm
+            client={client}
+            ownerScope="global"
+            onChanged={onChanged}
+            onNotice={onNotice}
+          />
+        ) : null}
+        {failure === undefined ? null : (
+          <ScopedReadFailure
+            title="Credential metadata is not available"
+            message={failure}
+          />
+        )}
+        {failure === undefined ? (
+          <CredentialTable
+            client={client}
+            values={credentials}
+            onChanged={onChanged}
+            onNotice={onNotice}
+          />
+        ) : null}
       </Panel>
     </div>
   );
@@ -1955,6 +2163,84 @@ export interface AdministrationDashboardProps {
   readonly accountActions?: ReactNode;
   readonly credentials?: readonly Credential[];
   readonly services?: readonly ServiceSummary[];
+  readonly globalFailures?: GlobalFailures;
+}
+
+function AdministratorSidebar({
+  scope,
+  services,
+  selectedService,
+  section,
+  onOpen,
+  onSelect,
+}: {
+  readonly scope: ScopeSelection;
+  readonly services: readonly ServiceSummary[];
+  readonly selectedService: ServiceSummary | undefined;
+  readonly section: Section;
+  readonly onOpen: (section: Section) => void;
+  readonly onSelect: (serviceId: string) => void;
+}) {
+  const navigation = (
+    <ApplicationNavigation aria-label="Administrator tasks">
+      <ApplicationNavigationGroup label="Global administration">
+        {globalSections.map((item) => (
+          <NavigationItem
+            key={item.id}
+            active={section === item.id}
+            icon={<Icon name={item.icon} size={18} />}
+            label={item.label}
+            onClick={() => {
+              onOpen(item.id);
+            }}
+          />
+        ))}
+      </ApplicationNavigationGroup>
+      <ApplicationNavigationGroup
+        className="selected-service-navigation"
+        label={selectedService?.display_name ?? "Selected service"}
+      >
+        {serviceSections.map((item) => (
+          <NavigationItem
+            key={item.id}
+            active={section === item.id}
+            disabled={selectedService === undefined}
+            icon={<Icon name={item.icon} size={18} />}
+            label={item.label}
+            onClick={() => {
+              onOpen(item.id);
+            }}
+          />
+        ))}
+      </ApplicationNavigationGroup>
+    </ApplicationNavigation>
+  );
+  return (
+    <ApplicationSidebar
+      className="router-sidebar"
+      brand={
+        <div className="brand">
+          <span>
+            <Icon name="layers" />
+          </span>
+          <div>
+            <strong>LLM Router</strong>
+            <small>Administration</small>
+          </div>
+        </div>
+      }
+      context={
+        <DesktopServiceSelector
+          scope={scope}
+          services={services}
+          selectedService={selectedService}
+          onSelect={onSelect}
+        />
+      }
+      navigation={navigation}
+      footer={<AdministratorSidebarFooter />}
+    />
+  );
 }
 
 export function AdministrationDashboard({
@@ -1972,6 +2258,7 @@ export function AdministrationDashboard({
   accountActions,
   credentials = emptyCredentials,
   services = emptyServices,
+  globalFailures = emptyGlobalFailures,
 }: AdministrationDashboardProps) {
   const [section, setSection] = useReducer(
     (_current: Section, next: Section) => next,
@@ -2022,78 +2309,21 @@ export function AdministrationDashboard({
     else if (destination !== undefined) setSection(destination);
   }
 
-  const navigation = (
-    <ApplicationNavigation aria-label="Administrator tasks">
-      <ApplicationNavigationGroup label="Global administration">
-        {globalSections.map((item) => (
-          <NavigationItem
-            key={item.id}
-            active={section === item.id}
-            icon={<Icon name={item.icon} size={18} />}
-            label={item.label}
-            onClick={() => {
-              openSection(item.id);
-            }}
-          />
-        ))}
-      </ApplicationNavigationGroup>
-      <ApplicationNavigationGroup
-        className="selected-service-navigation"
-        label={
-          selectedService === undefined
-            ? "Selected service"
-            : selectedService.display_name
-        }
-      >
-        {serviceSections.map((item) => (
-          <NavigationItem
-            key={item.id}
-            active={section === item.id}
-            disabled={selectedService === undefined}
-            icon={<Icon name={item.icon} size={18} />}
-            label={item.label}
-            onClick={() => {
-              openSection(item.id);
-            }}
-          />
-        ))}
-      </ApplicationNavigationGroup>
-    </ApplicationNavigation>
-  );
-
-  const sidebar = (
-    <ApplicationSidebar
-      className="router-sidebar"
-      brand={
-        <div className="brand">
-          <span>
-            <Icon name="layers" />
-          </span>
-          <div>
-            <strong>LLM Router</strong>
-            <small>Administration</small>
-          </div>
-        </div>
-      }
-      context={
-        <DesktopServiceSelector
+  return (
+    <ApplicationShell
+      className="router-application-shell"
+      sidebar={
+        <AdministratorSidebar
           scope={scope}
           services={services}
           selectedService={selectedService}
+          section={section}
+          onOpen={openSection}
           onSelect={(serviceId) => {
             selectService(serviceId, "configuration");
           }}
         />
       }
-      navigation={navigation}
-      footer={<AdministratorSidebarFooter />}
-    />
-  );
-
-  return (
-    <ApplicationShell
-      className="router-application-shell"
-      sidebar={sidebar}
       mobileNavigation={
         <AdministratorMobileNavigation
           section={section}
@@ -2125,7 +2355,7 @@ export function AdministrationDashboard({
                 <Button
                   variant="quiet"
                   icon={<Icon name="refresh" size={16} />}
-                  onClick={() => void onReload()}
+                  onClick={() => void onReload().catch(() => undefined)}
                 >
                   Refresh
                 </Button>
@@ -2151,42 +2381,63 @@ export function AdministrationDashboard({
       />
       {notice?.staleRevision === true ? <StaleRevisionBanner /> : null}
       {section === "overview" ? (
-        <GlobalOverview
-          services={services}
-          onOpenServices={() => {
-            openSection("services");
-          }}
-          onSelectService={(serviceId) => {
-            selectService(serviceId, "configuration");
-          }}
-        />
+        <>
+          {globalFailures.services === undefined ? null : (
+            <ScopedReadFailure
+              title="The service registry is not available"
+              message={globalFailures.services}
+            />
+          )}
+          <GlobalOverview
+            services={services}
+            onOpenServices={() => {
+              openSection("services");
+            }}
+            onSelectService={(serviceId) => {
+              selectService(serviceId, "configuration");
+            }}
+          />
+        </>
       ) : null}
       {section === "services" ? (
-        <ServiceManagement
-          client={client}
-          services={services}
-          selectedServiceId={scope.serviceId}
-          onSelect={(serviceId) => {
-            selectService(serviceId);
-          }}
-          onChanged={onGlobalReload ?? onReload}
-          onContinueSetup={() => {
-            setSection("setup");
-          }}
-          pendingBootstrap={pendingBootstrap}
-          onBootstrapPending={setPendingBootstrap}
-          onSuccess={(message) => {
-            onNotice({ tone: "success", message });
-          }}
-          onError={(message) => {
-            onNotice({ tone: "error", message });
-          }}
-        />
+        <>
+          {globalFailures.services === undefined ? null : (
+            <ScopedReadFailure
+              title="The service registry is not available"
+              message={globalFailures.services}
+            />
+          )}
+          {globalFailures.services === undefined ? (
+            <ServiceManagement
+              client={client}
+              services={services}
+              selectedServiceId={scope.serviceId}
+              onSelect={(serviceId) => {
+                selectService(serviceId);
+              }}
+              onChanged={onGlobalReload ?? onReload}
+              onContinueSetup={() => {
+                setSection("setup");
+              }}
+              pendingBootstrap={pendingBootstrap}
+              onBootstrapPending={setPendingBootstrap}
+              onSuccess={(message) => {
+                onNotice({ tone: "success", message });
+              }}
+              onError={(message) => {
+                onNotice({ tone: "error", message });
+              }}
+            />
+          ) : null}
+        </>
       ) : null}
       {section === "credentials" ? (
         <GlobalCredentialsView
           client={client}
           credentials={credentials}
+          {...(globalFailures.credentials === undefined
+            ? {}
+            : { failure: globalFailures.credentials })}
           onChanged={onGlobalReload ?? onReload}
           onNotice={(nextNotice) => {
             onNotice(nextNotice);
@@ -2228,11 +2479,28 @@ export function AdministrationDashboard({
             title="Logical requests"
             description="This view does not contain prompts, model output, or provider secrets."
           />
-          <RequestTable values={snapshot.requests} />
+          {snapshot.failures.requests === undefined ? (
+            <RequestTable values={snapshot.requests} />
+          ) : (
+            <ScopedReadFailure
+              title="Request status is not available"
+              message={snapshot.failures.requests}
+            />
+          )}
         </Panel>
       ) : null}
       {section === "accounting" && snapshot !== null ? (
-        <AccountingView summary={snapshot.accounting} />
+        snapshot.accounting === null ? (
+          <ScopedReadFailure
+            title="Accounting is not available"
+            message={
+              snapshot.failures.accounting ??
+              "No accounting summary is available for this scope."
+            }
+          />
+        ) : (
+          <AccountingView summary={snapshot.accounting} />
+        )
       ) : null}
       {serviceSections.some((item) => item.id === section) ? (
         <SelectedServiceState
@@ -2278,6 +2546,7 @@ export function AdministrationStateView({
   onScopeChange,
   accountActions,
   services = emptyServices,
+  globalFailures,
 }: {
   readonly client: AdministrationClient;
   readonly credentials?: readonly Credential[];
@@ -2292,6 +2561,9 @@ export function AdministrationStateView({
   readonly onScopeChange?: ((scope: ScopeSelection) => void) | undefined;
   readonly accountActions?: ReactNode;
   readonly services?: readonly ServiceSummary[];
+  readonly globalFailures?: Readonly<
+    Partial<Record<"services" | "credentials", string>>
+  >;
 }) {
   return (
     <>
@@ -2309,6 +2581,7 @@ export function AdministrationStateView({
         onScopeChange={onScopeChange}
         accountActions={accountActions}
         services={services}
+        {...(globalFailures === undefined ? {} : { globalFailures })}
       />
       <PersistentNotice
         notice={notice}
@@ -2329,6 +2602,11 @@ export interface AppProps {
 interface GlobalAdministrationData {
   readonly services: readonly ServiceSummary[];
   readonly credentials: readonly Credential[];
+}
+
+interface GlobalAdministrationState {
+  readonly data: GlobalAdministrationData;
+  readonly failures: GlobalFailures;
 }
 
 export function LocalAdministratorActivation({
@@ -2412,41 +2690,41 @@ function ActivatedAdministrationApp({
       }),
     [csrfToken, onRecentAuthentication],
   );
-  const accountActions =
-    authenticationMode === "oidc" ? (
-      <div
-        className="administrator-session-actions"
-        aria-label="Administrator account"
+  const accountActions = (
+    <div
+      className="administrator-session-actions"
+      aria-label="Administrator account"
+    >
+      {authenticationMode !== "oidc" ||
+      identityAccountUrl === undefined ? null : (
+        <AccountMenu
+          className="administrator-account"
+          compact
+          avatar="ID"
+          name="Pocket ID account"
+          aria-label="Manage Pocket ID account"
+          onClick={() => {
+            globalThis.location.assign(identityAccountUrl);
+          }}
+        />
+      )}
+      <Button
+        variant="quiet"
+        type="button"
+        disabled={sessionAction.endsWith("_pending")}
+        icon={<Icon name="logout" size={16} />}
+        onClick={() => void onSignOut()}
       >
-        {identityAccountUrl === undefined ? null : (
-          <AccountMenu
-            className="administrator-account"
-            compact
-            avatar="ID"
-            name="Pocket ID account"
-            aria-label="Manage Pocket ID account"
-            onClick={() => {
-              globalThis.location.assign(identityAccountUrl);
-            }}
-          />
-        )}
-        <Button
-          variant="quiet"
-          type="button"
-          disabled={sessionAction.endsWith("_pending")}
-          icon={<Icon name="logout" size={16} />}
-          onClick={() => void onSignOut()}
-        >
-          {sessionAction === "sign_out_pending" ? "Signing out…" : "Sign out"}
-        </Button>
-        {sessionAction === "error" ? (
-          <span role="alert">The Pocket ID action failed. Try again.</span>
-        ) : null}
-        {sessionAction === "recent_pending" ? (
-          <span role="status">Pocket ID verification is opening…</span>
-        ) : null}
-      </div>
-    ) : undefined;
+        {sessionAction === "sign_out_pending" ? "Signing out…" : "Sign out"}
+      </Button>
+      {sessionAction === "error" ? (
+        <span role="alert">The administrator action failed. Try again.</span>
+      ) : null}
+      {sessionAction === "recent_pending" ? (
+        <span role="status">Pocket ID verification is opening…</span>
+      ) : null}
+    </div>
+  );
   return <App client={client} accountActions={accountActions} />;
 }
 
@@ -2547,15 +2825,18 @@ export function LocalAdministrationApp() {
   const [sessionAction, setSessionAction] = useState<SessionAction>("idle");
   useEffect(() => {
     let mounted = true;
-    void inspectLocalAdministratorSession()
-      .then((result) => {
-        if (mounted) setSession(result);
-      })
-      .catch(() => {
-        if (mounted) setSession({ state: "failed" });
-      });
+    const cancelInspection = scheduleAdministrationSessionInspection(() => {
+      void inspectLocalAdministratorSession()
+        .then((result) => {
+          if (mounted) setSession(result);
+        })
+        .catch(() => {
+          if (mounted) setSession({ state: "failed" });
+        });
+    });
     return () => {
       mounted = false;
+      cancelInspection();
     };
   }, []);
   return (
@@ -2587,7 +2868,12 @@ export function LocalAdministrationApp() {
         try {
           await endAdministratorSession(session.csrfToken);
           setSessionAction("idle");
-          setSession({ state: "oidc_required" });
+          setSession({
+            state:
+              session.authenticationMode === "local"
+                ? "required"
+                : "oidc_required",
+          });
         } catch {
           setSessionAction("error");
         }
@@ -2616,15 +2902,18 @@ export function App({
     [suppliedClient],
   );
   const [scope, setScope] = useState(startingScope ?? initialScope);
-  const [globalData, setGlobalData] = useReducer(
-    (_current: GlobalAdministrationData, next: GlobalAdministrationData) =>
-      next,
-    { services: emptyServices, credentials: emptyCredentials },
-  );
-  const { services, credentials } = globalData;
+  const [globalState, setGlobalState] = useState<GlobalAdministrationState>({
+    data: { services: emptyServices, credentials: emptyCredentials },
+    failures: emptyGlobalFailures,
+  });
+  const { services, credentials } = globalState.data;
+  const { failures: globalFailures } = globalState;
   const [snapshot, setSnapshot] = useState<AdministrationSnapshot | null>(null);
   const [loading, setLoading] = useState(scope.serviceId !== "");
-  const [failure, setFailure] = useState<string | null>(null);
+  const [failure, setFailure] = useReducer(
+    (_current: string | null, next: string | null) => next,
+    null,
+  );
   const [notice, setNotice] = useReducer(
     (_current: Notice | null, next: Notice | null) => next,
     null,
@@ -2632,21 +2921,23 @@ export function App({
   const loadGeneration = useRef(0);
   const load = useCallback(
     async (signal?: AbortSignal) => {
-      if (signal?.aborted) return;
+      if (signal?.aborted) return false;
       const generation = ++loadGeneration.current;
       if (scope.serviceId === "") {
         setSnapshot(null);
         setLoading(false);
         setFailure(null);
-        return;
+        return true;
       }
       setLoading(true);
       setFailure(null);
+      setSnapshot(null);
       try {
         const nextSnapshot = await client.load(scope, signal);
         if (generation === loadGeneration.current && !signal?.aborted) {
           setSnapshot(nextSnapshot);
         }
+        return true;
       } catch (error) {
         if (
           generation === loadGeneration.current &&
@@ -2654,6 +2945,7 @@ export function App({
         ) {
           setFailure(errorMessage(error));
         }
+        return false;
       } finally {
         if (generation === loadGeneration.current && !signal?.aborted) {
           setLoading(false);
@@ -2664,43 +2956,64 @@ export function App({
   );
   useEffect(() => {
     const controller = new AbortController();
-    void Promise.resolve().then(() => load(controller.signal));
+    void Promise.resolve()
+      .then(() => load(controller.signal))
+      .catch(() => undefined);
     return () => {
       controller.abort();
     };
   }, [load]);
+  const reloadGlobalData = useCallback(
+    async (signal?: AbortSignal) => {
+      if (signal?.aborted) return false;
+      const results = await Promise.allSettled([
+        client.listServices(signal),
+        client.listCredentials(signal),
+      ] as const);
+      const failures: Partial<Record<"services" | "credentials", string>> = {};
+      if (results[0].status === "rejected") {
+        failures.services = errorMessage(results[0].reason);
+      }
+      if (results[1].status === "rejected") {
+        failures.credentials = errorMessage(results[1].reason);
+      }
+      if (!signal?.aborted) {
+        setGlobalState((current) => ({
+          failures,
+          data: {
+            services:
+              results[0].status === "fulfilled"
+                ? results[0].value
+                : current.data.services,
+            credentials:
+              results[1].status === "fulfilled"
+                ? results[1].value
+                : current.data.credentials,
+          },
+        }));
+      }
+      return !signal?.aborted && Object.keys(failures).length === 0;
+    },
+    [client],
+  );
   useEffect(() => {
     const controller = new AbortController();
-    void Promise.all([
-      client.listServices(controller.signal),
-      client.listCredentials(controller.signal),
-    ])
-      .then(([listedServices, listedCredentials]) => {
-        if (controller.signal.aborted) return;
-        setGlobalData({
-          services: listedServices,
-          credentials: listedCredentials,
-        });
-      })
-      .catch((error: unknown) => {
-        if (error instanceof DOMException && error.name === "AbortError")
-          return;
-        setNotice(errorNotice(error));
-      });
+    void Promise.resolve()
+      .then(() => reloadGlobalData(controller.signal))
+      .catch(() => undefined);
     return () => {
       controller.abort();
     };
-  }, [client]);
-  const reloadGlobalData = useCallback(async () => {
-    const [listedServices, listedCredentials] = await Promise.all([
-      client.listServices(),
-      client.listCredentials(),
+  }, [reloadGlobalData]);
+  const reloadAllData = useCallback(async () => {
+    const [globalReady, selectedReady] = await Promise.all([
+      reloadGlobalData(),
+      load(),
     ]);
-    setGlobalData({
-      services: listedServices,
-      credentials: listedCredentials,
-    });
-  }, [client]);
+    if (!globalReady || !selectedReady) {
+      throw new Error("Current administrator data did not refresh.");
+    }
+  }, [load, reloadGlobalData]);
   function applyScope(next: ScopeSelection) {
     loadGeneration.current += 1;
     setNotice(null);
@@ -2721,7 +3034,7 @@ export function App({
     <ShellErrorBoundary
       fallbackClassName="fatal-state"
       fallbackTitle="LLM Router administration is not available"
-      fallbackMessage="Reload the page. No change was sent."
+      fallbackMessage="Reload the page and review current data before you send another change."
       resetKey={scope}
     >
       <AdministrationStateView
@@ -2731,13 +3044,18 @@ export function App({
         loading={loading}
         notice={notice}
         onNotice={setNotice}
-        onGlobalReload={reloadGlobalData}
-        onReload={async () => load()}
+        onGlobalReload={reloadAllData}
+        onReload={async () => {
+          if (!(await load())) {
+            throw new Error("The selected service did not refresh.");
+          }
+        }}
         scope={scope}
         snapshot={snapshot}
         onScopeChange={applyScope}
         accountActions={accountActions}
         services={services}
+        globalFailures={globalFailures}
       />
     </ShellErrorBoundary>
   );

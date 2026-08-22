@@ -3193,10 +3193,11 @@ components:
     AdministrationAssignmentPage:
       type: object
       additionalProperties: false
-      required: [items]
+      required: [items, configuration_revision]
       properties:
         items: {type: array, items: {$ref: '#/components/schemas/AdministrationAssignment'}}
         next_cursor: {type: [string, 'null']}
+        configuration_revision: {oneOf: [{$ref: '#/components/schemas/OpaqueId'}, {type: 'null'}]}
     CreateDiagnosticGrant:
       type: object
       additionalProperties: false
@@ -3340,7 +3341,7 @@ components:
     AdministrationProviderInstance:
       type: object
       additionalProperties: false
-      required: [provider_instance_id, owner_scope, source_layer, provider_catalog_id, display_name, endpoint, credential_id, state, active_revision, inherited]
+      required: [provider_instance_id, owner_scope, source_layer, provider_catalog_id, display_name, endpoint, credential_id, eligible_service_ids, state, active_revision, inherited]
       properties:
         provider_instance_id: {$ref: '#/components/schemas/OpaqueId'}
         owner_scope: {$ref: '#/components/schemas/OpaqueId'}
@@ -3349,6 +3350,11 @@ components:
         display_name: {type: string, minLength: 1, maxLength: 200}
         endpoint: {type: string, format: uri}
         credential_id: {$ref: '#/components/schemas/OpaqueId'}
+        eligible_service_ids:
+          type: array
+          maxItems: 1000
+          uniqueItems: true
+          items: {$ref: '#/components/schemas/OpaqueId'}
         state: {type: string, enum: [active, disabled, retired]}
         active_revision: {$ref: '#/components/schemas/OpaqueId'}
         inherited: {type: boolean}
@@ -3356,10 +3362,11 @@ components:
     AdministrationProviderInstancePage:
       type: object
       additionalProperties: false
-      required: [items]
+      required: [items, configuration_revision]
       properties:
         items: {type: array, items: {$ref: '#/components/schemas/AdministrationProviderInstance'}}
         next_cursor: {type: [string, 'null']}
+        configuration_revision: {oneOf: [{$ref: '#/components/schemas/OpaqueId'}, {type: 'null'}]}
     AdministrationPutProviderModelRoute:
       type: object
       additionalProperties: false
@@ -3403,7 +3410,7 @@ components:
     AdministrationProviderModelRoute:
       type: object
       additionalProperties: false
-      required: [provider_model_route_id, owner_scope, source_layer, provider_instance_id, canonical_model_id, wire_model, capabilities, settings, price_authority, prices, synchronization_schedule, stale_after_seconds, price_version, synchronization_state, state, active_revision, inherited]
+      required: [provider_model_route_id, owner_scope, source_layer, provider_instance_id, canonical_model_id, wire_model, capabilities, eligible_service_ids, settings, price_authority, prices, synchronization_schedule, stale_after_seconds, price_version, synchronization_state, state, active_revision, inherited]
       allOf:
         - if:
             properties:
@@ -3419,6 +3426,11 @@ components:
         canonical_model_id: {$ref: '#/components/schemas/OpaqueId'}
         wire_model: {type: string, minLength: 1, maxLength: 500}
         capabilities: {type: array, uniqueItems: true, items: {type: string}}
+        eligible_service_ids:
+          type: array
+          maxItems: 1000
+          uniqueItems: true
+          items: {$ref: '#/components/schemas/OpaqueId'}
         settings: {$ref: '#/components/schemas/RegisteredDocument'}
         embedding_model_space_id: {$ref: '#/components/schemas/OpaqueId'}
         embedding_dimensions: {type: integer, minimum: 1, maximum: 4096}
@@ -3434,10 +3446,11 @@ components:
     AdministrationProviderModelRoutePage:
       type: object
       additionalProperties: false
-      required: [items]
+      required: [items, configuration_revision]
       properties:
         items: {type: array, items: {$ref: '#/components/schemas/AdministrationProviderModelRoute'}}
         next_cursor: {type: [string, 'null']}
+        configuration_revision: {oneOf: [{$ref: '#/components/schemas/OpaqueId'}, {type: 'null'}]}
     PriceComponent:
       type: object
       additionalProperties: false

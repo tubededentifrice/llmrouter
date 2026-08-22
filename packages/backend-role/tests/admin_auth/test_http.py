@@ -87,12 +87,23 @@ def _session(*, session_token: SecretValue | None) -> SessionResult:
     )
 
 
-def _client() -> tuple[TestClient, Repository]:
+def _client(*, base_url: str = "http://testserver") -> tuple[TestClient, Repository]:
     app = FastAPI()
     app.include_router(router)
     repository = Repository()
     app.state.administrator_auth_repository = repository
-    return TestClient(app), repository
+    return TestClient(app, base_url=base_url), repository
+
+
+def _local_client() -> tuple[TestClient, Repository]:
+    client, repository = _client(base_url="http://127.0.0.1:5174")
+    app = cast("FastAPI", client.app)
+    app.state.local_admin_authority = SimpleNamespace(
+        valid_session=lambda token: token == SECRET.value,
+        csrf=SECRET.value,
+    )
+    client.cookies.set("__Host-llmrouter-local-admin", SECRET.value)
+    return client, repository
 
 
 def test_pocket_id_213_callback_shape_sets_the_session_cookie() -> None:
@@ -188,6 +199,67 @@ def test_session_read_and_logout_are_no_store_and_browser_bound() -> None:
     assert logout.status_code == 204
     assert repository.logged_out
     assert "Max-Age=0" in logout.headers["set-cookie"]
+
+
+def test_local_session_logout_checks_browser_proof_and_clears_local_cookie() -> None:
+    client, repository = _local_client()
+
+    logout = client.delete(
+        "/v1/admin/session",
+        headers={
+            "X-CSRF-Token": SECRET.value,
+            "Origin": "http://127.0.0.1:5174",
+        },
+    )
+
+    assert logout.status_code == 204
+    assert logout.headers["cache-control"] == "no-store"
+    cookie = logout.headers["set-cookie"]
+    assert "__Host-llmrouter-local-admin=;" in cookie
+    assert "Max-Age=0" in cookie
+    assert "Secure" in cookie and "HttpOnly" in cookie
+    assert "SameSite=Strict" in cookie
+    assert "__Host-llmrouter-admin" not in cookie
+    assert not repository.logged_out
+
+
+@pytest.mark.parametrize(
+    ("csrf", "origin"),
+    [
+        ("wrong", "http://127.0.0.1:5174"),
+        (SECRET.value, "http://localhost:5174"),
+    ],
+)
+def test_local_session_logout_rejects_wrong_browser_proof(
+    csrf: str, origin: str
+) -> None:
+    client, repository = _local_client()
+
+    logout = client.delete(
+        "/v1/admin/session",
+        headers={"X-CSRF-Token": csrf, "Origin": origin},
+    )
+
+    assert logout.status_code == 403
+    assert "set-cookie" not in logout.headers
+    assert not repository.logged_out
+
+
+def test_public_host_rejects_local_session_logout() -> None:
+    client, repository = _local_client()
+
+    logout = client.delete(
+        "/v1/admin/session",
+        headers={
+            "Host": "llmrouter.opendle.dev",
+            "X-CSRF-Token": SECRET.value,
+            "Origin": "http://127.0.0.1:5174",
+        },
+    )
+
+    assert logout.status_code == 401
+    assert "set-cookie" not in logout.headers
+    assert not repository.logged_out
 
 
 def test_missing_repository_is_a_bounded_temporary_failure() -> None:

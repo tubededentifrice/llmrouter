@@ -232,7 +232,7 @@ describe("administration API client", () => {
       now: () => new Date("2026-08-20T00:00:00Z"),
     });
     const result = await client.load(scope);
-    expect(result.state.workspace_id).toBe("workspace-one");
+    expect(result.state?.workspace_id).toBe("workspace-one");
     expect(paths).toHaveLength(6);
     expect(paths.every((path) => !path.includes("/credentials"))).toBe(true);
     expect(paths.every((path) => path.includes("/v1/admin/"))).toBe(true);
@@ -261,6 +261,124 @@ describe("administration API client", () => {
         path.includes("model-requests?workspace_id=workspace-one"),
       ),
     ).toBe(true);
+  });
+
+  it("keeps setup data when accounting has no configured currency", async () => {
+    const client = createFetchAdministrationClient({
+      fetcher: vi.fn((input: string | URL | Request) => {
+        const path = requestUrl(input);
+        if (path.includes("/state")) {
+          return Promise.resolve(
+            json({
+              kind: "service",
+              service_id: "service-one",
+              display_name: "Service one",
+              state: "active",
+              revision: "state-revision-1",
+            }),
+          );
+        }
+        if (path.includes("/accounting/summary")) {
+          return Promise.resolve(
+            json(
+              {
+                error: {
+                  code: "invalid_request",
+                  message: "The request is invalid.",
+                },
+              },
+              400,
+            ),
+          );
+        }
+        return Promise.resolve(
+          json({
+            items: [],
+            next_cursor: null,
+            configuration_revision: null,
+          }),
+        );
+      }),
+    });
+
+    const result = await client.load({
+      mode: "global",
+      serviceId: "service-one",
+      workspaceId: "",
+    });
+
+    expect(result.state?.display_name).toBe("Service one");
+    expect(result.providers).toEqual([]);
+    expect(result.accounting).toBeNull();
+    expect(result.failures.accounting).toContain("no configured currency");
+    expect(result.failures.providers).toBeUndefined();
+  });
+
+  it("loads all pages for every selected snapshot collection", async () => {
+    const collectionPaths = new Map<string, string[]>([
+      ["provider-instances", []],
+      ["provider-model-routes", []],
+      ["assignments", []],
+      ["model-requests", []],
+    ]);
+    const client = createFetchAdministrationClient({
+      fetcher: vi.fn((input: string | URL | Request) => {
+        const path = requestUrl(input);
+        if (path.includes("/state")) {
+          return Promise.resolve(
+            json({
+              kind: "service",
+              service_id: "service-one",
+              display_name: "Service one",
+              state: "active",
+              revision: "state-revision-1",
+            }),
+          );
+        }
+        if (path.includes("/accounting/summary")) {
+          return Promise.resolve(
+            json({
+              from: "2026-08-13T00:00:00.000Z",
+              to: "2026-08-20T00:00:00.000Z",
+              currency: "USD",
+              logical_requests: 0,
+              attempts: 0,
+              usage: [],
+              cost: "0",
+              corrections: "0",
+            }),
+          );
+        }
+        const collection = [...collectionPaths.keys()].find((name) =>
+          path.includes(name),
+        );
+        if (collection !== undefined) {
+          collectionPaths.get(collection)?.push(path);
+          return Promise.resolve(
+            json({
+              items: [],
+              next_cursor: path.includes("cursor=page-one") ? null : "page-one",
+              ...(collection === "model-requests"
+                ? {}
+                : { configuration_revision: "configuration-revision-1" }),
+            }),
+          );
+        }
+        return Promise.resolve(json({ items: [], next_cursor: null }));
+      }),
+    });
+
+    const result = await client.load({
+      mode: "service",
+      serviceId: "service-one",
+      workspaceId: "",
+    });
+
+    expect(result.configuration_revision).toBe("configuration-revision-1");
+    for (const paths of collectionPaths.values()) {
+      expect(paths).toHaveLength(2);
+      expect(paths[1]).toContain("cursor=page-one");
+    }
   });
 
   it("lists the named services available to the administrator", async () => {
@@ -377,6 +495,51 @@ describe("administration API client", () => {
     expect(JSON.stringify(result)).not.toContain("test-secret-never-returned");
   });
 
+  it("sends a write-only credential replacement with its exact revision", async () => {
+    let path = "";
+    let received: RequestInit | undefined;
+    const client = createFetchAdministrationClient({
+      csrfToken: "csrf-token-with-at-least-thirty-two-characters",
+      fetcher: vi.fn((input: string | URL | Request, init?: RequestInit) => {
+        path = requestUrl(input);
+        received = init;
+        return Promise.resolve(
+          json({
+            credential_id: "credential-1",
+            owner_scope: "global",
+            provider_catalog_id: "openai_compatible.v1",
+            state: "active",
+            revision: "revision-2",
+            created_at: "2026-08-20T00:00:00Z",
+            fingerprint: "safe-new-fingerprint",
+          }),
+        );
+      }),
+    });
+
+    const result = await client.changeCredential("credential-1", "rotate", {
+      expectedRevision: "revision-1",
+      reason: "Replace the provider credential",
+      replacementSecret: "replacement-secret-never-returned",
+    });
+
+    expect(path).toBe("/v1/admin/credentials/credential-1/rotate");
+    if (typeof received?.body !== "string") {
+      throw new Error("The credential change body was not serialized.");
+    }
+    expect(JSON.parse(received.body)).toEqual({
+      expected_revision: "revision-1",
+      reason: "Replace the provider credential",
+      replacement_secret: "replacement-secret-never-returned",
+    });
+    expect(
+      new Headers(received.headers).get("Idempotency-Key")?.length,
+    ).toBeGreaterThan(15);
+    expect(JSON.stringify(result)).not.toContain(
+      "replacement-secret-never-returned",
+    );
+  });
+
   it("reports safe API, stale revision, and offline errors", async () => {
     const staleClient = createFetchAdministrationClient({
       csrfToken: "csrf-token-with-at-least-thirty-two-characters",
@@ -404,13 +567,23 @@ describe("administration API client", () => {
     });
 
     const offlineClient = createFetchAdministrationClient({
+      csrfToken: "csrf-token-with-at-least-thirty-two-characters",
       fetcher: vi.fn(() =>
         Promise.reject(new TypeError("private network detail")),
       ),
     });
-    await expect(offlineClient.load(scope)).rejects.toMatchObject({
+    const offlineSnapshot = await offlineClient.load(scope);
+    expect(offlineSnapshot.state).toBeNull();
+    expect(offlineSnapshot.failures.providers).toBe(
+      "The administration service is offline.",
+    );
+
+    await expect(
+      offlineClient.putAssignment(scope, "general", {}),
+    ).rejects.toMatchObject({
       code: "offline",
       status: 0,
+      outcomeUncertain: true,
     });
     expect(errorMessage(new Error("private detail"))).not.toContain(
       "private detail",

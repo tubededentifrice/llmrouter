@@ -574,7 +574,7 @@ class AdministrationService:
         limit: int,
     ) -> dict[str, object]:
         """List bounded effective provider instances."""
-        effective = self._effective(
+        effective, configuration_revision = self._effective_with_owned_revision(
             session_token,
             service_id,
             request_id=request_id,
@@ -590,6 +590,7 @@ class AdministrationService:
         return {
             "items": [_effective_provider_instance(item) for item in page],
             "next_cursor": next_cursor,
+            "configuration_revision": configuration_revision,
         }
 
     def put_provider_instance(
@@ -665,7 +666,7 @@ class AdministrationService:
         limit: int,
     ) -> dict[str, object]:
         """List bounded effective provider-model routes."""
-        effective = self._effective(
+        effective, configuration_revision = self._effective_with_owned_revision(
             session_token,
             service_id,
             request_id=request_id,
@@ -680,6 +681,7 @@ class AdministrationService:
         return {
             "items": [_effective_route(item) for item in page],
             "next_cursor": next_cursor,
+            "configuration_revision": configuration_revision,
         }
 
     def put_provider_model_route(
@@ -768,7 +770,7 @@ class AdministrationService:
         limit: int,
     ) -> dict[str, object]:
         """List bounded effective assignments."""
-        effective = self._effective(
+        effective, configuration_revision = self._effective_with_owned_revision(
             session_token,
             service_id,
             request_id=request_id,
@@ -784,6 +786,7 @@ class AdministrationService:
         return {
             "items": [_effective_assignment(item) for item in page],
             "next_cursor": next_cursor,
+            "configuration_revision": configuration_revision,
         }
 
     def put_assignment(
@@ -1043,6 +1046,28 @@ class AdministrationService:
             context, ConfigurationScope(service_id, workspace_id)
         )
 
+    def _effective_with_owned_revision(
+        self,
+        session_token: str,
+        service_id: str,
+        *,
+        request_id: str,
+        operation: str,
+        workspace_id: str | None = None,
+    ) -> tuple[EffectiveConfiguration, str | None]:
+        """Return effective data and the exact target-layer revision."""
+        scope = Scope(service_id, workspace_id)
+        context = self._context(
+            session_token,
+            request_id=request_id,
+            operation=operation,
+            scope=scope,
+        )
+        configuration_scope = ConfigurationScope(service_id, workspace_id)
+        effective = self._configuration.effective(context, configuration_scope)
+        owned = self._configuration.owned(context, configuration_scope)
+        return effective, None if owned is None else owned.revision_id
+
     def _context(
         self,
         session_token: str,
@@ -1254,6 +1279,7 @@ def _effective_provider_instance(item: EffectiveItem) -> dict[str, object]:
         "display_name": value.display_name,
         "endpoint": value.endpoint,
         "credential_id": value.credential_id,
+        "eligible_service_ids": sorted(value.eligible_service_ids),
         "state": value.state.value,
         "active_revision": item.active_revision,
         "inherited": item.inherited,
@@ -1294,6 +1320,7 @@ def _effective_route(item: EffectiveItem) -> dict[str, object]:
         "canonical_model_id": value.canonical_model_id,
         "wire_model": value.wire_model,
         "capabilities": sorted(value.capabilities),
+        "eligible_service_ids": sorted(value.eligible_service_ids),
         "settings": _registered_document(value.settings),
         "price_authority": price_authority,
         "prices": [_price_document(price) for price in value.prices],
