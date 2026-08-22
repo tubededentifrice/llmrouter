@@ -34,6 +34,7 @@ class Repository:
     def __init__(self) -> None:
         self.trusted_grant_token: str | None = None
         self.session_token: str | None = None
+        self.callback_session_token: SecretValue | None = SECRET
         self.reject_session_read = False
         self.logged_out = False
 
@@ -50,7 +51,7 @@ class Repository:
     def complete_authorization(
         self, _code: str, _state: str, **_kwargs: object
     ) -> SessionResult:
-        return _session(session_token=SECRET)
+        return _session(session_token=self.callback_session_token)
 
     def get_session(self, _token: str | None, **_kwargs: object) -> SessionResult:
         if not _token or self.reject_session_read:
@@ -151,14 +152,23 @@ def test_login_ignores_an_existing_session_cookie() -> None:
 def test_recent_authentication_keeps_the_current_session_cookie() -> None:
     client, repository = _client()
     client.cookies.set("__Host-llmrouter-admin", SECRET.value)
+    repository.callback_session_token = None
 
     started = client.post(
         "/v1/admin/session-starts",
         json={"purpose": "recent_authentication", "return_path": "/"},
     )
+    callback = client.get(
+        "/v1/admin/oidc/callback?" + _callback_query(),
+        follow_redirects=False,
+    )
 
     assert started.status_code == 201
     assert repository.session_token == SECRET.value
+    assert callback.status_code == 303
+    assert callback.headers["location"] == "/"
+    assert "set-cookie" not in callback.headers
+    assert client.cookies.get("__Host-llmrouter-admin") == SECRET.value
 
 
 def test_session_read_and_logout_are_no_store_and_browser_bound() -> None:

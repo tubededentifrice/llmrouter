@@ -1,5 +1,5 @@
 """HTTP boundary for Pocket ID administrator sessions."""
-# ruff: noqa: D103, EM101, TRY003, TRY300, TRY301
+# ruff: noqa: D103, EM101, TRY003, TRY300
 
 from __future__ import annotations
 
@@ -82,12 +82,11 @@ def complete_session(request: Request) -> Response:
         result = repository.complete_authorization(
             code, state, request_id=request_id, now=datetime.now(UTC)
         )
-        if result.session_token is None:
-            raise AdministratorAuthError("invalid_token", request_id)
         response = RedirectResponse(result.return_path, status_code=303)
-        response.headers["Set-Cookie"] = administrator_session_cookie(
-            result.session_token.value
-        )
+        if result.session_token is not None:
+            response.headers["Set-Cookie"] = administrator_session_cookie(
+                result.session_token.value
+            )
         response.headers["Cache-Control"] = "no-store"
         return response
     except AdministratorAuthError as error:
