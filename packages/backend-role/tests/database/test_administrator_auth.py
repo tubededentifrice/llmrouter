@@ -31,6 +31,8 @@ from llmrouter_backend.admin_auth import (
     administrator_session_cookie,
 )
 from llmrouter_backend.authority import (
+    ADMINISTRATOR_ABSOLUTE_LIMIT,
+    ADMINISTRATOR_IDLE_LIMIT,
     AdministratorPrincipal,
     Audience,
     AuthorityClass,
@@ -188,6 +190,94 @@ def test_callback_rejects_an_inactive_provider_session(
     assert identity.provider_calls == [
         ("provider-access-token", "provider-refresh-token")
     ]
+
+
+def test_concurrent_session_activity_keeps_valid_earlier_request(
+    database_url: str,
+    auth_repository: tuple[AdministratorAuthRepository, FakeIdentityService],
+) -> None:
+    """Do not reject an earlier request after a later request completes first."""
+    repository, identity = auth_repository
+    session, _ = _bootstrap(repository, identity, frozenset({"health.read"}))
+
+    repository.authenticate_session(
+        session,
+        request_id="later-concurrent-request",
+        now=NOW + timedelta(minutes=6),
+        policy=_policy("health.read"),
+    )
+    earlier_time = NOW + timedelta(minutes=5, seconds=59)
+    principal = repository.authenticate_session(
+        session,
+        request_id="earlier-concurrent-request",
+        now=earlier_time,
+        policy=_policy("health.read"),
+    )
+
+    assert principal.subject == identity.subject
+    assert principal.provider_session_checked_at == earlier_time
+    assert principal.idle_expires_at <= earlier_time + ADMINISTRATOR_IDLE_LIMIT
+    with psycopg.connect(database_url) as connection:
+        activity = connection.execute(
+            """
+            SELECT last_used_at, idle_expires_at, account_checked_at
+            FROM router.administrator_sessions
+            """
+        ).fetchone()
+    assert activity == (
+        NOW + timedelta(minutes=6),
+        min(
+            NOW + ADMINISTRATOR_IDLE_LIMIT + timedelta(minutes=6),
+            NOW + ADMINISTRATOR_ABSOLUTE_LIMIT,
+        ),
+        NOW + timedelta(minutes=6),
+    )
+
+
+def test_session_created_after_request_time_fails_closed(
+    auth_repository: tuple[AdministratorAuthRepository, FakeIdentityService],
+) -> None:
+    """Reject a request whose time is before the immutable session creation time."""
+    repository, identity = auth_repository
+    session, _ = _bootstrap(repository, identity, frozenset({"health.read"}))
+
+    with pytest.raises(AdministratorAuthError) as rejected:
+        repository.authenticate_session(
+            session,
+            request_id="request-before-session",
+            now=NOW - timedelta(microseconds=1),
+            policy=_policy("health.read"),
+        )
+
+    assert rejected.value.code == "invalid_token"
+
+
+def test_session_activity_beyond_concurrency_window_fails_closed(
+    database_url: str,
+    auth_repository: tuple[AdministratorAuthRepository, FakeIdentityService],
+) -> None:
+    """Reject mutable session times beyond the bounded concurrency window."""
+    repository, identity = auth_repository
+    session, _ = _bootstrap(repository, identity, frozenset({"health.read"}))
+    with psycopg.connect(database_url) as connection:
+        connection.execute(
+            """
+            UPDATE router.administrator_sessions
+            SET last_used_at = %s, account_checked_at = %s
+            """,
+            (NOW + timedelta(seconds=31), NOW + timedelta(seconds=31)),
+        )
+        connection.commit()
+
+    with pytest.raises(AdministratorAuthError) as rejected:
+        repository.authenticate_session(
+            session,
+            request_id="activity-beyond-concurrency-window",
+            now=NOW,
+            policy=_policy("health.read"),
+        )
+
+    assert rejected.value.code == "invalid_token"
 
 
 @pytest.fixture

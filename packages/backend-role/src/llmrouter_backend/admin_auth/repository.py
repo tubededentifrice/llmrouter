@@ -72,6 +72,7 @@ _ENCRYPTION_DOMAIN = b"llmrouter-admin-oidc-pkce-v1\x00"
 _RETURN_PATH = re.compile(r"^/[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*$")
 _MINIMUM_IDEMPOTENCY_LENGTH = 16
 _MAXIMUM_IDEMPOTENCY_LENGTH = 200
+_SESSION_TIME_SKEW_LIMIT = timedelta(seconds=30)
 
 
 class AdministratorAuthRepository:
@@ -727,16 +728,22 @@ class AdministratorAuthRepository:
                 if grant is None:
                     msg = "The grant decision has no selected grant."
                     raise RuntimeError(msg)
-                idle_expiry = min(
-                    now + ADMINISTRATOR_IDLE_LIMIT, session["absolute_expires_at"]
+                activity_time = max(session["last_used_at"], now)
+                idle_expiry = max(
+                    session["idle_expires_at"],
+                    min(
+                        now + ADMINISTRATOR_IDLE_LIMIT,
+                        session["absolute_expires_at"],
+                    ),
                 )
+                principal_idle_expiry = min(idle_expiry, now + ADMINISTRATOR_IDLE_LIMIT)
                 connection.execute(
                     """
                     UPDATE router.administrator_sessions
                     SET last_used_at = %s, idle_expires_at = %s
                     WHERE id = %s
                     """,
-                    (now, idle_expiry, session["id"]),
+                    (activity_time, idle_expiry, session["id"]),
                 )
                 if policy.sensitive:
                     self._audit(
@@ -766,8 +773,8 @@ class AdministratorAuthRepository:
                     authenticated_at=session["authenticated_at"],
                     last_activity_at=now,
                     recent_authentication_at=recent_at,
-                    provider_session_checked_at=session["account_checked_at"],
-                    idle_expires_at=idle_expiry,
+                    provider_session_checked_at=min(session["account_checked_at"], now),
+                    idle_expires_at=principal_idle_expiry,
                     absolute_expires_at=session["absolute_expires_at"],
                     grant_revision=grant["revision"],
                     allowed_service_ids=allowed_services,
@@ -862,8 +869,13 @@ class AdministratorAuthRepository:
                 connection, session_token, request_id=request_id, for_update=True
             )
             self._check_session_time(session, now, request_id=request_id)
-            idle_expiry = min(
-                now + ADMINISTRATOR_IDLE_LIMIT, session["absolute_expires_at"]
+            activity_time = max(session["last_used_at"], now)
+            idle_expiry = max(
+                session["idle_expires_at"],
+                min(
+                    now + ADMINISTRATOR_IDLE_LIMIT,
+                    session["absolute_expires_at"],
+                ),
             )
             connection.execute(
                 """
@@ -873,7 +885,7 @@ class AdministratorAuthRepository:
                 """,
                 (
                     self._digest("csrf", csrf_token.value),
-                    now,
+                    activity_time,
                     idle_expiry,
                     session["id"],
                 ),
@@ -1290,8 +1302,13 @@ class AdministratorAuthRepository:
         now: datetime,
     ) -> None:
         """Extend idle expiry for one successful authenticated activity."""
-        idle_expiry = min(
-            now + ADMINISTRATOR_IDLE_LIMIT, session["absolute_expires_at"]
+        activity_time = max(session["last_used_at"], now)
+        idle_expiry = max(
+            session["idle_expires_at"],
+            min(
+                now + ADMINISTRATOR_IDLE_LIMIT,
+                session["absolute_expires_at"],
+            ),
         )
         connection.execute(
             """
@@ -1299,7 +1316,7 @@ class AdministratorAuthRepository:
             SET last_used_at = %s, idle_expires_at = %s
             WHERE id = %s
             """,
-            (now, idle_expiry, session["id"]),
+            (activity_time, idle_expiry, session["id"]),
         )
 
     def logout(
@@ -1497,10 +1514,10 @@ class AdministratorAuthRepository:
             or session["administrator_state"] != "active"
             or session["identity_generation"] != session["current_identity_generation"]
             or session["authenticated_at"] > now
-            or session["last_used_at"] > now
+            or session["last_used_at"] > now + _SESSION_TIME_SKEW_LIMIT
             or session["idle_expires_at"] <= now
             or session["absolute_expires_at"] <= now
-            or session["account_checked_at"] > now
+            or session["account_checked_at"] > now + _SESSION_TIME_SKEW_LIMIT
             or session["provider_access_token_ciphertext"] is None
             or session["provider_refresh_token_ciphertext"] is None
             or session["provider_access_expires_at"] is None
