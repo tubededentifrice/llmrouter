@@ -26,7 +26,7 @@
     },
     {
       "path": "docs/api/openapi.yaml",
-      "sha256": "60d78cfa1d29b4c75c570ea176871087bfbc9d0c8f59da1db96cce49e6a2fbb4"
+      "sha256": "301369023cad9f03fe119f2baec7298c164014fee7ffb45dc9581d4a01d2929f"
     },
     {
       "path": "docs/api/request-fingerprint.md",
@@ -45,7 +45,7 @@
     "AccountingSummary": "214868b47f97be868b0b4e3de92614f6c997e9cb5351907484d8499a983267f3",
     "AdministrationAssignment": "0c458293ce1dd3c42a380f46f2b26c48b48be70d036861dbe8462f237ce50299",
     "AdministrationAssignmentPage": "fe0fc196b6e53a6076b1cb555b7b2f3858a1972ae5ff5baa6571844bb7384b6c",
-    "AdministrationChange": "a81b2118731820056134a407906e317e6381b658d1b05806e969466983b3a474",
+    "AdministrationChange": "73028097433a5aafd20854e850b5b68b22a4286cf45b00188de1af5ebcb77739",
     "AdministrationProviderInstance": "c524f1071315ff12e0ccb1f78248e9ef46a0e89eed0888c867bc6e431f6aed6b",
     "AdministrationProviderInstancePage": "82cd86fa3401a88e599ed41bf978aeaac34f408db43e73bdd4e34e8b7e73ba59",
     "AdministrationProviderModelRoute": "a101c8508a19834ec8a13f49160d584b9191dafcb1e30e3ff914abb877f40a61",
@@ -173,11 +173,13 @@
     "RetentionValue": "955c3c166d9e25a009cddea183d1ab73ed523c3d6941a4fbd7b81c397920d6ca",
     "RevisionWrite": "3514f6c1a656bdb6043ae593db0d8d5f574726d3ddf4a30d0fee61441223f77a",
     "ScopedAdministrationState": "f3f5700e3b5f24f39bf80101d90cb30ed3c9a72a5e3a5596a28bab99672ab1e9",
+    "ServiceAction": "5b424b079256681b6ea6dbe90728b824205d2fc45c1559a001efa4f057531550",
     "ServiceAdministrationPage": "4197a66efb87262c9cfeaa87e9666f70752e610199e133b7a0461bd232be1b4a",
-    "ServiceAdministrationRecord": "c37665af624f733c26f578bad182beb44d8f48b9fa6bd1ab60b012a9cc0950f6",
+    "ServiceAdministrationRecord": "d446989c2b9b3e6d6fb2bbb3bbb2742ad341193410d4d45f8e6b91b378c8df9a",
     "ServiceCreated": "d1bad5e3f9246f30154beec8e1d223a66a7e028f87bd49a7e15ef487233600bd",
     "ServiceToken": "a997941343029ef397543c1ba11507e555d33e3630ad01c43e5d929cad273aa2",
     "ServiceTokenExchange": "5e3414b4bef1881d27cfb24aaf5ad53c6d489e109bb961fa2707506209695ca4",
+    "ServiceUpdate": "9d6fefc7401c434ed7d1651cf01a0e3599f7db0ee6a33be43d04e8e4ffa66048",
     "SharedToolRequest": "e10559a5fae543faeb40464824916c19662baf1522b8fd08dfcb0d4f0dbeddcb",
     "TerminalError": "4465e9245c7858219f67a4e6f8481c2870cec578dedc0fc58025c153e6b69a1b",
     "Timestamp": "4f410cd74c87d8ddd21f20e835e06ed7445481c3aeae3c12085e82c54ea2fb7d",
@@ -191,6 +193,6 @@
   },
   "contract_set": "llmrouter-v1",
   "generator_version": 1,
-  "source_sha256": "60d78cfa1d29b4c75c570ea176871087bfbc9d0c8f59da1db96cce49e6a2fbb4",
+  "source_sha256": "301369023cad9f03fe119f2baec7298c164014fee7ffb45dc9581d4a01d2929f",
   "version": "1.0.0"
 }

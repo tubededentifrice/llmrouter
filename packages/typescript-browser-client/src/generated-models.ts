@@ -242,11 +242,15 @@ export type BootstrapScope = { readonly audiences: ReadonlyArray<"data_plane" | 
 
 export type ServiceCreated = { readonly service_id: OpaqueId; readonly state: "active"; readonly state_revision: OpaqueId; readonly bootstrap_secret?: string; readonly bootstrap_secret_available: boolean; readonly credential_generation: 1; };
 
-export type AdministrationChange = { readonly expected_revision: OpaqueId; readonly reason: string; readonly overlap_seconds?: number; readonly new_parent_service_id?: OpaqueId; };
+export type AdministrationChange = { readonly expected_revision: OpaqueId; readonly reason: string; readonly display_name?: string; readonly overlap_seconds?: number; readonly new_parent_service_id?: OpaqueId | null; };
+
+export type ServiceUpdate = { readonly expected_revision: OpaqueId; readonly reason: string; readonly display_name: string; readonly new_parent_service_id: OpaqueId | null; };
+
+export type ServiceAction = { readonly expected_revision: OpaqueId; readonly reason: string; };
 
 export type AdministrationResult = { readonly resource_id: OpaqueId; readonly state: string; readonly revision: OpaqueId; readonly operation_id: OpaqueId; readonly bootstrap_secret?: string; readonly prior_generation_expires_at?: Timestamp; };
 
-export type ServiceAdministrationRecord = { readonly service_id: OpaqueId; readonly display_name: string; readonly parent_service_id?: OpaqueId | null; readonly state: "active" | "disabled" | "retired"; readonly revision: OpaqueId; readonly credential_generation: number; readonly prior_generation_expires_at?: Timestamp; readonly bootstrap_scope: BootstrapScope; };
+export type ServiceAdministrationRecord = { readonly service_id: OpaqueId; readonly display_name: string; readonly parent_service_id?: OpaqueId | null; readonly state: "active" | "disabled" | "retired"; readonly revision: OpaqueId; readonly bootstrap_state: "ready" | "revoked" | "missing"; readonly credential_generation: number | null; readonly prior_generation_expires_at?: Timestamp; readonly bootstrap_scope: BootstrapScope | null; };
 
 export type ServiceAdministrationPage = { readonly items: ReadonlyArray<ServiceAdministrationRecord>; readonly next_cursor?: string | null; };
 
@@ -442,11 +446,23 @@ export const contractSchemas = {
   "AdministrationChange": {
     "additionalProperties": false,
     "properties": {
+      "display_name": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      },
       "expected_revision": {
         "$ref": "#/components/schemas/OpaqueId"
       },
       "new_parent_service_id": {
-        "$ref": "#/components/schemas/OpaqueId"
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          {
+            "type": "null"
+          }
+        ]
       },
       "overlap_seconds": {
         "default": 86400,
@@ -6701,6 +6717,24 @@ export const contractSchemas = {
     ],
     "type": "object"
   },
+  "ServiceAction": {
+    "additionalProperties": false,
+    "properties": {
+      "expected_revision": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "reason": {
+        "maxLength": 500,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "expected_revision",
+      "reason"
+    ],
+    "type": "object"
+  },
   "ServiceAdministrationPage": {
     "additionalProperties": false,
     "properties": {
@@ -6726,11 +6760,33 @@ export const contractSchemas = {
     "additionalProperties": false,
     "properties": {
       "bootstrap_scope": {
-        "$ref": "#/components/schemas/BootstrapScope"
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/BootstrapScope"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "bootstrap_state": {
+        "enum": [
+          "ready",
+          "revoked",
+          "missing"
+        ],
+        "type": "string"
       },
       "credential_generation": {
-        "minimum": 1,
-        "type": "integer"
+        "oneOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ]
       },
       "display_name": {
         "maxLength": 200,
@@ -6770,6 +6826,7 @@ export const contractSchemas = {
       "display_name",
       "state",
       "revision",
+      "bootstrap_state",
       "credential_generation",
       "bootstrap_scope"
     ],
@@ -6939,6 +6996,41 @@ export const contractSchemas = {
       "bootstrap_secret",
       "audience",
       "operations"
+    ],
+    "type": "object"
+  },
+  "ServiceUpdate": {
+    "additionalProperties": false,
+    "properties": {
+      "display_name": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      },
+      "expected_revision": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "new_parent_service_id": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "reason": {
+        "maxLength": 500,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "expected_revision",
+      "reason",
+      "display_name",
+      "new_parent_service_id"
     ],
     "type": "object"
   },

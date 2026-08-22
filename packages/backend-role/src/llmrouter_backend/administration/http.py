@@ -22,7 +22,7 @@ from llmrouter_backend.credential_store import (
     CredentialStoreError,
 )
 from llmrouter_backend.execution import ExecutionError
-from llmrouter_backend.lifecycle import LifecycleError
+from llmrouter_backend.lifecycle import LifecycleError, ServiceAction
 
 from .model import (
     AssignmentInput,
@@ -30,6 +30,9 @@ from .model import (
     CredentialCreateInput,
     ProviderInstanceInput,
     ProviderModelRouteInput,
+    ServiceActionInput,
+    ServiceCreateInput,
+    ServiceUpdateInput,
 )
 from .service import AdministrationService
 
@@ -54,6 +57,132 @@ def install_administration_service(
     if state is None:
         raise TypeError("The application does not have state storage.")
     state.administration_service = service
+
+
+@router.get("/admin/services", response_model=None)
+async def list_services(request: Request) -> Response:
+    """List every retained service in global administration."""
+    request_id = _request_id()
+    try:
+        result = await _run(
+            request,
+            lambda service: service.list_services(
+                _session(request, request_id),
+                request_id=request_id,
+                cursor=_optional_query(request, "cursor"),
+                limit=_limit(request),
+            ),
+            request_id,
+        )
+        return _json(result)
+    except Exception as error:
+        return _error_response(error, request_id)
+
+
+@router.post("/admin/services", response_model=None)
+async def create_service(request: Request) -> Response:
+    """Create one service and show its bootstrap secret once."""
+    request_id = _request_id()
+    try:
+        value = await _document(request, ServiceCreateInput, request_id)
+        result, replayed = await _run(
+            request,
+            lambda service: service.create_service(
+                _session(request, request_id),
+                _header(request, "x-csrf-token", request_id),
+                _header(request, "origin", request_id),
+                _idempotency_key(request, request_id),
+                value,
+                request_id=request_id,
+            ),
+            request_id,
+        )
+        return _json(result, status_code=200 if replayed else 201)
+    except Exception as error:
+        return _error_response(error, request_id)
+
+
+@router.get("/admin/services/{service_id}", response_model=None)
+async def get_service(request: Request, service_id: str) -> Response:
+    """Get one service administration record."""
+    request_id = _request_id()
+    try:
+        result = await _run(
+            request,
+            lambda service: service.get_service(
+                _session(request, request_id), service_id, request_id=request_id
+            ),
+            request_id,
+        )
+        return _json(result)
+    except Exception as error:
+        return _error_response(error, request_id)
+
+
+@router.put("/admin/services/{service_id}", response_model=None)
+async def update_service(request: Request, service_id: str) -> Response:
+    """Replace one service display name and parent link."""
+    request_id = _request_id()
+    try:
+        value = await _document(request, ServiceUpdateInput, request_id)
+        result = await _run(
+            request,
+            lambda service: service.update_service(
+                _session(request, request_id),
+                _header(request, "x-csrf-token", request_id),
+                _header(request, "origin", request_id),
+                service_id,
+                value,
+                request_id=request_id,
+            ),
+            request_id,
+        )
+        return _json(result)
+    except Exception as error:
+        return _error_response(error, request_id)
+
+
+@router.post("/admin/services/{service_id}/disable", response_model=None)
+async def disable_service(request: Request, service_id: str) -> Response:
+    """Disable one service."""
+    return await _change_service_response(request, service_id, ServiceAction.DISABLE)
+
+
+@router.post("/admin/services/{service_id}/restore", response_model=None)
+async def restore_service(request: Request, service_id: str) -> Response:
+    """Restore one disabled service."""
+    return await _change_service_response(request, service_id, ServiceAction.RESTORE)
+
+
+@router.post("/admin/services/{service_id}/retire", response_model=None)
+async def retire_service(request: Request, service_id: str) -> Response:
+    """Retire one service permanently."""
+    return await _change_service_response(request, service_id, ServiceAction.RETIRE)
+
+
+async def _change_service_response(
+    request: Request, service_id: str, action: ServiceAction
+) -> Response:
+    request_id = _request_id()
+    try:
+        value = await _document(request, ServiceActionInput, request_id)
+        result = await _run(
+            request,
+            lambda service: service.change_service(
+                _session(request, request_id),
+                _header(request, "x-csrf-token", request_id),
+                _header(request, "origin", request_id),
+                _idempotency_key(request, request_id),
+                service_id,
+                action,
+                value,
+                request_id=request_id,
+            ),
+            request_id,
+        )
+        return _json(result)
+    except Exception as error:
+        return _error_response(error, request_id)
 
 
 @router.get("/admin/services/{service_id}/state", response_model=None)

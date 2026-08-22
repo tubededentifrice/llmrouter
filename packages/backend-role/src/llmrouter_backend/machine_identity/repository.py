@@ -96,53 +96,65 @@ class MachineCredentialRepository:
         """Create generation one and return its secret one time."""
         _require_aware_now(now)
         _require_credential_administrator(context, now=now)
-        parsed_service_id = _parse_uuid(service_id, context.request_id)
-        secret = _new_secret()
-        verifier = _ARGON2.hash(secret.value)
-        generation_id = uuid.uuid4()
         with psycopg.connect(self._database_url) as connection:  # noqa: SIM117
             with connection.transaction():
-                _lock_service_credentials(connection, parsed_service_id)
-                row = connection.execute(
-                    "SELECT state FROM router.services WHERE id = %s FOR UPDATE",
-                    (parsed_service_id,),
-                ).fetchone()
-                if row is None:
-                    msg = "not_found"
-                    raise MachineIdentityError(msg, context.request_id)
-                if row[0] != "active":
-                    msg = "invalid_token"
-                    raise MachineIdentityError(msg, context.request_id)
-                if (
-                    connection.execute(
-                        """
-                    SELECT 1 FROM router.service_bootstrap_generations
-                    WHERE service_id = %s
-                    """,
-                        (parsed_service_id,),
-                    ).fetchone()
-                    is not None
-                ):
-                    msg = "insufficient_scope"
-                    raise MachineIdentityError(msg, context.request_id)
-                _insert_generation(
-                    connection,
-                    generation_id=generation_id,
-                    service_id=parsed_service_id,
-                    generation=1,
-                    issuer=self._issuer,
-                    verifier=verifier,
-                    scope=scope,
-                    now=now,
+                return self.create_initial_bootstrap_in_transaction(
+                    connection, context, service_id, scope, now=now
                 )
-                _insert_audit(
-                    connection,
-                    context,
-                    event_id=generation_id,
-                    service_id=parsed_service_id,
-                    action="credential.create",
-                    now=now,
-                )
+
+    def create_initial_bootstrap_in_transaction(
+        self,
+        connection: Connection[Any],
+        context: RequestContext,
+        service_id: str,
+        scope: BootstrapScope,
+        *,
+        now: datetime,
+    ) -> BootstrapCreated:
+        """Create generation one in the caller's database transaction."""
+        _require_aware_now(now)
+        _require_credential_administrator(context, now=now)
+        parsed_service_id = _parse_uuid(service_id, context.request_id)
+        secret = _new_secret()
+        generation_id = uuid.uuid4()
+        _lock_service_credentials(connection, parsed_service_id)
+        row = connection.execute(
+            "SELECT state FROM router.services WHERE id = %s FOR UPDATE",
+            (parsed_service_id,),
+        ).fetchone()
+        if row is None:
+            msg = "not_found"
+            raise MachineIdentityError(msg, context.request_id)
+        if row[0] != "active":
+            msg = "invalid_token"
+            raise MachineIdentityError(msg, context.request_id)
+        if connection.execute(
+            """
+            SELECT 1 FROM router.service_bootstrap_generations
+            WHERE service_id = %s
+            """,
+            (parsed_service_id,),
+        ).fetchone() is not None:
+            msg = "insufficient_scope"
+            raise MachineIdentityError(msg, context.request_id)
+        _insert_generation(
+            connection,
+            generation_id=generation_id,
+            service_id=parsed_service_id,
+            generation=1,
+            issuer=self._issuer,
+            verifier=_ARGON2.hash(secret.value),
+            scope=scope,
+            now=now,
+        )
+        _insert_audit(
+            connection,
+            context,
+            event_id=generation_id,
+            service_id=parsed_service_id,
+            action="credential.create",
+            now=now,
+        )
         return BootstrapCreated(str(parsed_service_id), 1, secret)
 
     def rotate_bootstrap(

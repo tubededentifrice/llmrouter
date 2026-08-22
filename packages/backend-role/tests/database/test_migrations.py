@@ -108,6 +108,7 @@ def test_migration_plan_has_reversible_contiguous_pairs() -> None:
         17,
         18,
         19,
+        20,
     ]
     assert all(migration.up_sql and migration.down_sql for migration in plan)
 
@@ -136,6 +137,7 @@ def test_migrate_empty_database(database_url: str) -> None:
             17,
             18,
             19,
+            20,
         )
         table_count = connection.execute(
             """
@@ -169,7 +171,7 @@ def test_administration_api_migration_rolls_back_and_reapplies(
             "SELECT to_regclass('router.configuration_write_idempotency_bindings')"
         ).fetchone() == (None,)
         migrate(connection)
-        assert applied_versions(connection)[-1] == 19  # noqa: PLR2004
+        assert applied_versions(connection)[-1] == 20  # noqa: PLR2004
 
 
 def test_administration_api_rollback_rejects_idempotency_loss(
@@ -203,7 +205,7 @@ def test_administration_api_rollback_rejects_idempotency_loss(
             psycopg.errors.ObjectNotInPrerequisiteState, match="data loss"
         ):
             migrate(connection, target=15)
-        assert applied_versions(connection)[-1] == 19  # noqa: PLR2004
+        assert applied_versions(connection)[-1] == 20  # noqa: PLR2004
 
 
 def test_embed_session_migration_rolls_back_and_reapplies(database_url: str) -> None:
@@ -213,7 +215,7 @@ def test_embed_session_migration_rolls_back_and_reapplies(database_url: str) -> 
         migrate(connection, target=16)
         assert applied_versions(connection)[-1] == 16  # noqa: PLR2004
         migrate(connection)
-        assert applied_versions(connection)[-1] == 19  # noqa: PLR2004
+        assert applied_versions(connection)[-1] == 20  # noqa: PLR2004
 
 
 def test_routing_success_guard_rolls_back_and_reapplies(database_url: str) -> None:
@@ -275,7 +277,7 @@ def test_embed_session_migration_upgrades_and_protects_existing_session(
             psycopg.errors.ObjectNotInPrerequisiteState, match="data loss"
         ):
             migrate(connection, target=16)
-        assert applied_versions(connection)[-1] == 19  # noqa: PLR2004
+        assert applied_versions(connection)[-1] == 20  # noqa: PLR2004
 
 
 @pytest.mark.parametrize(
@@ -739,8 +741,8 @@ def test_concurrent_migration_runners_serialize(database_url: str) -> None:
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         results = list(executor.map(_migrate_current, [database_url, database_url]))
     assert results == [
-        (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19),
-        (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19),
+        (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20),
+        (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20),
     ]
 
 
@@ -828,6 +830,7 @@ def test_rollback_keeps_previous_schema_data(database_url: str) -> None:
             17,
             18,
             19,
+            20,
         )
         assert connection.execute(
             "SELECT stable_name FROM router.services WHERE id = %s", (SERVICE_ID,)
@@ -1053,4 +1056,4 @@ def test_execution_lifecycle_new_run_blocks_lossy_rollback(database_url: str) ->
         )
         with pytest.raises(psycopg.errors.RaiseException, match="data loss"):
             migrate(connection, target=13)
-        assert applied_versions(connection)[-1] == 19  # noqa: PLR2004
+        assert applied_versions(connection)[-1] == 20  # noqa: PLR2004

@@ -1359,6 +1359,8 @@ paths:
       operationId: listServices
       summary: List services in global administration.
       security: [{administratorSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
       responses:
         '200':
           description: Service administration page.
@@ -1419,7 +1421,7 @@ paths:
         required: true
         content:
           application/json:
-            schema: {$ref: '#/components/schemas/AdministrationChange'}
+            schema: {$ref: '#/components/schemas/ServiceUpdate'}
       responses:
         '200':
           description: Service changed.
@@ -1433,11 +1435,11 @@ paths:
       - name: service_action
         in: path
         required: true
-        schema: {type: string, enum: [disable, restore, retire, rotate-bootstrap, revoke-bootstrap]}
+        schema: {type: string, enum: [disable, restore, retire]}
     post:
       tags: [Administration]
       operationId: changeService
-      summary: Change service state or bootstrap credential generation.
+      summary: Change service lifecycle state.
       security: [{administratorSession: []}]
       parameters:
         - $ref: '#/components/parameters/CsrfToken'
@@ -1447,7 +1449,7 @@ paths:
         required: true
         content:
           application/json:
-            schema: {$ref: '#/components/schemas/AdministrationChange'}
+            schema: {$ref: '#/components/schemas/ServiceAction'}
       responses:
         '200':
           description: Operation completed.
@@ -3929,8 +3931,25 @@ components:
       properties:
         expected_revision: {$ref: '#/components/schemas/OpaqueId'}
         reason: {type: string, minLength: 1, maxLength: 500}
+        display_name: {type: string, minLength: 1, maxLength: 200}
         overlap_seconds: {type: integer, minimum: 0, maximum: 86400, default: 86400}
-        new_parent_service_id: {$ref: '#/components/schemas/OpaqueId'}
+        new_parent_service_id: {oneOf: [{$ref: '#/components/schemas/OpaqueId'}, {type: 'null'}]}
+    ServiceUpdate:
+      type: object
+      additionalProperties: false
+      required: [expected_revision, reason, display_name, new_parent_service_id]
+      properties:
+        expected_revision: {$ref: '#/components/schemas/OpaqueId'}
+        reason: {type: string, minLength: 1, maxLength: 500}
+        display_name: {type: string, minLength: 1, maxLength: 200}
+        new_parent_service_id: {oneOf: [{$ref: '#/components/schemas/OpaqueId'}, {type: 'null'}]}
+    ServiceAction:
+      type: object
+      additionalProperties: false
+      required: [expected_revision, reason]
+      properties:
+        expected_revision: {$ref: '#/components/schemas/OpaqueId'}
+        reason: {type: string, minLength: 1, maxLength: 500}
     AdministrationResult:
       type: object
       additionalProperties: false
@@ -3945,16 +3964,17 @@ components:
     ServiceAdministrationRecord:
       type: object
       additionalProperties: false
-      required: [service_id, display_name, state, revision, credential_generation, bootstrap_scope]
+      required: [service_id, display_name, state, revision, bootstrap_state, credential_generation, bootstrap_scope]
       properties:
         service_id: {$ref: '#/components/schemas/OpaqueId'}
         display_name: {type: string, minLength: 1, maxLength: 200}
         parent_service_id: {oneOf: [{$ref: '#/components/schemas/OpaqueId'}, {type: 'null'}]}
         state: {type: string, enum: [active, disabled, retired]}
         revision: {$ref: '#/components/schemas/OpaqueId'}
-        credential_generation: {type: integer, minimum: 1}
+        bootstrap_state: {type: string, enum: [ready, revoked, missing]}
+        credential_generation: {oneOf: [{type: integer, minimum: 1}, {type: 'null'}]}
         prior_generation_expires_at: {$ref: '#/components/schemas/Timestamp'}
-        bootstrap_scope: {$ref: '#/components/schemas/BootstrapScope'}
+        bootstrap_scope: {oneOf: [{$ref: '#/components/schemas/BootstrapScope'}, {type: 'null'}]}
     ServiceAdministrationPage:
       type: object
       additionalProperties: false

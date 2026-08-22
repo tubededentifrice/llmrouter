@@ -163,6 +163,46 @@ browser-only action.
 
 ## Operational graph state
 
+## Global administrator workflow
+
+The global administration application MUST separate Router-wide tasks from
+tasks for one selected service. Router-wide navigation MUST stay available
+when no service is selected and MUST include service and inheritance
+management. A service selector MUST control only the selected-service tasks.
+The application MUST NOT ask a global administrator to select or understand an
+administration scope before the administrator can use Router-wide tasks.
+
+Selected-service navigation MUST put the effective configuration first. A
+normal service selection MUST open that effective configuration. The
+application MUST open a setup checklist after it creates a service. The
+checklist MUST use result-based steps for service access, provider access,
+model routes, and assignments. It MUST link each incomplete result to its
+applicable task.
+
+Service management MUST use a hierarchy and one selected-service detail view.
+The hierarchy MUST keep disabled and retired services visible and MUST show
+service names, parent relationships, and lifecycle state before technical
+identifiers. The detail view MUST show the complete named parent chain and the
+effect that a parent or lifecycle change has on descendant services.
+
+The effective configuration MUST label each inherited item with the name of
+its source service or with the Router-wide source. An inherited item MUST stay
+read-only at its source. When a local replacement is permitted, the interface
+MUST provide a direct "Override for this service" action that starts from the
+complete inherited value. The interface MUST explain that the local value
+replaces the effective inherited value without changing the parent.
+
+The phone interface MUST provide the same Router-wide and selected-service
+grouping and a service selector. It MUST NOT flatten the two groups into one
+unlabelled destination list. A service hierarchy MUST remain usable at the
+supported minimum width and depth.
+
+A one-time service bootstrap secret MUST remain in memory only. While it is
+visible, the application MUST prevent navigation that can discard it. The
+administrator MUST confirm that the secret is stored before normal navigation
+continues. The application MUST NOT put the secret in browser storage, a URL,
+or a log.
+
 The provider and assignment graph MUST be the primary provider, model,
 provider-model route, and assignment administration workflow. It MUST use
 searchable graph navigation with a side inspector for view and edit actions.

@@ -32,6 +32,11 @@ from llmrouter_backend.lifecycle import (
     ServiceAction,
     WorkspaceAction,
 )
+from llmrouter_backend.machine_identity import (
+    BootstrapScope,
+    MachineCredentialRepository,
+    MachineIdentityError,
+)
 
 NOW = datetime(2026, 8, 13, 10, 0, tzinfo=UTC)
 CREATE_KEY = "workspace-create-key-0001"
@@ -139,6 +144,130 @@ def test_concurrent_equal_service_create_has_one_result_and_audit(
             "SELECT count(*) FROM router.audit_events WHERE service_id = %s",
             (service_ids[0],),
         ).fetchone() == (1,)
+
+
+def test_service_registry_is_atomic_and_keeps_lifecycle_only_rows_visible(
+    repository: PostgresLifecycleRepository,
+    database_url: str,
+) -> None:
+    """Coordinate new bootstrap state and report older missing state safely."""
+    lifecycle_only = _create_service(repository, key="lifecycle-only-key-01")
+    credentials = MachineCredentialRepository(
+        database_url,
+        issuer="https://router.example.test",
+        digest_keys={"test-v1": b"d" * 32},
+        current_digest_key_id="test-v1",
+    )
+    scope = BootstrapScope(
+        frozenset({Audience.DATA_PLANE}), frozenset({"model.create"})
+    )
+    created, bootstrap = repository.create_service_with_bootstrap(
+        _global_context(),
+        _global_context("credential.manage"),
+        credentials,
+        idempotency_key="atomic-service-key-0001",
+        display_name="Atomic service",
+        parent_service_id=None,
+        bootstrap_scope=scope,
+        now=NOW,
+    )
+    replay, replay_bootstrap = repository.create_service_with_bootstrap(
+        _global_context(),
+        _global_context("credential.manage"),
+        credentials,
+        idempotency_key="atomic-service-key-0001",
+        display_name="Atomic service",
+        parent_service_id=None,
+        bootstrap_scope=scope,
+        now=NOW,
+    )
+
+    assert bootstrap is not None
+    assert bootstrap.generation == 1
+    assert replay.replayed
+    assert replay.value == created.value
+    assert replay_bootstrap is None
+    records = repository.list_service_administration(_global_context())
+    assert [record.service_id for record in records] == sorted(
+        [lifecycle_only, created.value.service_id]
+    )
+    missing = next(record for record in records if record.service_id == lifecycle_only)
+    ready = repository.get_service_administration(
+        _global_context(), created.value.service_id
+    )
+    assert missing.bootstrap_state == "missing"
+    assert missing.credential_generation is None
+    assert missing.bootstrap_audiences is None
+    assert ready.bootstrap_state == "ready"
+    assert ready.credential_generation == 1
+    assert ready.bootstrap_audiences == ("data_plane",)
+    assert ready.bootstrap_operations == ("model.create",)
+    credentials.revoke_generation(
+        _global_context("credential.manage"),
+        created.value.service_id,
+        1,
+        now=NOW,
+    )
+    revoked = repository.get_service_administration(
+        _global_context(), created.value.service_id
+    )
+    assert revoked.bootstrap_state == "revoked"
+
+    with pytest.raises(MachineIdentityError):
+        repository.create_service_with_bootstrap(
+            _global_context(),
+            _global_context("service.manage"),
+            credentials,
+            idempotency_key="atomic-service-key-0002",
+            display_name="Must roll back",
+            parent_service_id=None,
+            bootstrap_scope=scope,
+            now=NOW,
+        )
+    with psycopg.connect(database_url) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM router.services WHERE display_name = %s",
+            ("Must roll back",),
+        ).fetchone() == (0,)
+
+
+def test_service_metadata_change_is_revision_safe_and_rejects_cycles(
+    repository: PostgresLifecycleRepository,
+) -> None:
+    """Rename and reparent atomically with stale and cycle protection."""
+    parent = _create_service(repository, key="metadata-parent-key-01", name="Parent")
+    child = _create_service(repository, key="metadata-child-key-001", name="Child")
+    changed = repository.change_service_metadata(
+        _global_context("service_parent.manage"),
+        child,
+        expected_revision="1",
+        display_name="Renamed child",
+        new_parent_service_id=parent,
+        reason="Group the service",
+    )
+    assert changed.value.display_name == "Renamed child"
+    assert changed.value.parent_service_id == parent
+    assert changed.value.revision == "2"
+    with pytest.raises(LifecycleError) as stale:
+        repository.change_service_metadata(
+            _global_context("service_parent.manage"),
+            child,
+            expected_revision="1",
+            display_name="Stale name",
+            new_parent_service_id=None,
+            reason="Use a stale revision",
+        )
+    assert stale.value.code is LifecycleErrorCode.STATE_REVISION_CONFLICT
+    with pytest.raises(LifecycleError) as cycle:
+        repository.change_service_metadata(
+            _global_context("service_parent.manage"),
+            parent,
+            expected_revision="1",
+            display_name="Parent",
+            new_parent_service_id=child,
+            reason="Create a cycle",
+        )
+    assert cycle.value.code is LifecycleErrorCode.INVALID_REQUEST
 
 
 def test_service_lifecycle_has_exact_revisions_receipts_and_retirement(

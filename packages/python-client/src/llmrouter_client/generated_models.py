@@ -1241,8 +1241,21 @@ ServiceCreated = TypedDict('ServiceCreated', {
 AdministrationChange = TypedDict('AdministrationChange', {
     'expected_revision': 'OpaqueId',
     'reason': 'str',
+    'display_name': 'NotRequired[str]',
     'overlap_seconds': 'NotRequired[int]',
-    'new_parent_service_id': 'NotRequired[OpaqueId]',
+    'new_parent_service_id': 'NotRequired[OpaqueId | None]',
+})
+
+ServiceUpdate = TypedDict('ServiceUpdate', {
+    'expected_revision': 'OpaqueId',
+    'reason': 'str',
+    'display_name': 'str',
+    'new_parent_service_id': 'OpaqueId | None',
+})
+
+ServiceAction = TypedDict('ServiceAction', {
+    'expected_revision': 'OpaqueId',
+    'reason': 'str',
 })
 
 AdministrationResult = TypedDict('AdministrationResult', {
@@ -1260,9 +1273,10 @@ ServiceAdministrationRecord = TypedDict('ServiceAdministrationRecord', {
     'parent_service_id': 'NotRequired[OpaqueId | None]',
     'state': 'Literal["active", "disabled", "retired"]',
     'revision': 'OpaqueId',
-    'credential_generation': 'int',
+    'bootstrap_state': 'Literal["ready", "revoked", "missing"]',
+    'credential_generation': 'int | None',
     'prior_generation_expires_at': 'NotRequired[Timestamp]',
-    'bootstrap_scope': 'BootstrapScope',
+    'bootstrap_scope': 'BootstrapScope | None',
 })
 
 ServiceAdministrationPage = TypedDict('ServiceAdministrationPage', {
@@ -1591,11 +1605,23 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
   "AdministrationChange": {
     "additionalProperties": false,
     "properties": {
+      "display_name": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      },
       "expected_revision": {
         "$ref": "#/components/schemas/OpaqueId"
       },
       "new_parent_service_id": {
-        "$ref": "#/components/schemas/OpaqueId"
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          {
+            "type": "null"
+          }
+        ]
       },
       "overlap_seconds": {
         "default": 86400,
@@ -7850,6 +7876,24 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
     ],
     "type": "object"
   },
+  "ServiceAction": {
+    "additionalProperties": false,
+    "properties": {
+      "expected_revision": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "reason": {
+        "maxLength": 500,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "expected_revision",
+      "reason"
+    ],
+    "type": "object"
+  },
   "ServiceAdministrationPage": {
     "additionalProperties": false,
     "properties": {
@@ -7875,11 +7919,33 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
     "additionalProperties": false,
     "properties": {
       "bootstrap_scope": {
-        "$ref": "#/components/schemas/BootstrapScope"
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/BootstrapScope"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "bootstrap_state": {
+        "enum": [
+          "ready",
+          "revoked",
+          "missing"
+        ],
+        "type": "string"
       },
       "credential_generation": {
-        "minimum": 1,
-        "type": "integer"
+        "oneOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ]
       },
       "display_name": {
         "maxLength": 200,
@@ -7919,6 +7985,7 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
       "display_name",
       "state",
       "revision",
+      "bootstrap_state",
       "credential_generation",
       "bootstrap_scope"
     ],
@@ -8088,6 +8155,41 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
       "bootstrap_secret",
       "audience",
       "operations"
+    ],
+    "type": "object"
+  },
+  "ServiceUpdate": {
+    "additionalProperties": false,
+    "properties": {
+      "display_name": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      },
+      "expected_revision": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "new_parent_service_id": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "reason": {
+        "maxLength": 500,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "expected_revision",
+      "reason",
+      "display_name",
+      "new_parent_service_id"
     ],
     "type": "object"
   },

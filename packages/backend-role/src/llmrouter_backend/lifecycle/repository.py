@@ -23,6 +23,7 @@ from llmrouter_backend.lifecycle.model import (
     LifecycleResult,
     LifecycleState,
     ServiceAction,
+    ServiceAdministrationRecord,
     ServiceRecord,
     WorkspaceAction,
     WorkspaceRecord,
@@ -30,8 +31,15 @@ from llmrouter_backend.lifecycle.model import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from datetime import datetime
 
     from psycopg import Connection
+
+    from llmrouter_backend.machine_identity import (
+        BootstrapCreated,
+        BootstrapScope,
+        MachineCredentialRepository,
+    )
 
 
 _MINIMUM_IDEMPOTENCY_LENGTH = 16
@@ -39,6 +47,38 @@ _MAXIMUM_IDEMPOTENCY_LENGTH = 200
 _MAXIMUM_DISPLAY_NAME_LENGTH = 200
 _MAXIMUM_CALLER_REFERENCE_LENGTH = 200
 _MAXIMUM_REASON_LENGTH = 500
+
+_SERVICE_ADMINISTRATION_SELECT = """
+    SELECT service.id::text, service.display_name,
+           service.parent_service_id::text, service.state,
+           service.state_revision::text,
+           latest.generation, latest.revoked_at,
+           CASE
+               WHEN prior.revoked_at IS NULL
+                AND prior.valid_until > CURRENT_TIMESTAMP
+               THEN prior.valid_until
+               ELSE NULL
+           END,
+           latest.allowed_audiences, latest.allowed_operations,
+           latest.workspace_limit
+    FROM router.services AS service
+    LEFT JOIN LATERAL (
+        SELECT generation, revoked_at, allowed_audiences, allowed_operations,
+               workspace_limit
+        FROM router.service_bootstrap_generations
+        WHERE service_id = service.id
+        ORDER BY generation DESC
+        LIMIT 1
+    ) AS latest ON true
+    LEFT JOIN LATERAL (
+        SELECT revoked_at, valid_until
+        FROM router.service_bootstrap_generations
+        WHERE service_id = service.id
+          AND generation < latest.generation
+        ORDER BY generation DESC
+        LIMIT 1
+    ) AS prior ON true
+"""
 
 
 class PostgresLifecycleRepository:
@@ -188,6 +228,147 @@ class PostgresLifecycleRepository:
         if row is None:
             raise LifecycleError(LifecycleErrorCode.NOT_FOUND, context.request_id)
         return _service_record(row)
+
+    def create_service_with_bootstrap(  # noqa: PLR0913
+        self,
+        context: RequestContext,
+        credential_context: RequestContext,
+        credentials: MachineCredentialRepository,
+        *,
+        idempotency_key: str,
+        display_name: str,
+        parent_service_id: str | None,
+        bootstrap_scope: BootstrapScope,
+        now: datetime,
+    ) -> tuple[LifecycleResult[ServiceRecord], BootstrapCreated | None]:
+        """Create lifecycle and bootstrap state in one transaction."""
+        _require_global_change(context, "service.manage")
+        parent_id = (
+            None
+            if parent_service_id is None
+            else _parse_uuid(
+                parent_service_id,
+                LifecycleErrorCode.NOT_FOUND,
+                request_id=context.request_id,
+            )
+        )
+        _require_idempotency_key(idempotency_key)
+        _require_bounded(display_name, _MAXIMUM_DISPLAY_NAME_LENGTH, "display name")
+        fingerprint = _fingerprint(
+            {
+                "bootstrap_scope": {
+                    "audiences": sorted(
+                        value.value for value in bootstrap_scope.audiences
+                    ),
+                    "operations": sorted(bootstrap_scope.operations),
+                    "workspace_limit": bootstrap_scope.workspace_limit.value,
+                },
+                "display_name": display_name,
+                "parent_service_id": None if parent_id is None else str(parent_id),
+            }
+        )
+        with (
+            psycopg.connect(self._database_url) as connection,
+            connection.transaction(),
+        ):
+            _lock(connection, "service-parent-tree")
+            _lock(
+                connection,
+                f"service-operation:{context.actor_id}:{idempotency_key}",
+            )
+            replay = _find_service_replay(
+                connection,
+                actor_id=context.actor_id,
+                idempotency_key=idempotency_key,
+                action="service.create",
+                fingerprint=fingerprint,
+                request_id=context.request_id,
+            )
+            if replay is not None:
+                return LifecycleResult(replay, replayed=True, changed=True), None
+            if parent_id is not None:
+                _require_service_exists(
+                    connection, parent_id, request_id=context.request_id
+                )
+            service_id = self._identity_factory()
+            operation_id = self._identity_factory()
+            connection.execute(
+                """
+                INSERT INTO router.services (
+                    id, stable_name, display_name, parent_service_id
+                ) VALUES (%s, %s, %s, %s)
+                """,
+                (service_id, str(service_id), display_name, parent_id),
+            )
+            bootstrap = credentials.create_initial_bootstrap_in_transaction(
+                connection,
+                credential_context,
+                str(service_id),
+                bootstrap_scope,
+                now=now,
+            )
+            _insert_service_operation(
+                connection,
+                operation_id=operation_id,
+                service_id=service_id,
+                actor_id=context.actor_id,
+                action="service.create",
+                idempotency_key=idempotency_key,
+                fingerprint=fingerprint,
+                display_name=display_name,
+                state=LifecycleState.ACTIVE,
+                revision=1,
+                parent_service_id=None if parent_id is None else str(parent_id),
+                changed=True,
+            )
+            _insert_audit(
+                connection,
+                context,
+                operation_id=operation_id,
+                action="service.create",
+                service_id=service_id,
+                workspace_id=None,
+                reason=None,
+            )
+            record = ServiceRecord(
+                service_id=str(service_id),
+                display_name=display_name,
+                parent_service_id=None if parent_id is None else str(parent_id),
+                state=LifecycleState.ACTIVE,
+                revision="1",
+                operation_id=str(operation_id),
+            )
+        return LifecycleResult(record, replayed=False, changed=True), bootstrap
+
+    def list_service_administration(
+        self, context: RequestContext
+    ) -> tuple[ServiceAdministrationRecord, ...]:
+        """List every retained service with safe bootstrap metadata."""
+        _require_global_read(context)
+        with psycopg.connect(self._database_url) as connection:
+            rows = connection.execute(
+                f"{_SERVICE_ADMINISTRATION_SELECT} ORDER BY service.id"
+            ).fetchall()
+        return tuple(_service_administration_record(row) for row in rows)
+
+    def get_service_administration(
+        self, context: RequestContext, service_id: str
+    ) -> ServiceAdministrationRecord:
+        """Get one retained service with safe bootstrap metadata."""
+        _require_global_read(context)
+        parsed_service_id = _parse_uuid(
+            service_id,
+            LifecycleErrorCode.NOT_FOUND,
+            request_id=context.request_id,
+        )
+        with psycopg.connect(self._database_url) as connection:
+            row = connection.execute(
+                f"{_SERVICE_ADMINISTRATION_SELECT} WHERE service.id = %s",
+                (parsed_service_id,),
+            ).fetchone()
+        if row is None:
+            raise LifecycleError(LifecycleErrorCode.NOT_FOUND, context.request_id)
+        return _service_administration_record(row)
 
     def get_administration_state(
         self,
@@ -527,6 +708,160 @@ class PostgresLifecycleRepository:
             )
         return LifecycleResult(record, replayed=False, changed=changed)
 
+    def change_service_metadata(  # noqa: PLR0913
+        self,
+        context: RequestContext,
+        service_id: str,
+        *,
+        expected_revision: str,
+        display_name: str,
+        new_parent_service_id: str | None,
+        reason: str,
+    ) -> LifecycleResult[ServiceRecord]:
+        """Replace display metadata and the parent link atomically."""
+        _require_global_service_metadata_change(context)
+        parsed_service_id = _parse_uuid(
+            service_id,
+            LifecycleErrorCode.NOT_FOUND,
+            request_id=context.request_id,
+        )
+        parsed_parent_id = (
+            None
+            if new_parent_service_id is None
+            else _parse_uuid(
+                new_parent_service_id,
+                LifecycleErrorCode.NOT_FOUND,
+                request_id=context.request_id,
+            )
+        )
+        _require_bounded(display_name, _MAXIMUM_DISPLAY_NAME_LENGTH, "display name")
+        _require_bounded(reason, _MAXIMUM_REASON_LENGTH, "reason")
+        fingerprint = _fingerprint(
+            {
+                "display_name": display_name,
+                "expected_revision": expected_revision,
+                "new_parent_service_id": (
+                    None if parsed_parent_id is None else str(parsed_parent_id)
+                ),
+                "reason": reason,
+                "service_id": str(parsed_service_id),
+            }
+        )
+        with (
+            psycopg.connect(self._database_url) as connection,
+            connection.transaction(),
+        ):
+            _lock(connection, "service-parent-tree")
+            _lock(connection, "budget-hierarchy")
+            row = connection.execute(
+                """
+                SELECT id, display_name, parent_service_id::text, state,
+                       state_revision
+                FROM router.services WHERE id = %s FOR UPDATE
+                """,
+                (parsed_service_id,),
+            ).fetchone()
+            if row is None:
+                raise LifecycleError(LifecycleErrorCode.NOT_FOUND, context.request_id)
+            state = LifecycleState(row[3])
+            revision = int(row[4])
+            if state is LifecycleState.RETIRED:
+                raise LifecycleError(
+                    LifecycleErrorCode.TERMINAL_STATE,
+                    context.request_id,
+                    current_state=state,
+                    current_revision=str(revision),
+                )
+            _require_revision(
+                expected_revision, state, revision, request_id=context.request_id
+            )
+            if parsed_parent_id is not None:
+                _require_service_exists(
+                    connection, parsed_parent_id, request_id=context.request_id
+                )
+                cycle = connection.execute(
+                    """
+                    WITH RECURSIVE descendants AS (
+                        SELECT id FROM router.services WHERE id = %s
+                      UNION ALL
+                        SELECT child.id FROM router.services AS child
+                        JOIN descendants AS parent
+                          ON child.parent_service_id = parent.id
+                    )
+                    SELECT EXISTS (SELECT 1 FROM descendants WHERE id = %s)
+                    """,
+                    (parsed_service_id, parsed_parent_id),
+                ).fetchone()
+                if cycle is not None and cycle[0]:
+                    raise LifecycleError(
+                        LifecycleErrorCode.INVALID_REQUEST, context.request_id
+                    )
+            next_parent = None if parsed_parent_id is None else str(parsed_parent_id)
+            _require_global_change(
+                context,
+                (
+                    "service_parent.manage"
+                    if row[2] != next_parent
+                    else "service.manage"
+                ),
+            )
+            changed = row[1] != display_name or row[2] != next_parent
+            next_revision = revision + 1 if changed else revision
+            operation_id = self._identity_factory()
+            if changed:
+                if row[2] != next_parent and not _service_parent_budget_is_compatible(
+                    connection, parsed_service_id, parsed_parent_id
+                ):
+                    raise LifecycleError(
+                        LifecycleErrorCode.INVALID_REQUEST, context.request_id
+                    )
+                connection.execute(
+                    """
+                    UPDATE router.services
+                    SET display_name = %s, parent_service_id = %s,
+                        state_revision = %s
+                    WHERE id = %s
+                    """,
+                    (
+                        display_name,
+                        parsed_parent_id,
+                        next_revision,
+                        parsed_service_id,
+                    ),
+                )
+            _insert_service_operation(
+                connection,
+                operation_id=operation_id,
+                service_id=parsed_service_id,
+                actor_id=context.actor_id,
+                action="service.metadata",
+                idempotency_key=None,
+                fingerprint=fingerprint,
+                display_name=display_name,
+                state=state,
+                revision=next_revision,
+                parent_service_id=next_parent,
+                changed=changed,
+            )
+            _insert_audit(
+                connection,
+                context,
+                operation_id=operation_id,
+                action="service.metadata",
+                service_id=parsed_service_id,
+                workspace_id=None,
+                reason=reason,
+            )
+            record = ServiceRecord(
+                service_id=str(row[0]),
+                display_name=display_name,
+                parent_service_id=next_parent,
+                state=state,
+                revision=str(next_revision),
+                operation_id=str(operation_id),
+            )
+        return LifecycleResult(record, replayed=False, changed=changed)
+
     def create_workspace(
         self,
         context: RequestContext,
@@ -857,6 +1192,12 @@ def _require_global_read(context: RequestContext) -> None:
         and context.operation == "service.manage"
     ):
         raise LifecycleError(LifecycleErrorCode.INSUFFICIENT_SCOPE, context.request_id)
+
+
+def _require_global_service_metadata_change(context: RequestContext) -> None:
+    if context.operation not in {"service.manage", "service_parent.manage"}:
+        raise LifecycleError(LifecycleErrorCode.INSUFFICIENT_SCOPE, context.request_id)
+    _require_global_change(context, context.operation)
 
 
 def _require_administration_state_read(
@@ -1411,6 +1752,34 @@ def _service_record(row: tuple[Any, ...]) -> ServiceRecord:
         state=LifecycleState(row[3]),
         revision=str(row[4]),
         operation_id=str(row[5]),
+    )
+
+
+def _service_administration_record(
+    row: tuple[Any, ...],
+) -> ServiceAdministrationRecord:
+    generation = None if row[5] is None else int(row[5])
+    bootstrap_state = "ready"
+    if generation is None:
+        bootstrap_state = "missing"
+    elif row[6] is not None:
+        bootstrap_state = "revoked"
+    return ServiceAdministrationRecord(
+        service_id=str(row[0]),
+        display_name=str(row[1]),
+        parent_service_id=None if row[2] is None else str(row[2]),
+        state=LifecycleState(row[3]),
+        revision=str(row[4]),
+        bootstrap_state=bootstrap_state,
+        credential_generation=generation,
+        prior_generation_expires_at=row[7],
+        bootstrap_audiences=(
+            None if row[8] is None else tuple(str(value) for value in row[8])
+        ),
+        bootstrap_operations=(
+            None if row[9] is None else tuple(str(value) for value in row[9])
+        ),
+        bootstrap_workspace_limit=None if row[10] is None else str(row[10]),
     )
 
 

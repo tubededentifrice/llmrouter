@@ -47,7 +47,18 @@ from llmrouter_backend.credential_store import (
     SecretInput,
 )
 from llmrouter_backend.execution import ExecutionKind, ExecutionTarget
-from llmrouter_backend.lifecycle import ServiceRecord, WorkspaceRecord
+from llmrouter_backend.lifecycle import (
+    LifecycleResult,
+    ServiceAction,
+    ServiceAdministrationRecord,
+    ServiceRecord,
+    WorkspaceRecord,
+)
+from llmrouter_backend.machine_identity import (
+    BootstrapCreated,
+    BootstrapScope,
+    MachineCredentialRepository,
+)
 
 from .model import (
     AssignmentInput,
@@ -56,7 +67,10 @@ from .model import (
     ProviderInstanceInput,
     ProviderModelRouteInput,
     RegisteredDocumentInput,
+    ServiceActionInput,
+    ServiceCreateInput,
     ServiceStateDocument,
+    ServiceUpdateInput,
 )
 
 if TYPE_CHECKING:
@@ -139,6 +153,49 @@ class CredentialStore(Protocol):
 class LifecycleStore(Protocol):
     """Read exact administration lifecycle state."""
 
+    def create_service_with_bootstrap(
+        self,
+        context: RequestContext,
+        credential_context: RequestContext,
+        credentials: MachineCredentialRepository,
+        *,
+        idempotency_key: str,
+        display_name: str,
+        parent_service_id: str | None,
+        bootstrap_scope: BootstrapScope,
+        now: datetime,
+    ) -> tuple[LifecycleResult[ServiceRecord], BootstrapCreated | None]: ...
+
+    def list_service_administration(
+        self, context: RequestContext
+    ) -> tuple[ServiceAdministrationRecord, ...]: ...
+
+    def get_service_administration(
+        self, context: RequestContext, service_id: str
+    ) -> ServiceAdministrationRecord: ...
+
+    def change_service_metadata(
+        self,
+        context: RequestContext,
+        service_id: str,
+        *,
+        expected_revision: str,
+        display_name: str,
+        new_parent_service_id: str | None,
+        reason: str,
+    ) -> LifecycleResult[ServiceRecord]: ...
+
+    def change_service_state(
+        self,
+        context: RequestContext,
+        service_id: str,
+        action: ServiceAction,
+        *,
+        expected_revision: str,
+        idempotency_key: str,
+        reason: str,
+    ) -> LifecycleResult[ServiceRecord]: ...
+
     def get_administration_state(
         self,
         context: RequestContext,
@@ -189,6 +246,7 @@ class AdministrationService:
         lifecycle: LifecycleStore,
         requests: RequestStatusStore,
         accounting: AccountingStore,
+        machine: MachineCredentialRepository | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
         identity_factory: Callable[[], uuid.UUID] = uuid.uuid4,
     ) -> None:
@@ -198,6 +256,7 @@ class AdministrationService:
         self._lifecycle = lifecycle
         self._requests = requests
         self._accounting = accounting
+        self._machine = machine
         self._now = now
         self._identity_factory = identity_factory
 
@@ -237,6 +296,172 @@ class AdministrationService:
             revision=value.revision,
             parent_service_id=value.parent_service_id,
         ).model_dump(mode="json")
+
+    def list_services(
+        self,
+        session_token: str,
+        *,
+        request_id: str,
+        cursor: str | None,
+        limit: int,
+    ) -> dict[str, object]:
+        """List every retained service with safe bootstrap metadata."""
+        context = self._context(
+            session_token,
+            request_id=request_id,
+            operation="service.manage",
+            scope=Scope(),
+        )
+        page, next_cursor = _page(
+            self._lifecycle.list_service_administration(context),
+            cursor=cursor,
+            limit=limit,
+            identity=lambda item: item.service_id,
+        )
+        return {
+            "items": [_service_administration_document(item) for item in page],
+            "next_cursor": next_cursor,
+        }
+
+    def get_service(
+        self, session_token: str, service_id: str, *, request_id: str
+    ) -> dict[str, object]:
+        """Get one retained service with safe bootstrap metadata."""
+        context = self._context(
+            session_token,
+            request_id=request_id,
+            operation="service.manage",
+            scope=Scope(),
+        )
+        return _service_administration_document(
+            self._lifecycle.get_service_administration(context, service_id)
+        )
+
+    def create_service(
+        self,
+        session_token: str,
+        csrf_token: str,
+        origin: str,
+        idempotency_key: str,
+        value: ServiceCreateInput,
+        *,
+        request_id: str,
+    ) -> tuple[dict[str, object], bool]:
+        """Create one service and bootstrap credential atomically."""
+        if self._machine is None:
+            raise RuntimeError("The machine credential repository is unavailable.")
+        service_context = self._context(
+            session_token,
+            request_id=request_id,
+            operation="service.manage",
+            scope=Scope(),
+            mutation=True,
+            sensitive=True,
+            csrf_token=csrf_token,
+            origin=origin,
+        )
+        credential_context = self._context(
+            session_token,
+            request_id=request_id,
+            operation="credential.manage",
+            scope=Scope(),
+            mutation=True,
+            sensitive=True,
+            csrf_token=csrf_token,
+            origin=origin,
+        )
+        scope = BootstrapScope(
+            frozenset(value.bootstrap_scope.audiences),
+            frozenset(value.bootstrap_scope.operations),
+            value.bootstrap_scope.workspace_limit,
+        )
+        lifecycle, bootstrap = self._lifecycle.create_service_with_bootstrap(
+            service_context,
+            credential_context,
+            self._machine,
+            idempotency_key=idempotency_key,
+            display_name=value.display_name,
+            parent_service_id=value.parent_service_id,
+            bootstrap_scope=scope,
+            now=self._now(),
+        )
+        return _service_created_document(lifecycle.value, bootstrap), lifecycle.replayed
+
+    def update_service(
+        self,
+        session_token: str,
+        csrf_token: str,
+        origin: str,
+        service_id: str,
+        value: ServiceUpdateInput,
+        *,
+        request_id: str,
+    ) -> dict[str, object]:
+        """Replace one service display name and parent link."""
+        read_context = self._context(
+            session_token,
+            request_id=request_id,
+            operation="service.manage",
+            scope=Scope(),
+        )
+        current = self._lifecycle.get_service_administration(read_context, service_id)
+        operation = (
+            "service_parent.manage"
+            if current.parent_service_id != value.new_parent_service_id
+            else "service.manage"
+        )
+        context = self._context(
+            session_token,
+            request_id=request_id,
+            operation=operation,
+            scope=Scope(),
+            mutation=True,
+            sensitive=True,
+            csrf_token=csrf_token,
+            origin=origin,
+        )
+        result = self._lifecycle.change_service_metadata(
+            context,
+            service_id,
+            expected_revision=value.expected_revision,
+            display_name=value.display_name,
+            new_parent_service_id=value.new_parent_service_id,
+            reason=value.reason,
+        )
+        return _service_change_document(result.value)
+
+    def change_service(
+        self,
+        session_token: str,
+        csrf_token: str,
+        origin: str,
+        idempotency_key: str,
+        service_id: str,
+        action: ServiceAction,
+        value: ServiceActionInput,
+        *,
+        request_id: str,
+    ) -> dict[str, object]:
+        """Apply one revision-safe service lifecycle action."""
+        context = self._context(
+            session_token,
+            request_id=request_id,
+            operation="service.manage",
+            scope=Scope(),
+            mutation=True,
+            sensitive=True,
+            csrf_token=csrf_token,
+            origin=origin,
+        )
+        result = self._lifecycle.change_service_state(
+            context,
+            service_id,
+            action,
+            expected_revision=value.expected_revision,
+            idempotency_key=idempotency_key,
+            reason=value.reason,
+        )
+        return _service_change_document(result.value)
 
     def create_credential(
         self,
@@ -943,6 +1168,60 @@ def _credential_document(value: CredentialMetadata) -> dict[str, object]:
         "revision": value.revision,
         "created_at": value.created_at.isoformat(),
         "fingerprint": value.fingerprint,
+    }
+
+
+def _service_administration_document(
+    value: ServiceAdministrationRecord,
+) -> dict[str, object]:
+    result: dict[str, object] = {
+        "service_id": value.service_id,
+        "display_name": value.display_name,
+        "parent_service_id": value.parent_service_id,
+        "state": value.state.value,
+        "revision": value.revision,
+        "bootstrap_state": value.bootstrap_state,
+        "credential_generation": value.credential_generation,
+        "bootstrap_scope": None,
+    }
+    if value.prior_generation_expires_at is not None:
+        result["prior_generation_expires_at"] = (
+            value.prior_generation_expires_at.isoformat()
+        )
+    if (
+        value.bootstrap_audiences is not None
+        and value.bootstrap_operations is not None
+        and value.bootstrap_workspace_limit is not None
+    ):
+        result["bootstrap_scope"] = {
+            "audiences": list(value.bootstrap_audiences),
+            "operations": list(value.bootstrap_operations),
+            "workspace_limit": value.bootstrap_workspace_limit,
+        }
+    return result
+
+
+def _service_created_document(
+    value: ServiceRecord, bootstrap: BootstrapCreated | None
+) -> dict[str, object]:
+    result: dict[str, object] = {
+        "service_id": value.service_id,
+        "state": value.state.value,
+        "state_revision": value.revision,
+        "bootstrap_secret_available": bootstrap is not None,
+        "credential_generation": 1,
+    }
+    if bootstrap is not None:
+        result["bootstrap_secret"] = bootstrap.secret.value
+    return result
+
+
+def _service_change_document(value: ServiceRecord) -> dict[str, object]:
+    return {
+        "resource_id": value.service_id,
+        "state": value.state.value,
+        "revision": value.revision,
+        "operation_id": value.operation_id,
     }
 
 

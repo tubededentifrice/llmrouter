@@ -30,11 +30,13 @@ function loadFixture(filename: string): Record<string, unknown> {
 
 describe("generated contract models", () => {
   it("contains every accepted component schema", () => {
-    expect(Object.keys(contractSchemas)).toHaveLength(146);
+    expect(Object.keys(contractSchemas)).toHaveLength(148);
     expect(contractSchemas).toHaveProperty("EmbedBootstrap");
     expect(contractSchemas).toHaveProperty("EmbedBootstrapRequest");
     expect(contractSchemas).toHaveProperty("EmbedAdministrationSnapshot");
     expect(contractSchemas).toHaveProperty("EmbedRequestStatus");
+    expect(contractSchemas).toHaveProperty("ServiceUpdate");
+    expect(contractSchemas).toHaveProperty("ServiceAction");
   });
   for (const [schemaName, filename] of Object.entries(fixtures)) {
     it(`round trips the valid ${schemaName} fixture`, () => {

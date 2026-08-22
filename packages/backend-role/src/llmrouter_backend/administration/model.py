@@ -5,10 +5,12 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from llmrouter_backend.accounting import UsageUnit
+from llmrouter_backend.authority import Audience
 from llmrouter_backend.configuration import ConfigurationState, PriceAuthorityMode
+from llmrouter_backend.machine_identity import WorkspaceLimit
 
 OpaqueId = Annotated[str, Field(min_length=1, max_length=200)]
 Reason = Annotated[str, Field(min_length=1, max_length=500)]
@@ -144,3 +146,46 @@ class ServiceStateDocument(ClosedAdministrationModel):
     state: Literal["active", "disabled", "retired"]
     revision: OpaqueId
     parent_service_id: OpaqueId | None = None
+
+
+class BootstrapScopeInput(ClosedAdministrationModel):
+    """One exact maximum machine authority for a service bootstrap."""
+
+    audiences: list[Audience] = Field(min_length=1)
+    operations: list[Annotated[str, Field(min_length=1, max_length=100)]] = Field(
+        min_length=1
+    )
+    workspace_limit: WorkspaceLimit = WorkspaceLimit.ALL_SERVICE_WORKSPACES
+
+    @field_validator("audiences", "operations")
+    @classmethod
+    def values_are_unique(cls, values: list[object]) -> list[object]:
+        """Reject duplicate authority values instead of silently merging them."""
+        if len(values) != len(set(values)):
+            message = "Bootstrap scope values must be unique."
+            raise ValueError(message)
+        return values
+
+
+class ServiceCreateInput(ClosedAdministrationModel):
+    """Create one service and its initial bootstrap credential."""
+
+    display_name: Annotated[str, Field(min_length=1, max_length=200)]
+    parent_service_id: OpaqueId | None
+    bootstrap_scope: BootstrapScopeInput
+
+
+class ServiceUpdateInput(ClosedAdministrationModel):
+    """Replace one service display name and parent link."""
+
+    expected_revision: OpaqueId
+    reason: Reason
+    display_name: Annotated[str, Field(min_length=1, max_length=200)]
+    new_parent_service_id: OpaqueId | None
+
+
+class ServiceActionInput(ClosedAdministrationModel):
+    """Apply one revision-safe service lifecycle action."""
+
+    expected_revision: OpaqueId
+    reason: Reason

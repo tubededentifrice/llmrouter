@@ -538,6 +538,7 @@ def install_local_runtime(
             lifecycle=lifecycle,
             requests=views,
             accounting=accounting,
+            machine=machine,
         ),
     )
 

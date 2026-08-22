@@ -36,7 +36,19 @@ from llmrouter_backend.credential_store import (
     CredentialResult,
     CredentialState,
 )
-from llmrouter_backend.lifecycle import LifecycleState, ServiceRecord
+from llmrouter_backend.lifecycle import (
+    LifecycleResult,
+    LifecycleState,
+    ServiceAction,
+    ServiceAdministrationRecord,
+    ServiceRecord,
+)
+from llmrouter_backend.machine_identity import (
+    BootstrapCreated,
+    BootstrapScope,
+    MachineCredentialRepository,
+    SecretValue,
+)
 
 if TYPE_CHECKING:
     from llmrouter_backend.authority import OperationPolicy
@@ -194,6 +206,100 @@ class FakeCredentials:
 
 
 class FakeLifecycle:
+    def __init__(self) -> None:
+        self.services: list[ServiceAdministrationRecord] = []
+
+    def list_service_administration(
+        self, context: RequestContext
+    ) -> tuple[ServiceAdministrationRecord, ...]:
+        assert context.operation == "service.manage" and context.scope == Scope()
+        return tuple(self.services)
+
+    def get_service_administration(
+        self, context: RequestContext, service_id: str
+    ) -> ServiceAdministrationRecord:
+        assert context.operation == "service.manage"
+        return next(value for value in self.services if value.service_id == service_id)
+
+    def create_service_with_bootstrap(
+        self,
+        context: RequestContext,
+        credential_context: RequestContext,
+        credentials: MachineCredentialRepository,
+        *,
+        idempotency_key: str,
+        display_name: str,
+        parent_service_id: str | None,
+        bootstrap_scope: BootstrapScope,
+        now: datetime,
+    ) -> tuple[LifecycleResult[ServiceRecord], BootstrapCreated | None]:
+        assert context.operation == "service.manage"
+        assert credential_context.operation == "credential.manage"
+        assert credentials and idempotency_key and bootstrap_scope and now == NOW
+        record = ServiceRecord(
+            SERVICE_ID,
+            display_name,
+            parent_service_id,
+            LifecycleState.ACTIVE,
+            "1",
+            str(uuid.UUID(int=22)),
+        )
+        return (
+            LifecycleResult(record, replayed=False, changed=True),
+            BootstrapCreated(SERVICE_ID, 1, SecretValue("b" * 43)),
+        )
+
+    def change_service_metadata(
+        self,
+        context: RequestContext,
+        service_id: str,
+        *,
+        expected_revision: str,
+        display_name: str,
+        new_parent_service_id: str | None,
+        reason: str,
+    ) -> LifecycleResult[ServiceRecord]:
+        assert context.operation in {"service.manage", "service_parent.manage"}
+        assert expected_revision and reason
+        return LifecycleResult(
+            ServiceRecord(
+                service_id,
+                display_name,
+                new_parent_service_id,
+                LifecycleState.ACTIVE,
+                "2",
+                str(uuid.UUID(int=23)),
+            ),
+            replayed=False,
+            changed=True,
+        )
+
+    def change_service_state(
+        self,
+        context: RequestContext,
+        service_id: str,
+        action: ServiceAction,
+        *,
+        expected_revision: str,
+        idempotency_key: str,
+        reason: str,
+    ) -> LifecycleResult[ServiceRecord]:
+        assert context.operation == "service.manage"
+        assert action is ServiceAction.DISABLE
+        assert expected_revision and idempotency_key and reason
+        return LifecycleResult(
+            ServiceRecord(
+                service_id,
+                "Service A",
+                None,
+                LifecycleState.DISABLED,
+                "2",
+                str(uuid.UUID(int=24)),
+            ),
+            replayed=False,
+            changed=True,
+        )
+
     def get_administration_state(
         self,
         context: RequestContext,
@@ -243,19 +349,31 @@ class FakeAccounting:
         return AccountingSummary("USD", 1, 1, (), Decimal("0.01"), Decimal(0))
 
 
+class FakeMachine:
+    pass
+
+
 @pytest.fixture
-def administration() -> tuple[TestClient, FakeAuthority, FakeCredentials]:
+def lifecycle() -> FakeLifecycle:
+    return FakeLifecycle()
+
+
+@pytest.fixture
+def administration(
+    lifecycle: FakeLifecycle,
+) -> tuple[TestClient, FakeAuthority, FakeCredentials]:
     authority = FakeAuthority()
     credentials = FakeCredentials()
     service = AdministrationService(
         authority=authority,
         configuration=FakeConfiguration(),
         credentials=credentials,
-        lifecycle=FakeLifecycle(),
+        lifecycle=lifecycle,
         requests=FakeRequests(),
         accounting=FakeAccounting(),
         now=lambda: NOW,
         identity_factory=lambda: uuid.UUID(int=40),
+        machine=FakeMachine(),  # type: ignore[arg-type]
     )
     app = FastAPI()
     app.include_router(router)
@@ -486,3 +604,116 @@ def test_credential_listing_has_bounded_stable_pagination(
     assert response.status_code == 200
     assert len(response.json()["items"]) == 2
     assert response.json()["next_cursor"] == str(uuid.UUID(int=101))
+
+
+def test_service_registry_routes_use_exact_global_contract(
+    administration: tuple[TestClient, FakeAuthority, FakeCredentials],
+    lifecycle: FakeLifecycle,
+) -> None:
+    client, authority, _credentials = administration
+    lifecycle.services.append(
+        ServiceAdministrationRecord(
+            SERVICE_ID,
+            "Service A",
+            None,
+            LifecycleState.ACTIVE,
+            "1",
+            "missing",
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+    )
+
+    listed = client.get("/v1/admin/services", headers=_headers())
+    created = client.post(
+        "/v1/admin/services",
+        headers=_headers(mutation=True),
+        json={
+            "display_name": "Service A",
+            "parent_service_id": None,
+            "bootstrap_scope": {
+                "audiences": ["data_plane"],
+                "operations": ["model.create"],
+            },
+        },
+    )
+    updated = client.put(
+        f"/v1/admin/services/{SERVICE_ID}",
+        headers=_headers(mutation=True),
+        json={
+            "expected_revision": "1",
+            "reason": "Update service metadata",
+            "display_name": "Renamed service",
+            "new_parent_service_id": None,
+        },
+    )
+    rename_policy = authority.policies[-1]
+    disabled = client.post(
+        f"/v1/admin/services/{SERVICE_ID}/disable",
+        headers=_headers(mutation=True),
+        json={"expected_revision": "1", "reason": "Pause new work"},
+    )
+
+    assert listed.status_code == 200
+    assert listed.json()["items"] == [
+        {
+            "service_id": SERVICE_ID,
+            "display_name": "Service A",
+            "parent_service_id": None,
+            "state": "active",
+            "revision": "1",
+            "bootstrap_state": "missing",
+            "credential_generation": None,
+            "bootstrap_scope": None,
+        }
+    ]
+    assert created.status_code == 201
+    assert created.json()["bootstrap_secret"] == "b" * 43
+    assert created.json()["bootstrap_secret_available"] is True
+    assert updated.status_code == 200 and updated.json()["revision"] == "2"
+    assert rename_policy.operation == "service.manage"
+    assert rename_policy.sensitive is True
+    assert disabled.status_code == 200 and disabled.json()["state"] == "disabled"
+    assert [policy.operation for policy in authority.policies[-6:]] == [
+        "service.manage",
+        "service.manage",
+        "credential.manage",
+        "service.manage",
+        "service.manage",
+        "service.manage",
+    ]
+
+
+def test_service_registry_rejects_unknown_actions_without_route_capture(
+    administration: tuple[TestClient, FakeAuthority, FakeCredentials],
+) -> None:
+    client, _authority, _credentials = administration
+    response = client.post(
+        f"/v1/admin/services/{SERVICE_ID}/rotate-bootstrap",
+        headers=_headers(mutation=True),
+        json={"expected_revision": "1", "reason": "Unsupported action"},
+    )
+    assert response.status_code == 404
+
+
+def test_service_create_rejects_duplicate_bootstrap_scope_values(
+    administration: tuple[TestClient, FakeAuthority, FakeCredentials],
+) -> None:
+    client, _authority, _credentials = administration
+    response = client.post(
+        "/v1/admin/services",
+        headers=_headers(mutation=True),
+        json={
+            "display_name": "Service A",
+            "parent_service_id": None,
+            "bootstrap_scope": {
+                "audiences": ["data_plane", "data_plane"],
+                "operations": ["model.create"],
+            },
+        },
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "invalid_request"

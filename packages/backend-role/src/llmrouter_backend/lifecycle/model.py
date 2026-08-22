@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from datetime import datetime
 
 
 class LifecycleState(StrEnum):
@@ -40,6 +44,23 @@ class ServiceRecord:
     state: LifecycleState
     revision: str
     operation_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class ServiceAdministrationRecord:
+    """One complete safe global-administration service record."""
+
+    service_id: str
+    display_name: str
+    parent_service_id: str | None
+    state: LifecycleState
+    revision: str
+    bootstrap_state: str
+    credential_generation: int | None
+    prior_generation_expires_at: datetime | None
+    bootstrap_audiences: tuple[str, ...] | None
+    bootstrap_operations: tuple[str, ...] | None
+    bootstrap_workspace_limit: str | None
 
 
 @dataclass(frozen=True, slots=True)
