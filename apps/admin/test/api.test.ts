@@ -258,7 +258,7 @@ describe("administration API client", () => {
     ).toBe(true);
     expect(
       paths.some((path) =>
-        path.includes("model-requests?limit=100&workspace_id=workspace-one"),
+        path.includes("model-requests?workspace_id=workspace-one"),
       ),
     ).toBe(true);
   });
@@ -289,7 +289,7 @@ describe("administration API client", () => {
         state: "active",
       },
     ]);
-    expect(paths).toEqual(["/v1/admin/services?limit=100"]);
+    expect(paths).toEqual(["/v1/admin/services"]);
   });
 
   it("loads every service registry page without hiding retained services", async () => {
@@ -329,8 +329,8 @@ describe("administration API client", () => {
       "Ontology",
     ]);
     expect(paths).toEqual([
-      "/v1/admin/services?limit=100",
-      "/v1/admin/services?limit=100&cursor=service-one",
+      "/v1/admin/services",
+      "/v1/admin/services?cursor=service-one",
     ]);
   });
 

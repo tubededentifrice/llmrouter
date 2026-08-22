@@ -636,11 +636,11 @@ export function createFetchAdministrationClient({
 
   return {
     listServices(signal) {
-      return allPages<ServiceSummary>("/v1/admin/services?limit=100", signal);
+      return allPages<ServiceSummary>("/v1/admin/services", signal);
     },
 
     listCredentials(signal) {
-      return allPages<Credential>("/v1/admin/credentials?limit=100", signal);
+      return allPages<Credential>("/v1/admin/credentials", signal);
     },
 
     createService(input) {
@@ -717,24 +717,18 @@ export function createFetchAdministrationClient({
           signal === undefined ? {} : { signal },
         ),
         scope.mode === "global" && scope.workspaceId === ""
-          ? page<Credential>("/v1/admin/credentials?limit=100", signal)
+          ? page<Credential>("/v1/admin/credentials", signal)
           : Promise.resolve([]),
         page<ProviderInstance>(
-          servicePath(scope, "provider-instances?limit=100"),
+          servicePath(scope, "provider-instances"),
           signal,
         ),
         page<ProviderModelRoute>(
-          servicePath(scope, "provider-model-routes?limit=100"),
+          servicePath(scope, "provider-model-routes"),
           signal,
         ),
-        page<Assignment>(
-          servicePath(scope, "assignments?limit=100", true),
-          signal,
-        ),
-        page<RequestStatus>(
-          servicePath(scope, "model-requests?limit=100", true),
-          signal,
-        ),
+        page<Assignment>(servicePath(scope, "assignments", true), signal),
+        page<RequestStatus>(servicePath(scope, "model-requests", true), signal),
         request<AccountingSummary>(
           `${serviceBase}/accounting/summary?${accountingQuery.toString()}`,
           signal === undefined ? {} : { signal },
