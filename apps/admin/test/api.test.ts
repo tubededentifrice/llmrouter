@@ -102,6 +102,7 @@ describe("administration API client", () => {
             : json({ error: {} }, 401),
         );
       }),
+      "https://llmrouter.opendle.dev",
     );
     expect(required).toEqual({ state: "required" });
     expect(localPaths).toEqual([
@@ -109,10 +110,7 @@ describe("administration API client", () => {
       "/v1/admin/session",
     ]);
     expect(unavailable).toEqual({ state: "oidc_required" });
-    expect(productionPaths).toEqual([
-      "/v1/admin/local-session",
-      "/v1/admin/session",
-    ]);
+    expect(productionPaths).toEqual(["/v1/admin/session"]);
   });
 
   it("starts Pocket ID login with a one-use trusted grant token", async () => {

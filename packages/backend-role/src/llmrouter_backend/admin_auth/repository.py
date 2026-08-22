@@ -21,6 +21,7 @@ from nacl.bindings import (
     crypto_aead_xchacha20poly1305_ietf_encrypt,
 )
 from nacl.exceptions import CryptoError
+from opendle import build_authorization_code_url
 from psycopg.rows import dict_row
 
 from llmrouter_backend.admin_auth.errors import AdministratorAuthError
@@ -42,7 +43,6 @@ from llmrouter_backend.admin_auth.oidc import (
     OIDCTokenVerifier,
     ProviderSessionInvalid,
     ProviderSessionRotationFailed,
-    build_authorization_url,
 )
 from llmrouter_backend.authority import (
     ADMINISTRATOR_ABSOLUTE_LIMIT,
@@ -336,14 +336,15 @@ class AdministratorAuthRepository:
             )
             raise
         return AuthorizationStart(
-            authorization_url=build_authorization_url(
-                self.configuration,
+            authorization_url=build_authorization_code_url(
+                authorization_endpoint=self.configuration.authorization_endpoint,
+                client_id=self.configuration.client_id,
+                redirect_uri=self.configuration.redirect_uri,
                 state=state.value,
                 nonce=nonce.value,
-                pkce_verifier=verifier.value,
-                recent_authentication=(
-                    purpose is AuthenticationPurpose.RECENT_AUTHENTICATION
-                ),
+                code_verifier=verifier.value,
+                max_age_zero=(purpose is AuthenticationPurpose.RECENT_AUTHENTICATION),
+                prompt_login=(purpose is AuthenticationPurpose.RECENT_AUTHENTICATION),
             ),
             expires_at=expires_at,
         )
@@ -1532,7 +1533,7 @@ class AdministratorAuthRepository:
                 now=now,
             )
             rotation[0] = provider.refresh_token != refresh_token
-        except (ProviderSessionInvalid, ProviderSessionRotationFailed):
+        except ProviderSessionInvalid, ProviderSessionRotationFailed:
             self._revoke_session_row(connection, session, now)
             return False
         except IdentityServiceUnavailable as error:

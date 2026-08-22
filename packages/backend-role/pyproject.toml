@@ -6,11 +6,12 @@ build-backend = "hatchling.build"
 name = "llmrouter-backend"
 version = "0.0.0"
 description = "LLM Router backend role scaffold"
-requires-python = "==3.13.*"
+requires-python = "==3.14.*"
 dependencies = [
   "argon2-cffi==25.1.0",
   "fastapi==0.140.13",
   "httpx==0.28.1",
+  "opendle-lib @ git+https://github.com/opendle/opendle-lib.git@main",
   "pycryptodome==3.23.0",
   "pyjwt==2.13.0",
   "pynacl==1.6.2",
@@ -21,3 +22,6 @@ dependencies = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/llmrouter_backend"]
+
+[tool.hatch.metadata]
+allow-direct-references = true

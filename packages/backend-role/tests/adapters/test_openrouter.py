@@ -458,11 +458,7 @@ def test_stream_accepts_repeated_identical_empty_terminal_metadata(
     finish_reason: str,
 ) -> None:
     first = json.dumps(
-        {
-            "choices": [
-                {"delta": {"content": "answer"}, "finish_reason": finish_reason}
-            ]
-        },
+        {"choices": [{"delta": {"content": "answer"}, "finish_reason": finish_reason}]},
         separators=(",", ":"),
     ).encode()
     repeated = json.dumps(
@@ -479,10 +475,7 @@ def test_stream_accepts_repeated_identical_empty_terminal_metadata(
     chunks = (
         b"data: " + first + b"\n\n",
         b"data: " + repeated + b"\n\n",
-        (
-            b'data: {"choices":[],"usage":{"prompt_tokens":1,'
-            b'"completion_tokens":1}}\n\n'
-        ),
+        (b'data: {"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1}}\n\n'),
         b"data: [DONE]\n\n",
     )
     harness = _Harness(_request(ModelOperation.STREAM))
@@ -520,10 +513,7 @@ def test_stream_rejects_unsafe_repeated_terminal_metadata(
             b'"finish_reason":"stop"}]}\n\n'
         ),
         b"data: " + repeated + b"\n\n",
-        (
-            b'data: {"choices":[],"usage":{"prompt_tokens":1,'
-            b'"completion_tokens":1}}\n\n'
-        ),
+        (b'data: {"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1}}\n\n'),
         b"data: [DONE]\n\n",
     )
     harness = _Harness(_request(ModelOperation.STREAM))
@@ -608,9 +598,7 @@ def test_stream_reports_the_closed_missing_terminal_condition(
     chunks: bytes, detail_code: str, outcome: AttemptOutcome
 ) -> None:
     harness = _Harness(_request(ModelOperation.STREAM))
-    with _server(
-        _Reply(content_type="text/event-stream", chunks=(chunks,))
-    ) as server:
+    with _server(_Reply(content_type="text/event-stream", chunks=(chunks,))) as server:
         adapter = _adapter(harness)
         result = adapter.execute(_plan(_endpoint(server)), harness.progress)
         adapter.close()

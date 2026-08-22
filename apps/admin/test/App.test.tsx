@@ -228,7 +228,7 @@ describe("administration app states", () => {
     );
     expect(pending).toContain("Opening Pocket ID…");
     expect(pending).toContain("disabled");
-    expect(failed).toContain("Pocket ID is not available. Try again.");
+    expect(failed).toContain("Pocket ID sign-in did not start. Try again.");
   });
 
   it("shows an empty scope state before it makes a request", () => {

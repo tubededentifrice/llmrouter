@@ -33,6 +33,10 @@ that satisfy the repository dependency-age rule. This decision does not select
 a Python web framework, process server, or frontend build tool. Decision 0044
 selects FastAPI on ASGI and Vite for the first-release foundation.
 
+The Router uses Python 3.14. This version lets Router and Ontology use the
+shared `opendle-lib` backend code. Each repository still pins one exact patch
+version for builds and checks.
+
 ## Alternatives
 
 - A TypeScript backend would use one language with the frontend, but it would
@@ -64,9 +68,9 @@ selects FastAPI on ASGI and Vite for the first-release foundation.
 
 ## Migration effect
 
-There is no product implementation to migrate. The first implementation must
-create the Python backend and React TypeScript frontend structure. Generated
-client and contract checks must remain independent of the backend language.
+The first implementation started on Python 3.13. It moves to Python 3.14
+before it imports `opendle-lib`. Generated client and contract checks must
+remain independent of the backend language.
 
 ## Security effect
 

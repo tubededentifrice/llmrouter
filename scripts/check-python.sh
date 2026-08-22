@@ -12,8 +12,8 @@ if [[ "${uv_version}" != "uv 0.12.0" && "${uv_version}" != "uv 0.12.0 "* ]]; the
 fi
 
 uv sync --frozen --all-packages
-if [[ "$(uv run python --version)" != "Python 3.13.12" ]]; then
-  echo "Python 3.13.12 is required." >&2
+if [[ "$(uv run python --version)" != "Python 3.14.6" ]]; then
+  echo "Python 3.14.6 is required." >&2
   exit 1
 fi
 uv run ruff format --check packages scripts/check-dependency-policy.py scripts/generate-contract-models.py

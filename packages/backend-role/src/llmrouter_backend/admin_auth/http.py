@@ -54,7 +54,11 @@ async def start_session(request: Request) -> Response:
             document.return_path,
             request_id=request_id,
             now=datetime.now(UTC),
-            session_token=request.cookies.get(_COOKIE),
+            session_token=(
+                request.cookies.get(_COOKIE)
+                if document.purpose == "recent_authentication"
+                else None
+            ),
             trusted_grant_token=document.trusted_grant_token,
         )
         return JSONResponse(
@@ -112,7 +116,12 @@ def get_session(request: Request) -> Response:
             _session_document(result), headers={"Cache-Control": "no-store"}
         )
     except AdministratorAuthError as error:
-        return _error(error)
+        error_response = _error(error)
+        if error.code == "invalid_token":
+            error_response.headers["Set-Cookie"] = administrator_session_cookie(
+                "", clear=True
+            )
+        return error_response
 
 
 @router.delete("/session", response_model=None)
@@ -234,7 +243,7 @@ def _session_document(result: SessionResult) -> dict[str, object]:
 
 def _error(error: AdministratorAuthError) -> JSONResponse:
     status = {
-        "invalid_token": 401,
+        "invalid_token": 401,  # nosec B105 - This value is an HTTP status code.
         "recent_auth_required": 401,
         "insufficient_scope": 403,
         "temporarily_unavailable": 503,

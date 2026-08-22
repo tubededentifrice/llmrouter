@@ -1254,7 +1254,7 @@ def _shape_issues(  # noqa: C901, PLR0912
 def _is_uuid(value: str) -> bool:
     try:
         uuid.UUID(value)
-    except (TypeError, ValueError, AttributeError):
+    except TypeError, ValueError, AttributeError:
         return False
     return True
 

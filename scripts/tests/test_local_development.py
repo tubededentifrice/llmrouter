@@ -60,6 +60,25 @@ def test_local_development_contract_accepts_repository_compose() -> None:
     _check_module().main()
 
 
+def test_local_development_contract_rejects_a_source_nested_python_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Keep the container environment outside the read-only source mount."""
+    unsafe = tmp_path / "docker-compose.dev.yml"
+    source = COMPOSE_PATH.read_text(encoding="utf-8")
+    unsafe.write_text(
+        source.replace(
+            "llmrouter-python-environment:/python-environment",
+            "llmrouter-python-environment:/workspace/.venv",
+        ),
+        encoding="utf-8",
+    )
+    module = _check_module()
+    monkeypatch.setattr(module, "COMPOSE_PATH", unsafe)
+    with pytest.raises(SystemExit, match="Python environment is not isolated"):
+        module.main()
+
+
 @pytest.mark.parametrize(
     ("old", "new", "message"),
     [
@@ -385,12 +404,8 @@ def test_live_openrouter_model_selector_and_catalog_identities_are_closed() -> N
     )
     assert default.model.selector == "deepseek"
     assert default.operations == ("non-stream", "stream")
-    assert mimo.model.wire_model == (
-        "xiaomi/mimo-v2.5"
-    )
-    assert granite.model.wire_model == (
-        "ibm-granite/granite-4.1-8b"
-    )
+    assert mimo.model.wire_model == ("xiaomi/mimo-v2.5")
+    assert granite.model.wire_model == ("ibm-granite/granite-4.1-8b")
     assert diagnostic.model is module.LIVE_MODELS["granite"]
     assert diagnostic.operations == ("stream",)
     assert (
@@ -405,16 +420,13 @@ def test_live_openrouter_model_selector_and_catalog_identities_are_closed() -> N
         module.LIVE_MODELS["granite"].canonical_model_id
         == bootstrap.GRANITE_CANONICAL_MODEL_ID
     )
-    assert (
-        len(
-            {
-                bootstrap.DEEPSEEK_CANONICAL_MODEL_ID,
-                bootstrap.MIMO_CANONICAL_MODEL_ID,
-                bootstrap.GRANITE_CANONICAL_MODEL_ID,
-            }
-        )
-        == len(module.LIVE_MODELS)
-    )
+    assert len(
+        {
+            bootstrap.DEEPSEEK_CANONICAL_MODEL_ID,
+            bootstrap.MIMO_CANONICAL_MODEL_ID,
+            bootstrap.GRANITE_CANONICAL_MODEL_ID,
+        }
+    ) == len(module.LIVE_MODELS)
     with pytest.raises(module.LiveProofError, match="selector is invalid"):
         module._selected_plan(("--model", "private-model"))  # noqa: SLF001
     with pytest.raises(module.LiveProofError, match="selector is invalid"):
@@ -457,9 +469,7 @@ def test_browser_proof_keeps_live_embed_separate_from_deterministic_admin() -> N
         )
     ]
     admin = e2e[
-        e2e.index("def _prove_global_administration(") : e2e.index(
-            "class _CdpBrowser:"
-        )
+        e2e.index("def _prove_global_administration(") : e2e.index("class _CdpBrowser:")
     ]
 
     assert "_prove_service_scoped_embed()" in main
@@ -524,8 +534,7 @@ def test_live_openrouter_stream_diagnostic_makes_one_successful_attempt(
     calls: list[bool] = []
     content = b"test answer"
     stream = (
-        b'data: {"choices":[{"delta":{"content":"test answer"}}]}\n\n'
-        b"data: [DONE]\n\n"
+        b'data: {"choices":[{"delta":{"content":"test answer"}}]}\n\ndata: [DONE]\n\n'
     )
     status = {
         "state": "succeeded",

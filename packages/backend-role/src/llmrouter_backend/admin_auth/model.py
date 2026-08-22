@@ -3,10 +3,11 @@
 
 from __future__ import annotations
 
-import base64
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING
+
+from opendle import validate_canonical_token
 
 from llmrouter_backend.authority import ADMINISTRATOR_OPERATIONS, AuthorityClass, Scope
 
@@ -44,22 +45,11 @@ class SecretValue:
 
     def __post_init__(self) -> None:
         """Reject a value outside the generated secret form."""
-        alphabet = frozenset(
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
-        )
         try:
-            decoded = base64.b64decode(self.value + "=", altchars=b"-_", validate=True)
+            validate_canonical_token(self.value)
         except ValueError as error:
             msg = "A generated secret must be 32-byte unpadded base64url."
             raise ValueError(msg) from error
-        canonical = base64.urlsafe_b64encode(decoded).rstrip(b"=").decode()
-        if (
-            len(decoded) != 32
-            or canonical != self.value
-            or not set(self.value) <= alphabet
-        ):
-            msg = "A generated secret must be 32-byte unpadded base64url."
-            raise ValueError(msg)
 
     def __repr__(self) -> str:
         """Do not expose the value in logs or diagnostics."""

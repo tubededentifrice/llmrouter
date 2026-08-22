@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "llmrouter-client"
 version = "0.0.0"
 description = "Official LLM Router Python client scaffold"
-requires-python = "==3.13.*"
+requires-python = "==3.14.*"
 dependencies = ["httpx==0.28.1", "jsonschema==4.25.1"]
 
 [tool.hatch.build.targets.wheel]

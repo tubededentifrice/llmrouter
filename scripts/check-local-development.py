@@ -70,6 +70,12 @@ def main() -> None:
     }
     if any(value not in text for value in required_runtime):
         raise SystemExit("The complete local runtime is not configured.")
+    if (
+        "UV_PROJECT_ENVIRONMENT: /python-environment/.venv" not in text
+        or "llmrouter-python-environment:/python-environment" not in text
+        or "llmrouter-python-environment:/workspace/.venv" in text
+    ):
+        raise SystemExit("The container Python environment is not isolated.")
     required_proxy = {
         "networks:\n      - default\n      - traefik-proxy\n    labels:",
         "traefik.enable=true",

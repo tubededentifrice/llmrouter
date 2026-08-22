@@ -824,7 +824,7 @@ class PostgresLifecycleRepository:
             parsed_workspace_id = (
                 None if workspace_id is None else uuid.UUID(workspace_id)
             )
-        except (TypeError, ValueError, AttributeError):
+        except TypeError, ValueError, AttributeError:
             return False
         with psycopg.connect(self._database_url) as connection:
             row = connection.execute(

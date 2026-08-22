@@ -4,13 +4,12 @@
 from __future__ import annotations
 
 import base64
-import hashlib
 import hmac
 import math
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Protocol
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlsplit
 
 import jwt
 from Crypto.Hash import SHA256  # nosec B413 - This import is maintained PyCryptodome.
@@ -305,39 +304,6 @@ def _exact_audiences(value: object, request_id: str) -> tuple[str, ...]:
     ):
         return (value[0],)
     raise AdministratorAuthError("invalid_token", request_id)
-
-
-def build_authorization_url(
-    configuration: OIDCConfiguration,
-    *,
-    state: str,
-    nonce: str,
-    pkce_verifier: str,
-    recent_authentication: bool = False,
-) -> str:
-    """Build the exact authorization-code request with PKCE S256."""
-    challenge = (
-        base64.urlsafe_b64encode(hashlib.sha256(pkce_verifier.encode()).digest())
-        .rstrip(b"=")
-        .decode()
-    )
-    parameters: dict[str, str] = {
-        "response_type": "code",
-        "client_id": configuration.client_id,
-        "redirect_uri": configuration.redirect_uri,
-        "scope": "openid offline_access",
-        "state": state,
-        "nonce": nonce,
-        "code_challenge": challenge,
-        "code_challenge_method": "S256",
-    }
-    if recent_authentication:
-        parameters.update({"max_age": "0", "prompt": "login"})
-    endpoint = urlsplit(configuration.authorization_endpoint)
-    query = urlencode(
-        [*parse_qsl(endpoint.query, keep_blank_values=True), *parameters.items()]
-    )
-    return urlunsplit((endpoint.scheme, endpoint.netloc, endpoint.path, query, ""))
 
 
 def administrator_session_cookie(value: str, *, clear: bool = False) -> str:

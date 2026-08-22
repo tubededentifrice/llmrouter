@@ -16,12 +16,15 @@ EXACT_PYTHON = re.compile(
     r"==[A-Za-z0-9][A-Za-z0-9.!+_-]*(?:\s*;.+)?$"
 )
 EXACT_NPM = re.compile(r"^(?:[A-Za-z0-9_.-]+@)?[0-9]+\.[0-9]+\.[0-9]+$")
+SHARED_BACKEND_SPEC = (
+    "opendle-lib @ git+https://github.com/opendle/opendle-lib.git@main"
+)
 SHARED_UI_PACKAGE = "@opendle/ui"
 SHARED_UI_SPEC = "git+https://github.com/tubededentifrice/opendle-ui.git#main"
 CUTOFF = "2026-07-30T06:00:00Z"
 NODE_VERSION = "24.17.0"
 NPM_VERSION = "11.18.0"
-PYTHON_VERSION = "3.13.12"
+PYTHON_VERSION = "3.14.6"
 UV_VERSION = "0.12.0"
 APPROVED_NPM_EXCEPTION_DOCUMENT: dict[str, Any] = {
     "approved_at": None,
@@ -52,7 +55,7 @@ def check_pyproject(path: Path) -> list[str]:
     return [
         f"{path}: Python dependency is not exact: {dependency}"
         for dependency in dependencies
-        if not EXACT_PYTHON.fullmatch(dependency)
+        if dependency != SHARED_BACKEND_SPEC and not EXACT_PYTHON.fullmatch(dependency)
     ]
 
 

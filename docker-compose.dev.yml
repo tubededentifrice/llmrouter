@@ -4,14 +4,15 @@
 name: llmrouter-development
 
 x-python-service: &python-service
-  image: ghcr.io/astral-sh/uv:0.12.0-python3.13-trixie-slim@sha256:c8a73be6ed92bb5437785f4bab9a5ea579ce122744a8d8cde379d092e168dedf
+  image: ghcr.io/astral-sh/uv:0.12.0-python3.14-trixie@sha256:31a52487b980ba38c38ee1d1eb21f416f974978794ad834af493aa734926bb94
   working_dir: /workspace
   environment:
     UV_LINK_MODE: copy
+    UV_PROJECT_ENVIRONMENT: /python-environment/.venv
     UV_PYTHON_DOWNLOADS: never
   volumes:
     - .:/workspace:ro
-    - llmrouter-python-environment:/workspace/.venv
+    - llmrouter-python-environment:/python-environment
     - llmrouter-uv-cache:/root/.cache/uv
   secrets:
     - postgres_password
@@ -60,10 +61,10 @@ services:
       - |
         export LLMROUTER_DATABASE_URL="postgresql://llmrouter:$$(cat /run/secrets/postgres_password)@postgres:5432/llmrouter"
         uv sync --frozen --all-packages --python /usr/local/bin/python
-        .venv/bin/python scripts/local-development-migrate.py
+        /python-environment/.venv/bin/python scripts/local-development-migrate.py
     volumes:
       - .:/workspace:ro
-      - llmrouter-python-environment:/workspace/.venv
+      - llmrouter-python-environment:/python-environment
       - llmrouter-uv-cache:/root/.cache/uv
 
   token-worker:
@@ -78,13 +79,13 @@ services:
       - |
         export LLMROUTER_DATABASE_URL="postgresql://llmrouter:$$(cat /run/secrets/postgres_password)@postgres:5432/llmrouter"
         while true; do
-          .venv/bin/python scripts/local-development-bootstrap.py
+          /python-environment/.venv/bin/python scripts/local-development-bootstrap.py
           sleep 240
         done
     volumes:
       - .:/workspace:ro
       - ./.local-development:/local-state
-      - llmrouter-python-environment:/workspace/.venv
+      - llmrouter-python-environment:/python-environment
       - llmrouter-uv-cache:/root/.cache/uv
     healthcheck:
       test:
@@ -120,6 +121,7 @@ services:
       LLMROUTER_ADMIN_DIGEST_KEY_FILE: /run/secrets/administrator_digest_key
       LLMROUTER_ADMIN_ENCRYPTION_KEY_FILE: /run/secrets/administrator_encryption_key
       UV_LINK_MODE: copy
+      UV_PROJECT_ENVIRONMENT: /python-environment/.venv
       UV_PYTHON_DOWNLOADS: never
     secrets:
       - postgres_password
@@ -137,7 +139,7 @@ services:
     volumes:
       - .:/workspace:ro
       - ./.local-development:/local-state
-      - llmrouter-python-environment:/workspace/.venv
+      - llmrouter-python-environment:/python-environment
       - llmrouter-uv-cache:/root/.cache/uv
     command:
       - /bin/sh
@@ -146,7 +148,7 @@ services:
         mkdir -p /local-state/backend-replay
         chmod 700 /local-state/backend-replay
         export LLMROUTER_DATABASE_URL="postgresql://llmrouter:$$(cat /run/secrets/postgres_password)@postgres:5432/llmrouter"
-        exec .venv/bin/uvicorn llmrouter_backend.app:app --host 0.0.0.0 --port 8000 --no-access-log
+        exec /python-environment/.venv/bin/uvicorn llmrouter_backend.app:app --host 0.0.0.0 --port 8000 --no-access-log
     ports:
       - "127.0.0.1:8010:8000"
     healthcheck:

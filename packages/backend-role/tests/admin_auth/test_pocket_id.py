@@ -6,6 +6,7 @@ from __future__ import annotations
 import base64
 import json
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 import httpx
 import pytest
@@ -17,6 +18,9 @@ from llmrouter_backend.admin_auth.oidc import (
     ProviderSessionRotationFailed,
 )
 from llmrouter_backend.admin_auth.pocket_id import PocketIDIdentityService
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator
 
 ISSUER = "https://auth.opendle.dev"
 
@@ -32,7 +36,9 @@ def _configuration() -> OIDCConfiguration:
     )
 
 
-def _identity(handler) -> PocketIDIdentityService:  # noqa: ANN001
+def _identity(
+    handler: Callable[[httpx.Request], httpx.Response],
+) -> PocketIDIdentityService:
     return PocketIDIdentityService(
         _configuration(),
         token_endpoint=f"{ISSUER}/api/oidc/token",
@@ -153,7 +159,7 @@ def test_adapter_stops_streaming_at_the_response_limit() -> None:
     read_chunks = 0
 
     class Stream(httpx.SyncByteStream):
-        def __iter__(self):  # noqa: ANN204
+        def __iter__(self) -> Iterator[bytes]:
             nonlocal read_chunks
             for _ in range(100):
                 read_chunks += 1

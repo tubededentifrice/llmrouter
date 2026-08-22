@@ -20,7 +20,6 @@ from llmrouter_backend.admin_auth.oidc import (
     ProviderSessionInvalid,
     ProviderSessionRotationFailed,
     administrator_session_cookie,
-    build_authorization_url,
 )
 from llmrouter_backend.admin_auth.repository import AdministratorAuthRepository
 
@@ -43,5 +42,4 @@ __all__ = [
     "TrustedGrantPurpose",
     "TrustedGrantURL",
     "administrator_session_cookie",
-    "build_authorization_url",
 ]

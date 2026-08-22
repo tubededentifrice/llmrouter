@@ -2,14 +2,16 @@
 
 import importlib
 from http import HTTPStatus
-from typing import Self
+from typing import TYPE_CHECKING, Self
 
-import pytest
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from llmrouter_backend import app
 from llmrouter_backend.administration.http import router as administration_router
 from llmrouter_backend.embed_sessions.http import router as embed_session_router
+
+if TYPE_CHECKING:
+    import pytest
 
 
 def test_health_route_is_registered() -> None:

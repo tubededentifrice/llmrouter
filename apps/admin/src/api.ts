@@ -239,18 +239,24 @@ export type LocalAdministratorSession =
 
 export async function inspectLocalAdministratorSession(
   fetcher: typeof fetch = globalThis.fetch.bind(globalThis),
+  origin: string = typeof window === "undefined"
+    ? "http://127.0.0.1:5174"
+    : window.location.origin,
 ): Promise<LocalAdministratorSession> {
-  let capability: Response;
-  try {
-    capability = await fetcher("/v1/admin/local-session", {
-      method: "HEAD",
-      credentials: "same-origin",
-      cache: "no-store",
-    });
-  } catch {
-    return { state: "unavailable" };
+  let localAvailable = false;
+  if (origin === "http://127.0.0.1:5174") {
+    let capability: Response;
+    try {
+      capability = await fetcher("/v1/admin/local-session", {
+        method: "HEAD",
+        credentials: "same-origin",
+        cache: "no-store",
+      });
+    } catch {
+      return { state: "unavailable" };
+    }
+    localAvailable = capability.ok;
   }
-  const localAvailable = capability.ok;
   const response = await fetcher("/v1/admin/session", {
     credentials: "same-origin",
     cache: "no-store",

@@ -210,8 +210,7 @@ class CompatibilityResponseFormat(ClosedModel):
 
     type: Literal["text", "json_object", "json_schema"]
     schema_name: (
-        Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9._-]{0,99}$")]
-        | None
+        Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9._-]{0,99}$")] | None
     ) = None
     schema_major_version: Annotated[int, Field(ge=1, strict=True)] | None = None
 
@@ -248,9 +247,9 @@ class CompatibleChatRequest(ClosedModel):
     ) = None
     response_format: CompatibilityResponseFormat | None = None
     temperature: Annotated[Decimal, Field(ge=0, le=2)] | None = None
-    max_completion_tokens: Annotated[
-        int, Field(ge=1, le=1_000_000, strict=True)
-    ] | None = None
+    max_completion_tokens: (
+        Annotated[int, Field(ge=1, le=1_000_000, strict=True)] | None
+    ) = None
     stream: Annotated[bool, Field(strict=True)] = False
     metadata: Annotated[list[MetadataEntry], Field(max_length=100)] | None = None
     user: Annotated[str, Field(max_length=200)] | None = None

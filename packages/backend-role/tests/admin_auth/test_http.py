@@ -1,10 +1,11 @@
 """Focused administrator authentication HTTP tests."""
-# ruff: noqa: ANN201, D101, D102, D103, D107, EM101, PLR2004, PT018
+# ruff: noqa: D101, D102, D103, D107, EM101, PLR2004, PT018
 
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import cast
 from urllib.parse import urlencode
 
 import pytest
@@ -32,24 +33,37 @@ def _callback_query(*, code: str = "code", state: str = SECRET.value) -> str:
 class Repository:
     def __init__(self) -> None:
         self.trusted_grant_token: str | None = None
+        self.session_token: str | None = None
+        self.reject_session_read = False
         self.logged_out = False
 
-    def start_authorization(self, _purpose, _return_path, **kwargs):  # noqa: ANN001, ANN003
-        self.trusted_grant_token = kwargs["trusted_grant_token"]
+    def start_authorization(
+        self, _purpose: object, _return_path: str, **kwargs: object
+    ) -> SimpleNamespace:
+        self.trusted_grant_token = cast("str | None", kwargs["trusted_grant_token"])
+        self.session_token = cast("str | None", kwargs["session_token"])
         return SimpleNamespace(
             authorization_url="https://auth.opendle.dev/authorize?state=safe",
             expires_at=NOW + timedelta(minutes=5),
         )
 
-    def complete_authorization(self, _code, _state, **_kwargs):  # noqa: ANN001, ANN003
+    def complete_authorization(
+        self, _code: str, _state: str, **_kwargs: object
+    ) -> SessionResult:
         return _session(session_token=SECRET)
 
-    def get_session(self, _token, **_kwargs):  # noqa: ANN001, ANN003
-        if not _token:
+    def get_session(self, _token: str | None, **_kwargs: object) -> SessionResult:
+        if not _token or self.reject_session_read:
             raise AdministratorAuthError("invalid_token", "request")
         return _session(session_token=None)
 
-    def logout(self, _token, csrf, origin, **_kwargs) -> None:  # noqa: ANN001, ANN003
+    def logout(
+        self,
+        _token: str,
+        csrf: str,
+        origin: str,
+        **_kwargs: object,
+    ) -> None:
         assert csrf == SECRET.value
         assert origin == "https://llmrouter.opendle.dev"
         self.logged_out = True
@@ -101,6 +115,49 @@ def test_pocket_id_213_callback_shape_sets_the_session_cookie() -> None:
     assert "__Host-llmrouter-admin=" in cookie
     assert "Secure" in cookie and "HttpOnly" in cookie and "SameSite=Lax" in cookie
     assert "Domain" not in cookie
+
+
+def test_stale_cookie_is_cleared_and_does_not_block_new_login() -> None:
+    client, repository = _client()
+    repository.reject_session_read = True
+    client.cookies.set("__Host-llmrouter-admin", SECRET.value)
+
+    session = client.get("/v1/admin/session")
+    started = client.post(
+        "/v1/admin/session-starts",
+        json={"purpose": "login", "return_path": "/"},
+    )
+
+    assert session.status_code == 401
+    assert "Max-Age=0" in session.headers["set-cookie"]
+    assert started.status_code == 201
+    assert repository.session_token is None
+
+
+def test_login_ignores_an_existing_session_cookie() -> None:
+    client, repository = _client()
+    client.cookies.set("__Host-llmrouter-admin", SECRET.value)
+
+    started = client.post(
+        "/v1/admin/session-starts",
+        json={"purpose": "login", "return_path": "/"},
+    )
+
+    assert started.status_code == 201
+    assert repository.session_token is None
+
+
+def test_recent_authentication_keeps_the_current_session_cookie() -> None:
+    client, repository = _client()
+    client.cookies.set("__Host-llmrouter-admin", SECRET.value)
+
+    started = client.post(
+        "/v1/admin/session-starts",
+        json={"purpose": "recent_authentication", "return_path": "/"},
+    )
+
+    assert started.status_code == 201
+    assert repository.session_token == SECRET.value
 
 
 def test_session_read_and_logout_are_no_store_and_browser_bound() -> None:
@@ -200,11 +257,12 @@ def test_callback_rejects_duplicate_unbounded_or_extra_query_values(
     response = client.get(f"/v1/admin/oidc/callback?{query}")
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "invalid_request"
+    assert "set-cookie" not in response.headers
 
 
 def test_public_host_does_not_accept_the_local_session_cookie() -> None:
     client, _repository = _client()
-    app = client.app
+    app = cast("FastAPI", client.app)
     app.state.local_admin_authority = SimpleNamespace(
         valid_session=lambda token: token == SECRET.value,
         csrf=SECRET.value,

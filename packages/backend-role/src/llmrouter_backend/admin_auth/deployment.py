@@ -27,7 +27,7 @@ def configured_repository(database_url: str) -> AdministratorAuthRepository | No
         raise RuntimeError("The public administrator authentication flag is invalid.")
     names = {
         "client_id": "LLMROUTER_OIDC_CLIENT_ID_FILE",
-        "client_secret": "LLMROUTER_OIDC_CLIENT_SECRET_FILE",
+        "client_secret": "LLMROUTER_OIDC_CLIENT_SECRET_FILE",  # nosec B105 - This value is an environment variable name.
         "digest_key": "LLMROUTER_ADMIN_DIGEST_KEY_FILE",
         "encryption_key": "LLMROUTER_ADMIN_ENCRYPTION_KEY_FILE",
     }

@@ -612,15 +612,16 @@ def test_attachment_must_be_ready_immutable_current_and_in_scope(
         connection.execute(
             """INSERT INTO router.attachments (
                    id, service_id, workspace_id, media_type, byte_length,
-                   content_sha256, object_manifest_id, expires_at
-               ) VALUES (%s, %s, %s, 'text/plain', 5, %s, %s, %s)""",
+                   content_sha256, object_manifest_id, expires_at, created_at
+               ) VALUES (%s, %s, %s, 'text/plain', 5, %s, %s, %s, %s)""",
             (
                 ATTACHMENT_ID,
                 SERVICE_ID,
                 WORKSPACE_ID,
                 digest,
                 "0198a080-0000-7000-8000-000000000117",
-                NOW + timedelta(days=7),
+                NOW + timedelta(days=36500),
+                NOW,
             ),
         )
         connection.execute(

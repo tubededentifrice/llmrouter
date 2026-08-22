@@ -383,9 +383,7 @@ class ModelRequestService:
             now=now,
             error_request_id=error_request_id,
             adapter_operation=(
-                ModelOperation.STREAM
-                if compatible.stream
-                else ModelOperation.COMPLETE
+                ModelOperation.STREAM if compatible.stream else ModelOperation.COMPLETE
             ),
             fingerprint_operation="openai.chat.completions.create",
             fingerprint_execution=compatible_fingerprint,
@@ -746,9 +744,7 @@ def _parse_model_document(raw_body: bytes, request_id: str) -> ModelRequestDocum
         raise _validation_error(error, request_id) from error
 
 
-def _parse_compatible_chat(
-    raw_body: bytes, request_id: str
-) -> CompatibleChatRequest:
+def _parse_compatible_chat(raw_body: bytes, request_id: str) -> CompatibleChatRequest:
     value = _strict_json(raw_body, request_id)
     try:
         return CompatibleChatRequest.model_validate(value)

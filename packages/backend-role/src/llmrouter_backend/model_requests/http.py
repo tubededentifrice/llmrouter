@@ -387,9 +387,7 @@ async def _compatible_records(  # noqa: PLR0913, PLR0917
             )
 
 
-def _compatible_event(
-    event: StreamEvent, receipt: dict[str, object]
-) -> str | None:
+def _compatible_event(event: StreamEvent, receipt: dict[str, object]) -> str | None:
     if event.event_name == "output.delta":
         delta = event.payload.get("delta")
         if not isinstance(delta, str):
@@ -418,9 +416,7 @@ def _compatible_event(
             {
                 "id": f"chatcmpl-{event.target.public_id}",
                 "object": "chat.completion.chunk",
-                "choices": [
-                    {"index": 0, "delta": {}, "finish_reason": "stop"}
-                ],
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
                 "x_llmrouter_request_id": event.target.public_id,
                 "x_llmrouter_state": state,
                 "x_llmrouter_status_url": receipt["status_url"],

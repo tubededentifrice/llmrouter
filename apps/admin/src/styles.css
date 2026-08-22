@@ -105,22 +105,10 @@ textarea:focus {
   padding: 20px;
 }
 
-.local-activation {
-  display: grid;
-  min-height: 100vh;
-  padding: 24px;
-  place-items: center;
-}
-
-.local-activation-card {
-  width: min(100%, 560px);
-  padding: 30px;
-}
-
 .local-activation-form {
   display: grid;
   gap: 18px;
-  margin-top: 24px;
+  width: 100%;
 }
 
 .local-activation-form label {
@@ -133,35 +121,6 @@ textarea:focus {
   margin: 0;
   color: var(--od-color-danger, #aa3d39);
 }
-.state-message {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  padding: 28px;
-}
-.state-message h2,
-.state-message p {
-  margin: 0;
-}
-.state-message p {
-  margin-top: 5px;
-  color: var(--od-color-muted);
-}
-.state-message > div {
-  flex: 1;
-}
-.state-message-error svg {
-  color: #aa3d39;
-}
-.state-message-loading svg {
-  animation: spin 1.4s linear infinite;
-}
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 .application-shell {
   display: grid;
   grid-template-columns: 232px minmax(0, 1fr);
@@ -622,11 +581,6 @@ td small {
   th,
   td {
     padding: 12px;
-  }
-  .state-message {
-    align-items: flex-start;
-    flex-wrap: wrap;
-    padding: 20px;
   }
   .entry-state {
     margin: 36px auto;

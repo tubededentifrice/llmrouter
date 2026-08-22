@@ -290,7 +290,7 @@ def _usage(value: object) -> list[dict[str, str]]:
             continue
         try:
             parsed = Decimal(quantity)
-        except (ArithmeticError, ValueError):
+        except ArithmeticError, ValueError:
             continue
         if not parsed.is_finite() or parsed < 0:
             continue

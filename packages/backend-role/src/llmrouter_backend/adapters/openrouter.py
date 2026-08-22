@@ -218,7 +218,7 @@ class OpenRouterAdapter:
                 return configuration_failure
             try:
                 body = _request_body(plan, request)
-            except (UnicodeEncodeError, ValueError):
+            except UnicodeEncodeError, ValueError:
                 return _preflight_failure(
                     plan,
                     progress,
@@ -573,9 +573,7 @@ class OpenRouterAdapter:
                         if finish_reason != terminal_reason:
                             raise _InvalidResponseError("stream_finish_conflict")
                         if content:
-                            raise _InvalidResponseError(
-                                "stream_content_after_finish"
-                            )
+                            raise _InvalidResponseError("stream_content_after_finish")
                         continue
                     terminal_reason = finish_reason
                 if content is None:

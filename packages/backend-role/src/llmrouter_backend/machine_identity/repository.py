@@ -846,7 +846,7 @@ def _matching_generation(
         try:
             if _ARGON2.verify(row[1], secret):
                 matches.append(row)
-        except (InvalidHashError, VerificationError):
+        except InvalidHashError, VerificationError:
             continue
     if len(matches) != 1:
         msg = "invalid_token"

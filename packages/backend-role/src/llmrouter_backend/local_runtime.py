@@ -748,7 +748,7 @@ async def activate_local_admin_session(request: Request) -> Response:
         if len(body) > _MAXIMUM_LOCAL_ACTIVATION_BYTES:
             return _local_activation_error(400)
         document = json.loads(body)
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except UnicodeDecodeError, json.JSONDecodeError:
         return _local_activation_error(400)
     secret = document.get("secret") if isinstance(document, dict) else None
     if (

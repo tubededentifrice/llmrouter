@@ -1205,7 +1205,7 @@ class PostgresAccountingRepository:
             )
         try:
             normalized = tuple(self._normalize_component(item) for item in candidate)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             normalized = ()
         if not normalized or len({item.unit for item in normalized}) != len(normalized):
             return SynchronizationRow(

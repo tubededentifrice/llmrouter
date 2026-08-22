@@ -10,13 +10,15 @@ import {
 } from "react";
 import {
   Button,
-  Card,
   Icon,
   PageHeading,
   Panel,
   PanelHeader,
+  SessionCard,
+  SessionPage,
   ShellErrorBoundary,
   StatCard,
+  StatePanel,
   StatusPill,
   Toast,
   type IconName,
@@ -210,32 +212,19 @@ export function StateMessage({
   readonly onRetry?: () => void;
 }) {
   return (
-    <Card
-      className={`state-message state-message-${kind}`}
-      role={kind === "error" ? "alert" : "status"}
+    <StatePanel
+      kind={kind}
+      title={
+        kind === "error"
+          ? "The scope is not available"
+          : kind === "loading"
+            ? "Loading protected state"
+            : "Select an exact scope"
+      }
+      {...(onRetry === undefined ? {} : { onRetry })}
     >
-      <Icon
-        name={
-          kind === "error" ? "warning" : kind === "loading" ? "refresh" : "list"
-        }
-        size={22}
-      />
-      <div>
-        <h2>
-          {kind === "error"
-            ? "The scope is not available"
-            : kind === "loading"
-              ? "Loading protected state"
-              : "Select an exact scope"}
-        </h2>
-        <p>{children}</p>
-      </div>
-      {onRetry ? (
-        <Button variant="secondary" onClick={onRetry}>
-          Try again
-        </Button>
-      ) : null}
-    </Card>
+      {children}
+    </StatePanel>
   );
 }
 
@@ -1634,39 +1623,39 @@ export function LocalAdministratorActivation({
     }
   }
   return (
-    <main className="local-activation">
-      <Card className="local-activation-card">
-        <PageHeading
-          eyebrow="Localhost only"
-          title="Activate administrator session"
-          description="Enter the generated local administrator secret. The control clears the value after each attempt."
-        />
-        <form
-          className="local-activation-form"
-          onSubmit={(event) => void submit(event)}
-        >
-          <label>
-            Local administrator secret
-            <input
-              name="local-administrator-secret"
-              type="password"
-              autoComplete="off"
-              spellCheck="false"
-              value={secret}
-              required
-              minLength={20}
-              onChange={(event) => {
-                setSecret(event.currentTarget.value);
-              }}
-            />
-          </label>
-          {failure === null ? null : <p role="alert">{failure}</p>}
-          <Button type="submit" disabled={submitting || secret.length < 20}>
-            {submitting ? "Activating…" : "Activate local session"}
-          </Button>
-        </form>
-      </Card>
-    </main>
+    <SessionPage aria-label="Local administrator activation">
+      <SessionCard
+        eyebrow="Localhost only"
+        title="Activate administrator session"
+        description="Enter the generated local administrator secret. The control clears the value after each attempt."
+        actions={
+          <form
+            className="local-activation-form"
+            onSubmit={(event) => void submit(event)}
+          >
+            <label>
+              Local administrator secret
+              <input
+                name="local-administrator-secret"
+                type="password"
+                autoComplete="off"
+                spellCheck="false"
+                value={secret}
+                required
+                minLength={20}
+                onChange={(event) => {
+                  setSecret(event.currentTarget.value);
+                }}
+              />
+            </label>
+            {failure === null ? null : <p role="alert">{failure}</p>}
+            <Button type="submit" disabled={submitting || secret.length < 20}>
+              {submitting ? "Activating…" : "Activate local session"}
+            </Button>
+          </form>
+        }
+      />
+    </SessionPage>
   );
 }
 
@@ -1753,45 +1742,47 @@ export function LocalAdministrationGateView({
 }) {
   if (session.state === "checking")
     return (
-      <main className="entry-state">
-        <StateMessage kind="loading">
+      <SessionPage aria-label="Administrator session">
+        <StatePanel kind="loading" title="Checking administrator session">
           The administrator session state is loading.
-        </StateMessage>
-      </main>
+        </StatePanel>
+      </SessionPage>
     );
   if (session.state === "required")
     return <LocalAdministratorActivation onActivate={onActivate} />;
   if (session.state === "oidc_required")
     return (
-      <main className="entry-state">
-        <Card>
-          <PageHeading
-            eyebrow="OpenDLE Identity"
-            title="Administrator sign-in"
-            description="Use your Pocket ID passkey to start a bounded Router session."
-          />
-          <Button
-            type="button"
-            disabled={sessionAction.endsWith("_pending")}
-            onClick={() => void onSignIn?.()}
-          >
-            {sessionAction === "sign_in_pending"
-              ? "Opening Pocket ID…"
-              : "Sign in with Pocket ID"}
-          </Button>
-          {sessionAction === "error" ? (
-            <p role="alert">Pocket ID is not available. Try again.</p>
-          ) : null}
-        </Card>
-      </main>
+      <SessionPage aria-label="Administrator sign-in">
+        <SessionCard
+          eyebrow="OpenDLE Identity"
+          title="Administrator sign-in"
+          description="Use your Pocket ID passkey to start a bounded Router session."
+          actions={
+            <Button
+              type="button"
+              disabled={sessionAction.endsWith("_pending")}
+              onClick={() => void onSignIn?.()}
+            >
+              {sessionAction === "sign_in_pending"
+                ? "Opening Pocket ID…"
+                : "Sign in with Pocket ID"}
+            </Button>
+          }
+          feedback={
+            sessionAction === "error" ? (
+              <p role="alert">Pocket ID sign-in did not start. Try again.</p>
+            ) : null
+          }
+        />
+      </SessionPage>
     );
   if (session.state === "failed")
     return (
-      <main className="entry-state">
-        <StateMessage kind="error">
+      <SessionPage aria-label="Administrator session">
+        <StatePanel kind="error" title="Administrator session is not available">
           The local administrator session is not available.
-        </StateMessage>
-      </main>
+        </StatePanel>
+      </SessionPage>
     );
   if (session.state === "active")
     return (
