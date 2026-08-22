@@ -26,11 +26,13 @@ from llmrouter_backend.authority import (
     Scope,
 )
 from llmrouter_backend.configuration import (
+    ConfigurationScope,
     ConfigurationWriteResult,
     DistributionState,
     EffectiveConfiguration,
     EffectiveItem,
     RevisionLayer,
+    ScopeConfiguration,
 )
 from llmrouter_backend.credential_store import (
     CredentialMetadata,
@@ -53,7 +55,6 @@ from llmrouter_backend.machine_identity import (
 
 if TYPE_CHECKING:
     from llmrouter_backend.authority import OperationPolicy
-    from llmrouter_backend.configuration import ConfigurationScope, ScopeConfiguration
     from llmrouter_backend.credential_store import (
         CredentialAction,
         CredentialOwner,
@@ -185,6 +186,26 @@ class FakeConfiguration:
             DistributionState.DISTRIBUTING,
             str(uuid.UUID(int=self.revision + 100)),
         )
+
+
+class ChangingConfiguration(FakeConfiguration):
+    def __init__(self) -> None:
+        super().__init__()
+        self.effective_reads = 0
+
+    def effective(
+        self, context: RequestContext, scope: ConfigurationScope
+    ) -> EffectiveConfiguration:
+        effective = super().effective(context, scope)
+        self.effective_reads += 1
+        if self.effective_reads == 1:
+            assert self.layer is not None
+            self.layer = RevisionLayer(
+                self.layer.scope,
+                str(uuid.UUID(int=52)),
+                self.layer.content,
+            )
+        return effective
 
 
 class FakeCredentials:
@@ -617,6 +638,37 @@ def test_provider_configuration_write_requires_recent_authentication(
         listing.json()["configuration_revision"] == response.json()["active_revision"]
     )
     assert listing.json()["items"][0]["eligible_service_ids"] == []
+
+
+def test_configuration_listing_retries_a_concurrent_target_revision() -> None:
+    configuration = ChangingConfiguration()
+    configuration.layer = RevisionLayer(
+        ConfigurationScope(SERVICE_ID),
+        str(uuid.UUID(int=51)),
+        ScopeConfiguration(),
+    )
+    service = AdministrationService(
+        authority=FakeAuthority(),
+        configuration=configuration,
+        credentials=FakeCredentials(),
+        lifecycle=FakeLifecycle(),
+        requests=FakeRequests(),
+        accounting=FakeAccounting(),
+        now=lambda: NOW,
+        identity_factory=lambda: uuid.UUID(int=40),
+    )
+
+    listing = service.list_provider_instances(
+        SESSION,
+        SERVICE_ID,
+        request_id="request-configuration-consistency",
+        cursor=None,
+        limit=100,
+    )
+
+    assert configuration.effective_reads == 2
+    assert listing["items"] == []
+    assert listing["configuration_revision"] == str(uuid.UUID(int=52))
 
 
 def test_provider_listing_returns_safe_eligibility_metadata(

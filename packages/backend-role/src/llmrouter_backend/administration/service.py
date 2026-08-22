@@ -76,6 +76,8 @@ from .model import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+_CONFIGURATION_READ_ATTEMPTS = 3
+
 
 class SessionAuthority(Protocol):
     """Authorize one administrator session."""
@@ -1064,9 +1066,15 @@ class AdministrationService:
             scope=scope,
         )
         configuration_scope = ConfigurationScope(service_id, workspace_id)
-        effective = self._configuration.effective(context, configuration_scope)
-        owned = self._configuration.owned(context, configuration_scope)
-        return effective, None if owned is None else owned.revision_id
+        for _attempt in range(_CONFIGURATION_READ_ATTEMPTS):
+            owned_before = self._configuration.owned(context, configuration_scope)
+            effective = self._configuration.effective(context, configuration_scope)
+            owned_after = self._configuration.owned(context, configuration_scope)
+            revision_before = None if owned_before is None else owned_before.revision_id
+            revision_after = None if owned_after is None else owned_after.revision_id
+            if revision_before == revision_after:
+                return effective, revision_after
+        raise RuntimeError("The configuration changed during the administration read.")
 
     def _context(
         self,

@@ -32,7 +32,6 @@ import {
   type IconName,
 } from "@opendle/ui";
 import {
-  AdministrationApiError,
   activateLocalAdministrator,
   configurationRevisionForScope,
   consumeTrustedGrantToken,
@@ -55,6 +54,7 @@ import {
   type ServiceCreated,
   type ServiceSummary,
 } from "./api.js";
+import { recoverAfterMutationFailure } from "./mutationRecovery.js";
 import { ServiceManagement } from "./ServiceManagement.js";
 
 const initialTrustedGrantToken =
@@ -75,15 +75,6 @@ export interface Notice {
   readonly tone: "success" | "error";
   readonly message: string;
   readonly staleRevision?: boolean;
-}
-
-function errorNotice(error: unknown): Notice {
-  return {
-    tone: "error",
-    message: errorMessage(error),
-    staleRevision:
-      error instanceof AdministrationApiError && error.staleRevision,
-  };
 }
 
 function committedRefreshNotice(message: string, error: unknown): Notice {
@@ -275,8 +266,8 @@ function CredentialForm({
       setSecret("");
       setSafeLabel("");
     } catch (error) {
-      onNotice(errorNotice(error));
       setSecret("");
+      await recoverAfterMutationFailure(error, onChanged, onNotice);
       setSubmitting(false);
       return;
     }
@@ -416,8 +407,8 @@ function CredentialRow({
         ...(action === "rotate" ? { replacementSecret } : {}),
       });
     } catch (error) {
-      onNotice(errorNotice(error));
       setReplacementSecret("");
+      await recoverAfterMutationFailure(error, onChanged, onNotice);
       setBusy(false);
       return;
     }
@@ -547,7 +538,7 @@ function ProviderForm({
         onNotice,
       );
     } catch (error) {
-      onNotice(errorNotice(error));
+      await recoverAfterMutationFailure(error, onChanged, onNotice);
     } finally {
       setSubmitting(false);
     }
@@ -665,7 +656,7 @@ function ProviderTable({
         onNotice,
       );
     } catch (error) {
-      onNotice(errorNotice(error));
+      await recoverAfterMutationFailure(error, onChanged, onNotice);
     }
   }
   async function override(item: ProviderInstance) {
@@ -687,7 +678,7 @@ function ProviderTable({
         onNotice,
       );
     } catch (error) {
-      onNotice(errorNotice(error));
+      await recoverAfterMutationFailure(error, onChanged, onNotice);
     }
   }
   return (
@@ -854,7 +845,7 @@ function RouteForm({
         onNotice,
       );
     } catch (error) {
-      onNotice(errorNotice(error));
+      await recoverAfterMutationFailure(error, onChanged, onNotice);
     } finally {
       setSubmitting(false);
     }
@@ -1001,7 +992,7 @@ function RouteTable({
         onNotice,
       );
     } catch (error) {
-      onNotice(errorNotice(error));
+      await recoverAfterMutationFailure(error, onChanged, onNotice);
     }
   }
   async function override(item: ProviderModelRoute) {
@@ -1027,7 +1018,7 @@ function RouteTable({
         onNotice,
       );
     } catch (error) {
-      onNotice(errorNotice(error));
+      await recoverAfterMutationFailure(error, onChanged, onNotice);
     }
   }
   return (
@@ -1276,7 +1267,7 @@ function AssignmentForm({
         onNotice,
       );
     } catch (error) {
-      onNotice(errorNotice(error));
+      await recoverAfterMutationFailure(error, onChanged, onNotice);
     } finally {
       setSubmitting(false);
     }
@@ -1441,7 +1432,7 @@ function AssignmentTable({
         onNotice,
       );
     } catch (error) {
-      onNotice(errorNotice(error));
+      await recoverAfterMutationFailure(error, onChanged, onNotice);
     }
   }
   async function override(item: Assignment) {
@@ -1459,7 +1450,7 @@ function AssignmentTable({
         onNotice,
       );
     } catch (error) {
-      onNotice(errorNotice(error));
+      await recoverAfterMutationFailure(error, onChanged, onNotice);
     }
   }
   return (

@@ -14,8 +14,10 @@ import {
   type AppProps,
 } from "../src/App.js";
 import { scheduleFrameStart } from "../src/embedProtocol.js";
+import { recoverAfterMutationFailure } from "../src/mutationRecovery.js";
 import { ServiceManagement } from "../src/ServiceManagement.js";
 import {
+  AdministrationApiError,
   configurationRevisionForScope,
   scheduleAdministrationSessionInspection,
   type AdministrationClient,
@@ -344,6 +346,89 @@ describe("administration app states", () => {
     expect(errorHtml).toContain("No change was sent");
     expect(staleHtml).toContain("This configuration changed");
     expect(staleHtml).toContain("review the active revision");
+  });
+
+  it("refreshes current data after an uncertain or stale mutation failure", async () => {
+    const onChanged = vi.fn(() => Promise.resolve());
+    const onNotice = vi.fn();
+    const uncertain = new AdministrationApiError(
+      "The outcome is uncertain. Refresh current data.",
+      {
+        code: "offline",
+        requestId: null,
+        status: 0,
+        outcomeUncertain: true,
+      },
+    );
+    await recoverAfterMutationFailure(uncertain, onChanged, onNotice);
+    expect(onChanged).toHaveBeenCalledOnce();
+    expect(onNotice).toHaveBeenCalledWith({
+      tone: "error",
+      message: "The outcome is uncertain. Refresh current data.",
+      staleRevision: false,
+    });
+
+    onChanged.mockClear();
+    onNotice.mockClear();
+    await recoverAfterMutationFailure(
+      new AdministrationApiError("Read the current active revision.", {
+        code: "configuration_revision_conflict",
+        requestId: "safe-request-1",
+        status: 409,
+      }),
+      onChanged,
+      onNotice,
+    );
+    expect(onChanged).toHaveBeenCalledOnce();
+    expect(onNotice).toHaveBeenCalledWith({
+      tone: "error",
+      message: "Read the current active revision. Request safe-request-1.",
+      staleRevision: true,
+    });
+  });
+
+  it("does not refresh after a certain mutation rejection", async () => {
+    const onChanged = vi.fn(() => Promise.resolve());
+    const onNotice = vi.fn();
+    await recoverAfterMutationFailure(
+      new AdministrationApiError("The request is invalid.", {
+        code: "invalid_request",
+        requestId: null,
+        status: 422,
+      }),
+      onChanged,
+      onNotice,
+    );
+    expect(onChanged).not.toHaveBeenCalled();
+    expect(onNotice).toHaveBeenCalledOnce();
+  });
+
+  it("keeps both safe errors when mutation recovery does not refresh", async () => {
+    const onNotice = vi.fn();
+    await recoverAfterMutationFailure(
+      new AdministrationApiError("The outcome is uncertain.", {
+        code: "offline",
+        requestId: null,
+        status: 0,
+        outcomeUncertain: true,
+      }),
+      vi.fn(() =>
+        Promise.reject(
+          new AdministrationApiError("The administration service is offline.", {
+            code: "offline",
+            requestId: null,
+            status: 0,
+          }),
+        ),
+      ),
+      onNotice,
+    );
+    expect(onNotice).toHaveBeenLastCalledWith({
+      tone: "error",
+      message:
+        "The outcome is uncertain. Current data did not refresh. The administration service is offline.",
+      staleRevision: false,
+    });
   });
 
   it("keeps focus and phone table behavior in the app stylesheet", () => {
