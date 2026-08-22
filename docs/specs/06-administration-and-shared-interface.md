@@ -179,11 +179,25 @@ checklist MUST use result-based steps for service access, provider access,
 model routes, and assignments. It MUST link each incomplete result to its
 applicable task.
 
-Service management MUST use a hierarchy and one selected-service detail view.
-The hierarchy MUST keep disabled and retired services visible and MUST show
-service names, parent relationships, and lifecycle state before technical
-identifiers. The detail view MUST show the complete named parent chain and the
-effect that a parent or lifecycle change has on descendant services.
+Service management MUST use a full-width hierarchy canvas and one
+selected-service inspector. The canvas MUST show each service as a named node
+and each parent relationship as a directional tree edge. It MUST keep disabled
+and retired services visible and MUST show service names, parent relationships,
+and lifecycle state before technical identifiers. The inspector MUST show the
+complete named parent chain and the effect that a parent or lifecycle change
+has on descendant services. An administrator MUST be able to create a root,
+create a child from a selected node, and reattach a node to an eligible parent
+without leaving the graph workflow. The canvas MUST support drag-and-drop
+reattachment when a pointing device is available. The inspector MUST keep an
+explicit parent control as the keyboard, touch, and confirmation path. A drop
+target MUST exclude the service itself, its descendants, and a parent that
+cannot accept children.
+
+The graph workspace, canvas, node, edge, navigation tools, empty state, and
+inspector composition MUST come from OpenDLE UI. These shared components MUST
+support directed trees and general relationship graphs without Router-specific
+data or actions. Router MUST keep service data, hierarchy rules, and mutations
+in this application.
 
 The effective configuration MUST label each inherited item with the name of
 its source service or with the Router-wide source. An inherited item MUST stay
@@ -194,8 +208,14 @@ replaces the effective inherited value without changing the parent.
 
 The phone interface MUST provide the same Router-wide and selected-service
 grouping and a service selector. It MUST NOT flatten the two groups into one
-unlabelled destination list. A service hierarchy MUST remain usable at the
-supported minimum width and depth.
+unlabelled destination list. The graph MUST provide a usable narrow-screen
+node list and inspector path at the supported minimum width and depth.
+
+All normal administration pages MUST use the complete application-content
+width and responsive spacing. They MUST NOT use an arbitrary fixed content
+width that leaves unused page space. Section boundaries and spacing MUST come
+from the shared OpenDLE UI layout system and MUST stay consistent between
+pages.
 
 A one-time service bootstrap secret MUST remain in memory only. While it is
 visible, the application MUST prevent navigation that can discard it. The

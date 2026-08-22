@@ -326,6 +326,12 @@ describe("administration app states", () => {
     expect(styles).toContain("overflow-x: auto");
     expect(styles).toContain("@media (max-width: 600px)");
     expect(styles).toContain("grid-template-columns: 1fr");
+    expect(styles).toMatch(/\.content\s*{[^}]*width: 100%/s);
+    expect(styles).not.toContain("width: min(1240px");
+    expect(styles).toMatch(/\.service-graph-page\s*{[^}]*padding: 12px/s);
+    expect(styles).not.toMatch(
+      /\.service-management \.od-graph-node\s*{[^}]*display: none/s,
+    );
   });
 
   it("keeps a credential success notice through reload and remounts an empty secret", () => {
@@ -535,6 +541,99 @@ describe("protected administration dashboard", () => {
 });
 
 describe("service management", () => {
+  it("shows root creation in a full graph workspace", () => {
+    const html = renderToStaticMarkup(
+      <ServiceManagement
+        client={client}
+        services={[]}
+        selectedServiceId=""
+        onSelect={vi.fn()}
+        onChanged={vi.fn()}
+        onContinueSetup={vi.fn()}
+        pendingBootstrap={null}
+        onBootstrapPending={vi.fn()}
+        onSuccess={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+    expect(html).toContain("od-graph-workspace");
+    expect(html).toContain("Create the first root service");
+    expect(html).toContain("No parent · start a new service chain");
+    expect(html).toContain('name="display_name"');
+  });
+
+  it("shows multiple roots and their inheritance edges", () => {
+    const firstRoot: ServiceSummary = {
+      ...registeredService,
+      service_id: "root-one",
+      display_name: "Platform",
+      parent_service_id: null,
+    };
+    const secondRoot: ServiceSummary = {
+      ...registeredService,
+      service_id: "root-two",
+      display_name: "Experiments",
+      parent_service_id: null,
+    };
+    const child: ServiceSummary = {
+      ...registeredService,
+      service_id: "child-one",
+      display_name: "Xbot",
+      parent_service_id: firstRoot.service_id,
+    };
+    const html = renderToStaticMarkup(
+      <ServiceManagement
+        client={client}
+        services={[firstRoot, secondRoot, child]}
+        selectedServiceId={firstRoot.service_id}
+        onSelect={vi.fn()}
+        onChanged={vi.fn()}
+        onContinueSetup={vi.fn()}
+        pendingBootstrap={null}
+        onBootstrapPending={vi.fn()}
+        onSuccess={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+    expect(html).toContain("3 services · 3 active · 2 roots");
+    expect(html.match(/od-graph-node-eyebrow">Root service/g)).toHaveLength(2);
+    expect(html).toContain("od-graph-edge-line");
+    expect(html).not.toContain("Service hierarchy list");
+    expect(html).toContain('draggable="true"');
+    expect(html).toContain("Create child");
+  });
+
+  it("keeps malformed cycles visible as separate roots", () => {
+    const first: ServiceSummary = {
+      ...registeredService,
+      service_id: "cycle-one",
+      display_name: "First service",
+      parent_service_id: "cycle-two",
+    };
+    const second: ServiceSummary = {
+      ...registeredService,
+      service_id: "cycle-two",
+      display_name: "Second service",
+      parent_service_id: "cycle-one",
+    };
+    const html = renderToStaticMarkup(
+      <ServiceManagement
+        client={client}
+        services={[first, second]}
+        selectedServiceId=""
+        onSelect={vi.fn()}
+        onChanged={vi.fn()}
+        onContinueSetup={vi.fn()}
+        pendingBootstrap={null}
+        onBootstrapPending={vi.fn()}
+        onSuccess={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+    expect(html).toContain("First service");
+    expect(html).toContain("Second service");
+  });
+
   it("shows a named parent chain and keeps technical IDs secondary", () => {
     const parent: ServiceSummary = {
       ...registeredService,

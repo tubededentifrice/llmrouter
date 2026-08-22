@@ -1,12 +1,21 @@
-import { useMemo, useReducer, type SubmitEvent } from "react";
+import { useMemo, useReducer, useState, type SubmitEvent } from "react";
 import {
   Button,
+  GraphEdge,
+  GraphEdges,
+  GraphInspector,
+  GraphNode,
+  GraphToolbar,
+  GraphViewport,
+  GraphWorkspace,
   Icon,
-  PageHeading,
   Panel,
   PanelHeader,
-  StatCard,
   StatusPill,
+  layoutTree,
+  treeEdgePath,
+  type TreeLayoutItem,
+  type TreeLayoutResult,
 } from "@opendle/ui";
 import {
   AdministrationApiError,
@@ -28,20 +37,25 @@ function formText(values: FormData, name: string): string {
 }
 
 interface ViewState {
-  readonly createOpen: boolean;
+  readonly createParentId: string | null | undefined;
   readonly busy: boolean;
   readonly retireServiceId: string | null;
 }
 
 type ViewAction =
-  | { readonly type: "toggle_create" }
+  | {
+      readonly type: "open_create";
+      readonly parentServiceId: string | null;
+    }
+  | { readonly type: "close_create" }
   | { readonly type: "busy"; readonly value: boolean }
   | { readonly type: "confirm_retire"; readonly value: string | null };
 
 function viewReducer(state: ViewState, action: ViewAction): ViewState {
-  if (action.type === "toggle_create") {
-    return { ...state, createOpen: !state.createOpen };
-  }
+  if (action.type === "open_create")
+    return { ...state, createParentId: action.parentServiceId };
+  if (action.type === "close_create")
+    return { ...state, createParentId: undefined };
   if (action.type === "busy") return { ...state, busy: action.value };
   return { ...state, retireServiceId: action.value };
 }
@@ -116,77 +130,182 @@ function countServices(services: readonly ServiceSummary[]): {
   return { active, roots };
 }
 
-function ServiceTree({
+function treeItems(
+  services: readonly ServiceSummary[],
+): readonly TreeLayoutItem[] {
+  const parentById = new Map(
+    services.map((service) => [
+      service.service_id,
+      service.parent_service_id ?? null,
+    ]),
+  );
+  const safeParents = new Map(parentById);
+
+  for (const service of services) {
+    const path = new Set<string>();
+    let currentId: string | null = service.service_id;
+    while (currentId !== null && parentById.has(currentId)) {
+      if (path.has(currentId)) {
+        safeParents.set(currentId, null);
+        break;
+      }
+      path.add(currentId);
+      currentId = parentById.get(currentId) ?? null;
+    }
+  }
+
+  return services.map((service) => ({
+    id: service.service_id,
+    parentId: safeParents.get(service.service_id) ?? null,
+  }));
+}
+
+function childCount(services: readonly ServiceSummary[], serviceId: string) {
+  return services.filter((service) => service.parent_service_id === serviceId)
+    .length;
+}
+
+function nodeTone(state: ServiceSummary["state"]): "lime" | "amber" | "coral" {
+  if (state === "active") return "lime";
+  if (state === "disabled") return "amber";
+  return "coral";
+}
+
+function ServiceGraphCanvas({
+  layout,
   services,
   selectedServiceId,
+  onCreateRoot,
+  onReparent,
   onSelect,
 }: {
+  readonly layout: TreeLayoutResult;
   readonly services: readonly ServiceSummary[];
   readonly selectedServiceId: string;
+  readonly onCreateRoot: () => void;
+  readonly onReparent: (serviceId: string, parentServiceId: string) => void;
   readonly onSelect: (serviceId: string) => void;
 }) {
-  const knownIds = new Set(services.map((service) => service.service_id));
-  const roots = services.filter(
-    (service) =>
-      service.parent_service_id == null ||
-      !knownIds.has(service.parent_service_id),
+  const serviceById = new Map(
+    services.map((service) => [service.service_id, service]),
   );
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  const canvasWidth = Math.max(layout.width, 760);
+  const canvasHeight = Math.max(layout.height, 520);
 
-  function branch(service: ServiceSummary, path: ReadonlySet<string>) {
-    const nextPath = new Set(path).add(service.service_id);
-    const children = services.filter(
-      (candidate) =>
-        candidate.parent_service_id === service.service_id &&
-        !nextPath.has(candidate.service_id),
-    );
+  function canDropOn(parentServiceId: string) {
+    if (draggingId === null || draggingId === parentServiceId) return false;
+    const parent = serviceById.get(parentServiceId);
     return (
-      <li key={service.service_id}>
-        <button
-          type="button"
-          aria-current={
-            selectedServiceId === service.service_id ? "true" : undefined
-          }
-          data-selected={selectedServiceId === service.service_id}
-          onClick={() => {
-            onSelect(service.service_id);
-          }}
-        >
-          <span className="service-tree-icon">
-            <Icon name="server" size={16} />
-          </span>
-          <span>
-            <strong>{service.display_name}</strong>
-            <small>
-              {children.length === 0
-                ? "No child services"
-                : `${String(children.length)} child services`}
-            </small>
-          </span>
-          <StatusPill tone={stateTone(service.state)}>
-            {displayState(service.state)}
-          </StatusPill>
-        </button>
-        {children.length === 0 ? null : (
-          <ul>{children.map((child) => branch(child, nextPath))}</ul>
-        )}
-      </li>
+      parent?.state === "active" &&
+      !descendantIds(services, draggingId).has(parentServiceId)
     );
   }
-
-  if (services.length === 0) {
-    return (
-      <div className="service-registry-empty">
-        <Icon name="server" size={24} />
-        <strong>No services yet</strong>
-        <p>Create the first service to start the Router hierarchy.</p>
-      </div>
-    );
-  }
-  const visibleRoots = roots.length === 0 ? services : roots;
   return (
-    <ul className="service-tree">
-      {visibleRoots.map((root) => branch(root, new Set()))}
-    </ul>
+    <GraphViewport
+      aria-label="Service tree canvas"
+      canvasWidth={canvasWidth}
+      canvasHeight={canvasHeight}
+      canvasProps={{
+        "aria-label": `${String(services.length)} ${services.length === 1 ? "service" : "services"} in the inheritance tree`,
+      }}
+    >
+      {services.length === 0 ? (
+        <div className="service-graph-empty">
+          <Icon name="layers" size={28} />
+          <strong>Create the first root service</strong>
+          <p>
+            A root starts an inheritance tree. Add children from its details
+            after you create it.
+          </p>
+          <Button onClick={onCreateRoot}>Create root service</Button>
+        </div>
+      ) : null}
+      <GraphEdges width={canvasWidth} height={canvasHeight}>
+        {layout.edges.map((edge) => {
+          const source = layout.nodes.find((node) => node.id === edge.sourceId);
+          const target = layout.nodes.find((node) => node.id === edge.targetId);
+          if (source === undefined || target === undefined) return null;
+          return (
+            <GraphEdge key={edge.id} path={treeEdgePath(source, target)} />
+          );
+        })}
+      </GraphEdges>
+      {layout.nodes.map((node, index) => {
+        const service = serviceById.get(node.id);
+        if (service === undefined) return null;
+        return (
+          <GraphNode
+            id={`service-node-${service.service_id}`}
+            key={service.service_id}
+            aria-label={`Open ${service.display_name} details`}
+            eyebrow={node.depth === 0 ? "Root service" : "Child service"}
+            icon={<Icon name="server" size={17} />}
+            meta={`${displayState(service.state)} · ${String(childCount(services, service.service_id))} children`}
+            root={node.depth === 0}
+            selected={service.service_id === selectedServiceId}
+            draggable={service.state !== "retired"}
+            dragging={draggingId === service.service_id}
+            dropTarget={dropTargetId === service.service_id}
+            title={service.display_name}
+            tone={nodeTone(service.state)}
+            x={node.x}
+            y={node.y}
+            onClick={() => {
+              onSelect(service.service_id);
+            }}
+            onDragStart={(event) => {
+              setDraggingId(service.service_id);
+              event.dataTransfer.effectAllowed = "move";
+              event.dataTransfer.setData("text/plain", service.service_id);
+            }}
+            onDragOver={(event) => {
+              if (!canDropOn(service.service_id)) return;
+              event.preventDefault();
+              event.dataTransfer.dropEffect = "move";
+              setDropTargetId(service.service_id);
+            }}
+            onDragLeave={() => {
+              if (dropTargetId === service.service_id) setDropTargetId(null);
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              if (draggingId !== null && canDropOn(service.service_id)) {
+                onReparent(draggingId, service.service_id);
+              }
+              setDraggingId(null);
+              setDropTargetId(null);
+            }}
+            onDragEnd={() => {
+              setDraggingId(null);
+              setDropTargetId(null);
+            }}
+            onKeyDown={(event) => {
+              if (
+                event.key !== "ArrowRight" &&
+                event.key !== "ArrowDown" &&
+                event.key !== "ArrowLeft" &&
+                event.key !== "ArrowUp"
+              )
+                return;
+              event.preventDefault();
+              const offset =
+                event.key === "ArrowRight" || event.key === "ArrowDown"
+                  ? 1
+                  : -1;
+              const target =
+                layout.nodes[
+                  (index + offset + layout.nodes.length) % layout.nodes.length
+                ];
+              if (target === undefined) return;
+              onSelect(target.id);
+              document.getElementById(`service-node-${target.id}`)?.focus();
+            }}
+          />
+        );
+      })}
+    </GraphViewport>
   );
 }
 
@@ -205,63 +324,58 @@ export interface ServiceManagementProps {
 
 function CreateServicePanel({
   busy,
+  defaultParentId,
   parents,
   onCancel,
   onCreate,
 }: {
   readonly busy: boolean;
+  readonly defaultParentId: string | null;
   readonly parents: readonly ServiceSummary[];
   readonly onCancel: () => void;
   readonly onCreate: (event: SubmitEvent<HTMLFormElement>) => void;
 }) {
   return (
-    <Panel>
-      <PanelHeader
-        kicker="New service"
-        title="Create a Router service"
-        description="Give the service a clear name. Choose a parent only when it should inherit eligible routing configuration from another service."
-      />
-      <form className="service-create-form" onSubmit={onCreate}>
-        <label>
-          Service name
-          <input
-            required
-            name="display_name"
-            maxLength={200}
-            placeholder="For example, Xbot production"
-          />
-        </label>
-        <label>
-          Inherit from
-          <select name="parent_service_id" defaultValue="">
-            <option value="">No parent · start a new service chain</option>
-            {parents.map((service) => (
-              <option key={service.service_id} value={service.service_id}>
-                {service.display_name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <div className="service-access-summary">
-          <Icon name="shield" size={18} />
-          <div>
-            <strong>Machine access: model calls only</strong>
-            <p>
-              The first key can create, read, and cancel model requests. It
-              cannot run agents, use tools, or manage Router configuration.
-            </p>
-          </div>
+    <form className="service-create-form" onSubmit={onCreate}>
+      <label>
+        Service name
+        <input
+          required
+          name="display_name"
+          maxLength={200}
+          placeholder="For example, Xbot production"
+        />
+      </label>
+      <label>
+        Inherit from
+        <select name="parent_service_id" defaultValue={defaultParentId ?? ""}>
+          <option value="">No parent · start a new service chain</option>
+          {parents.map((service) => (
+            <option key={service.service_id} value={service.service_id}>
+              {service.display_name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div className="service-access-summary">
+        <Icon name="shield" size={18} />
+        <div>
+          <strong>Machine access: model calls only</strong>
+          <p>
+            The first key can create, read, and cancel model requests. It cannot
+            run agents, use tools, or manage Router configuration.
+          </p>
         </div>
-        <div className="service-form-actions">
-          <Button type="submit" disabled={busy}>
-            {busy ? "Creating…" : "Create service"}
-          </Button>
-          <Button type="button" variant="quiet" onClick={onCancel}>
-            Cancel
-          </Button>
-        </div>
-      </form>
-    </Panel>
+      </div>
+      <div className="service-form-actions">
+        <Button type="submit" disabled={busy}>
+          {busy ? "Creating…" : "Create service"}
+        </Button>
+        <Button type="button" variant="quiet" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+    </form>
   );
 }
 
@@ -310,59 +424,6 @@ function BootstrapSecretPanel({
   );
 }
 
-function ServiceRegistryHeader({
-  activeCount,
-  rootCount,
-  serviceCount,
-  onCreate,
-}: {
-  readonly activeCount: number;
-  readonly rootCount: number;
-  readonly serviceCount: number;
-  readonly onCreate: () => void;
-}) {
-  return (
-    <>
-      <PageHeading
-        eyebrow="Global administration"
-        title="Services and inheritance"
-        description="Create services, organize their parent chain, and choose which service you want to configure."
-        actions={
-          <Button icon={<Icon name="plus" size={16} />} onClick={onCreate}>
-            Create service
-          </Button>
-        }
-      />
-      <section
-        className="service-registry-stats"
-        aria-label="Service registry summary"
-      >
-        <StatCard
-          icon={<Icon name="server" />}
-          label="Services"
-          value={serviceCount}
-          note="Retained service identities"
-          tone="blue"
-        />
-        <StatCard
-          icon={<Icon name="health" />}
-          label="Active"
-          value={activeCount}
-          note="Can accept new work"
-          tone="lime"
-        />
-        <StatCard
-          icon={<Icon name="layers" />}
-          label="Root services"
-          value={rootCount}
-          note="Start an inheritance chain"
-          tone="purple"
-        />
-      </section>
-    </>
-  );
-}
-
 function ServiceDetailsPanel({
   ancestors,
   availableParents,
@@ -372,6 +433,7 @@ function ServiceDetailsPanel({
   retireServiceId,
   selected,
   onChangeState,
+  onCreateChild,
   onContinueSetup,
   onRetirePrompt,
   onUpdate,
@@ -384,41 +446,50 @@ function ServiceDetailsPanel({
   readonly retireServiceId: string | null;
   readonly selected: ServiceSummary | undefined;
   readonly onChangeState: (action: "disable" | "restore" | "retire") => void;
+  readonly onCreateChild: () => void;
   readonly onContinueSetup: () => void;
   readonly onRetirePrompt: (serviceId: string | null) => void;
   readonly onUpdate: (event: SubmitEvent<HTMLFormElement>) => void;
 }) {
   if (selected === undefined) {
-    return (
-      <Panel className="service-details-panel">
-        <div className="service-registry-empty">
-          <Icon name="workspace" size={24} />
-          <strong>Select a service</strong>
-          <p>
-            Choose a service in the tree to view its parent and management
-            actions.
-          </p>
-        </div>
-      </Panel>
-    );
+    return null;
   }
   const confirmRetire = retireServiceId === selected.service_id;
   return (
-    <Panel className="service-details-panel">
-      <PanelHeader
-        kicker="Selected service"
-        title={selected.display_name}
-        description={
-          parent === undefined
-            ? "This service starts its own inheritance chain."
-            : `This service inherits eligible configuration from ${parent.display_name} and its parents.`
-        }
-        actions={
+    <GraphInspector
+      tone={nodeTone(selected.state)}
+      eyebrow="Selected service"
+      icon={<Icon name="server" size={18} />}
+      title={selected.display_name}
+      actions={
+        <>
+          <Button
+            type="button"
+            disabled={busy || selected.state !== "active"}
+            onClick={onCreateChild}
+          >
+            Create child
+          </Button>
+          <Button type="button" variant="secondary" onClick={onContinueSetup}>
+            Configure service
+          </Button>
           <StatusPill tone={stateTone(selected.state)}>
             {displayState(selected.state)}
           </StatusPill>
-        }
-      />
+        </>
+      }
+    >
+      <p className="service-inspector-description">
+        {parent === undefined
+          ? "This service starts an inheritance chain."
+          : `This service inherits eligible configuration from ${parent.display_name} and its parents.`}
+      </p>
+      {selected.state === "retired" ? null : (
+        <p className="service-drag-help">
+          Drag this node onto an active service to move it. You can also choose
+          its parent below.
+        </p>
+      )}
       <div className="service-inheritance-summary">
         <Icon name="layers" size={18} />
         <div>
@@ -462,9 +533,6 @@ function ServiceDetailsPanel({
         <div className="service-form-actions">
           <Button type="submit" disabled={busy || selected.state === "retired"}>
             Save name and parent
-          </Button>
-          <Button type="button" variant="secondary" onClick={onContinueSetup}>
-            Configure this service
           </Button>
         </div>
       </form>
@@ -551,7 +619,7 @@ function ServiceDetailsPanel({
           </div>
         </dl>
       </details>
-    </Panel>
+    </GraphInspector>
   );
 }
 
@@ -568,7 +636,7 @@ export function ServiceManagement({
   onError,
 }: ServiceManagementProps) {
   const [view, dispatch] = useReducer(viewReducer, {
-    createOpen: services.length === 0,
+    createParentId: services.length === 0 ? null : undefined,
     busy: false,
     retireServiceId: null,
   });
@@ -577,6 +645,15 @@ export function ServiceManagement({
     [selectedServiceId, services],
   );
   const serviceCounts = countServices(services);
+  const layout = useMemo(
+    () =>
+      layoutTree(treeItems(services), {
+        horizontalGap: 74,
+        padding: 56,
+        verticalGap: 36,
+      }),
+    [services],
+  );
 
   async function create(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -591,6 +668,7 @@ export function ServiceManagement({
       onSelect(created.service_id);
       onBootstrapPending(created);
       await onChanged();
+      dispatch({ type: "close_create" });
       onSuccess("The service was created. Store its one-time access key.");
     } catch (error) {
       if (error instanceof AdministrationApiError && error.staleRevision) {
@@ -616,6 +694,32 @@ export function ServiceManagement({
       });
       await onChanged();
       onSuccess("The service name and parent were updated.");
+    } catch (error) {
+      if (error instanceof AdministrationApiError && error.staleRevision) {
+        await onChanged();
+      }
+      onError(errorMessage(error));
+    } finally {
+      dispatch({ type: "busy", value: false });
+    }
+  }
+
+  async function reparent(serviceId: string, parentServiceId: string) {
+    const service = services.find(
+      (candidate) => candidate.service_id === serviceId,
+    );
+    if (service === undefined || service.parent_service_id === parentServiceId)
+      return;
+    dispatch({ type: "busy", value: true });
+    try {
+      await client.putService(service.service_id, {
+        expectedRevision: service.revision,
+        displayName: service.display_name,
+        newParentServiceId: parentServiceId,
+        reason: "Reattach the service in the inheritance tree",
+      });
+      await onChanged();
+      onSuccess("The service was moved to its new parent.");
     } catch (error) {
       if (error instanceof AdministrationApiError && error.staleRevision) {
         await onChanged();
@@ -673,28 +777,6 @@ export function ServiceManagement({
 
   return (
     <div className="service-management">
-      <ServiceRegistryHeader
-        activeCount={serviceCounts.active}
-        rootCount={serviceCounts.roots}
-        serviceCount={services.length}
-        onCreate={() => {
-          dispatch({ type: "toggle_create" });
-        }}
-      />
-
-      {view.createOpen ? (
-        <CreateServicePanel
-          busy={view.busy}
-          parents={creationParents}
-          onCancel={() => {
-            dispatch({ type: "toggle_create" });
-          }}
-          onCreate={(event) => {
-            void create(event);
-          }}
-        />
-      ) : null}
-
       {pendingBootstrap === null ? null : (
         <BootstrapSecretPanel
           created={pendingBootstrap}
@@ -707,40 +789,103 @@ export function ServiceManagement({
         />
       )}
 
-      <div className="service-registry-layout">
-        <Panel className="service-tree-panel">
-          <PanelHeader
-            kicker="Parent chain"
-            title="Service hierarchy"
-            description="A child inherits eligible configuration from the services above it."
+      <GraphWorkspace
+        aria-label="Service inheritance"
+        toolbar={
+          <GraphToolbar
+            leading={
+              <div className="service-graph-heading">
+                <span>Global administration</span>
+                <h1>Services and inheritance</h1>
+                <small>
+                  {String(services.length)}{" "}
+                  {services.length === 1 ? "service" : "services"} ·{" "}
+                  {String(serviceCounts.active)} active ·{" "}
+                  {String(serviceCounts.roots)}{" "}
+                  {serviceCounts.roots === 1 ? "root" : "roots"}
+                </small>
+              </div>
+            }
+            actions={
+              <Button
+                icon={<Icon name="plus" size={16} />}
+                onClick={() => {
+                  dispatch({ type: "open_create", parentServiceId: null });
+                }}
+              >
+                Create root
+              </Button>
+            }
           />
-          <ServiceTree
-            services={services}
-            selectedServiceId={selected?.service_id ?? ""}
-            onSelect={onSelect}
-          />
-        </Panel>
-
-        <ServiceDetailsPanel
-          ancestors={ancestors}
-          availableParents={availableParents}
-          busy={view.busy}
-          childCount={descendants.size}
-          parent={parent}
-          retireServiceId={view.retireServiceId}
-          selected={selected}
-          onChangeState={(action) => {
-            void changeState(action);
+        }
+        inspector={
+          view.createParentId !== undefined ? (
+            <GraphInspector
+              eyebrow={view.createParentId === null ? "New root" : "New child"}
+              icon={<Icon name="plus" size={18} />}
+              title="Create a service"
+              onClose={() => {
+                dispatch({ type: "close_create" });
+              }}
+            >
+              <CreateServicePanel
+                busy={view.busy}
+                defaultParentId={view.createParentId}
+                parents={creationParents}
+                onCancel={() => {
+                  dispatch({ type: "close_create" });
+                }}
+                onCreate={(event) => {
+                  void create(event);
+                }}
+              />
+            </GraphInspector>
+          ) : (
+            <ServiceDetailsPanel
+              ancestors={ancestors}
+              availableParents={availableParents}
+              busy={view.busy}
+              childCount={descendants.size}
+              parent={parent}
+              retireServiceId={view.retireServiceId}
+              selected={selected}
+              onChangeState={(action) => {
+                void changeState(action);
+              }}
+              onCreateChild={() => {
+                if (selected === undefined) return;
+                dispatch({
+                  type: "open_create",
+                  parentServiceId: selected.service_id,
+                });
+              }}
+              onContinueSetup={onContinueSetup}
+              onRetirePrompt={(serviceId) => {
+                dispatch({ type: "confirm_retire", value: serviceId });
+              }}
+              onUpdate={(event) => {
+                void updateDetails(event);
+              }}
+            />
+          )
+        }
+      >
+        <ServiceGraphCanvas
+          layout={layout}
+          services={services}
+          selectedServiceId={selectedServiceId}
+          onCreateRoot={() => {
+            dispatch({ type: "open_create", parentServiceId: null });
           }}
-          onContinueSetup={onContinueSetup}
-          onRetirePrompt={(serviceId) => {
-            dispatch({ type: "confirm_retire", value: serviceId });
+          onReparent={(serviceId, parentServiceId) => {
+            void reparent(serviceId, parentServiceId);
           }}
-          onUpdate={(event) => {
-            void updateDetails(event);
+          onSelect={(serviceId) => {
+            dispatch({ type: "close_create" });
+            onSelect(serviceId);
           }}
         />
-      </div>
+      </GraphWorkspace>
     </div>
   );
 }

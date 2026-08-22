@@ -1940,6 +1940,23 @@ function GlobalCredentialsView({
   );
 }
 
+export interface AdministrationDashboardProps {
+  readonly client: AdministrationClient;
+  readonly scope: ScopeSelection;
+  readonly snapshot: AdministrationSnapshot | null;
+  readonly initialSection?: Section;
+  readonly failure?: string | null;
+  readonly loading?: boolean;
+  readonly notice: Notice | null;
+  readonly onNotice: (notice: Notice | null) => void;
+  readonly onGlobalReload?: () => Promise<void>;
+  readonly onReload: () => Promise<void>;
+  readonly onScopeChange?: ((scope: ScopeSelection) => void) | undefined;
+  readonly accountActions?: ReactNode;
+  readonly credentials?: readonly Credential[];
+  readonly services?: readonly ServiceSummary[];
+}
+
 export function AdministrationDashboard({
   client,
   scope,
@@ -1955,22 +1972,7 @@ export function AdministrationDashboard({
   accountActions,
   credentials = emptyCredentials,
   services = emptyServices,
-}: {
-  readonly client: AdministrationClient;
-  readonly scope: ScopeSelection;
-  readonly snapshot: AdministrationSnapshot | null;
-  readonly initialSection?: Section;
-  readonly failure?: string | null;
-  readonly loading?: boolean;
-  readonly notice: Notice | null;
-  readonly onNotice: (notice: Notice | null) => void;
-  readonly onGlobalReload?: () => Promise<void>;
-  readonly onReload: () => Promise<void>;
-  readonly onScopeChange?: ((scope: ScopeSelection) => void) | undefined;
-  readonly accountActions?: ReactNode;
-  readonly credentials?: readonly Credential[];
-  readonly services?: readonly ServiceSummary[];
-}) {
+}: AdministrationDashboardProps) {
   const [section, setSection] = useReducer(
     (_current: Section, next: Section) => next,
     initialSection,
@@ -2099,7 +2101,10 @@ export function AdministrationDashboard({
           onOpen={openSection}
         />
       }
-      mainProps={{ className: "content" }}
+      mainProps={{
+        className:
+          section === "services" ? "content service-graph-page" : "content",
+      }}
       topbar={
         <ApplicationTopbar
           className="router-topbar"

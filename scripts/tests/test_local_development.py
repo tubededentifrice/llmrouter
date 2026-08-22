@@ -150,6 +150,17 @@ def test_local_start_script_rejects_a_public_address() -> None:
     assert "can bind only to 127.0.0.1" in script
 
 
+def test_local_start_restarts_source_bound_development_services() -> None:
+    """Load current source when an existing deployment starts again."""
+    script = (REPOSITORY_ROOT / "scripts/local-development.sh").read_text(
+        encoding="utf-8"
+    )
+    startup = script.index("compose up --detach --remove-orphans")
+    restart = script.index("compose restart admin-dev backend embed-example")
+    readiness = script.index("wait_until_ready", restart)
+    assert startup < restart < readiness
+
+
 def test_local_start_serializes_operations_and_installs_secrets_exclusively() -> None:
     """Prevent concurrent startup and unsafe secret replacement."""
     script = (REPOSITORY_ROOT / "scripts/local-development.sh").read_text(

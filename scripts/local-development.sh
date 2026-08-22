@@ -157,7 +157,7 @@ main() {
         cleanup_new_deployment=1
       fi
       compose up --detach --remove-orphans
-      compose restart embed-example >/dev/null
+      compose restart admin-dev backend embed-example >/dev/null
       wait_until_ready
       cleanup_new_deployment=0
       trap - EXIT
