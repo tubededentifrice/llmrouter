@@ -1324,7 +1324,9 @@ paths:
               schema: {type: string}
             Set-Cookie:
               required: true
-              schema: {type: string}
+              schema:
+                type: string
+                description: Secure, HttpOnly, SameSite=Lax, host-only administrator session cookie with a maximum age of seven days.
         '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '503': {$ref: '#/components/responses/Retryable'}

@@ -315,6 +315,5 @@ def administrator_session_cookie(value: str, *, clear: bool = False) -> str:
             msg = "A local session cookie needs one generated token."
             raise ValueError(msg) from error
     cookie = f"__Host-llmrouter-admin={'' if clear else value}; Path=/"
-    if clear:
-        cookie += "; Max-Age=0"
+    cookie += "; Max-Age=0" if clear else "; Max-Age=604800"
     return f"{cookie}; Secure; HttpOnly; SameSite=Lax"

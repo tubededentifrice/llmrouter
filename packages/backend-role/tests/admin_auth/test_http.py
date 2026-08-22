@@ -79,8 +79,8 @@ def _session(*, session_token: SecretValue | None) -> SessionResult:
         authenticated_at=NOW,
         recent_authentication_at=NOW,
         account_state_checked_at=NOW,
-        idle_expires_at=NOW + timedelta(minutes=15),
-        absolute_expires_at=NOW + timedelta(hours=8),
+        idle_expires_at=NOW + timedelta(days=7),
+        absolute_expires_at=NOW + timedelta(days=7),
         return_path="/",
         identity_account_url="https://auth.opendle.dev/settings/account",
     )
@@ -113,6 +113,7 @@ def test_pocket_id_213_callback_shape_sets_the_session_cookie() -> None:
     assert callback.status_code == 303
     cookie = callback.headers["set-cookie"]
     assert "__Host-llmrouter-admin=" in cookie
+    assert "Max-Age=604800" in cookie
     assert "Secure" in cookie and "HttpOnly" in cookie and "SameSite=Lax" in cookie
     assert "Domain" not in cookie
 

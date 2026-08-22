@@ -25,13 +25,16 @@ if [[ -z "${LLMROUTER_TEST_DATABASE_URL:-}" ]]; then
     --env POSTGRES_PASSWORD=postgres \
     "${postgres_image}" >/dev/null
 
+  postgres_ready=0
   for _ in {1..60}; do
-    if docker exec "${container_name}" pg_isready --username postgres >/dev/null 2>&1; then
+    if [[ "$(docker exec "${container_name}" cat /proc/1/comm 2>/dev/null)" == "postgres" ]] &&
+      docker exec "${container_name}" pg_isready --username postgres >/dev/null 2>&1; then
+      postgres_ready=1
       break
     fi
     sleep 1
   done
-  if ! docker exec "${container_name}" pg_isready --username postgres >/dev/null 2>&1; then
+  if [[ "${postgres_ready}" -ne 1 ]]; then
     echo "The isolated PostgreSQL server did not become ready." >&2
     exit 1
   fi

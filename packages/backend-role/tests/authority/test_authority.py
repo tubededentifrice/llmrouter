@@ -450,16 +450,16 @@ def test_administrator_session_lifetime_bounds_are_closed() -> None:
     principal = ScopeTestBuilder(Scope(), now=NOW).administrator(
         "health.read", global_authority=True
     )
-    with pytest.raises(ValueError, match="15 minutes"):
+    with pytest.raises(ValueError, match="seven days"):
         replace(
             principal,
-            idle_expires_at=principal.last_activity_at + timedelta(minutes=16),
+            idle_expires_at=principal.last_activity_at + timedelta(days=7, seconds=1),
         )
-    with pytest.raises(ValueError, match="eight hours"):
+    with pytest.raises(ValueError, match="seven days"):
         replace(
             principal,
             absolute_expires_at=principal.authenticated_at
-            + timedelta(hours=8, seconds=1),
+            + timedelta(days=7, seconds=1),
         )
 
 

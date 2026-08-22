@@ -56,6 +56,7 @@ Accepted decisions:
 - [0052: Use structured secret fields and standard endpoint trust](0052-use-structured-secret-fields-and-standard-endpoint-trust.md)
 - [0053: Allow two early security-fix pins](0053-allow-two-early-security-fix-pins.md)
 - [0054: Add a bounded workspace-scoped embedding operation](0054-add-a-bounded-workspace-scoped-embedding-operation.md)
+- [0055: Keep administrator sessions for seven days](0055-keep-administrator-sessions-for-seven-days.md)
 
 Add a numbered decision record only after the user accepts a material choice.
 Each record must state the context, the accepted choice, alternatives, good and

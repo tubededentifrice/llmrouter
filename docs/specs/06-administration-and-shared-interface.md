@@ -64,8 +64,10 @@ eligible LLM Router administrator remains. The URL MUST NOT create or recover
 an identity-service account or passkey. Creation, redemption, success, and
 failure MUST create LLM Router audit events.
 
-An administrator session MUST have an idle expiry of no more than 15 minutes
-and an absolute expiry of no more than 8 hours. A sensitive action MUST require
+An administrator session MUST have an idle expiry and an absolute expiry of no
+more than 7 days. The local session cookie MUST persist across browser restarts
+for no more than the same 7-day period. Activity MUST NOT extend the absolute
+expiry. A sensitive action MUST require
 an identity-service authentication no more than five minutes old. The service
 MUST validate the authentication time and current OpenID Connect provider
 session. Each provider check MUST rotate the refresh token and introspect the

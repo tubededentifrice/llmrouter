@@ -516,6 +516,8 @@ def test_callback_is_one_use_and_identity_alone_grants_no_authority(
     )
     assert session.grants == ()
     assert session.session_token is not None
+    assert session.idle_expires_at == NOW + timedelta(days=7)
+    assert session.absolute_expires_at == NOW + timedelta(days=7)
     with pytest.raises(AdministratorAuthError) as repeated:
         repository.complete_authorization(
             "code", state, request_id="callback-repeat", now=NOW
@@ -1341,7 +1343,7 @@ def test_expired_session_is_revoked_and_provider_tokens_are_cleared(
         repository.authenticate_session(
             session,
             request_id="expired",
-            now=NOW + timedelta(minutes=15),
+            now=NOW + timedelta(days=7),
             policy=_policy("health.read"),
         )
     assert expired.value.code == "invalid_token"
@@ -1366,6 +1368,7 @@ def test_session_expiry_logout_cookie_and_migration_workspace_controls(
     session, csrf = _bootstrap(repository, identity, frozenset({"health.read"}))
     cookie = administrator_session_cookie(session)
     assert cookie.startswith("__Host-llmrouter-admin=")
+    assert "Max-Age=604800" in cookie
     assert "Secure" in cookie and "HttpOnly" in cookie and "SameSite=Lax" in cookie
     assert "Domain" not in cookie
     with pytest.raises(AdministratorAuthError):
@@ -1441,7 +1444,7 @@ def test_absolute_session_expiry_is_terminal(
     database_url: str,
     auth_repository: tuple[AdministratorAuthRepository, FakeIdentityService],
 ) -> None:
-    """Reject a session at its exact eight-hour absolute expiry."""
+    """Reject a session at its exact seven-day absolute expiry."""
     repository, identity = auth_repository
     session, _ = _bootstrap(repository, identity, frozenset({"health.read"}))
     with psycopg.connect(database_url) as connection:
@@ -1450,29 +1453,31 @@ def test_absolute_session_expiry_is_terminal(
             UPDATE router.administrator_sessions
             SET last_used_at = %s, idle_expires_at = absolute_expires_at
             """,
-            (NOW + timedelta(hours=7, minutes=59),),
+            (NOW + timedelta(days=6, hours=23, minutes=59),),
         )
         connection.commit()
     with pytest.raises(AdministratorAuthError) as expired:
         repository.authenticate_session(
             session,
             request_id="absolute-expiry",
-            now=NOW + timedelta(hours=8),
+            now=NOW + timedelta(days=7),
             policy=_policy("health.read"),
         )
     assert expired.value.code == "invalid_token"
 
 
-def test_grant_list_activity_extends_idle_expiry(
+def test_grant_list_activity_does_not_extend_absolute_expiry(
     auth_repository: tuple[AdministratorAuthRepository, FakeIdentityService],
 ) -> None:
-    """Keep an active grant reader signed in until 15 minutes after its activity."""
+    """Keep the fixed seven-day end after session activity."""
     repository, identity = auth_repository
     session, _ = _bootstrap(repository, identity, frozenset({"grant.manage"}))
     repository.list_grants(
-        session, request_id="active-list", now=NOW + timedelta(minutes=14)
+        session, request_id="active-list", now=NOW + timedelta(days=6)
     )
     current = repository.get_session(
-        session, request_id="after-active-list", now=NOW + timedelta(minutes=16)
+        session, request_id="after-active-list", now=NOW + timedelta(days=6, hours=1)
     )
     assert current.subject == identity.subject
+    assert current.absolute_expires_at == NOW + timedelta(days=7)
+    assert current.idle_expires_at == current.absolute_expires_at

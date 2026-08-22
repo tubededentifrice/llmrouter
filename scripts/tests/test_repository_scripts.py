@@ -11,6 +11,18 @@ def test_database_check_installs_all_workspace_packages() -> None:
     assert "uv run --all-packages pytest packages/backend-role/tests/database" in script
 
 
+def test_database_check_waits_for_the_final_postgres_process() -> None:
+    """Do not accept the temporary server that initializes the data directory."""
+    script = (REPOSITORY_ROOT / "scripts/check-database.sh").read_text(encoding="utf-8")
+    assert "postgres_ready=0" in script
+    assert (
+        'cat /proc/1/comm 2>/dev/null)" == "postgres" ]] &&\n'
+        '      docker exec "${container_name}" pg_isready'
+    ) in script
+    assert "postgres_ready=1" in script
+    assert 'if [[ "${postgres_ready}" -ne 1 ]]; then' in script
+
+
 def test_node_check_installs_the_locked_dependency_tree() -> None:
     """Install exact Node dependencies before repository tools run."""
     script = (REPOSITORY_ROOT / "scripts/check-node.sh").read_text(encoding="utf-8")

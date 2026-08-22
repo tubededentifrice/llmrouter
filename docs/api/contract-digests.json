@@ -26,7 +26,7 @@
     },
     {
       "path": "docs/api/openapi.yaml",
-      "sha256": "301369023cad9f03fe119f2baec7298c164014fee7ffb45dc9581d4a01d2929f"
+      "sha256": "0f002726831b33ffb6f4f7e6ab85a8d819cfea10c76c8beea7f74cf2c20d11fb"
     },
     {
       "path": "docs/api/request-fingerprint.md",
@@ -193,6 +193,6 @@
   },
   "contract_set": "llmrouter-v1",
   "generator_version": 1,
-  "source_sha256": "301369023cad9f03fe119f2baec7298c164014fee7ffb45dc9581d4a01d2929f",
+  "source_sha256": "0f002726831b33ffb6f4f7e6ab85a8d819cfea10c76c8beea7f74cf2c20d11fb",
   "version": "1.0.0"
 }

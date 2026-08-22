@@ -136,8 +136,8 @@ SENSITIVE_EMBED_OPERATIONS = frozenset(
 )
 
 SERVICE_TOKEN_LIFETIME = timedelta(minutes=5)
-ADMINISTRATOR_IDLE_LIMIT = timedelta(minutes=15)
-ADMINISTRATOR_ABSOLUTE_LIMIT = timedelta(hours=8)
+ADMINISTRATOR_IDLE_LIMIT = timedelta(days=7)
+ADMINISTRATOR_ABSOLUTE_LIMIT = timedelta(days=7)
 EMBED_RECENT_AUTH_LIMIT = timedelta(minutes=5)
 
 
@@ -292,7 +292,7 @@ class AdministratorPrincipal:
             msg = "The idle expiry must be after the last activity."
             raise ValueError(msg)
         if self.idle_expires_at - self.last_activity_at > ADMINISTRATOR_IDLE_LIMIT:
-            msg = "The administrator idle lifetime must not exceed 15 minutes."
+            msg = "The administrator idle lifetime must not exceed seven days."
             raise ValueError(msg)
         if not self.authenticated_at < self.absolute_expires_at:
             msg = "The absolute expiry must be after authentication."
@@ -301,7 +301,7 @@ class AdministratorPrincipal:
             self.absolute_expires_at - self.authenticated_at
             > ADMINISTRATOR_ABSOLUTE_LIMIT
         ):
-            msg = "The administrator absolute lifetime must not exceed eight hours."
+            msg = "The administrator absolute lifetime must not exceed seven days."
             raise ValueError(msg)
         if self.idle_expires_at > self.absolute_expires_at:
             msg = "The idle expiry must not exceed the absolute expiry."
