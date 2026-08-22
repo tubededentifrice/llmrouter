@@ -263,6 +263,77 @@ describe("administration API client", () => {
     ).toBe(true);
   });
 
+  it("lists the named services available to the administrator", async () => {
+    const paths: string[] = [];
+    const client = createFetchAdministrationClient({
+      fetcher: vi.fn((input: string | URL | Request) => {
+        paths.push(requestUrl(input));
+        return Promise.resolve(
+          json({
+            items: [
+              {
+                service_id: "service-one",
+                display_name: "Xbot",
+                state: "active",
+              },
+            ],
+            next_cursor: null,
+          }),
+        );
+      }),
+    });
+    await expect(client.listServices()).resolves.toEqual([
+      {
+        service_id: "service-one",
+        display_name: "Xbot",
+        state: "active",
+      },
+    ]);
+    expect(paths).toEqual(["/v1/admin/services?limit=100"]);
+  });
+
+  it("loads every service registry page without hiding retained services", async () => {
+    const paths: string[] = [];
+    const client = createFetchAdministrationClient({
+      fetcher: vi.fn((input: string | URL | Request) => {
+        const path = requestUrl(input);
+        paths.push(path);
+        return Promise.resolve(
+          path.includes("cursor=service-one")
+            ? json({
+                items: [
+                  {
+                    service_id: "service-two",
+                    display_name: "Ontology",
+                    state: "retired",
+                  },
+                ],
+                next_cursor: null,
+              })
+            : json({
+                items: [
+                  {
+                    service_id: "service-one",
+                    display_name: "Xbot",
+                    state: "active",
+                  },
+                ],
+                next_cursor: "service-one",
+              }),
+        );
+      }),
+    });
+    const services = await client.listServices();
+    expect(services.map((service) => service.display_name)).toEqual([
+      "Xbot",
+      "Ontology",
+    ]);
+    expect(paths).toEqual([
+      "/v1/admin/services?limit=100",
+      "/v1/admin/services?limit=100&cursor=service-one",
+    ]);
+  });
+
   it("sends protected mutation headers and does not expect a secret response", async () => {
     let received: RequestInit | undefined;
     const fetcher = vi.fn(

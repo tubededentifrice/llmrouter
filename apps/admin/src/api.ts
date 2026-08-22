@@ -1,5 +1,41 @@
 export type AdministrationMode = "global" | "service";
 
+export interface BootstrapScope {
+  readonly audiences: readonly string[];
+  readonly operations: readonly string[];
+  readonly workspace_limit?: "all_service_workspaces" | "explicit_only";
+}
+
+export interface ServiceSummary {
+  readonly service_id: string;
+  readonly display_name: string;
+  readonly parent_service_id?: string | null;
+  readonly state: "active" | "disabled" | "retired";
+  readonly revision: string;
+  readonly bootstrap_state: "ready" | "revoked" | "missing";
+  readonly credential_generation: number | null;
+  readonly prior_generation_expires_at?: string;
+  readonly bootstrap_scope: BootstrapScope | null;
+}
+
+export interface ServiceCreated {
+  readonly service_id: string;
+  readonly state: "active";
+  readonly state_revision: string;
+  readonly bootstrap_secret?: string;
+  readonly bootstrap_secret_available: boolean;
+  readonly credential_generation: 1;
+}
+
+export interface ServiceAdministrationResult {
+  readonly resource_id: string;
+  readonly state: string;
+  readonly revision: string;
+  readonly operation_id: string;
+  readonly bootstrap_secret?: string;
+  readonly prior_generation_expires_at?: string;
+}
+
 export interface ScopeSelection {
   readonly mode: AdministrationMode;
   readonly serviceId: string;
@@ -190,6 +226,27 @@ export class AdministrationApiError extends Error {
 }
 
 export interface AdministrationClient {
+  listServices(signal?: AbortSignal): Promise<readonly ServiceSummary[]>;
+  listCredentials(signal?: AbortSignal): Promise<readonly Credential[]>;
+  createService(input: {
+    readonly displayName: string;
+    readonly parentServiceId: string | null;
+    readonly bootstrapScope: BootstrapScope;
+  }): Promise<ServiceCreated>;
+  putService(
+    serviceId: string,
+    input: {
+      readonly expectedRevision: string;
+      readonly reason: string;
+      readonly displayName?: string;
+      readonly newParentServiceId?: string | null;
+    },
+  ): Promise<ServiceAdministrationResult>;
+  changeService(
+    serviceId: string,
+    action: "disable" | "restore" | "retire",
+    input: { readonly expectedRevision: string; readonly reason: string },
+  ): Promise<ServiceAdministrationResult>;
   load(
     scope: ScopeSelection,
     signal?: AbortSignal,
@@ -546,7 +603,95 @@ export function createFetchAdministrationClient({
     return value.items;
   }
 
+  async function allPages<T>(
+    initialPath: string,
+    signal?: AbortSignal,
+  ): Promise<readonly T[]> {
+    const items: T[] = [];
+    const cursors = new Set<string>();
+    let path = initialPath;
+    for (let pageNumber = 0; pageNumber < 100; pageNumber += 1) {
+      const value = await request<Page<T>>(
+        path,
+        signal === undefined ? {} : { signal },
+      );
+      items.push(...value.items);
+      if (value.next_cursor === null) return items;
+      if (cursors.has(value.next_cursor)) {
+        throw new AdministrationApiError(
+          "The administration list did not complete. Try again.",
+          { code: "invalid_pagination", requestId: null, status: 502 },
+        );
+      }
+      cursors.add(value.next_cursor);
+      const next = new URL(path, "http://administration.local");
+      next.searchParams.set("cursor", value.next_cursor);
+      path = `${next.pathname}${next.search}`;
+    }
+    throw new AdministrationApiError(
+      "The administration list is too large to load safely.",
+      { code: "pagination_limit", requestId: null, status: 502 },
+    );
+  }
+
   return {
+    listServices(signal) {
+      return allPages<ServiceSummary>("/v1/admin/services?limit=100", signal);
+    },
+
+    listCredentials(signal) {
+      return allPages<Credential>("/v1/admin/credentials?limit=100", signal);
+    },
+
+    createService(input) {
+      return request<ServiceCreated>(
+        "/v1/admin/services",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            display_name: input.displayName,
+            parent_service_id: input.parentServiceId,
+            bootstrap_scope: input.bootstrapScope,
+          }),
+        },
+        true,
+      );
+    },
+
+    putService(serviceId, input) {
+      return request<ServiceAdministrationResult>(
+        `/v1/admin/services/${encodeURIComponent(serviceId)}`,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            expected_revision: input.expectedRevision,
+            reason: input.reason,
+            ...(input.displayName === undefined
+              ? {}
+              : { display_name: input.displayName }),
+            ...(input.newParentServiceId === undefined
+              ? {}
+              : { new_parent_service_id: input.newParentServiceId }),
+          }),
+        },
+        true,
+      );
+    },
+
+    changeService(serviceId, action, input) {
+      return request<ServiceAdministrationResult>(
+        `/v1/admin/services/${encodeURIComponent(serviceId)}/${action}`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            expected_revision: input.expectedRevision,
+            reason: input.reason,
+          }),
+        },
+        true,
+      );
+    },
+
     async load(scope, signal) {
       const end = now();
       const start = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);

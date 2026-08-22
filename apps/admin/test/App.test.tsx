@@ -14,11 +14,13 @@ import {
   type AppProps,
 } from "../src/App.js";
 import { scheduleFrameStart } from "../src/embedProtocol.js";
+import { ServiceManagement } from "../src/ServiceManagement.js";
 import {
   configurationRevisionForScope,
   type AdministrationClient,
   type AdministrationSnapshot,
   type ScopeSelection,
+  type ServiceSummary,
 } from "../src/api.js";
 
 const globalScope: ScopeSelection = {
@@ -29,6 +31,18 @@ const globalScope: ScopeSelection = {
 const serviceLevelScope: ScopeSelection = {
   ...globalScope,
   workspaceId: "",
+};
+const registeredService: ServiceSummary = {
+  service_id: serviceLevelScope.serviceId,
+  display_name: "Test service",
+  state: "active",
+  revision: "service-revision-one",
+  bootstrap_state: "ready",
+  credential_generation: 1,
+  bootstrap_scope: {
+    audiences: ["data_plane"],
+    operations: ["model.create"],
+  },
 };
 const styles = readFileSync(
   new URL("../src/styles.css", import.meta.url),
@@ -140,6 +154,11 @@ const snapshot: AdministrationSnapshot = {
 };
 
 const client: AdministrationClient = {
+  listServices: vi.fn(),
+  listCredentials: vi.fn(),
+  createService: vi.fn(),
+  putService: vi.fn(),
+  changeService: vi.fn(),
   load: vi.fn(),
   createCredential: vi.fn(),
   putProvider: vi.fn(),
@@ -148,7 +167,15 @@ const client: AdministrationClient = {
 };
 
 function dashboard(
-  section: "configuration" | "assignments" | "requests" | "accounting",
+  section:
+    | "overview"
+    | "services"
+    | "credentials"
+    | "setup"
+    | "configuration"
+    | "assignments"
+    | "requests"
+    | "accounting",
   scope = serviceLevelScope,
 ): string {
   return renderToStaticMarkup(
@@ -159,6 +186,7 @@ function dashboard(
       onNotice={vi.fn()}
       onReload={vi.fn()}
       scope={scope}
+      services={[registeredService]}
       snapshot={snapshot}
     />,
   );
@@ -206,7 +234,7 @@ describe("administration app states", () => {
         onActivate={vi.fn()}
       />,
     );
-    expect(unavailable).toContain("Select an exact scope");
+    expect(unavailable).toContain("Run LLM Router");
     expect(unavailable).not.toContain("Activate administrator session");
     expect(required).toContain("Activate administrator session");
   });
@@ -231,17 +259,52 @@ describe("administration app states", () => {
     expect(failed).toContain("Pocket ID sign-in did not start. Try again.");
   });
 
-  it("shows an empty scope state before it makes a request", () => {
+  it("shows global tasks before a service is selected", () => {
     const html = renderToStaticMarkup(<App client={client} />);
-    expect(html).toContain("Select an exact scope");
-    expect(html).toContain("Service ID");
+    expect(html).toContain("Run LLM Router");
+    expect(html).toContain("Create your first service");
+    expect(html).toContain("Service to manage");
+    expect(html).not.toContain("Exact administration scope");
+    expect(html).toContain('aria-current="page"');
+    expect(html).toContain("Global administrator tasks");
+    expect(html).toContain("Overview");
+    expect(html).toContain("mobile-service-selector");
   });
 
-  it("shows a loading state for a supplied exact scope", () => {
+  it("shows registered service names in the scope control", () => {
+    const html = renderToStaticMarkup(
+      <AdministrationDashboard
+        client={client}
+        notice={null}
+        onNotice={vi.fn()}
+        onReload={vi.fn()}
+        onScopeChange={vi.fn()}
+        scope={{ mode: "global", serviceId: "", workspaceId: "" }}
+        services={[
+          {
+            service_id: "service-one",
+            display_name: "Xbot",
+            state: "active",
+            revision: "service-revision-one",
+            bootstrap_state: "ready",
+            credential_generation: 1,
+            bootstrap_scope: { audiences: [], operations: [] },
+          },
+        ]}
+        snapshot={null}
+      />,
+    );
+    expect(html).toContain("No service selected");
+    expect(html).toContain("Xbot · active");
+    expect(html).not.toContain('placeholder="Service UUID"');
+  });
+
+  it("keeps global navigation visible while a service loads", () => {
     const props: AppProps = { client, startingScope: globalScope };
     const html = renderToStaticMarkup(<App {...props} />);
-    expect(html).toContain("Loading protected state");
-    expect(html).toContain("Protected service and workspace state is loading");
+    expect(html).toContain("Global administration");
+    expect(html).toContain("Services &amp; inheritance");
+    expect(html).toContain("Run LLM Router");
   });
 
   it("shows safe error and stale revision recovery states", () => {
@@ -253,7 +316,7 @@ describe("administration app states", () => {
     const staleHtml = renderToStaticMarkup(<StaleRevisionBanner />);
     expect(errorHtml).toContain('role="alert"');
     expect(errorHtml).toContain("No change was sent");
-    expect(staleHtml).toContain("Stale configuration revision");
+    expect(staleHtml).toContain("This configuration changed");
     expect(staleHtml).toContain("review the active revision");
   });
 
@@ -294,10 +357,10 @@ describe("administration app states", () => {
         snapshot={snapshot}
       />,
     );
-    expect(loadingHtml).toContain("Loading protected state");
+    expect(loadingHtml).toContain("Run LLM Router");
     expect(loadingHtml).toContain(success.message);
     expect(reloadedHtml).toContain(success.message);
-    expect(reloadedHtml).toContain(
+    expect(dashboard("credentials")).toContain(
       'type="password" autoComplete="new-password" spellCheck="false" value=""',
     );
   });
@@ -313,15 +376,64 @@ describe("administration app states", () => {
 });
 
 describe("protected administration dashboard", () => {
-  it("shows exact scope, write-only secret controls, and effective configuration", () => {
+  it("shows names first and the effective service configuration", () => {
     const html = dashboard("configuration");
-    expect(html).toContain(globalScope.serviceId);
-    expect(html).toContain("Service level");
-    expect(html).toContain('type="password"');
-    expect(html).toContain('autoComplete="new-password"');
+    expect(html).toContain("What this service will use");
+    expect(html).toContain("Provider keys are managed globally");
+    expect(html).not.toContain(`>${globalScope.serviceId}<`);
+    expect(html).not.toContain('type="password"');
     expect(html).toContain("safe-fingerprint");
     expect(html).toContain("deepseek/deepseek-v4-flash");
     expect(html).not.toContain("Provider secret value");
+  });
+
+  it("offers direct local overrides for inherited effective values", () => {
+    const inheritedSnapshot: AdministrationSnapshot = {
+      ...snapshot,
+      providers: snapshot.providers.map((item) => ({
+        ...item,
+        inherited: true,
+        owner_scope: "parent-service",
+      })),
+      routes: snapshot.routes.map((item) => ({
+        ...item,
+        inherited: true,
+        owner_scope: "parent-service",
+      })),
+      assignments: snapshot.assignments.map((item) => ({
+        ...item,
+        inherited: true,
+        owner_scope: "parent-service",
+      })),
+    };
+    const configurationHtml = renderToStaticMarkup(
+      <AdministrationDashboard
+        client={client}
+        initialSection="configuration"
+        notice={null}
+        onNotice={vi.fn()}
+        onReload={vi.fn()}
+        scope={serviceLevelScope}
+        services={[registeredService]}
+        snapshot={inheritedSnapshot}
+      />,
+    );
+    const assignmentHtml = renderToStaticMarkup(
+      <AdministrationDashboard
+        client={client}
+        initialSection="assignments"
+        notice={null}
+        onNotice={vi.fn()}
+        onReload={vi.fn()}
+        scope={serviceLevelScope}
+        services={[registeredService]}
+        snapshot={inheritedSnapshot}
+      />,
+    );
+    expect(configurationHtml.match(/Override for this service/g)).toHaveLength(
+      2,
+    );
+    expect(assignmentHtml).toContain("Override for this service");
   });
 
   it("requires a canonical UUID and explicit prices before route publication", () => {
@@ -342,12 +454,20 @@ describe("protected administration dashboard", () => {
 
   it("uses semantic keyboard controls and a table alternative", () => {
     const html = dashboard("assignments");
-    expect(html).toContain('aria-label="Administration areas"');
+    expect(html).toContain('aria-label="Administrator tasks"');
     expect(html).toContain('aria-current="page"');
     expect(html).toContain("<button");
     expect(html).toContain("<table>");
     expect(html).toContain("Complete ordered chain");
     expect(html).toContain("Primary");
+  });
+
+  it("puts effective configuration before setup for a selected service", () => {
+    const html = dashboard("configuration");
+    expect(html.indexOf("Effective configuration")).toBeLessThan(
+      html.indexOf(">Setup<"),
+    );
+    expect(html).toContain("Open global tasks");
   });
 
   it("shows content-free request status and bounded accounting", () => {
@@ -367,10 +487,10 @@ describe("protected administration dashboard", () => {
       mode: "service",
     };
     const html = dashboard("configuration", serviceScope);
-    expect(html).toContain("Secret custody stays global");
+    expect(html).toContain("Provider keys are managed globally");
     expect(html).not.toContain("Store OpenRouter credential");
     expect(html).toContain("Eligible credential reference ID");
-    expect(html).toContain("Exact administration scope");
+    expect(html).not.toContain("Exact administration scope");
   });
 
   it("keeps service-owned provider changes out of a workspace view", () => {
@@ -406,8 +526,122 @@ describe("protected administration dashboard", () => {
       />,
     );
     expect(assignmentHtml).toContain(
-      "No assignment is effective in this scope",
+      "No assignment is available for this service",
     );
-    expect(requestHtml).toContain("No request status is in this bounded scope");
+    expect(requestHtml).toContain(
+      "No request status is available for this service",
+    );
+  });
+});
+
+describe("service management", () => {
+  it("shows a named parent chain and keeps technical IDs secondary", () => {
+    const parent: ServiceSummary = {
+      ...registeredService,
+      service_id: "parent-service",
+      display_name: "Shared platform",
+    };
+    const child: ServiceSummary = {
+      ...registeredService,
+      service_id: "child-service",
+      display_name: "Xbot",
+      parent_service_id: parent.service_id,
+    };
+    const html = renderToStaticMarkup(
+      <ServiceManagement
+        client={client}
+        services={[parent, child]}
+        selectedServiceId={child.service_id}
+        onSelect={vi.fn()}
+        onChanged={vi.fn()}
+        onContinueSetup={vi.fn()}
+        pendingBootstrap={null}
+        onBootstrapPending={vi.fn()}
+        onSuccess={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+    expect(html).toContain("Shared platform → Xbot");
+    expect(html).toContain(
+      "inherits eligible configuration from Shared platform",
+    );
+    expect(html).toContain("Technical details");
+  });
+
+  it("describes the first key as model access only", () => {
+    const html = renderToStaticMarkup(
+      <ServiceManagement
+        client={client}
+        services={[]}
+        selectedServiceId=""
+        onSelect={vi.fn()}
+        onChanged={vi.fn()}
+        onContinueSetup={vi.fn()}
+        pendingBootstrap={null}
+        onBootstrapPending={vi.fn()}
+        onSuccess={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+    expect(html).toContain("Machine access: model calls only");
+    expect(html).toContain("cannot run agents, use tools");
+  });
+
+  it("keeps disabled and retired services visible", () => {
+    const disabled: ServiceSummary = {
+      ...registeredService,
+      service_id: "disabled-service",
+      display_name: "Disabled service",
+      state: "disabled",
+    };
+    const retired: ServiceSummary = {
+      ...registeredService,
+      service_id: "retired-service",
+      display_name: "Retired service",
+      state: "retired",
+    };
+    const html = renderToStaticMarkup(
+      <ServiceManagement
+        client={client}
+        services={[disabled, retired]}
+        selectedServiceId={disabled.service_id}
+        onSelect={vi.fn()}
+        onChanged={vi.fn()}
+        onContinueSetup={vi.fn()}
+        pendingBootstrap={null}
+        onBootstrapPending={vi.fn()}
+        onSuccess={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+    expect(html).toContain("Disabled service");
+    expect(html).toContain("Retired service");
+  });
+
+  it("keeps a pending one-time key visible until confirmation", () => {
+    const html = renderToStaticMarkup(
+      <ServiceManagement
+        client={client}
+        services={[registeredService]}
+        selectedServiceId={registeredService.service_id}
+        onSelect={vi.fn()}
+        onChanged={vi.fn()}
+        onContinueSetup={vi.fn()}
+        pendingBootstrap={{
+          service_id: registeredService.service_id,
+          state: "active",
+          state_revision: "1",
+          bootstrap_secret: "one-time-key",
+          bootstrap_secret_available: true,
+          credential_generation: 1,
+        }}
+        onBootstrapPending={vi.fn()}
+        onSuccess={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+    expect(html).toContain("Store this key now");
+    expect(html).toContain("one-time-key");
+    expect(html).toContain("I stored it · open setup");
   });
 });
