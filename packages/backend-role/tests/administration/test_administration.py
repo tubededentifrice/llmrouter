@@ -52,6 +52,7 @@ from llmrouter_backend.credential_store import (
     CredentialResult,
     CredentialState,
 )
+from llmrouter_backend.execution import ExecutionError, ExecutionErrorCode
 from llmrouter_backend.lifecycle import (
     LifecycleResult,
     LifecycleState,
@@ -81,6 +82,8 @@ SESSION = "s" * 43
 CSRF = "c" * 43
 ORIGIN = "https://admin.example.test"
 SECRET = "test-secret-value"
+DETAIL_REQUEST_ID = "0198a080-0000-7000-8000-000000000030"
+MISSING_REQUEST_ID = "0198a080-0000-7000-8000-000000000031"
 
 
 class FakeAuthority:
@@ -395,11 +398,13 @@ class FakeRequests:
         limit: int = 100,
     ) -> tuple[tuple[dict[str, object], ...], str | None]:
         assert cursor is None and limit == 100
-        return (({"request_id": str(uuid.UUID(int=30)), "state": "succeeded"},), None)
+        return (({"request_id": DETAIL_REQUEST_ID, "state": "succeeded"},), None)
 
     def status(
         self, _context: RequestContext, target: ExecutionTarget
     ) -> dict[str, object]:
+        if target.public_id == MISSING_REQUEST_ID:
+            raise ExecutionError(ExecutionErrorCode.NOT_FOUND, _context.request_id)
         return {"request_id": target.public_id, "state": "succeeded"}
 
 
@@ -687,9 +692,21 @@ def test_service_state_and_content_free_status_use_exact_scopes(
         f"/v1/admin/services/{SERVICE_ID}/model-requests",
         headers=_headers(),
     )
+    detail = client.get(
+        f"/v1/admin/services/{SERVICE_ID}/model-requests/{DETAIL_REQUEST_ID}",
+        headers=_headers(),
+    )
+    missing = client.get(
+        f"/v1/admin/services/{SERVICE_ID}/model-requests/{MISSING_REQUEST_ID}",
+        headers=_headers(),
+    )
     assert state.status_code == 200
     assert state.json()["service_id"] == SERVICE_ID
     assert statuses.status_code == 200
+    assert detail.status_code == 200
+    assert detail.json()["request_id"] == DETAIL_REQUEST_ID
+    assert missing.status_code == 404
+    assert missing.json()["error"]["code"] == "request_not_found"
     assert "result" not in statuses.text
     assert authority.policies[-1].operation == "request_status.read"
 

@@ -606,6 +606,7 @@ AttemptStatus = TypedDict('AttemptStatus', {
     'started_at': 'Timestamp',
     'ended_at': 'NotRequired[Timestamp]',
     'assignment_revision': 'OpaqueId',
+    'decision': 'NotRequired[Literal["next_candidate", "stop_request", "commit_boundary", "cancelled", "succeeded"]]',
     'error': 'NotRequired[TerminalError]',
     'usage': 'NotRequired[list[UsageComponent]]',
     'price_version': 'NotRequired[OpaqueId]',
@@ -2886,6 +2887,17 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
       },
       "attempt_id": {
         "$ref": "#/components/schemas/OpaqueId"
+      },
+      "decision": {
+        "description": "The safe Router retry, fallback, or stop decision for a terminal attempt.",
+        "enum": [
+          "next_candidate",
+          "stop_request",
+          "commit_boundary",
+          "cancelled",
+          "succeeded"
+        ],
+        "type": "string"
       },
       "ended_at": {
         "$ref": "#/components/schemas/Timestamp"

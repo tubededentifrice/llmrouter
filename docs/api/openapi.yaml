@@ -2935,6 +2935,10 @@ components:
         started_at: {$ref: '#/components/schemas/Timestamp'}
         ended_at: {$ref: '#/components/schemas/Timestamp'}
         assignment_revision: {$ref: '#/components/schemas/OpaqueId'}
+        decision:
+          type: string
+          description: The safe Router retry, fallback, or stop decision for a terminal attempt.
+          enum: [next_candidate, stop_request, commit_boundary, cancelled, succeeded]
         error: {$ref: '#/components/schemas/TerminalError'}
         usage: {type: array, items: {$ref: '#/components/schemas/UsageComponent'}}
         price_version: {$ref: '#/components/schemas/OpaqueId'}

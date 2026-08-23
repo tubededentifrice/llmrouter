@@ -26,7 +26,7 @@
     },
     {
       "path": "docs/api/openapi.yaml",
-      "sha256": "de43bff5230f42aea2579084602af2b12524611a90e09d1ed9d09b1126fe783a"
+      "sha256": "50c1775bd93fe6102bb4dde4f4d079ee5a3697d2f541b1d6d4f18d65cdf81a6a"
     },
     {
       "path": "docs/api/request-fingerprint.md",
@@ -66,7 +66,7 @@
     "AssignmentName": "cc55a7b3685c61b10be6c3b72ebb44c5397d5c8f474e803ba7de160ba5ed21aa",
     "AssignmentPage": "cbcfe223f39dd5147cc60199be5db87da3384c482b2fe47157c8e4a8c675455c",
     "Attachment": "9fd8f1aee00f1c29517bec6106cc7b47dcba80083e480960ad627172b5aa01e0",
-    "AttemptStatus": "333734e7b3bcd7b14f6ccacb1c235855ed6d2b0d3831c6c3ff47321e32f91b3d",
+    "AttemptStatus": "437e0e6825dc24b9dff20a06838562c974e79ae263b237bd2acea9d373199f9e",
     "AuditPage": "f20026d0a629fecda82df5e531dca66acc8868db3d34ffb411a6862a91ace014",
     "AuditSafeDetail": "663de69bc3ad746273fced3a43a9f6fbc7e88f072a308d3992e12e2aeccf5bea",
     "AuditScope": "9e7efc0936fe66117766c0f2504b738d813fef0b3096598b03bf70704443b69d",
@@ -199,6 +199,6 @@
   },
   "contract_set": "llmrouter-v1",
   "generator_version": 1,
-  "source_sha256": "de43bff5230f42aea2579084602af2b12524611a90e09d1ed9d09b1126fe783a",
+  "source_sha256": "50c1775bd93fe6102bb4dde4f4d079ee5a3697d2f541b1d6d4f18d65cdf81a6a",
   "version": "1.0.0"
 }

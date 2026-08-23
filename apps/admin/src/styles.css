@@ -266,6 +266,83 @@ textarea:focus {
   width: 100%;
   overflow-x: auto;
 }
+.request-detail {
+  display: grid;
+  gap: var(--od-space-lg);
+}
+.request-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--od-space-sm);
+  padding: var(--od-space-md) var(--od-space-md) 0;
+}
+.request-detail-summary,
+.request-accounting-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--od-space-md);
+  margin: 0;
+  padding: 0 var(--od-space-md);
+}
+.request-detail-summary > div,
+.request-accounting-summary > div {
+  min-width: 0;
+  padding: var(--od-space-sm);
+  border: 1px solid var(--od-color-border);
+  border-radius: var(--od-radius-md);
+  background: var(--od-color-background);
+}
+.request-detail-summary dt,
+.request-accounting-summary dt {
+  color: var(--od-color-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+.request-detail-summary dd,
+.request-accounting-summary dd {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--od-space-sm);
+  margin: var(--od-space-xs) 0 0;
+  overflow-wrap: anywhere;
+}
+.request-terminal-error {
+  margin: 0 var(--od-space-md);
+  padding: var(--od-space-md);
+  border: 1px solid #d8a4a1;
+  border-radius: var(--od-radius-md);
+  background: color-mix(in srgb, #d8a4a1 12%, transparent);
+}
+.request-terminal-error h3,
+.request-terminal-error p,
+.request-detail-section h3,
+.request-detail-section p {
+  margin: 0;
+}
+.request-terminal-error p + p {
+  margin-top: var(--od-space-sm);
+}
+.request-detail-section {
+  display: grid;
+  gap: var(--od-space-sm);
+}
+.request-detail-section > h3,
+.request-detail-section > p {
+  padding-inline: var(--od-space-md);
+}
+.request-usage-list {
+  margin: 0;
+  padding-left: var(--od-space-md);
+}
+.request-detail-state {
+  display: grid;
+  gap: var(--od-space-md);
+  justify-items: start;
+  padding: var(--od-space-md);
+}
 table {
   width: 100%;
   border-collapse: collapse;
@@ -852,6 +929,10 @@ td small {
   }
   .bootstrap-secret-value {
     display: grid;
+  }
+  .request-detail-summary,
+  .request-accounting-summary {
+    grid-template-columns: 1fr;
   }
 
   .service-graph-page {

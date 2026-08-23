@@ -26,9 +26,12 @@ import { ServiceManagement } from "../src/ServiceManagement.js";
 import {
   AdministrationApiError,
   configurationRevisionForScope,
+  scopeFromSearch,
+  scopeSearch,
   scheduleAdministrationSessionInspection,
   type AdministrationClient,
   type AdministrationSnapshot,
+  type RequestStatus,
   type ScopeSelection,
   type ServiceSummary,
 } from "../src/api.js";
@@ -77,12 +80,15 @@ const styles = readFileSync(
 function deferred<T>(): {
   readonly promise: Promise<T>;
   readonly resolve: (value: T) => void;
+  readonly reject: (reason: unknown) => void;
 } {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((next) => {
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((next, fail) => {
     resolve = next;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 // React Test Renderer supplies the node tree for reducer interaction tests.
@@ -181,10 +187,23 @@ const snapshot: AdministrationSnapshot = {
   requests: [
     {
       request_id: "request-1",
-      workspace_id: globalScope.workspaceId,
       assignment: "general",
       state: "succeeded",
       state_revision: 4,
+      admitted_at: "2026-08-20T00:00:00Z",
+      last_transition_at: "2026-08-20T00:00:02Z",
+      terminal_at: "2026-08-20T00:00:02Z",
+      partial_output: false,
+      committed_effects: false,
+      configuration_revision: "configuration-revision-1",
+      attempts: [],
+      accounting: {
+        estimated: "0.0001",
+        reserved: "0.0001",
+        used: "0.0001",
+        corrected: "0.0001",
+        currency: "USD",
+      },
     },
   ],
   accounting: {
@@ -221,6 +240,7 @@ const client: AdministrationClient = {
   putService: vi.fn(),
   changeService: vi.fn(),
   load: vi.fn(),
+  getRequest: vi.fn(),
   createCredential: vi.fn(),
   changeCredential: vi.fn(),
   putProvider: vi.fn(),
@@ -258,6 +278,13 @@ function dashboard(
 }
 
 describe("administration app states", () => {
+  it("keeps the exact workspace through the administration URL", () => {
+    const search = scopeSearch(globalScope);
+    expect(search).toContain(`service_id=${globalScope.serviceId}`);
+    expect(search).toContain(`workspace_id=${globalScope.workspaceId}`);
+    expect(scopeFromSearch(`?${search}`)).toEqual(globalScope);
+  });
+
   it("does not rotate the session proof from a temporary Strict Mode effect", () => {
     const callbacks: (() => void)[] = [];
     const inspect = vi.fn();
@@ -858,14 +885,212 @@ describe("protected administration dashboard", () => {
 
   it("shows content-free request status and bounded accounting", () => {
     const requestHtml = dashboard("requests");
+    const workspaceRequestHtml = dashboard("requests", globalScope);
     const accountingHtml = dashboard("accounting");
     expect(requestHtml).toContain("Content-free status");
     expect(requestHtml).toContain("request-1");
     expect(requestHtml).not.toContain("model output value");
+    expect(workspaceRequestHtml).toContain(globalScope.workspaceId);
+    expect(workspaceRequestHtml).not.toContain("Service level");
     expect(accountingHtml).toContain("Bounded accounting");
     expect(accountingHtml).toContain("0.0001 USD");
     expect(accountingHtml).toContain("input_token");
   });
+
+  /* eslint-disable @typescript-eslint/no-deprecated -- This renderer verifies the complete request-detail interaction. */
+  it("selects, refreshes, and closes a safe ordered request detail", async () => {
+    const failureClasses = [
+      "authentication",
+      "policy",
+      "budget",
+      "rate_limit",
+      "timeout",
+      "transport",
+      "provider_unavailable",
+      "invalid_provider_response",
+      "incompatible_request",
+      "cancelled",
+      "uncertain_effect",
+      "router_internal",
+    ] as const;
+    const safeDetail = {
+      request_id: "request-1",
+      assignment: "general",
+      state: "failed",
+      state_revision: 9,
+      admitted_at: "2026-08-20T00:00:00Z",
+      last_transition_at: "2026-08-20T00:00:12Z",
+      terminal_at: "2026-08-20T00:00:12Z",
+      partial_output: false,
+      committed_effects: false,
+      configuration_revision: "configuration-revision-7",
+      error: {
+        class: "router_internal",
+        affected_scope: "logical_request",
+        message: "The logical request stopped safely.",
+      },
+      attempts: failureClasses.map((failureClass, index) => ({
+        attempt_id: `attempt-${String(index + 1)}`,
+        provider_model_route_id: `route-${String(index + 1)}`,
+        state: "failed" as const,
+        started_at: `2026-08-20T00:00:${String(index).padStart(2, "0")}Z`,
+        ended_at: `2026-08-20T00:00:${String(index + 1).padStart(2, "0")}Z`,
+        assignment_revision: "assignment-revision-7",
+        decision:
+          index === 0 ? ("next_candidate" as const) : ("stop_request" as const),
+        error: {
+          class: failureClass,
+          affected_scope:
+            failureClass === "authentication"
+              ? ("credential" as const)
+              : ("attempt" as const),
+          message: "The provider attempt did not complete.",
+          ...(failureClass === "authentication"
+            ? { safe_provider_code: "SAFE_AUTH_CODE" }
+            : {}),
+        },
+        usage: [{ unit: "input_token", quantity: "4" }],
+        price_version: "price-revision-1",
+      })),
+      accounting: {
+        estimated: "0.01",
+        reserved: "0.01",
+        used: "0.008",
+        corrected: "0.009",
+        currency: "USD",
+      },
+      result: { outputs: [{ type: "text", text: "PRIVATE MODEL OUTPUT" }] },
+      tool_calls: [{ input: "PRIVATE TOOL INPUT" }],
+      credential: "PRIVATE CREDENTIAL",
+    } as unknown as RequestStatus;
+    const getRequest = vi.fn().mockResolvedValue(safeDetail);
+    const detailClient: AdministrationClient = { ...client, getRequest };
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        <AdministrationDashboard
+          client={detailClient}
+          initialSection="requests"
+          notice={null}
+          onNotice={vi.fn()}
+          onReload={vi.fn()}
+          scope={globalScope}
+          services={[registeredService]}
+          snapshot={snapshot}
+        />,
+      );
+    });
+    const view = renderer.root
+      .findAllByType("button")
+      .find((item) => renderedText(item).trim() === "View request");
+    if (view === undefined)
+      throw new Error("Request detail action did not render.");
+    await act(async () => {
+      (view.props.onClick as () => void)();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const detailText = renderedText(renderer.root);
+    expect(detailText).toContain(globalScope.serviceId);
+    expect(detailText).toContain(globalScope.workspaceId);
+    expect(detailText).toContain("configuration-revision-7");
+    expect(detailText).toContain("No retry. Router used the next fallback.");
+    expect(detailText).toContain("Router stopped the logical request");
+    expect(detailText).toContain("SAFE_AUTH_CODE");
+    expect(detailText).toContain("0.009 USD");
+    for (const failureClass of failureClasses) {
+      expect(detailText).toContain(failureClass);
+    }
+    expect(detailText).not.toContain("PRIVATE MODEL OUTPUT");
+    expect(detailText).not.toContain("PRIVATE TOOL INPUT");
+    expect(detailText).not.toContain("PRIVATE CREDENTIAL");
+
+    const refresh = renderer.root
+      .findAllByType("button")
+      .find((item) => renderedText(item).trim() === "Refresh detail");
+    if (refresh === undefined)
+      throw new Error("Detail refresh did not render.");
+    await act(async () => {
+      (refresh.props.onClick as () => void)();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(getRequest).toHaveBeenCalledTimes(2);
+    expect(getRequest).toHaveBeenLastCalledWith(
+      globalScope,
+      "request-1",
+      expect.any(AbortSignal),
+    );
+
+    const back = renderer.root
+      .findAllByType("button")
+      .find((item) => renderedText(item).trim() === "Back to requests");
+    if (back === undefined)
+      throw new Error("Detail back action did not render.");
+    act(() => {
+      (back.props.onClick as () => void)();
+    });
+    expect(renderedText(renderer.root)).toContain("View request");
+    act(() => {
+      renderer.unmount();
+    });
+  });
+
+  it.each([
+    [404, "The logical request is missing"],
+    [403, "The logical request is forbidden"],
+    [500, "Request detail is not available"],
+  ])(
+    "shows an explicit request-detail read state for HTTP %i",
+    async (status, title) => {
+      const pending = deferred<RequestStatus>();
+      const detailClient: AdministrationClient = {
+        ...client,
+        getRequest: vi.fn(() => pending.promise),
+      };
+      let renderer!: ReactTestRenderer;
+      act(() => {
+        renderer = create(
+          <AdministrationDashboard
+            client={detailClient}
+            initialSection="requests"
+            notice={null}
+            onNotice={vi.fn()}
+            onReload={vi.fn()}
+            scope={globalScope}
+            services={[registeredService]}
+            snapshot={snapshot}
+          />,
+        );
+      });
+      const view = renderer.root
+        .findAllByType("button")
+        .find((item) => renderedText(item).trim() === "View request");
+      if (view === undefined)
+        throw new Error("Request detail action did not render.");
+      act(() => {
+        (view.props.onClick as () => void)();
+      });
+      expect(renderedText(renderer.root)).toContain("Loading request detail");
+      await act(async () => {
+        pending.reject(
+          new AdministrationApiError("The safe read failed.", {
+            code: status === 404 ? "request_not_found" : "insufficient_scope",
+            requestId: null,
+            status,
+          }),
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(renderedText(renderer.root)).toContain(title);
+      expect(renderedText(renderer.root)).toContain("Back to requests");
+      act(() => {
+        renderer.unmount();
+      });
+    },
+  );
+  /* eslint-enable @typescript-eslint/no-deprecated */
 
   it("shows all exact budget totals and the current revision", () => {
     const html = dashboard("budgets");

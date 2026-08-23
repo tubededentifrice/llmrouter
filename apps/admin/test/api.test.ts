@@ -779,4 +779,55 @@ describe("administration API client", () => {
       "/v1/admin/services/service-one/budgets?workspace_id=workspace-one",
     );
   });
+
+  it("loads one request detail only in the exact selected scope", async () => {
+    const paths: string[] = [];
+    const fetcher = vi.fn((input: string | URL | Request) => {
+      paths.push(requestUrl(input));
+      return Promise.resolve(
+        json({
+          request_id: "request/with a space",
+          state: "succeeded",
+          state_revision: 4,
+          attempts: [],
+        }),
+      );
+    });
+    const client = createFetchAdministrationClient({ fetcher });
+    const detail = await client.getRequest(scope, "request/with a space");
+    expect(detail.state).toBe("succeeded");
+    expect(paths).toEqual([
+      "/v1/admin/services/service-one/model-requests/request%2Fwith%20a%20space?workspace_id=workspace-one",
+    ]);
+  });
+
+  it.each([
+    [403, "insufficient_scope"],
+    [404, "request_not_found"],
+  ])(
+    "keeps a safe request-detail failure for HTTP %i",
+    async (status, code) => {
+      const client = createFetchAdministrationClient({
+        fetcher: vi.fn(() =>
+          Promise.resolve(
+            json(
+              {
+                error: {
+                  code,
+                  message: "The safe request detail is not available.",
+                },
+              },
+              status,
+            ),
+          ),
+        ),
+      });
+      await expect(
+        client.getRequest(scope, "request-one"),
+      ).rejects.toMatchObject({
+        code,
+        status,
+      });
+    },
+  );
 });

@@ -334,7 +334,7 @@ def _resume() -> None:
         ).fetchone()
         assert cancelled_accounting == (1,)
     _prove_service_scoped_embed()
-    _prove_global_administration()
+    _prove_global_administration(str(state["successful_id"]))
     print(
         "The deterministic API, accounting, persistence, recovery, and embed proof "
         "passed."
@@ -377,7 +377,7 @@ def _prove_service_scoped_embed() -> None:
         assert "Configuration" in new_text
 
 
-def _prove_global_administration() -> None:
+def _prove_global_administration(successful_request_id: str) -> None:
     """Prove deterministic global administration data and secret controls."""
     with _CdpBrowser() as browser:
         browser.navigate(f"http://127.0.0.1:5174/?view=global&service_id={SERVICE_ID}")
@@ -463,6 +463,32 @@ def _prove_global_administration() -> None:
             "4.5"
         )
         assert browser.definition_value("Revision") != old_budget_revision
+        browser.navigate(
+            "http://127.0.0.1:5174/?view=global"
+            f"&service_id={SERVICE_ID}&workspace_id={WORKSPACE_ID}"
+        )
+        browser.wait_for_text("Effective configuration")
+        browser.click_button("Requests")
+        browser.wait_for_text(successful_request_id)
+        browser.click_request_detail(successful_request_id)
+        browser.wait_for_text("Ordered provider attempts")
+        detail_text = browser.body_text()
+        assert SERVICE_ID in detail_text and WORKSPACE_ID in detail_text
+        assert "No retry. Router used the next fallback." in detail_text
+        assert (
+            "The attempt succeeded. Router did not use another fallback." in detail_text
+        )
+        attempt_rows = browser.request_attempt_rows()
+        assert len(attempt_rows) == 2
+        assert "failed" in attempt_rows[0]
+        assert "succeeded" in attempt_rows[1]
+        assert "Return the deterministic response." not in detail_text
+        assert "local response" not in detail_text
+        browser.click_button("Refresh detail")
+        browser.wait_for_text("Ordered provider attempts")
+        assert browser.request_attempt_rows() == attempt_rows
+        browser.click_button("Back to requests")
+        browser.wait_for_text(successful_request_id)
         browser.click_button("Provider credentials")
         browser.wait_for_text("Store OpenRouter credential")
         credential_count = browser.evaluate(
@@ -732,6 +758,40 @@ class _CdpBrowser:
             }})()"""
         )
         return value if isinstance(value, str) else ""
+
+    def click_request_detail(self, request_id: str) -> None:
+        """Open one logical request from its exact table row."""
+        clicked = self.evaluate(
+            f"""(() => {{
+              const row = [...document.querySelectorAll("table tbody tr")]
+                .find((item) => item.querySelector("strong")?.textContent?.trim()
+                  === {json.dumps(request_id)});
+              const button = [...(row?.querySelectorAll("button") ?? [])]
+                .find((item) => item.textContent?.trim() === "View request");
+              if (button === undefined) return false;
+              button.click();
+              return true;
+            }})()"""
+        )
+        assert clicked is True
+
+    def request_attempt_rows(self) -> list[str]:
+        """Read the ordered provider-attempt rows from request detail."""
+        value = self.evaluate(
+            """(() => {
+              const heading = [...document.querySelectorAll("h3")]
+                .find((item) => item.textContent?.trim()
+                  === "Ordered provider attempts");
+              const table = heading?.parentElement?.querySelector("table");
+              return [...(table?.querySelectorAll("tbody tr") ?? [])]
+                .map((row) => row.textContent?.trim() ?? "");
+            })()"""
+        )
+        if not isinstance(value, list) or not all(
+            isinstance(item, str) for item in value
+        ):
+            raise AssertionError("The ordered request attempts are not available.")
+        return value
 
     def change_credential(
         self,

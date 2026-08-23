@@ -40,8 +40,11 @@ import {
   errorMessage,
   inspectLocalAdministratorSession,
   scheduleAdministrationSessionInspection,
+  scopeFromSearch,
+  scopeSearch,
   startPocketIDAdministratorSession,
   startPocketIDRecentAuthentication,
+  AdministrationApiError,
   type AccountingSummary,
   type AdministrationClient,
   type AdministrationSnapshot,
@@ -52,6 +55,8 @@ import {
   type ProviderInstance,
   type ProviderModelRoute,
   type RequestStatus,
+  type RequestAttemptStatus,
+  type RequestFailureClass,
   type ScopeSelection,
   type ServiceCreated,
   type ServiceSummary,
@@ -132,22 +137,28 @@ const emptyGlobalFailures: GlobalFailures = {};
 
 function initialScope(): ScopeSelection {
   const search = "location" in globalThis ? globalThis.location.search : "";
-  const query = new URLSearchParams(search);
-  return {
-    mode: "global",
-    serviceId: query.get("service_id") ?? "",
-    workspaceId: "",
-  };
+  return scopeFromSearch(search);
 }
 
 function toneForState(state: string): "green" | "amber" | "red" | "blue" {
   if (state === "active" || state === "succeeded" || state === "current") {
     return "green";
   }
-  if (state === "disabled" || state === "running" || state === "distributing") {
+  if (
+    state === "disabled" ||
+    state === "running" ||
+    state === "cancel_requested" ||
+    state === "distributing"
+  ) {
     return "amber";
   }
-  if (state === "failed" || state === "cancelled" || state === "retired") {
+  if (
+    state === "failed" ||
+    state === "cancelled" ||
+    state === "interrupted" ||
+    state === "uncertain" ||
+    state === "retired"
+  ) {
     return "red";
   }
   return "blue";
@@ -1508,7 +1519,7 @@ function AssignmentTable({
       <table>
         <thead>
           <tr>
-            <th>Assignment</th>
+            <th>Assignment or route</th>
             <th>Complete ordered chain</th>
             <th>State</th>
             <th>Revision</th>
@@ -1647,10 +1658,57 @@ function AssignmentsView(props: {
   );
 }
 
+function requestFailureLabel(value: RequestFailureClass): string {
+  const labels: Readonly<Record<RequestFailureClass, string>> = {
+    authentication: "Authentication",
+    policy: "Policy",
+    budget: "Budget",
+    rate_limit: "Rate limit",
+    timeout: "Availability: timeout",
+    transport: "Availability: transport",
+    provider_unavailable: "Availability: provider",
+    invalid_provider_response: "Availability: invalid response",
+    incompatible_request: "Compatibility",
+    cancelled: "Cancellation",
+    uncertain_effect: "Cancellation: uncertain effect",
+    router_internal: "Router internal",
+  };
+  return labels[value];
+}
+
+function attemptDecision(value: RequestAttemptStatus["decision"]): string {
+  switch (value) {
+    case "next_candidate":
+      return "No retry. Router used the next fallback.";
+    case "stop_request":
+      return "No retry or fallback. Router stopped the logical request.";
+    case "commit_boundary":
+      return "No retry or fallback. Router stopped after a committed effect.";
+    case "cancelled":
+      return "No retry or fallback. Router stopped for cancellation.";
+    case "succeeded":
+      return "The attempt succeeded. Router did not use another fallback.";
+    case undefined:
+      return "The Router decision is pending.";
+  }
+}
+
+function RequestTime({ value }: { readonly value: string | undefined }) {
+  return value === undefined ? (
+    <>Not reported</>
+  ) : (
+    <time dateTime={value}>{value}</time>
+  );
+}
+
 function RequestTable({
+  scope,
   values,
+  onSelect,
 }: {
+  readonly scope: ScopeSelection;
   readonly values: readonly RequestStatus[];
+  readonly onSelect: (requestId: string) => void;
 }) {
   return (
     <div className="table-scroll">
@@ -1663,11 +1721,12 @@ function RequestTable({
             <th>State</th>
             <th>Revision</th>
             <th>Safe diagnostic</th>
+            <th>Action</th>
           </tr>
         </thead>
         <tbody>
           {values.length === 0 ? (
-            <EmptyRow columns={6}>
+            <EmptyRow columns={7}>
               No request status is available for this service.
             </EmptyRow>
           ) : (
@@ -1676,18 +1735,29 @@ function RequestTable({
                 <td>
                   <strong>{item.request_id}</strong>
                 </td>
-                <td>{item.workspace_id ?? "Service level"}</td>
-                <td>{item.assignment ?? "Not reported"}</td>
+                <td>
+                  {scope.workspaceId === ""
+                    ? "Service level"
+                    : scope.workspaceId}
+                </td>
+                <td>{item.assignment ?? item.exact_route ?? "Not reported"}</td>
                 <td>
                   <StatusPill tone={toneForState(item.state)}>
                     {item.state}
                   </StatusPill>
                 </td>
-                <td>{item.state_revision ?? "—"}</td>
+                <td>{item.state_revision}</td>
+                <td>{item.error?.message ?? "No safe diagnostic"}</td>
                 <td>
-                  {item.error?.message ??
-                    item.error?.code ??
-                    "No safe diagnostic"}
+                  <Button
+                    variant="quiet"
+                    aria-label={`View request ${item.request_id}`}
+                    onClick={() => {
+                      onSelect(item.request_id);
+                    }}
+                  >
+                    View request
+                  </Button>
                 </td>
               </tr>
             ))
@@ -1695,6 +1765,369 @@ function RequestTable({
         </tbody>
       </table>
     </div>
+  );
+}
+
+function RequestAttemptTable({
+  values,
+}: {
+  readonly values: readonly RequestAttemptStatus[];
+}) {
+  return (
+    <div className="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Order</th>
+            <th>Provider-model route</th>
+            <th>State and time</th>
+            <th>Failure and scope</th>
+            <th>Router decision</th>
+            <th>Usage and price</th>
+          </tr>
+        </thead>
+        <tbody>
+          {values.length === 0 ? (
+            <EmptyRow columns={6}>
+              No provider attempt has started for this logical request.
+            </EmptyRow>
+          ) : (
+            values.map((attempt, index) => (
+              <tr key={attempt.attempt_id}>
+                <td>
+                  <strong>{String(index + 1)}</strong>
+                  <small>{attempt.attempt_id}</small>
+                </td>
+                <td>
+                  <strong>{attempt.provider_model_route_id}</strong>
+                  <small>
+                    Assignment revision {attempt.assignment_revision}
+                  </small>
+                </td>
+                <td>
+                  <StatusPill tone={toneForState(attempt.state)}>
+                    {attempt.state}
+                  </StatusPill>
+                  <small>
+                    Started <RequestTime value={attempt.started_at} />
+                  </small>
+                  <small>
+                    Ended <RequestTime value={attempt.ended_at} />
+                  </small>
+                </td>
+                <td>
+                  {attempt.error === undefined ? (
+                    "No normalized failure"
+                  ) : (
+                    <>
+                      <strong>
+                        {requestFailureLabel(attempt.error.class)}
+                      </strong>
+                      <small>Class: {attempt.error.class}</small>
+                      <small>Scope: {attempt.error.affected_scope}</small>
+                      {attempt.error.safe_provider_code === undefined ? null : (
+                        <small>
+                          Safe provider code: {attempt.error.safe_provider_code}
+                        </small>
+                      )}
+                    </>
+                  )}
+                </td>
+                <td>{attemptDecision(attempt.decision)}</td>
+                <td>
+                  {attempt.usage === undefined || attempt.usage.length === 0 ? (
+                    <span>No usage reported</span>
+                  ) : (
+                    <ul className="request-usage-list">
+                      {attempt.usage.map((usage) => (
+                        <li key={usage.unit}>
+                          {usage.quantity} {usage.unit}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <small>
+                    Price version {attempt.price_version ?? "Not reported"}
+                  </small>
+                </td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function RequestDetail({
+  scope,
+  value,
+  onBack,
+  onRefresh,
+}: {
+  readonly scope: ScopeSelection;
+  readonly value: RequestStatus;
+  readonly onBack: () => void;
+  readonly onRefresh: () => void;
+}) {
+  return (
+    <div className="request-detail">
+      <div className="request-detail-actions">
+        <Button variant="secondary" onClick={onBack}>
+          Back to requests
+        </Button>
+        <Button
+          variant="quiet"
+          icon={<Icon name="refresh" size={16} />}
+          onClick={onRefresh}
+        >
+          Refresh detail
+        </Button>
+      </div>
+      <PanelHeader
+        kicker="Content-free request detail"
+        title={value.request_id}
+        description="This detail contains safe status and accounting only. It does not contain prompts, results, tool values, raw provider-error content, credentials, or secrets."
+      />
+      <dl className="request-detail-summary">
+        <div>
+          <dt>Service</dt>
+          <dd>{scope.serviceId}</dd>
+        </div>
+        <div>
+          <dt>Workspace</dt>
+          <dd>
+            {scope.workspaceId === "" ? "Service level" : scope.workspaceId}
+          </dd>
+        </div>
+        <div>
+          <dt>Assignment or diagnostic route</dt>
+          <dd>{value.assignment ?? value.exact_route ?? "Not reported"}</dd>
+        </div>
+        <div>
+          <dt>Configuration revision</dt>
+          <dd>{value.configuration_revision}</dd>
+        </div>
+        <div>
+          <dt>State</dt>
+          <dd>
+            <StatusPill tone={toneForState(value.state)}>
+              {value.state}
+            </StatusPill>
+            <span>Revision {value.state_revision}</span>
+          </dd>
+        </div>
+        <div>
+          <dt>Admitted</dt>
+          <dd>
+            <RequestTime value={value.admitted_at} />
+          </dd>
+        </div>
+        <div>
+          <dt>Last transition</dt>
+          <dd>
+            <RequestTime value={value.last_transition_at} />
+          </dd>
+        </div>
+        <div>
+          <dt>Terminal</dt>
+          <dd>
+            <RequestTime value={value.terminal_at} />
+          </dd>
+        </div>
+        <div>
+          <dt>Partial output</dt>
+          <dd>{value.partial_output ? "Yes" : "No"}</dd>
+        </div>
+        <div>
+          <dt>Committed effect</dt>
+          <dd>{value.committed_effects ? "Yes" : "No"}</dd>
+        </div>
+      </dl>
+      {value.error === undefined || value.error === null ? null : (
+        <section
+          className="request-terminal-error"
+          aria-labelledby="terminal-error-title"
+        >
+          <h3 id="terminal-error-title">Safe terminal diagnostic</h3>
+          <p>
+            {requestFailureLabel(value.error.class)} · {value.error.class} ·
+            scope {value.error.affected_scope}
+          </p>
+          <p>{value.error.message}</p>
+          {value.error.safe_provider_code === undefined ? null : (
+            <p>Safe provider code: {value.error.safe_provider_code}</p>
+          )}
+        </section>
+      )}
+      <section
+        className="request-detail-section"
+        aria-labelledby="attempts-title"
+      >
+        <h3 id="attempts-title">Ordered provider attempts</h3>
+        <RequestAttemptTable values={value.attempts} />
+      </section>
+      <section
+        className="request-detail-section"
+        aria-labelledby="accounting-title"
+      >
+        <h3 id="accounting-title">Bounded logical accounting</h3>
+        <dl className="request-accounting-summary">
+          <div>
+            <dt>Estimated</dt>
+            <dd>
+              {value.accounting.estimated} {value.accounting.currency}
+            </dd>
+          </div>
+          <div>
+            <dt>Reserved</dt>
+            <dd>
+              {value.accounting.reserved} {value.accounting.currency}
+            </dd>
+          </div>
+          <div>
+            <dt>Used</dt>
+            <dd>
+              {value.accounting.used} {value.accounting.currency}
+            </dd>
+          </div>
+          <div>
+            <dt>Corrected total</dt>
+            <dd>
+              {value.accounting.corrected} {value.accounting.currency}
+            </dd>
+          </div>
+        </dl>
+      </section>
+    </div>
+  );
+}
+
+function requestDetailFailure(error: unknown): {
+  readonly title: string;
+  readonly message: string;
+} {
+  if (error instanceof AdministrationApiError && error.status === 404) {
+    return {
+      title: "The logical request is missing",
+      message:
+        "The request is absent, hidden from this scope, or no longer retained.",
+    };
+  }
+  if (error instanceof AdministrationApiError && error.status === 403) {
+    return {
+      title: "The logical request is forbidden",
+      message:
+        "The administrator cannot read this request in the selected service and workspace.",
+    };
+  }
+  return {
+    title: "Request detail is not available",
+    message: errorMessage(error),
+  };
+}
+
+function RequestsView({
+  client,
+  scope,
+  values,
+}: {
+  readonly client: AdministrationClient;
+  readonly scope: ScopeSelection;
+  readonly values: readonly RequestStatus[];
+}) {
+  const [selectedRequestId, setSelectedRequestId] = useState<string | null>(
+    null,
+  );
+  const [detail, setDetail] = useState<RequestStatus | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailFailure, setDetailFailure] = useState<{
+    readonly title: string;
+    readonly message: string;
+  } | null>(null);
+  const controller = useRef<AbortController | null>(null);
+
+  useEffect(
+    () => () => {
+      controller.current?.abort();
+    },
+    [],
+  );
+
+  const loadDetail = useCallback(
+    async (requestId: string) => {
+      controller.current?.abort();
+      const nextController = new AbortController();
+      controller.current = nextController;
+      setSelectedRequestId(requestId);
+      setDetail(null);
+      setDetailFailure(null);
+      setDetailLoading(true);
+      try {
+        const value = await client.getRequest(
+          scope,
+          requestId,
+          nextController.signal,
+        );
+        if (!nextController.signal.aborted) setDetail(value);
+      } catch (error) {
+        if (!nextController.signal.aborted) {
+          setDetailFailure(requestDetailFailure(error));
+        }
+      } finally {
+        if (!nextController.signal.aborted) setDetailLoading(false);
+      }
+    },
+    [client, scope],
+  );
+
+  function backToList() {
+    controller.current?.abort();
+    setSelectedRequestId(null);
+    setDetail(null);
+    setDetailFailure(null);
+    setDetailLoading(false);
+  }
+
+  if (selectedRequestId === null) {
+    return (
+      <RequestTable
+        scope={scope}
+        values={values}
+        onSelect={(id) => void loadDetail(id)}
+      />
+    );
+  }
+  if (detailLoading) {
+    return (
+      <StatePanel kind="loading" title="Loading request detail">
+        The Router is loading safe status for {selectedRequestId}.
+      </StatePanel>
+    );
+  }
+  if (detailFailure !== null) {
+    return (
+      <div className="request-detail-state">
+        <StatePanel
+          kind="error"
+          title={detailFailure.title}
+          onRetry={() => void loadDetail(selectedRequestId)}
+        >
+          {detailFailure.message}
+        </StatePanel>
+        <Button variant="secondary" onClick={backToList}>
+          Back to requests
+        </Button>
+      </div>
+    );
+  }
+  return detail === null ? null : (
+    <RequestDetail
+      scope={scope}
+      value={detail}
+      onBack={backToList}
+      onRefresh={() => void loadDetail(selectedRequestId)}
+    />
   );
 }
 
@@ -2806,7 +3239,12 @@ export function AdministrationDashboard({
             description="This view does not contain prompts, model output, or provider secrets."
           />
           {snapshot.failures.requests === undefined ? (
-            <RequestTable values={snapshot.requests} />
+            <RequestsView
+              key={`${scope.serviceId}:${scope.workspaceId}`}
+              client={client}
+              scope={scope}
+              values={snapshot.requests}
+            />
           ) : (
             <ScopedReadFailure
               title="Request status is not available"
@@ -3389,9 +3827,7 @@ export function App({
     setFailure(null);
     setLoading(next.serviceId !== "");
     setScope(next);
-    const query = new URLSearchParams();
-    if (next.serviceId !== "") query.set("service_id", next.serviceId);
-    const suffix = query.toString();
+    const suffix = scopeSearch(next);
     globalThis.history.replaceState(
       null,
       "",

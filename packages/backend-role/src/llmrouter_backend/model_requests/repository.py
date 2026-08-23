@@ -257,6 +257,8 @@ def _attempts(
         }
         if row["finished_at"] is not None:
             item["ended_at"] = _timestamp(row["finished_at"])
+        if row["retry_decision"] is not None:
+            item["decision"] = str(row["retry_decision"])
         if row["normalized_error_class"] is not None:
             error: dict[str, str] = {
                 "class": str(row["normalized_error_class"]),

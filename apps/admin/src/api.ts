@@ -42,6 +42,22 @@ export interface ScopeSelection {
   readonly workspaceId: string;
 }
 
+export function scopeFromSearch(search: string): ScopeSelection {
+  const query = new URLSearchParams(search);
+  return {
+    mode: "global",
+    serviceId: query.get("service_id") ?? "",
+    workspaceId: query.get("workspace_id") ?? "",
+  };
+}
+
+export function scopeSearch(scope: ScopeSelection): string {
+  const query = new URLSearchParams();
+  if (scope.serviceId !== "") query.set("service_id", scope.serviceId);
+  if (scope.workspaceId !== "") query.set("workspace_id", scope.workspaceId);
+  return query.toString();
+}
+
 export interface ScopedState {
   readonly kind: "service" | "workspace";
   readonly service_id: string;
@@ -168,15 +184,88 @@ export interface Assignment {
   readonly required_capabilities: readonly string[];
 }
 
+export type RequestFailureClass =
+  | "authentication"
+  | "policy"
+  | "budget"
+  | "rate_limit"
+  | "timeout"
+  | "transport"
+  | "provider_unavailable"
+  | "invalid_provider_response"
+  | "incompatible_request"
+  | "cancelled"
+  | "uncertain_effect"
+  | "router_internal";
+
+export type RequestFailureScope =
+  | "attempt"
+  | "provider_model_route"
+  | "provider_instance"
+  | "credential"
+  | "assignment_candidate"
+  | "logical_request";
+
+export interface SafeRequestError {
+  readonly class: RequestFailureClass;
+  readonly affected_scope: RequestFailureScope;
+  readonly message: string;
+  readonly safe_provider_code?: string;
+}
+
+export interface RequestAttemptStatus {
+  readonly attempt_id: string;
+  readonly provider_model_route_id: string;
+  readonly state:
+    "running" | "succeeded" | "failed" | "cancelled" | "uncertain";
+  readonly started_at: string;
+  readonly ended_at?: string;
+  readonly assignment_revision: string;
+  readonly decision?:
+    | "next_candidate"
+    | "stop_request"
+    | "commit_boundary"
+    | "cancelled"
+    | "succeeded";
+  readonly error?: SafeRequestError;
+  readonly usage?: readonly {
+    readonly unit: string;
+    readonly quantity: string;
+  }[];
+  readonly price_version?: string;
+}
+
+export interface RequestAccounting {
+  readonly estimated: string;
+  readonly reserved: string;
+  readonly used: string;
+  readonly corrected: string;
+  readonly currency: string;
+}
+
 export interface RequestStatus {
   readonly request_id: string;
-  readonly workspace_id?: string | null;
   readonly assignment?: string;
-  readonly state: string;
-  readonly state_revision?: number | string;
-  readonly created_at?: string;
-  readonly updated_at?: string;
-  readonly error?: { readonly code?: string; readonly message?: string } | null;
+  readonly exact_route?: string;
+  readonly state:
+    | "admitted"
+    | "running"
+    | "succeeded"
+    | "failed"
+    | "interrupted"
+    | "cancel_requested"
+    | "cancelled"
+    | "uncertain";
+  readonly state_revision: number;
+  readonly admitted_at: string;
+  readonly last_transition_at: string;
+  readonly terminal_at?: string;
+  readonly partial_output: boolean;
+  readonly committed_effects: boolean;
+  readonly configuration_revision: string;
+  readonly attempts: readonly RequestAttemptStatus[];
+  readonly accounting: RequestAccounting;
+  readonly error?: SafeRequestError | null;
 }
 
 export interface AccountingSummary {
@@ -320,6 +409,11 @@ export interface AdministrationClient {
     scope: ScopeSelection,
     signal?: AbortSignal,
   ): Promise<AdministrationSnapshot>;
+  getRequest(
+    scope: ScopeSelection,
+    requestId: string,
+    signal?: AbortSignal,
+  ): Promise<RequestStatus>;
   createCredential(input: {
     readonly ownerScope: string;
     readonly secret: string;
@@ -955,6 +1049,17 @@ export function createFetchAdministrationClient({
         configuration_revision: configurationRevision,
         failures,
       };
+    },
+
+    getRequest(scope, requestId, signal) {
+      return request<RequestStatus>(
+        servicePath(
+          scope,
+          `model-requests/${encodeURIComponent(requestId)}`,
+          true,
+        ),
+        signal === undefined ? {} : { signal },
+      );
     },
 
     createCredential(input) {

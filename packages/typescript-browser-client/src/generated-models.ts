@@ -98,7 +98,7 @@ export type CancelRequest = { readonly reason: string; };
 
 export type RequestStatus = { readonly request_id: UuidV7; readonly run_id?: OpaqueId; readonly state: RequestState; readonly state_revision: number; readonly admitted_at: Timestamp; readonly last_transition_at: Timestamp; readonly terminal_at?: Timestamp; readonly partial_output: boolean; readonly committed_effects: boolean; readonly configuration_revision: OpaqueId; readonly assignment: AssignmentName; readonly admission: AdmissionReceipt; readonly owner_epoch?: number; readonly attempts: ReadonlyArray<AttemptStatus>; readonly tool_calls: ReadonlyArray<ToolCallStatus>; readonly result?: OutputResult; readonly error?: TerminalError; readonly accounting: RequestAccounting; } | { readonly request_id: UuidV7; readonly run_id?: OpaqueId; readonly state: RequestState; readonly state_revision: number; readonly admitted_at: Timestamp; readonly last_transition_at: Timestamp; readonly terminal_at?: Timestamp; readonly partial_output: boolean; readonly committed_effects: boolean; readonly configuration_revision: OpaqueId; readonly exact_route: OpaqueId; readonly admission: AdmissionReceipt; readonly owner_epoch?: number; readonly attempts: ReadonlyArray<AttemptStatus>; readonly tool_calls: ReadonlyArray<ToolCallStatus>; readonly result?: OutputResult; readonly error?: TerminalError; readonly accounting: RequestAccounting; };
 
-export type AttemptStatus = { readonly attempt_id: OpaqueId; readonly provider_model_route_id: OpaqueId; readonly state: "running" | "succeeded" | "failed" | "cancelled" | "uncertain"; readonly started_at: Timestamp; readonly ended_at?: Timestamp; readonly assignment_revision: OpaqueId; readonly error?: TerminalError; readonly usage?: ReadonlyArray<UsageComponent>; readonly price_version?: OpaqueId; };
+export type AttemptStatus = { readonly attempt_id: OpaqueId; readonly provider_model_route_id: OpaqueId; readonly state: "running" | "succeeded" | "failed" | "cancelled" | "uncertain"; readonly started_at: Timestamp; readonly ended_at?: Timestamp; readonly assignment_revision: OpaqueId; readonly decision?: "next_candidate" | "stop_request" | "commit_boundary" | "cancelled" | "succeeded"; readonly error?: TerminalError; readonly usage?: ReadonlyArray<UsageComponent>; readonly price_version?: OpaqueId; };
 
 export type ToolCallStatus = { readonly tool_call_id: OpaqueId; readonly tool_name: string; readonly tool_kind: "shared" | "business"; readonly state: "pending" | "running" | "succeeded" | "failed" | "cancelled" | "uncertain"; readonly committed_effect?: boolean; readonly error?: TerminalError; };
 
@@ -1692,6 +1692,17 @@ export const contractSchemas = {
       },
       "attempt_id": {
         "$ref": "#/components/schemas/OpaqueId"
+      },
+      "decision": {
+        "description": "The safe Router retry, fallback, or stop decision for a terminal attempt.",
+        "enum": [
+          "next_candidate",
+          "stop_request",
+          "commit_boundary",
+          "cancelled",
+          "succeeded"
+        ],
+        "type": "string"
       },
       "ended_at": {
         "$ref": "#/components/schemas/Timestamp"
