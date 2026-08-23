@@ -1,5 +1,5 @@
 """Compose the complete localhost-only MVP runtime."""
-# ruff: noqa: D102, D107, EM101, PLR0913, PLR0915, TRY003
+# ruff: noqa: BLE001, C901, D102, D107, EM101, PLR0913, PLR0915, TRY003, TRY400
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import json
 import logging
+import secrets
 import threading
 import uuid
 from base64 import b64decode, b64encode
@@ -61,11 +62,13 @@ from llmrouter_backend.configuration import (
     RevisionAuthenticator,
     SettingsSchemaRegistry,
 )
+from llmrouter_backend.content import MemoryObjectStore, PostgresContentRepository
 from llmrouter_backend.credential_store import (
     DataPlaneCredentialDistributor,
     EncryptedCredentialRepository,
     SecretLease,
 )
+from llmrouter_backend.credential_store.crypto import EnvelopeCipher
 from llmrouter_backend.execution import (
     AdapterStopEvidence,
     ErrorScope,
@@ -537,6 +540,18 @@ def install_local_runtime(
     views = PostgresModelRequestViews(database_url)
     accounting = PostgresAccountingRepository(database_url)
     budget_repository = PostgresBudgetRepository(database_url)
+    content = PostgresContentRepository(
+        database_url,
+        cipher=EnvelopeCipher(
+            {"local-v1": wrapping_key},
+            current_key_id="local-v1",
+            random_bytes=secrets.token_bytes,
+        ),
+        object_store=MemoryObjectStore(),
+        token_digest_key=hmac.digest(
+            digest_key, b"llmrouter-export-token-v1", "sha256"
+        ),
+    )
     replay = LocalReplayProtector(replay_path, replay_key)
     local_authority = LocalAdministratorAuthority(admin_session, admin_csrf)
     authority = (
@@ -685,6 +700,34 @@ def install_local_runtime(
                 raise
 
     submitter = ThreadWorkSubmitter(maximum_workers=4)
+    export_submitter = ThreadWorkSubmitter(maximum_workers=1)
+
+    def run_export_jobs() -> None:
+        while True:
+            lease = content.claim_lifecycle_job(
+                "0198a080-0000-7000-8000-000000000151",
+                now=_now(),
+                job_kind="export",
+            )
+            if lease is None:
+                return
+            try:
+                content.run_lifecycle_job(lease, now=_now())
+            except Exception:
+                _LOGGER.error(
+                    "A local content lifecycle job failed without content detail."
+                )
+                try:
+                    content.fail_lifecycle_job(
+                        lease,
+                        now=_now(),
+                        safe_error="The Router could not build this export.",
+                    )
+                except Exception:
+                    _LOGGER.error(
+                        "A local export failure could not reach a terminal state."
+                    )
+
     diagnostic_authenticator = TransientDiagnosticAuthenticator(machine)
     service = ModelRequestService(
         authenticator=diagnostic_authenticator,
@@ -717,6 +760,11 @@ def install_local_runtime(
             diagnostics=AdministratorDiagnosticRunner(
                 routing_repository, service, diagnostic_authenticator
             ),
+            exports=content,
+            export_session_key=hmac.digest(
+                digest_key, b"llmrouter-export-session-v1", "sha256"
+            ),
+            export_submit=lambda: export_submitter(run_export_jobs),
             machine=machine,
         ),
     )
@@ -733,7 +781,10 @@ def install_local_runtime(
         try:
             submitter.close()
         finally:
-            replay.close()
+            try:
+                export_submitter.close()
+            finally:
+                replay.close()
 
     app.router.add_event_handler("shutdown", shutdown_local_runtime)
 

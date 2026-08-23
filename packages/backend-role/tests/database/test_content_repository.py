@@ -1,5 +1,5 @@
 """PostgreSQL content capture, retention, export, and fencing tests."""
-# ruff: noqa: E501, PLR2004, PT018
+# ruff: noqa: E501, PLR0913, PLR2004, PT018
 
 from __future__ import annotations
 
@@ -62,6 +62,7 @@ def _context(
     global_authority: bool = True,
     actor_id: str = "administrator",
     recent: datetime | None = NOW,
+    scope: Scope | None = None,
 ) -> RequestContext:
     return RequestContext(
         request_id=f"transport-{operation}-{mutation}",
@@ -75,7 +76,11 @@ def _context(
         authority_path=AuthorityPath.GLOBAL_ADMINISTRATION,
         machine_audience=None,
         operation=operation,
-        scope=Scope() if global_authority else Scope(SERVICE_ID, WORKSPACE_ID),
+        scope=(
+            scope
+            if scope is not None
+            else (Scope() if global_authority else Scope(SERVICE_ID, WORKSPACE_ID))
+        ),
         authorized_at=NOW,
         recent_authentication_at=recent,
         mutation=mutation,
@@ -590,7 +595,9 @@ def test_protected_export_current_session_one_use_and_token_race(
         authenticated_control_values=(),
         now=NOW,
     )
-    export_context = _context("export.create", mutation=True)
+    export_context = _context(
+        "export.create", mutation=True, scope=Scope(SERVICE_ID, WORKSPACE_ID)
+    )
     content_context = _context("content.read", mutation=False)
     request = ExportRequest(
         ExportDataClass.CAPTURED_CONTENT,
@@ -639,8 +646,39 @@ def test_protected_export_current_session_one_use_and_token_race(
     lease = repository.claim_lifecycle_job(NODE_ONE, now=NOW)
     assert lease is not None and lease.job_kind == "export"
     repository.run_lifecycle_job(lease, now=NOW)
+    with pytest.raises(ContentError) as wrong_session:
+        repository.export_status(
+            _context(
+                "export.create",
+                mutation=False,
+                recent=None,
+                scope=Scope(SERVICE_ID, WORKSPACE_ID),
+            ),
+            operation.operation_id,
+            administrator_session_id="session-two",
+            now=NOW,
+        )
+    assert wrong_session.value.code is ContentErrorCode.NOT_FOUND
+    with pytest.raises(ContentError) as wrong_scope:
+        repository.export_status(
+            _context(
+                "export.create",
+                mutation=False,
+                recent=None,
+                scope=Scope(SERVICE_ID, OTHER_WORKSPACE_ID),
+            ),
+            operation.operation_id,
+            administrator_session_id="session-one",
+            now=NOW,
+        )
+    assert wrong_scope.value.code is ContentErrorCode.NOT_FOUND
     status = repository.export_status(
-        _context("export.create", mutation=False, recent=None),
+        _context(
+            "export.create",
+            mutation=False,
+            recent=None,
+            scope=Scope(SERVICE_ID, WORKSPACE_ID),
+        ),
         operation.operation_id,
         administrator_session_id="session-one",
         now=NOW,
@@ -728,6 +766,188 @@ def test_non_content_export_classes_build_and_redeem(
         )
         if data_class is ExportDataClass.AUDIT:
             assert b'"action":"export.create"' in redeemed.value
+
+
+def test_non_content_exports_redact_unpublished_audit_and_configuration_values(
+    database_url: str,
+    repository: PostgresContentRepository,
+) -> None:
+    """Keep useful configuration fields without sensitive or unpublished values."""
+    with psycopg.connect(database_url) as connection:
+        connection.execute(
+            """INSERT INTO router.audit_events (
+                   event_id, audit_class, actor_kind, actor_id, authority_class,
+                   service_id, workspace_id, action, permission_result,
+                   safe_details, occurred_at
+               ) VALUES (%s, 'global_administration', 'administrator',
+                         'raw-private-actor', 'global_administrator', NULL, NULL,
+                         'private.prompt', 'permitted',
+                         '{"prompt":"private prompt","token":"private token"}'::jsonb,
+                         %s)""",
+            (uuid.uuid4(), NOW),
+        )
+        revision_row = connection.execute(
+            """SELECT coalesce(max(revision_number), 0) + 1
+               FROM router.configuration_revisions
+               WHERE scope_kind = 'global'"""
+        ).fetchone()
+        assert revision_row is not None
+        revision_number = revision_row[0]
+        connection.execute(
+            """INSERT INTO router.configuration_revisions (
+                   id, scope_kind, revision_number, content, content_sha256,
+                   created_at, created_by_kind, created_by_id
+               ) VALUES (%s, 'global', %s, %s, %s, %s, 'administrator',
+                         'raw-private-creator')""",
+            (
+                uuid.uuid4(),
+                revision_number,
+                json.dumps(
+                    {
+                        "catalog": [
+                            {
+                                "kind": "model",
+                                "stable_id": "safe-model",
+                                "display_name": "Safe model",
+                                "capabilities": ["text"],
+                                "state": "active",
+                            }
+                        ],
+                        "provider_instances": [
+                            {
+                                "provider_instance_id": "safe-provider",
+                                "provider_catalog_id": "safe-catalog",
+                                "display_name": "Safe provider",
+                                "endpoint": "https://safe.example.test/v1",
+                                "credential_id": "private-credential",
+                                "settings": {
+                                    "schema_name": "adapter.openai_compatible.settings",
+                                    "major_version": 1,
+                                    "document": {
+                                        "profile": "openrouter",
+                                        "supported_operations": ["chat.complete"],
+                                        "token": "private-token",
+                                        "unpublished": "private-setting",
+                                    },
+                                },
+                                "state": "active",
+                                "eligible_service_ids": [],
+                                "unpublished_field": "private-unpublished-value",
+                            }
+                        ],
+                        "prompt": "private-prompt",
+                        "provider_body": {"private": True},
+                    }
+                ),
+                bytes.fromhex("88" * 32),
+                NOW,
+            ),
+        )
+
+    values: dict[ExportDataClass, bytes] = {}
+    for index, data_class in enumerate(
+        (ExportDataClass.AUDIT, ExportDataClass.CONFIGURATION)
+    ):
+        operation = repository.create_export(
+            _context("export.create", mutation=True),
+            ExportRequest(
+                data_class,
+                NOW - timedelta(minutes=1),
+                NOW + timedelta(minutes=1),
+                "jsonl",
+            ),
+            idempotency_key=f"export-redaction-{index:02d}",
+            administrator_session_id="session-redaction",
+            now=NOW,
+        )
+        lease = repository.claim_lifecycle_job(NODE_ONE, now=NOW)
+        assert lease is not None
+        repository.run_lifecycle_job(lease, now=NOW)
+        status = repository.export_status(
+            _context("export.create", mutation=False, recent=None),
+            operation.operation_id,
+            administrator_session_id="session-redaction",
+            now=NOW,
+        )
+        assert status.redemption_token is not None
+        values[data_class] = repository.redeem_export(
+            _context("export.create", mutation=True),
+            operation.operation_id,
+            status.redemption_token,
+            administrator_session_id="session-redaction",
+            now=NOW,
+        ).value
+
+    audit = values[ExportDataClass.AUDIT]
+    assert b'"action":"unknown"' in audit
+    assert b"private.prompt" not in audit
+    assert b"raw-private-actor" not in audit
+    assert b"private prompt" not in audit
+    configuration = values[ExportDataClass.CONFIGURATION]
+    assert b"safe-model" in configuration
+    assert b"safe-provider" in configuration
+    assert b"https://safe.example.test/v1" in configuration
+    assert b"adapter.openai_compatible.settings" in configuration
+    assert b"openrouter" in configuration
+    assert b"chat.complete" in configuration
+    for prohibited in (
+        b"private-credential",
+        b"private-token",
+        b"private-prompt",
+        b"raw-private-creator",
+        b"provider_body",
+        b"private-setting",
+        b"private-unpublished-value",
+    ):
+        assert prohibited not in configuration
+
+
+def test_export_worker_failure_reaches_safe_terminal_state(
+    database_url: str,
+    repository: PostgresContentRepository,
+) -> None:
+    """Move a failed build to one safe terminal export and job state."""
+    operation = repository.create_export(
+        _context("export.create", mutation=True),
+        ExportRequest(
+            ExportDataClass.AUDIT,
+            NOW - timedelta(minutes=1),
+            NOW + timedelta(minutes=1),
+            "jsonl",
+        ),
+        idempotency_key="export-terminal-failure-01",
+        administrator_session_id="session-failure",
+        now=NOW,
+    )
+    lease = repository.claim_lifecycle_job(NODE_ONE, now=NOW)
+    assert lease is not None
+    repository.fail_lifecycle_job(
+        lease,
+        now=NOW,
+        safe_error="The Router could not build this export.",
+    )
+    with pytest.raises(ValueError, match="lifecycle failure is invalid"):
+        repository.fail_lifecycle_job(
+            lease,
+            now=NOW,
+            safe_error="private table provider_credentials failed",
+        )
+    status = repository.export_status(
+        _context("export.create", mutation=False, recent=None),
+        operation.operation_id,
+        administrator_session_id="session-failure",
+        now=NOW,
+    )
+    assert status.state is ExportState.FAILED
+    assert status.safe_error == "The Router could not build this export."
+    with psycopg.connect(database_url) as connection:
+        assert connection.execute(
+            "SELECT state, safe_error FROM router.content_lifecycle_jobs WHERE id = %s",
+            (lease.job_id,),
+        ).fetchone() == (
+            "failed",
+            "The Router could not build this export.",
+        )
 
 
 def test_capture_and_export_expiry_remove_objects_keys_and_manifests(

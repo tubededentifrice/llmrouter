@@ -338,6 +338,33 @@ export interface AuditPage {
   readonly next_cursor: string | null;
 }
 
+export type ExportDataClass = "accounting" | "audit" | "configuration";
+export type ExportFormat = "jsonl" | "csv";
+export type ExportState =
+  "queued" | "running" | "completed" | "failed" | "expired";
+
+export interface ExportOperation {
+  readonly operation_id: string;
+  readonly state: ExportState;
+  readonly created_at: string;
+  readonly expires_at: string;
+  readonly redemption_path?: string;
+  readonly redemption_token?: string;
+  readonly redemption_expires_at?: string;
+  readonly sha256?: string;
+  readonly safe_error?: string;
+}
+
+export interface ExportCreate {
+  readonly dataClass: ExportDataClass;
+  readonly serviceId: string | null;
+  readonly workspaceId: string | null;
+  readonly from: string;
+  readonly to: string;
+  readonly format: ExportFormat;
+  readonly idempotencyKey: string;
+}
+
 export interface AdministrationSnapshot {
   readonly state: ScopedState | null;
   readonly credentials: readonly Credential[];
@@ -450,6 +477,16 @@ export interface AdministrationClient {
     },
     signal?: AbortSignal,
   ): Promise<AuditPage>;
+  createExport(input: ExportCreate): Promise<ExportOperation>;
+  getExport(
+    operationId: string,
+    signal?: AbortSignal,
+  ): Promise<ExportOperation>;
+  redeemExport(
+    operationId: string,
+    redemptionPath: string,
+    redemptionToken: string,
+  ): Promise<Blob>;
   createService(input: {
     readonly displayName: string;
     readonly parentServiceId: string | null;
@@ -866,6 +903,79 @@ export function createFetchAdministrationClient({
     return (await response.json()) as T;
   }
 
+  async function requestExportBytes(
+    path: string,
+    redemptionToken: string,
+  ): Promise<Blob> {
+    if (csrfToken === null) {
+      const session = await request<{ readonly csrf_token: string }>(
+        "/v1/admin/session",
+      );
+      csrfToken = session.csrf_token;
+    }
+    let response: Response;
+    try {
+      response = await fetcher(`${baseUrl}${path}`, {
+        method: "POST",
+        credentials: "same-origin",
+        cache: "no-store",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": csrfToken,
+        },
+        body: JSON.stringify({ redemption_token: redemptionToken }),
+      });
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        throw error;
+      }
+      throw new AdministrationApiError(
+        "The connection failed during download. The one-use result is uncertain. Get current status before you try again.",
+        {
+          code: "offline",
+          requestId: null,
+          status: 0,
+          outcomeUncertain: true,
+        },
+      );
+    }
+    if (!response.ok) {
+      let document: ApiErrorDocument = {};
+      try {
+        document = (await response.json()) as ApiErrorDocument;
+      } catch {
+        // The safe generic error below does not expose an upstream response.
+      }
+      if (
+        document.error?.code === "recent_auth_required" &&
+        onRecentAuthenticationRequired !== undefined
+      ) {
+        await onRecentAuthenticationRequired();
+      }
+      throw new AdministrationApiError(
+        document.error?.message ??
+          "The protected download did not complete. No unsafe detail is available.",
+        {
+          code: document.error?.code ?? "administration_request_failed",
+          requestId: document.error?.request_id ?? null,
+          status: response.status,
+        },
+      );
+    }
+    if (
+      response.headers.get("Content-Type") !== "application/octet-stream" ||
+      response.headers.get("Cache-Control") !== "no-store" ||
+      response.headers.get("Referrer-Policy") !== "no-referrer" ||
+      response.headers.get("X-Content-Type-Options") !== "nosniff"
+    ) {
+      throw new AdministrationApiError(
+        "The protected download response was invalid.",
+        { code: "invalid_response", requestId: null, status: 502 },
+      );
+    }
+    return response.blob();
+  }
+
   function servicePath(
     scope: ScopeSelection,
     suffix: string,
@@ -976,6 +1086,58 @@ export function createFetchAdministrationClient({
         `/v1/admin/audit-events?${query.toString()}`,
         signal === undefined ? {} : { signal },
       );
+    },
+
+    createExport(input) {
+      return request<ExportOperation>(
+        "/v1/admin/exports",
+        {
+          method: "POST",
+          headers: { "Idempotency-Key": input.idempotencyKey },
+          body: JSON.stringify({
+            data_class: input.dataClass,
+            service_id: input.serviceId,
+            workspace_id: input.workspaceId,
+            from: input.from,
+            to: input.to,
+            format: input.format,
+          }),
+        },
+        true,
+      );
+    },
+
+    getExport(operationId, signal) {
+      return request<ExportOperation>(
+        `/v1/admin/exports/${encodeURIComponent(operationId)}`,
+        signal === undefined ? {} : { signal },
+      );
+    },
+
+    redeemExport(operationId, redemptionPath, redemptionToken) {
+      const expected = `/v1/admin/exports/${encodeURIComponent(operationId)}/redeem`;
+      let exactSameOriginBase = baseUrl === "";
+      if (!exactSameOriginBase && typeof globalThis.location !== "undefined") {
+        try {
+          const resolved = new URL(
+            `${baseUrl}${expected}`,
+            globalThis.location.origin,
+          );
+          exactSameOriginBase =
+            resolved.origin === globalThis.location.origin &&
+            `${resolved.pathname}${resolved.search}${resolved.hash}` ===
+              expected;
+        } catch {
+          exactSameOriginBase = false;
+        }
+      }
+      if (redemptionPath !== expected || !exactSameOriginBase) {
+        throw new AdministrationApiError(
+          "The protected download path was invalid.",
+          { code: "invalid_response", requestId: null, status: 502 },
+        );
+      }
+      return requestExportBytes(expected, redemptionToken);
     },
 
     createService(input) {

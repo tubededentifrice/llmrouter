@@ -376,6 +376,86 @@ textarea:focus {
   padding: 0 var(--od-space-lg) var(--od-space-lg);
 }
 
+.export-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.export-form label {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.export-form label > span,
+.export-details dt {
+  color: var(--od-color-text-muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.export-form input,
+.export-form select {
+  min-width: 0;
+  min-height: 2.75rem;
+  border: 1px solid var(--od-color-border);
+  border-radius: 0.65rem;
+  background: var(--od-color-surface);
+  color: var(--od-color-text);
+  padding: 0.65rem 0.75rem;
+  font: inherit;
+}
+
+.export-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  grid-column: 1 / -1;
+}
+
+.export-result:focus-visible {
+  outline: 3px solid var(--od-color-focus);
+  outline-offset: 4px;
+}
+
+.export-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin: 0 0 1rem;
+}
+
+.export-details > div {
+  min-width: 0;
+}
+
+.export-details dt,
+.export-details dd {
+  margin: 0;
+}
+
+.export-details dd {
+  overflow-wrap: anywhere;
+}
+
+.export-success {
+  color: var(--od-color-success-text);
+}
+
+@media (max-width: 520px) {
+  .export-form,
+  .export-details {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .export-actions > button {
+    width: 100%;
+  }
+}
+
 .audit-page-end {
   margin: 0;
   padding: 0 var(--od-space-lg) var(--od-space-lg);

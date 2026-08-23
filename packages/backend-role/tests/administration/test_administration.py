@@ -6,7 +6,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
 from fastapi import FastAPI
@@ -17,7 +17,10 @@ from llmrouter_backend.administration.http import (
     install_administration_service,
     router,
 )
-from llmrouter_backend.administration.model import CredentialCreateInput
+from llmrouter_backend.administration.model import (
+    CredentialCreateInput,
+    ExportCreateInput,
+)
 from llmrouter_backend.authority import (
     AuthorityClass,
     AuthorityPath,
@@ -46,6 +49,12 @@ from llmrouter_backend.configuration import (
     EffectiveItem,
     RevisionLayer,
     ScopeConfiguration,
+)
+from llmrouter_backend.content import (
+    ExportOperation,
+    ExportRequest,
+    ExportState,
+    RedeemedExport,
 )
 from llmrouter_backend.credential_store import (
     CredentialMetadata,
@@ -577,6 +586,73 @@ class FakeDiagnostics:
         )
 
 
+class FakeExports:
+    def __init__(self) -> None:
+        self.contexts: list[RequestContext] = []
+        self.session_ids: list[str] = []
+
+    def create_export(
+        self,
+        export_context: RequestContext,
+        request: ExportRequest,
+        *,
+        idempotency_key: str,
+        administrator_session_id: str,
+        now: datetime,
+    ) -> ExportOperation:
+        assert idempotency_key == "export-idempotency-key"
+        assert request.service_id == SERVICE_ID
+        assert request.workspace_id is None
+        assert now == NOW
+        self.contexts.append(export_context)
+        self.session_ids.append(administrator_session_id)
+        return ExportOperation(
+            str(uuid.UUID(int=110)),
+            ExportState.QUEUED,
+            NOW,
+            NOW + timedelta(hours=1),
+        )
+
+    def export_status(
+        self,
+        export_context: RequestContext,
+        operation_id: str,
+        *,
+        administrator_session_id: str,
+        now: datetime,
+    ) -> ExportOperation:
+        assert operation_id == str(uuid.UUID(int=110))
+        assert now == NOW
+        self.contexts.append(export_context)
+        self.session_ids.append(administrator_session_id)
+        return ExportOperation(
+            operation_id,
+            ExportState.COMPLETED,
+            NOW,
+            NOW + timedelta(hours=1),
+            f"/v1/admin/exports/{operation_id}/redeem",
+            "r" * 43,
+            NOW + timedelta(minutes=5),
+            "a" * 64,
+        )
+
+    def redeem_export(
+        self,
+        export_context: RequestContext,
+        operation_id: str,
+        redemption_token: str,
+        *,
+        administrator_session_id: str,
+        now: datetime,
+    ) -> RedeemedExport:
+        assert operation_id == str(uuid.UUID(int=110))
+        assert redemption_token == "r" * 43
+        assert now == NOW
+        self.contexts.append(export_context)
+        self.session_ids.append(administrator_session_id)
+        return RedeemedExport(b'{"safe":true}\n')
+
+
 @pytest.fixture
 def lifecycle() -> FakeLifecycle:
     return FakeLifecycle()
@@ -588,6 +664,7 @@ def administration(
 ) -> tuple[TestClient, FakeAuthority, FakeCredentials]:
     authority = FakeAuthority()
     credentials = FakeCredentials()
+    exports = FakeExports()
     service = AdministrationService(
         authority=authority,
         configuration=FakeConfiguration(),
@@ -598,6 +675,8 @@ def administration(
         audit=FakeAudit(),
         budgets=FakeBudgets(),
         diagnostics=FakeDiagnostics(),
+        exports=exports,
+        export_session_key=b"e" * 32,
         now=lambda: NOW,
         identity_factory=lambda: uuid.UUID(int=40),
         machine=FakeMachine(),  # type: ignore[arg-type]
@@ -654,6 +733,149 @@ def test_global_audit_route_uses_exact_read_authority_and_safe_filters(
     ]
     assert invalid_range.status_code == 400
     assert invalid_range.json()["error"]["field_errors"][0]["path"] == "from,to"
+
+
+def test_protected_export_routes_keep_exact_authority_and_binary_controls(
+    administration: tuple[TestClient, FakeAuthority, FakeCredentials],
+) -> None:
+    client, authority, _credentials = administration
+    headers = _headers(mutation=True)
+    headers["idempotency-key"] = "export-idempotency-key"
+    created = client.post(
+        "/v1/admin/exports",
+        headers=headers,
+        json={
+            "data_class": "accounting",
+            "service_id": SERVICE_ID,
+            "from": (NOW - timedelta(hours=1)).isoformat(),
+            "to": NOW.isoformat(),
+            "format": "jsonl",
+        },
+    )
+    assert created.status_code == 202, created.text
+    handle = created.json()["operation_id"]
+    assert handle.startswith("v1.")
+    assert str(uuid.UUID(int=110)) in handle
+    assert authority.policies[-1].operation == "export.create"
+    assert authority.policies[-1].scope_kind.value == "service"
+    assert authority.policies[-1].sensitive is True
+    export_store = vars(cast("FastAPI", client.app).state.administration_service)[
+        "_exports"
+    ]
+    assert isinstance(export_store, FakeExports)
+    assert export_store.session_ids
+    assert all(item != SESSION and len(item) == 64 for item in export_store.session_ids)
+
+    status = client.get(f"/v1/admin/exports/{handle}", headers=_headers())
+    assert status.status_code == 200, status.text
+    assert status.json()["state"] == "completed"
+    assert status.json()["operation_id"] == handle
+    assert status.json()["redemption_path"] == f"/v1/admin/exports/{handle}/redeem"
+    assert authority.policies[-1].sensitive is False
+
+    redeemed = client.post(
+        f"/v1/admin/exports/{handle}/redeem",
+        headers=_headers(mutation=True),
+        json={"redemption_token": status.json()["redemption_token"]},
+    )
+    assert redeemed.status_code == 200, redeemed.text
+    assert redeemed.content == b'{"safe":true}\n'
+    assert redeemed.headers["content-type"] == "application/octet-stream"
+    assert redeemed.headers["cache-control"] == "no-store"
+    assert redeemed.headers["referrer-policy"] == "no-referrer"
+    assert authority.policies[-1].sensitive is True
+
+    tampered = f"{handle[:-1]}{'a' if handle[-1] != 'a' else 'b'}"
+    before_reads = len(export_store.contexts)
+    invalid_status = client.get(f"/v1/admin/exports/{tampered}", headers=_headers())
+    assert invalid_status.status_code == 404
+    assert len(export_store.contexts) == before_reads
+    assert authority.policies[-1].operation == "export.create"
+    invalid_redeem = client.post(
+        f"/v1/admin/exports/{tampered}/redeem",
+        headers=_headers(mutation=True),
+        json={"redemption_token": "r" * 43},
+    )
+    assert invalid_redeem.status_code == 404
+    assert len(export_store.contexts) == before_reads
+    assert authority.policies[-1].sensitive is True
+
+
+def test_hosted_export_rejects_captured_content_after_sensitive_authority(
+    administration: tuple[TestClient, FakeAuthority, FakeCredentials],
+) -> None:
+    client, authority, _credentials = administration
+    before = len(authority.policies)
+    response = client.post(
+        "/v1/admin/exports",
+        headers=_headers(mutation=True),
+        json={
+            "data_class": "captured_content",
+            "service_id": SERVICE_ID,
+            "from": (NOW - timedelta(hours=1)).isoformat(),
+            "to": NOW.isoformat(),
+            "format": "jsonl",
+        },
+    )
+    assert response.status_code == 403
+    assert len(authority.policies) == before + 1
+    assert authority.policies[-1].operation == "export.create"
+    assert authority.policies[-1].sensitive is True
+
+    unauthenticated = client.post(
+        "/v1/admin/exports",
+        headers={
+            "origin": ORIGIN,
+            "x-csrf-token": CSRF,
+            "idempotency-key": "export-idempotency-key",
+        },
+        json={
+            "data_class": "captured_content",
+            "service_id": SERVICE_ID,
+            "from": (NOW - timedelta(hours=1)).isoformat(),
+            "to": NOW.isoformat(),
+            "format": "jsonl",
+        },
+    )
+    assert unauthenticated.status_code == 401
+    assert unauthenticated.json()["error"]["code"] == "invalid_token"
+
+
+def test_export_authorizes_before_repository_availability() -> None:
+    authority = FakeAuthority()
+    service = AdministrationService(
+        authority=authority,
+        configuration=FakeConfiguration(),
+        credentials=FakeCredentials(),
+        lifecycle=FakeLifecycle(),
+        requests=FakeRequests(),
+        accounting=FakeAccounting(),
+        now=lambda: NOW,
+        identity_factory=lambda: uuid.UUID(int=40),
+    )
+    value = ExportCreateInput.model_validate(
+        {
+            "data_class": "accounting",
+            "service_id": SERVICE_ID,
+            "from": NOW - timedelta(hours=1),
+            "to": NOW,
+            "format": "jsonl",
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="export repository is unavailable"):
+        service.create_export(
+            SESSION,
+            CSRF,
+            ORIGIN,
+            "export-idempotency-key",
+            value,
+            request_id="export-repository-unavailable",
+        )
+
+    assert authority.policies[-1].operation == "export.create"
+    assert authority.policies[-1].scope_kind.value == "service"
+    assert authority.policies[-1].sensitive is True
 
 
 def test_global_audit_authorizes_before_repository_availability() -> None:

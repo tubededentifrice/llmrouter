@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import base64
+import hmac
 import uuid
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -52,6 +54,14 @@ from llmrouter_backend.configuration import (
     RevisionLayer,
     ScopeConfiguration,
 )
+from llmrouter_backend.content import (
+    ContentError,
+    ContentErrorCode,
+    ExportDataClass,
+    ExportOperation,
+    ExportRequest,
+    RedeemedExport,
+)
 from llmrouter_backend.credential_store import (
     CredentialAction,
     CredentialMetadata,
@@ -79,6 +89,7 @@ from .model import (
     CredentialChangeInput,
     CredentialCreateInput,
     DiagnosticRunInput,
+    ExportCreateInput,
     ProviderInstanceInput,
     ProviderModelRouteInput,
     RegisteredDocumentInput,
@@ -300,6 +311,39 @@ class DiagnosticRunner(Protocol):
     ) -> tuple[dict[str, object], bool]: ...
 
 
+class ExportStore(Protocol):
+    """Keep exact-scope protected export custody."""
+
+    def create_export(
+        self,
+        export_context: RequestContext,
+        request: ExportRequest,
+        *,
+        idempotency_key: str,
+        administrator_session_id: str,
+        now: datetime,
+    ) -> ExportOperation: ...
+
+    def export_status(
+        self,
+        export_context: RequestContext,
+        operation_id: str,
+        *,
+        administrator_session_id: str,
+        now: datetime,
+    ) -> ExportOperation: ...
+
+    def redeem_export(
+        self,
+        export_context: RequestContext,
+        operation_id: str,
+        redemption_token: str,
+        *,
+        administrator_session_id: str,
+        now: datetime,
+    ) -> RedeemedExport: ...
+
+
 class AdministrationService:
     """Provide the small protected administration workflow for the MVP."""
 
@@ -315,6 +359,9 @@ class AdministrationService:
         audit: AuditStore | None = None,
         budgets: BudgetStore | None = None,
         diagnostics: DiagnosticRunner | None = None,
+        exports: ExportStore | None = None,
+        export_session_key: bytes | None = None,
+        export_submit: Callable[[], None] | None = None,
         machine: MachineCredentialRepository | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
         identity_factory: Callable[[], uuid.UUID] = uuid.uuid4,
@@ -328,6 +375,9 @@ class AdministrationService:
         self._audit = audit
         self._budgets = budgets
         self._diagnostics = diagnostics
+        self._exports = exports
+        self._export_session_key = export_session_key
+        self._export_submit = export_submit
         self._machine = machine
         self._now = now
         self._identity_factory = identity_factory
@@ -1180,6 +1230,178 @@ class AdministrationService:
         )
         return {"items": list(items), "next_cursor": next_cursor}
 
+    def create_export(
+        self,
+        session_token: str,
+        csrf_token: str,
+        origin: str,
+        idempotency_key: str,
+        value: ExportCreateInput,
+        *,
+        request_id: str,
+    ) -> tuple[dict[str, object], bool]:
+        """Create one bounded non-content export in its selected scope."""
+        scope = Scope(value.service_id, value.workspace_id)
+        context = self._context(
+            session_token,
+            request_id=request_id,
+            operation="export.create",
+            scope=scope,
+            mutation=True,
+            sensitive=True,
+            csrf_token=csrf_token,
+            origin=origin,
+        )
+        if value.data_class == ExportDataClass.CAPTURED_CONTENT.value:
+            raise ContentError(ContentErrorCode.INSUFFICIENT_SCOPE, request_id)
+        exports = self._export_store()
+        operation = exports.create_export(
+            context,
+            ExportRequest(
+                ExportDataClass(value.data_class),
+                value.range_start,
+                value.range_end,
+                value.export_format,
+                value.service_id,
+                value.workspace_id,
+            ),
+            idempotency_key=idempotency_key,
+            administrator_session_id=self._export_session(session_token),
+            now=self._now(),
+        )
+        if self._export_submit is not None and operation.state.value == "queued":
+            self._export_submit()
+        handle = self._export_handle(operation.operation_id, scope)
+        return _export_operation_document(operation, handle), False
+
+    def export_status(
+        self, session_token: str, operation_id: str, *, request_id: str
+    ) -> dict[str, object]:
+        """Read one export through its saved exact scope and session custody."""
+        raw_operation_id, scope, valid_handle = self._export_handle_parts(operation_id)
+        context = self._context(
+            session_token,
+            request_id=request_id,
+            operation="export.create",
+            scope=scope,
+        )
+        if valid_handle is None:
+            raise RuntimeError("The export handle key is unavailable.")
+        if not valid_handle:
+            raise ContentError(ContentErrorCode.NOT_FOUND, request_id)
+        exports = self._export_store()
+        session_id = self._export_session(session_token)
+        return _export_operation_document(
+            exports.export_status(
+                context,
+                raw_operation_id,
+                administrator_session_id=session_id,
+                now=self._now(),
+            ),
+            operation_id,
+        )
+
+    def redeem_export(
+        self,
+        session_token: str,
+        csrf_token: str,
+        origin: str,
+        operation_id: str,
+        redemption_token: str,
+        *,
+        request_id: str,
+    ) -> RedeemedExport:
+        """Redeem one complete export through its saved exact authority."""
+        raw_operation_id, scope, valid_handle = self._export_handle_parts(operation_id)
+        context = self._context(
+            session_token,
+            request_id=request_id,
+            operation="export.create",
+            scope=scope,
+            mutation=True,
+            sensitive=True,
+            csrf_token=csrf_token,
+            origin=origin,
+        )
+        if valid_handle is None:
+            raise RuntimeError("The export handle key is unavailable.")
+        if not valid_handle:
+            raise ContentError(ContentErrorCode.NOT_FOUND, request_id)
+        exports = self._export_store()
+        session_id = self._export_session(session_token)
+        return exports.redeem_export(
+            context,
+            raw_operation_id,
+            redemption_token,
+            administrator_session_id=session_id,
+            now=self._now(),
+        )
+
+    def _export_store(self) -> ExportStore:
+        if self._exports is None:
+            raise RuntimeError("The export repository is unavailable.")
+        return self._exports
+
+    def _export_session(self, session_token: str) -> str:
+        if self._export_session_key is None or len(self._export_session_key) < 32:
+            raise RuntimeError("The export session binding is unavailable.")
+        return hmac.digest(
+            self._export_session_key,
+            b"llmrouter-export-session-v1\x00" + session_token.encode(),
+            "sha256",
+        ).hex()
+
+    def _export_handle(self, operation_id: str, scope: Scope) -> str:
+        if self._export_session_key is None:
+            raise RuntimeError("The export handle key is unavailable.")
+        service = _export_handle_value(scope.service_id)
+        workspace = _export_handle_value(scope.workspace_id)
+        payload = f"v1.{operation_id}.{service}.{workspace}"
+        signature = (
+            base64.urlsafe_b64encode(
+                hmac.digest(
+                    self._export_session_key,
+                    b"llmrouter-export-handle-v1\x00" + payload.encode(),
+                    "sha256",
+                )
+            )
+            .decode()
+            .rstrip("=")
+        )
+        handle = f"{payload}.{signature}"
+        if len(handle) > 200:
+            raise RuntimeError("The protected export handle is too long.")
+        return handle
+
+    def _export_handle_parts(self, handle: str) -> tuple[str, Scope, bool | None]:
+        parts = handle.split(".")
+        if len(parts) != 5 or parts[0] != "v1":
+            return "00000000-0000-0000-0000-000000000000", Scope(), False
+        _version, operation_id, service_value, workspace_value, signature = parts
+        try:
+            scope = Scope(
+                _export_handle_decode(service_value),
+                _export_handle_decode(workspace_value),
+            )
+            uuid.UUID(operation_id)
+        except UnicodeDecodeError, ValueError:
+            return "00000000-0000-0000-0000-000000000000", Scope(), False
+        if self._export_session_key is None:
+            return operation_id, scope, None
+        payload = ".".join(parts[:4])
+        expected = (
+            base64.urlsafe_b64encode(
+                hmac.digest(
+                    self._export_session_key,
+                    b"llmrouter-export-handle-v1\x00" + payload.encode(),
+                    "sha256",
+                )
+            )
+            .decode()
+            .rstrip("=")
+        )
+        return operation_id, scope, hmac.compare_digest(signature, expected)
+
     def embed_snapshot(
         self,
         contexts: dict[str, RequestContext],
@@ -1360,6 +1582,46 @@ def _uuid_text(value: str) -> str:
     if str(parsed) != value:
         raise ValueError("The identity is invalid.")
     return value
+
+
+def _export_handle_value(value: str | None) -> str:
+    if value is None:
+        return "-"
+    return base64.urlsafe_b64encode(value.encode()).decode().rstrip("=")
+
+
+def _export_handle_decode(value: str) -> str | None:
+    if value == "-":
+        return None
+    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4)).decode()
+
+
+def _export_operation_document(
+    value: ExportOperation, public_operation_id: str
+) -> dict[str, object]:
+    document: dict[str, object] = {
+        "operation_id": public_operation_id,
+        "state": value.state.value,
+        "created_at": value.created_at.isoformat(),
+        "expires_at": value.expires_at.isoformat(),
+    }
+    optional = {
+        "redemption_path": (
+            None
+            if value.redemption_path is None
+            else f"/v1/admin/exports/{public_operation_id}/redeem"
+        ),
+        "redemption_token": value.redemption_token,
+        "redemption_expires_at": (
+            None
+            if value.redemption_expires_at is None
+            else value.redemption_expires_at.isoformat()
+        ),
+        "sha256": value.sha256,
+        "safe_error": value.safe_error,
+    }
+    document.update({key: item for key, item in optional.items() if item is not None})
+    return document
 
 
 def _registered(value: RegisteredDocumentInput) -> RegisteredDocument:

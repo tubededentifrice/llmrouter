@@ -435,7 +435,7 @@ def _event_document(cursor_key: bytes, row: dict[str, Any]) -> dict[str, object]
         "event_id": str(row["event_id"]),
         "occurred_at": row["occurred_at"].isoformat(),
         "actor": _safe_actor(cursor_key, actor_kind, str(row["actor_id"])),
-        "action": _safe_action(str(row["action"])),
+        "action": safe_audit_action(str(row["action"])),
         "outcome": str(row["permission_result"]),
         "scope": scope,
     }
@@ -475,7 +475,8 @@ def _safe_name(value: str, fallback: str) -> str:
     return value if _SAFE_NAME.fullmatch(value) else fallback
 
 
-def _safe_action(value: str) -> str:
+def safe_audit_action(value: str) -> str:
+    """Return one published action or the closed unknown value."""
     return value if value in _SAFE_ACTIONS else "unknown"
 
 

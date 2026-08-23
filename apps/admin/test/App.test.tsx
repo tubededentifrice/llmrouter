@@ -15,6 +15,7 @@ import {
   AdministrationStateView,
   App,
   AuditView,
+  ExportView,
   LocalAdministrationGateView,
   LocalAdministratorActivation,
   StaleRevisionBanner,
@@ -239,6 +240,9 @@ const client: AdministrationClient = {
   listCredentials: vi.fn(),
   listCatalog: vi.fn(),
   listAuditEvents: vi.fn().mockResolvedValue({ items: [], next_cursor: null }),
+  createExport: vi.fn(),
+  getExport: vi.fn(),
+  redeemExport: vi.fn(),
   createService: vi.fn(),
   putService: vi.fn(),
   changeService: vi.fn(),
@@ -402,8 +406,141 @@ describe("administration app states", () => {
     expect(html).toContain("Global administrator tasks");
     expect(html).toContain("Overview");
     expect(html).toContain("Audit events");
+    expect(html).toContain("Exports");
     expect(html).toContain("mobile-service-selector");
   });
+
+  /* eslint-disable @typescript-eslint/no-deprecated -- This renderer verifies export operation state changes. */
+  it("creates and polls a bounded protected export without rendering custody", async () => {
+    vi.useFakeTimers();
+    const createExport = vi
+      .fn<AdministrationClient["createExport"]>()
+      .mockResolvedValue({
+        operation_id: "signed-operation",
+        state: "queued",
+        created_at: "2026-08-23T10:00:00Z",
+        expires_at: "2026-08-23T11:00:00Z",
+      });
+    const getExport = vi
+      .fn<AdministrationClient["getExport"]>()
+      .mockResolvedValueOnce({
+        operation_id: "signed-operation",
+        state: "running",
+        created_at: "2026-08-23T10:00:00Z",
+        expires_at: "2026-08-23T11:00:00Z",
+      })
+      .mockResolvedValueOnce({
+        operation_id: "signed-operation",
+        state: "completed",
+        created_at: "2026-08-23T10:00:00Z",
+        expires_at: "2026-08-23T11:00:00Z",
+        redemption_path: "/v1/admin/exports/signed-operation/redeem",
+        redemption_token: "private-redemption-token".padEnd(43, "x"),
+        redemption_expires_at: "2026-08-23T10:05:00Z",
+        sha256: "a".repeat(64),
+      });
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        <ExportView
+          client={{ ...client, createExport, getExport }}
+          services={[registeredService]}
+        />,
+      );
+    });
+    expect(renderedText(renderer.root)).toContain("No export operation");
+    await act(async () => {
+      (
+        renderer.root.findByType("form").props.onSubmit as (event: {
+          preventDefault(): void;
+        }) => void
+      )({
+        preventDefault: vi.fn(),
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(createExport).toHaveBeenCalledOnce();
+    const submittedRangeEnd = createExport.mock.calls[0]?.[0].to;
+    expect(submittedRangeEnd).toBeDefined();
+    expect(new Date(submittedRangeEnd ?? 0).getTime()).toBeGreaterThan(
+      Date.now(),
+    );
+    expect(renderedText(renderer.root)).toContain("Export is queued");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(renderedText(renderer.root)).toContain("Export is running");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(getExport).toHaveBeenCalledTimes(2);
+    expect(renderedText(renderer.root)).toContain("Export is completed");
+    expect(renderedText(renderer.root)).toContain("Download once");
+    expect(renderedText(renderer.root)).not.toContain(
+      "private-redemption-token",
+    );
+    act(() => {
+      renderer.unmount();
+    });
+    vi.useRealTimers();
+  });
+  /* eslint-enable @typescript-eslint/no-deprecated */
+
+  /* eslint-disable @typescript-eslint/no-deprecated -- This renderer verifies uncertain export retry identity. */
+  it("keeps one export idempotency key after an uncertain offline result", async () => {
+    const createExport = vi
+      .fn<AdministrationClient["createExport"]>()
+      .mockRejectedValueOnce(
+        new AdministrationApiError("The administration service is offline.", {
+          code: "offline",
+          requestId: null,
+          status: 0,
+          outcomeUncertain: true,
+        }),
+      )
+      .mockResolvedValueOnce({
+        operation_id: "signed-operation",
+        state: "queued",
+        created_at: "2026-08-23T10:00:00Z",
+        expires_at: "2026-08-23T11:00:00Z",
+      });
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        <ExportView
+          client={{ ...client, createExport }}
+          services={[registeredService]}
+        />,
+      );
+    });
+    await act(async () => {
+      (
+        renderer.root.findByType("form").props.onSubmit as (event: {
+          preventDefault(): void;
+        }) => void
+      )({ preventDefault: vi.fn() });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(renderedText(renderer.root)).toContain("export status is offline");
+    const firstKey = createExport.mock.calls[0]?.[0].idempotencyKey;
+    const retry = renderer.root
+      .findAllByType("button")
+      .find((item) => renderedText(item).includes("Try again"));
+    if (retry === undefined) throw new Error("Export retry did not render.");
+    await act(async () => {
+      (retry.props.onClick as () => void)();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(createExport).toHaveBeenCalledTimes(2);
+    expect(createExport.mock.calls[1]?.[0].idempotencyKey).toBe(firstKey);
+    act(() => {
+      renderer.unmount();
+    });
+  });
+  /* eslint-enable @typescript-eslint/no-deprecated */
 
   /* eslint-disable @typescript-eslint/no-deprecated -- This renderer verifies audit page state changes. */
   it("shows audit loading, safe events, and stable next-page controls", async () => {

@@ -944,4 +944,117 @@ describe("administration API client", () => {
     );
     expect(received[1]).toContain("cursor=opaque-cursor-value");
   });
+
+  it("creates, reads, and redeems one exact protected export", async () => {
+    const received: { url: string; init?: RequestInit }[] = [];
+    const operation = {
+      operation_id: "signed-operation",
+      state: "completed" as const,
+      created_at: "2026-08-23T10:00:00Z",
+      expires_at: "2026-08-23T11:00:00Z",
+      redemption_path: "/v1/admin/exports/signed-operation/redeem",
+      redemption_token: "r".repeat(43),
+      redemption_expires_at: "2026-08-23T10:05:00Z",
+      sha256: "a".repeat(64),
+    };
+    const fetcher = vi.fn(
+      (input: string | URL | Request, init?: RequestInit) => {
+        const url = requestUrl(input);
+        received.push(init === undefined ? { url } : { url, init });
+        if (url === "/v1/admin/session") {
+          return Promise.resolve(json({ csrf_token: "csrf-token" }));
+        }
+        if (url.endsWith("/redeem")) {
+          return Promise.resolve(
+            new Response(new Uint8Array([1, 2, 3]), {
+              status: 200,
+              headers: {
+                "Content-Type": "application/octet-stream",
+                "Cache-Control": "no-store",
+                "Referrer-Policy": "no-referrer",
+                "X-Content-Type-Options": "nosniff",
+              },
+            }),
+          );
+        }
+        return Promise.resolve(
+          json(operation, url === "/v1/admin/exports" ? 202 : 200),
+        );
+      },
+    );
+    const exportClient = createFetchAdministrationClient({ fetcher });
+    await exportClient.createExport({
+      dataClass: "audit",
+      serviceId: "service-one",
+      workspaceId: null,
+      from: "2026-08-23T09:00:00Z",
+      to: "2026-08-23T10:00:00Z",
+      format: "jsonl",
+      idempotencyKey: "stable-export-key",
+    });
+    const status = await exportClient.getExport("signed-operation");
+    const token = status.redemption_token;
+    const path = status.redemption_path;
+    if (token === undefined || path === undefined)
+      throw new Error("Export custody is missing.");
+    const blob = await exportClient.redeemExport(
+      status.operation_id,
+      path,
+      token,
+    );
+
+    expect(blob.size).toBe(3);
+    expect(received.map((item) => item.url)).toEqual([
+      "/v1/admin/session",
+      "/v1/admin/exports",
+      "/v1/admin/exports/signed-operation",
+      "/v1/admin/exports/signed-operation/redeem",
+    ]);
+    expect(new Headers(received[1]?.init?.headers).get("Idempotency-Key")).toBe(
+      "stable-export-key",
+    );
+    expect(received[3]?.init?.body).toBe(
+      JSON.stringify({ redemption_token: token }),
+    );
+  });
+
+  it("rejects an export redemption path or response without required controls", async () => {
+    const exportClient = createFetchAdministrationClient({
+      csrfToken: "csrf-token",
+      fetcher: vi.fn(() =>
+        Promise.resolve(
+          new Response("unsafe", {
+            status: 200,
+            headers: { "Content-Type": "text/plain" },
+          }),
+        ),
+      ),
+    });
+    expect(() =>
+      exportClient.redeemExport(
+        "signed-operation",
+        "https://unsafe.example/export",
+        "r".repeat(43),
+      ),
+    ).toThrow("The protected download path was invalid.");
+    const crossOriginClient = createFetchAdministrationClient({
+      baseUrl: "https://unsafe.example",
+      csrfToken: "csrf-token",
+      fetcher: vi.fn(),
+    });
+    expect(() =>
+      crossOriginClient.redeemExport(
+        "signed-operation",
+        "/v1/admin/exports/signed-operation/redeem",
+        "r".repeat(43),
+      ),
+    ).toThrow("The protected download path was invalid.");
+    await expect(
+      exportClient.redeemExport(
+        "signed-operation",
+        "/v1/admin/exports/signed-operation/redeem",
+        "r".repeat(43),
+      ),
+    ).rejects.toMatchObject({ code: "invalid_response" });
+  });
 });

@@ -57,6 +57,10 @@ import {
   type Credential,
   type DiagnosticPhase,
   type DiagnosticRun,
+  type ExportDataClass,
+  type ExportCreate,
+  type ExportFormat,
+  type ExportOperation,
   type ProviderInstance,
   type ProviderModelRoute,
   type RequestStatus,
@@ -77,6 +81,7 @@ type Section =
   | "services"
   | "credentials"
   | "audit"
+  | "exports"
   | "setup"
   | "configuration"
   | "assignments"
@@ -123,6 +128,7 @@ const globalSections: readonly SectionItem[] = [
   { id: "services", label: "Services & inheritance", icon: "layers" },
   { id: "credentials", label: "Provider credentials", icon: "key" },
   { id: "audit", label: "Audit events", icon: "audit" },
+  { id: "exports", label: "Exports", icon: "list" },
 ];
 
 const serviceSections: readonly SectionItem[] = [
@@ -2393,6 +2399,484 @@ function AuditEventCard({ value }: { readonly value: AuditEvent }) {
   );
 }
 
+function exportDateTime(value: Date): string {
+  return value.toISOString().slice(0, 16);
+}
+
+function safeExportOperation(value: ExportOperation): ExportOperation {
+  return {
+    operation_id: value.operation_id,
+    state: value.state,
+    created_at: value.created_at,
+    expires_at: value.expires_at,
+    ...(value.sha256 === undefined ? {} : { sha256: value.sha256 }),
+    ...(value.safe_error === undefined ? {} : { safe_error: value.safe_error }),
+  };
+}
+
+interface ExportFailure {
+  readonly message: string;
+  readonly offline: boolean;
+}
+
+function exportFailure(error: unknown): ExportFailure {
+  return {
+    message: errorMessage(error),
+    offline:
+      error instanceof AdministrationApiError && error.code === "offline",
+  };
+}
+
+interface ExportDraft {
+  readonly dataClass: ExportDataClass;
+  readonly format: ExportFormat;
+  readonly serviceId: string;
+  readonly workspaceId: string;
+  readonly from: string;
+  readonly to: string;
+}
+
+interface ExportViewState {
+  readonly operation: ExportOperation | null;
+  readonly failure: ExportFailure | null;
+  readonly pending: "create" | "status" | "download" | null;
+  readonly lastChecked: string | null;
+  readonly downloadMessage: string | null;
+  readonly retryCreate: ExportCreate | null;
+}
+
+function ExportForm({
+  services,
+  pending,
+  onCreate,
+  onInvalid,
+}: {
+  readonly services: readonly ServiceSummary[];
+  readonly pending: boolean;
+  readonly onCreate: (input: ExportCreate) => void;
+  readonly onInvalid: (message: string) => void;
+}) {
+  const initialDraft = useMemo<ExportDraft>(() => {
+    const now = new Date();
+    const end = new Date(
+      Math.floor(now.getTime() / (60 * 1_000)) * 60 * 1_000 + 60 * 1_000,
+    );
+    const start = new Date(end.getTime() - 60 * 60 * 1000);
+    return {
+      dataClass: "accounting",
+      format: "jsonl",
+      serviceId: "",
+      workspaceId: "",
+      from: exportDateTime(start),
+      to: exportDateTime(end),
+    };
+  }, []);
+  const [draft, updateDraft] = useReducer(
+    (current: ExportDraft, update: Partial<ExportDraft>) => ({
+      ...current,
+      ...update,
+    }),
+    initialDraft,
+  );
+
+  function submit(event: SubmitEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const start = new Date(`${draft.from}Z`);
+    const end = new Date(`${draft.to}Z`);
+    if (
+      Number.isNaN(start.getTime()) ||
+      Number.isNaN(end.getTime()) ||
+      end <= start ||
+      end.getTime() - start.getTime() > 24 * 60 * 60 * 1000
+    ) {
+      onInvalid("Select an ordered UTC range of no more than one day.");
+      return;
+    }
+    if (draft.workspaceId.trim() !== "" && draft.serviceId === "") {
+      onInvalid("Select a service before you enter a workspace identity.");
+      return;
+    }
+    onCreate({
+      dataClass: draft.dataClass,
+      serviceId: draft.serviceId === "" ? null : draft.serviceId,
+      workspaceId:
+        draft.workspaceId.trim() === "" ? null : draft.workspaceId.trim(),
+      from: start.toISOString(),
+      to: end.toISOString(),
+      format: draft.format,
+      idempotencyKey: newLogicalRequestId(),
+    });
+  }
+
+  return (
+    <Panel>
+      <PanelHeader
+        kicker="Exact scope"
+        title="Create an export"
+        description="Times use UTC. The maximum range is one day. A service and workspace are optional."
+      />
+      <form className="export-form" onSubmit={submit}>
+        <label>
+          <span>Data class</span>
+          <select
+            value={draft.dataClass}
+            onChange={(event) => {
+              updateDraft({ dataClass: event.target.value as ExportDataClass });
+            }}
+          >
+            <option value="accounting">Accounting</option>
+            <option value="audit">Audit</option>
+            <option value="configuration">Configuration</option>
+          </select>
+        </label>
+        <label>
+          <span>Format</span>
+          <select
+            value={draft.format}
+            onChange={(event) => {
+              updateDraft({ format: event.target.value as ExportFormat });
+            }}
+          >
+            <option value="jsonl">JSON Lines</option>
+            <option value="csv">CSV</option>
+          </select>
+        </label>
+        <label>
+          <span>Service (optional)</span>
+          <select
+            value={draft.serviceId}
+            onChange={(event) => {
+              updateDraft({
+                serviceId: event.target.value,
+                ...(event.target.value === "" ? { workspaceId: "" } : {}),
+              });
+            }}
+          >
+            <option value="">All permitted Router data</option>
+            {services.map((service) => (
+              <option key={service.service_id} value={service.service_id}>
+                {service.display_name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Workspace identity (optional)</span>
+          <input
+            value={draft.workspaceId}
+            disabled={draft.serviceId === ""}
+            maxLength={200}
+            onChange={(event) => {
+              updateDraft({ workspaceId: event.target.value });
+            }}
+          />
+        </label>
+        <label>
+          <span>From (UTC)</span>
+          <input
+            type="datetime-local"
+            value={draft.from}
+            onChange={(event) => {
+              updateDraft({ from: event.target.value });
+            }}
+            required
+          />
+        </label>
+        <label>
+          <span>To (UTC)</span>
+          <input
+            type="datetime-local"
+            value={draft.to}
+            onChange={(event) => {
+              updateDraft({ to: event.target.value });
+            }}
+            required
+          />
+        </label>
+        <div className="export-actions">
+          <Button type="submit" disabled={pending}>
+            {pending ? "Creating export…" : "Create export"}
+          </Button>
+        </div>
+      </form>
+    </Panel>
+  );
+}
+
+export function ExportView({
+  client,
+  services,
+}: {
+  readonly client: AdministrationClient;
+  readonly services: readonly ServiceSummary[];
+}) {
+  const [state, updateState] = useReducer(
+    (current: ExportViewState, update: Partial<ExportViewState>) => ({
+      ...current,
+      ...update,
+    }),
+    {
+      operation: null,
+      failure: null,
+      pending: null,
+      lastChecked: null,
+      downloadMessage: null,
+      retryCreate: null,
+    },
+  );
+  const {
+    operation,
+    failure,
+    pending,
+    lastChecked,
+    downloadMessage,
+    retryCreate,
+  } = state;
+  const downloadName = useRef("llmrouter-export.bin");
+  const results = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (
+      operation === null ||
+      (operation.state !== "queued" && operation.state !== "running")
+    )
+      return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const controller = new AbortController();
+    const poll = async () => {
+      updateState({ pending: "status" });
+      try {
+        const next = await client.getExport(
+          operation.operation_id,
+          controller.signal,
+        );
+        if (active) {
+          updateState({
+            operation: safeExportOperation(next),
+            failure: null,
+            lastChecked: new Date().toISOString(),
+          });
+          if (next.state === "queued" || next.state === "running") {
+            timer = setTimeout(() => void poll(), 1_000);
+          }
+        }
+      } catch (error) {
+        if (
+          !active ||
+          (error instanceof DOMException && error.name === "AbortError")
+        )
+          return;
+        updateState({ failure: exportFailure(error) });
+      } finally {
+        if (active) updateState({ pending: null });
+      }
+    };
+    timer = setTimeout(() => void poll(), 1_000);
+    return () => {
+      active = false;
+      controller.abort();
+      if (timer !== undefined) clearTimeout(timer);
+    };
+  }, [client, operation]);
+
+  async function create(input: ExportCreate) {
+    updateState({
+      retryCreate: input,
+      pending: "create",
+      failure: null,
+      downloadMessage: null,
+    });
+    try {
+      const next = await client.createExport(input);
+      downloadName.current = `llmrouter-${input.dataClass}-${next.operation_id}.${input.format}`;
+      updateState({
+        operation: safeExportOperation(next),
+        lastChecked: new Date().toISOString(),
+        retryCreate: null,
+      });
+      queueMicrotask(() => results.current?.focus());
+    } catch (error) {
+      updateState({ failure: exportFailure(error) });
+      queueMicrotask(() => results.current?.focus());
+    } finally {
+      updateState({ pending: null });
+    }
+  }
+
+  async function refresh() {
+    if (operation === null) return;
+    updateState({ pending: "status", failure: null });
+    try {
+      const next = await client.getExport(operation.operation_id);
+      updateState({
+        operation: safeExportOperation(next),
+        lastChecked: new Date().toISOString(),
+      });
+    } catch (error) {
+      updateState({ failure: exportFailure(error) });
+    } finally {
+      updateState({ pending: null });
+      queueMicrotask(() => results.current?.focus());
+    }
+  }
+
+  async function download() {
+    if (operation === null) return;
+    updateState({ pending: "download", failure: null, downloadMessage: null });
+    try {
+      const current = await client.getExport(operation.operation_id);
+      updateState({
+        operation: safeExportOperation(current),
+        lastChecked: new Date().toISOString(),
+      });
+      const token = current.redemption_token;
+      const path = current.redemption_path;
+      if (
+        current.state !== "completed" ||
+        token === undefined ||
+        path === undefined
+      ) {
+        throw new Error("The export is not ready for protected download.");
+      }
+      const blob = await client.redeemExport(current.operation_id, path, token);
+      const objectUrl = URL.createObjectURL(blob);
+      try {
+        const anchor = document.createElement("a");
+        anchor.href = objectUrl;
+        anchor.download = downloadName.current;
+        anchor.click();
+      } finally {
+        URL.revokeObjectURL(objectUrl);
+      }
+      updateState({
+        downloadMessage:
+          blob.size === 0
+            ? "The protected export completed with no records."
+            : "The protected download started. Its one-use access is now spent.",
+      });
+    } catch (error) {
+      updateState({ failure: exportFailure(error) });
+    } finally {
+      updateState({ pending: null });
+      queueMicrotask(() => results.current?.focus());
+    }
+  }
+
+  return (
+    <div className="panel-stack export-view">
+      <PageHeading
+        eyebrow="Global administration"
+        title="Protected exports"
+        description="Create a bounded accounting, audit, or safe configuration export. Exports never include captured content, prompts, outputs, tool data, credentials, tokens, or provider bodies."
+      />
+      <ExportForm
+        services={services}
+        pending={pending !== null}
+        onCreate={(input) => {
+          void create(input);
+        }}
+        onInvalid={(message) => {
+          updateState({ failure: { message, offline: false } });
+          queueMicrotask(() => results.current?.focus());
+        }}
+      />
+      <div
+        className="export-result"
+        ref={results}
+        tabIndex={-1}
+        aria-live="polite"
+      >
+        {failure !== null ? (
+          <StatePanel
+            kind="error"
+            title={
+              failure.offline
+                ? "The export status is offline"
+                : "The export operation did not complete"
+            }
+            {...(retryCreate === null && operation === null
+              ? {}
+              : {
+                  onRetry:
+                    retryCreate === null
+                      ? () => {
+                          void refresh();
+                        }
+                      : () => {
+                          void create(retryCreate);
+                        },
+                })}
+          >
+            {failure.message}
+            {retryCreate === null && operation === null
+              ? null
+              : " Use the retry action to keep the current export identity and idempotency key."}
+          </StatePanel>
+        ) : operation === null ? (
+          <StatePanel kind="empty" title="No export operation">
+            Select a class, exact scope, range, and format to create one
+            protected export.
+          </StatePanel>
+        ) : (
+          <Panel>
+            <PanelHeader
+              kicker="Protected operation"
+              title={`Export is ${operation.state}`}
+              description={`Operation ${operation.operation_id}`}
+            />
+            <dl className="export-details">
+              <div>
+                <dt>Created</dt>
+                <dd>{operation.created_at}</dd>
+              </div>
+              <div>
+                <dt>Expires</dt>
+                <dd>{operation.expires_at}</dd>
+              </div>
+              <div>
+                <dt>Last checked</dt>
+                <dd>{lastChecked ?? "Status is stale"}</dd>
+              </div>
+              {operation.sha256 === undefined ? null : (
+                <div>
+                  <dt>SHA-256</dt>
+                  <dd>{operation.sha256}</dd>
+                </div>
+              )}
+            </dl>
+            {operation.safe_error === undefined ? null : (
+              <p>{operation.safe_error}</p>
+            )}
+            {downloadMessage === null ? null : (
+              <p className="export-success">{downloadMessage}</p>
+            )}
+            <div className="export-actions">
+              <Button
+                variant="secondary"
+                disabled={pending !== null}
+                onClick={() => void refresh()}
+              >
+                {pending === "status" ? "Refreshing…" : "Refresh status"}
+              </Button>
+              {operation.state === "completed" ? (
+                <Button
+                  disabled={pending !== null}
+                  onClick={() => void download()}
+                >
+                  {pending === "download"
+                    ? "Preparing download…"
+                    : "Download once"}
+                </Button>
+              ) : null}
+            </div>
+          </Panel>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function AuditView({
   client,
 }: {
@@ -4339,6 +4823,9 @@ export function AdministrationDashboard({
         />
       ) : null}
       {section === "audit" ? <AuditView client={client} /> : null}
+      {section === "exports" ? (
+        <ExportView client={client} services={services} />
+      ) : null}
       {section === "setup" && snapshot !== null ? (
         <ServiceSetup
           snapshot={snapshot}

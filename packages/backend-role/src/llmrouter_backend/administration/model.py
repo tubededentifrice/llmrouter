@@ -3,9 +3,10 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from llmrouter_backend.accounting import UsageUnit
 from llmrouter_backend.authority import Audience
@@ -161,6 +162,46 @@ class DiagnosticRunInput(ClosedAdministrationModel):
     request_id: UuidV7
     exact_route: OpaqueId
     reason: Reason
+
+
+class ExportCreateInput(ClosedAdministrationModel):
+    """Create one bounded protected export."""
+
+    data_class: Literal["accounting", "audit", "configuration", "captured_content"]
+    service_id: OpaqueId | None = None
+    workspace_id: OpaqueId | None = None
+    range_start: datetime = Field(alias="from")
+    range_end: datetime = Field(alias="to")
+    export_format: Literal["jsonl", "csv"] = Field(alias="format")
+
+    @model_validator(mode="after")
+    def valid_range_and_scope(self) -> ExportCreateInput:
+        """Reject an unordered, long, or incomplete export scope."""
+        if self.range_start.tzinfo is None or self.range_end.tzinfo is None:
+            message = "Export times must include a time zone."
+            raise ValueError(message)
+        if not self.range_start < self.range_end:
+            message = "The export time range is not ordered."
+            raise ValueError(message)
+        if self.range_end - self.range_start > timedelta(days=1):
+            message = "The export time range exceeds one day."
+            raise ValueError(message)
+        if self.workspace_id is not None and self.service_id is None:
+            message = "A workspace export needs a service identity."
+            raise ValueError(message)
+        return self
+
+
+class ExportRedeemInput(ClosedAdministrationModel):
+    """Redeem one protected export without rendering its token."""
+
+    redemption_token: str = Field(min_length=43, max_length=200, repr=False)
+
+    def __repr__(self) -> str:
+        """Do not expose the one-use token."""
+        return "ExportRedeemInput([REDACTED])"
+
+    __str__ = __repr__
 
 
 class ServiceStateDocument(ClosedAdministrationModel):

@@ -1,5 +1,5 @@
 """FastAPI routes for the protected basic administration surface."""
-# ruff: noqa: BLE001, C901, EM101, EM102, PLR0911, PLR2004, TRY003
+# ruff: noqa: BLE001, C901, EM101, EM102, PLR0911, PLR0912, PLR2004, TRY003
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from llmrouter_backend.accounting import AccountingError
 from llmrouter_backend.admin_auth import AdministratorAuthError
 from llmrouter_backend.budgets import BudgetError
 from llmrouter_backend.configuration import CatalogKind, ConfigurationError
+from llmrouter_backend.content import ContentError
 from llmrouter_backend.credential_store import (
     CredentialAction,
     CredentialStoreError,
@@ -34,6 +35,8 @@ from .model import (
     CredentialChangeInput,
     CredentialCreateInput,
     DiagnosticRunInput,
+    ExportCreateInput,
+    ExportRedeemInput,
     ProviderInstanceInput,
     ProviderModelRouteInput,
     ServiceActionInput,
@@ -126,6 +129,77 @@ async def list_audit_events(request: Request) -> Response:
             request_id,
         )
         return _json(result)
+    except Exception as error:
+        return _error_response(error, request_id)
+
+
+@router.post("/admin/exports", response_model=None)
+async def create_export(request: Request) -> Response:
+    """Start one bounded non-content export."""
+    request_id = _request_id()
+    try:
+        value = await _document(request, ExportCreateInput, request_id)
+        result, _replayed = await _run(
+            request,
+            lambda service: service.create_export(
+                _session(request, request_id),
+                _header(request, "x-csrf-token", request_id),
+                _header(request, "origin", request_id),
+                _idempotency_key(request, request_id),
+                value,
+                request_id=request_id,
+            ),
+            request_id,
+        )
+        return _json(result, status_code=202)
+    except Exception as error:
+        return _error_response(error, request_id)
+
+
+@router.get("/admin/exports/{operation_id}", response_model=None)
+async def get_export(request: Request, operation_id: str) -> Response:
+    """Read one protected export state."""
+    request_id = _request_id()
+    try:
+        result = await _run(
+            request,
+            lambda service: service.export_status(
+                _session(request, request_id), operation_id, request_id=request_id
+            ),
+            request_id,
+        )
+        return _json(result)
+    except Exception as error:
+        return _error_response(error, request_id)
+
+
+@router.post("/admin/exports/{operation_id}/redeem", response_model=None)
+async def redeem_export(request: Request, operation_id: str) -> Response:
+    """Redeem one protected export through the Router."""
+    request_id = _request_id()
+    try:
+        value = await _document(request, ExportRedeemInput, request_id)
+        result = await _run(
+            request,
+            lambda service: service.redeem_export(
+                _session(request, request_id),
+                _header(request, "x-csrf-token", request_id),
+                _header(request, "origin", request_id),
+                operation_id,
+                value.redemption_token,
+                request_id=request_id,
+            ),
+            request_id,
+        )
+        return Response(
+            result.value,
+            media_type="application/octet-stream",
+            headers={
+                "Cache-Control": result.cache_control,
+                "Referrer-Policy": result.referrer_policy,
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
     except Exception as error:
         return _error_response(error, request_id)
 
@@ -886,6 +960,18 @@ def _safe_error(
             for detail in error.errors(include_input=False, include_context=False)[:100]
         ]
         return "invalid_request", 422, False, fields
+    if isinstance(error, ContentError):
+        code = {
+            "invalid_request": "invalid_request",
+            "insufficient_scope": "insufficient_scope",
+            "recent_authentication_required": "recent_auth_required",
+            "not_found": "not_found",
+            "conflict": "idempotency_conflict",
+            "expired": "not_found",
+            "integrity_failure": "internal_error",
+            "stale_lease": "internal_error",
+        }[error.code.value]
+        return code, _status(code), False, []
     if isinstance(error, AuditDiscoveryError):
         return (
             "invalid_request",
@@ -967,6 +1053,8 @@ def _status(code: str) -> int:
         return 409
     if code == "temporarily_unavailable":
         return 503
+    if code == "internal_error":
+        return 500
     return 400
 
 

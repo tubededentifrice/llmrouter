@@ -18,11 +18,13 @@ from typing import TYPE_CHECKING, Any, cast
 import psycopg
 from psycopg.rows import dict_row
 
+from llmrouter_backend.administration.audit import safe_audit_action
 from llmrouter_backend.authority import (
     Audience,
     AuthorityClass,
     AuthorityPath,
     PrincipalKind,
+    Scope,
 )
 from llmrouter_backend.credential_store.crypto import (
     EncryptedEnvelope,
@@ -866,6 +868,10 @@ class PostgresContentRepository:
         """Create one global export with exact grants and a stable replay."""
         _require_aware(now)
         _require_export_context(export_context, mutation=True, now=now)
+        if export_context.scope != Scope(request.service_id, request.workspace_id):
+            raise ContentError(
+                ContentErrorCode.INSUFFICIENT_SCOPE, export_context.request_id
+            )
         if request.data_class is ExportDataClass.CAPTURED_CONTENT:
             if content_context is None:
                 raise ContentError(
@@ -989,6 +995,7 @@ class PostgresContentRepository:
                 row is None
                 or row["actor_id"] != export_context.actor_id
                 or row["administrator_session_id"] != administrator_session_id
+                or not _export_scope_matches(export_context, row)
             ):
                 raise ContentError(
                     ContentErrorCode.NOT_FOUND, export_context.request_id
@@ -1083,6 +1090,7 @@ class PostgresContentRepository:
                 row is None
                 or row["actor_id"] != export_context.actor_id
                 or row["administrator_session_id"] != administrator_session_id
+                or not _export_scope_matches(export_context, row)
                 or row["token_session_id"] != administrator_session_id
                 or row["state"] != ExportState.COMPLETED.value
                 or row["expires_at"] <= now
@@ -1186,11 +1194,14 @@ class PostgresContentRepository:
         *,
         now: datetime,
         lease_lifetime: timedelta = _DEFAULT_LEASE_LIFETIME,
+        job_kind: str | None = None,
     ) -> LifecycleLease | None:
         """Claim one due job or take over one expired owner with fencing."""
         _require_aware(now)
         if lease_lifetime <= timedelta(0):
             raise ValueError("A lifecycle lease must be positive.")
+        if job_kind is not None and job_kind not in _CONTENT_LIFECYCLE_JOB_KINDS:
+            raise ValueError("The lifecycle job kind is invalid.")
         try:
             owner = uuid.UUID(owner_node_id)
         except ValueError as error:
@@ -1202,15 +1213,14 @@ class PostgresContentRepository:
             row = connection.execute(
                 """
                 SELECT * FROM router.content_lifecycle_jobs
-                WHERE (
-                    state IN ('ready', 'retry_wait') AND available_at <= %s
-                ) OR (
-                    state = 'running' AND lease_expires_at <= %s
+                WHERE (%s::text IS NULL OR job_kind = %s) AND (
+                    (state IN ('ready', 'retry_wait') AND available_at <= %s)
+                    OR (state = 'running' AND lease_expires_at <= %s)
                 )
                 ORDER BY available_at, id
                 LIMIT 1 FOR UPDATE SKIP LOCKED
                 """,
-                (now, now),
+                (job_kind, job_kind, now, now),
             ).fetchone()
             if row is None:
                 return None
@@ -1314,6 +1324,51 @@ class PostgresContentRepository:
             ).fetchone()
             if row is None:
                 raise ContentError(ContentErrorCode.STALE_LEASE, lease.job_id)
+
+    def fail_lifecycle_job(
+        self, lease: LifecycleLease, *, now: datetime, safe_error: str
+    ) -> None:
+        """Finish one live job with a closed safe terminal failure."""
+        _require_aware(now)
+        if safe_error not in _SAFE_TERMINAL_LIFECYCLE_ERRORS:
+            raise ValueError("The lifecycle failure is invalid.")
+        with (
+            psycopg.connect(self._database_url, row_factory=dict_row) as connection,
+            connection.transaction(),
+        ):
+            row = connection.execute(
+                """UPDATE router.content_lifecycle_jobs SET
+                       state = 'failed', owner_node_id = NULL,
+                       lease_expires_at = NULL,
+                       lease_generation = lease_generation + 1,
+                       safe_error = %s, updated_at = %s
+                   WHERE id = %s AND state = 'running' AND owner_node_id = %s
+                     AND lease_generation = %s AND lease_expires_at > %s
+                   RETURNING job_kind, scope_key""",
+                (
+                    safe_error,
+                    now,
+                    lease.job_id,
+                    lease.owner_node_id,
+                    lease.generation,
+                    now,
+                ),
+            ).fetchone()
+            if row is None:
+                raise ContentError(ContentErrorCode.STALE_LEASE, lease.job_id)
+            if row["job_kind"] == "export":
+                connection.execute(
+                    """UPDATE router.protected_exports
+                       SET state = 'running', updated_at = %s
+                       WHERE id = %s AND state = 'queued'""",
+                    (now, uuid.UUID(row["scope_key"])),
+                )
+                connection.execute(
+                    """UPDATE router.protected_exports
+                       SET state = 'failed', safe_error = %s, updated_at = %s
+                       WHERE id = %s AND state IN ('queued', 'running')""",
+                    (safe_error, now, uuid.UUID(row["scope_key"])),
+                )
 
     def _require_live_lease(self, lease: LifecycleLease, *, now: datetime) -> None:
         with psycopg.connect(self._database_url, row_factory=dict_row) as connection:
@@ -1544,9 +1599,9 @@ class PostgresContentRepository:
         if data_class is ExportDataClass.AUDIT:
             records = connection.execute(
                 """
-                SELECT event_id, audit_class, actor_kind, actor_id, authority_class,
+                SELECT event_id, audit_class, actor_kind, authority_class,
                        service_id, workspace_id, action, permission_result,
-                       safe_details, occurred_at
+                       occurred_at
                 FROM router.audit_events
                 WHERE occurred_at >= %s AND occurred_at < %s
                   AND (%s::uuid IS NULL OR service_id = %s)
@@ -1555,13 +1610,19 @@ class PostgresContentRepository:
                 """,
                 parameters,
             ).fetchall()
-            return [_json_document(item) for item in records]
+            return [
+                {
+                    **_json_document(item),
+                    "action": safe_audit_action(str(item["action"])),
+                }
+                for item in records
+            ]
         if data_class is ExportDataClass.CONFIGURATION:
             records = connection.execute(
                 """
                 SELECT id, scope_kind, service_id, workspace_id, revision_number,
                        restored_from_revision_id, content, content_sha256, created_at,
-                       created_by_kind, created_by_id
+                       created_by_kind
                 FROM router.configuration_revisions
                 WHERE created_at >= %s AND created_at < %s
                   AND (%s::uuid IS NULL OR service_id = %s)
@@ -1570,7 +1631,17 @@ class PostgresContentRepository:
                 """,
                 parameters,
             ).fetchall()
-            return [_json_document(item) for item in records]
+            return [
+                {
+                    **{
+                        key: value
+                        for key, value in _json_document(item).items()
+                        if key != "content"
+                    },
+                    "content": _safe_configuration_content(item["content"]),
+                }
+                for item in records
+            ]
         records = connection.execute(
             """
             SELECT * FROM router.captured_content
@@ -1926,7 +1997,6 @@ def _require_export_context(
         and context.authority_class is AuthorityClass.GLOBAL_ADMINISTRATOR
         and context.authority_path is AuthorityPath.GLOBAL_ADMINISTRATION
         and context.operation == "export.create"
-        and context.scope.service_id is None
         and context.recent_authentication_at is not None
         and context.recent_authentication_at <= context.authorized_at <= now
         and now - context.recent_authentication_at <= MAXIMUM_REDEMPTION_AGE
@@ -1941,10 +2011,197 @@ def _require_export_status_context(context: RequestContext) -> None:
         and context.authority_class is AuthorityClass.GLOBAL_ADMINISTRATOR
         and context.authority_path is AuthorityPath.GLOBAL_ADMINISTRATION
         and context.operation == "export.create"
-        and context.scope.service_id is None
         and not context.mutation
     ):
         raise ContentError(ContentErrorCode.INSUFFICIENT_SCOPE, context.request_id)
+
+
+def _export_scope_matches(context: RequestContext, row: Mapping[str, Any]) -> bool:
+    return context.scope == Scope(
+        None if row["service_id"] is None else str(row["service_id"]),
+        None if row["workspace_id"] is None else str(row["workspace_id"]),
+    )
+
+
+_SAFE_TERMINAL_LIFECYCLE_ERRORS = frozenset({"The Router could not build this export."})
+_CONTENT_LIFECYCLE_JOB_KINDS = frozenset(
+    {"expiry", "delete", "export", "export_expiry", "archive", "retention"}
+)
+
+
+def _safe_configuration_content(value: object) -> dict[str, object]:
+    """Return only the closed published configuration export schema."""
+    if not isinstance(value, Mapping):
+        return {}
+    return {
+        "catalog": _safe_configuration_items(value.get("catalog"), _safe_catalog),
+        "provider_instances": _safe_configuration_items(
+            value.get("provider_instances"), _safe_provider_instance
+        ),
+        "provider_model_routes": _safe_configuration_items(
+            value.get("provider_model_routes"), _safe_provider_model_route
+        ),
+        "assignments": _safe_configuration_items(
+            value.get("assignments"), _safe_assignment
+        ),
+        "inherited_disables": _safe_configuration_items(
+            value.get("inherited_disables"), _safe_inherited_disable
+        ),
+    }
+
+
+def _safe_configuration_items(
+    value: object, serializer: Callable[[Mapping[str, Any]], dict[str, object]]
+) -> list[dict[str, object]]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        return []
+    return [serializer(item) for item in value if isinstance(item, Mapping)]
+
+
+def _safe_catalog(value: Mapping[str, Any]) -> dict[str, object]:
+    result = _safe_configuration_fields(
+        value,
+        {
+            "kind": str,
+            "stable_id": str,
+            "display_name": str,
+            "state": str,
+        },
+    )
+    result["capabilities"] = _safe_string_list(value.get("capabilities"))
+    settings = _safe_registered_schema(value.get("settings"))
+    if settings is not None:
+        result["settings"] = settings
+    return result
+
+
+def _safe_provider_instance(value: Mapping[str, Any]) -> dict[str, object]:
+    result = _safe_configuration_fields(
+        value,
+        {
+            "provider_instance_id": str,
+            "provider_catalog_id": str,
+            "display_name": str,
+            "endpoint": str,
+            "state": str,
+        },
+    )
+    result["eligible_service_ids"] = _safe_string_list(
+        value.get("eligible_service_ids")
+    )
+    settings = _safe_registered_schema(value.get("settings"))
+    if settings is not None:
+        result["settings"] = settings
+    return result
+
+
+def _safe_provider_model_route(value: Mapping[str, Any]) -> dict[str, object]:
+    result = _safe_configuration_fields(
+        value,
+        {
+            "provider_model_route_id": str,
+            "provider_instance_id": str,
+            "canonical_model_id": str,
+            "wire_model": str,
+            "synchronization_schedule": str,
+            "stale_after_seconds": int,
+            "price_version": str,
+            "synchronization_state": str,
+            "state": str,
+            "embedding_model_space_id": str,
+            "embedding_dimensions": int,
+        },
+    )
+    result["capabilities"] = _safe_string_list(value.get("capabilities"))
+    result["eligible_service_ids"] = _safe_string_list(
+        value.get("eligible_service_ids")
+    )
+    settings = _safe_registered_schema(value.get("settings"))
+    if settings is not None:
+        result["settings"] = settings
+    authority = value.get("price_authority")
+    if isinstance(authority, Mapping):
+        result["price_authority"] = _safe_configuration_fields(
+            authority,
+            {"mode": str, "source_name": str, "lookup_identifier": str},
+        )
+    result["prices"] = _safe_configuration_items(value.get("prices"), _safe_price)
+    return result
+
+
+def _safe_price(value: Mapping[str, Any]) -> dict[str, object]:
+    return _safe_configuration_fields(
+        value,
+        {"unit": str, "price": str, "currency": str, "unit_quantity": str},
+    )
+
+
+def _safe_assignment(value: Mapping[str, Any]) -> dict[str, object]:
+    result = _safe_configuration_fields(value, {"name": str, "state": str})
+    result["required_capabilities"] = _safe_string_list(
+        value.get("required_capabilities")
+    )
+    result["candidates"] = _safe_configuration_items(
+        value.get("candidates"), _safe_assignment_candidate
+    )
+    return result
+
+
+def _safe_assignment_candidate(value: Mapping[str, Any]) -> dict[str, object]:
+    return _safe_configuration_fields(
+        value, {"provider_model_route_id": str, "attempt_timeout_ms": int}
+    )
+
+
+def _safe_inherited_disable(value: Mapping[str, Any]) -> dict[str, object]:
+    return _safe_configuration_fields(value, {"resource_kind": str, "resource_id": str})
+
+
+def _safe_registered_schema(value: object) -> dict[str, object] | None:
+    if not isinstance(value, Mapping):
+        return None
+    result = _safe_configuration_fields(
+        value, {"schema_name": str, "major_version": int}
+    )
+    schema_name = result.get("schema_name")
+    document = value.get("document")
+    if schema_name == "adapter.openai_compatible.settings" and isinstance(
+        document, Mapping
+    ):
+        safe_document = _safe_configuration_fields(
+            document,
+            {
+                "attribution_referer": str,
+                "attribution_title": str,
+                "profile": str,
+            },
+        )
+        safe_document["supported_operations"] = _safe_string_list(
+            document.get("supported_operations")
+        )
+        result["document"] = safe_document
+    elif schema_name == "adapter.openai_compatible.route":
+        result["document"] = {}
+    return result or None
+
+
+def _safe_configuration_fields(
+    value: Mapping[str, Any], fields: Mapping[str, type]
+) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for name, expected in fields.items():
+        item = value.get(name)
+        if isinstance(item, expected) and not (
+            expected is int and isinstance(item, bool)
+        ):
+            result[name] = item
+    return result
+
+
+def _safe_string_list(value: object) -> list[str]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        return []
+    return [item for item in value if isinstance(item, str)]
 
 
 def _require_retention_context(
