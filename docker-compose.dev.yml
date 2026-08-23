@@ -151,6 +151,7 @@ services:
       LLMROUTER_ADMINISTRATOR_SUBJECTS_FILE: /run/secrets/administrator_subjects
       LLMROUTER_ADMIN_DIGEST_KEY_FILE: /run/secrets/administrator_digest_key
       LLMROUTER_ADMIN_ENCRYPTION_KEY_FILE: /run/secrets/administrator_encryption_key
+      LLMROUTER_PROVIDER_CREDENTIAL_WRAPPING_KEY_FILE: /run/secrets/provider_credential_wrapping_key
       LLMROUTER_OBJECT_STORE_ENDPOINT: http://127.0.0.1:3900
       LLMROUTER_OBJECT_STORE_BUCKET: llmrouter-local
       LLMROUTER_OBJECT_STORE_REGION: garage
@@ -163,6 +164,7 @@ services:
       - administrator_subjects
       - administrator_digest_key
       - administrator_encryption_key
+      - provider_credential_wrapping_key
       - object_store_access_key
       - object_store_secret_key
     command:
@@ -241,6 +243,8 @@ secrets:
     file: .local-development/administrator-digest-key
   administrator_encryption_key:
     file: .local-development/administrator-encryption-key
+  provider_credential_wrapping_key:
+    file: .local-development/provider-credential-wrapping-key
   object_store_access_key:
     file: .local-development/object-store-access-key
   object_store_secret_key:

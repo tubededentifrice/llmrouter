@@ -130,7 +130,75 @@ CREATE TABLE router.assignment_definitions (
     service_id uuid NOT NULL REFERENCES router.services(id) ON DELETE CASCADE,
     api_name router.assignment_name NOT NULL,
     payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+    reasoning_level text CHECK (reasoning_level IN ('none', 'low', 'medium', 'high')),
     UNIQUE (service_id, api_name)
+);
+
+CREATE TABLE router.provider_credentials (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    api_name router.api_name NOT NULL UNIQUE,
+    encrypted_secret bytea NOT NULL CHECK (octet_length(encrypted_secret) BETWEEN 90 AND 40100),
+    fingerprint text NOT NULL CHECK (fingerprint ~ '^[0-9a-f]{12}$'),
+    created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+    updated_at timestamptz NOT NULL DEFAULT transaction_timestamp()
+);
+
+CREATE TABLE router.provider_connections (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    api_name router.api_name NOT NULL UNIQUE,
+    display_name text NOT NULL CHECK (char_length(display_name) BETWEEN 1 AND 200),
+    adapter text NOT NULL CHECK (adapter IN (
+        'openai', 'openai_compatible', 'openrouter', 'custom', 'wavespeed',
+        'ollama', 'local_embeddings', 'fake'
+    )),
+    endpoint text CHECK (char_length(endpoint) BETWEEN 1 AND 4096),
+    credential_id uuid REFERENCES router.provider_credentials(id) ON DELETE RESTRICT,
+    enabled boolean NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT transaction_timestamp()
+);
+
+CREATE TABLE router.canonical_models (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    api_name router.api_name NOT NULL UNIQUE,
+    display_name text NOT NULL CHECK (char_length(display_name) BETWEEN 1 AND 200),
+    input_modalities text[] NOT NULL CHECK (cardinality(input_modalities) BETWEEN 1 AND 2),
+    output_modalities text[] NOT NULL CHECK (cardinality(output_modalities) BETWEEN 1 AND 6),
+    capabilities text[] NOT NULL CHECK (cardinality(capabilities) BETWEEN 0 AND 3),
+    constraints jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(constraints) = 'object'),
+    price_source text CHECK (char_length(price_source) BETWEEN 1 AND 500),
+    price_lookup_key text CHECK (char_length(price_lookup_key) BETWEEN 1 AND 500),
+    manual_price jsonb CHECK (manual_price IS NULL OR jsonb_typeof(manual_price) = 'object'),
+    created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+    CHECK ((price_source IS NULL) = (price_lookup_key IS NULL))
+);
+
+CREATE TABLE router.provider_models (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    api_name router.api_name NOT NULL UNIQUE,
+    provider_id uuid NOT NULL REFERENCES router.provider_connections(id) ON DELETE RESTRICT,
+    model_id uuid NOT NULL REFERENCES router.canonical_models(id) ON DELETE RESTRICT,
+    provider_model_name text NOT NULL CHECK (char_length(provider_model_name) BETWEEN 1 AND 500),
+    enabled boolean NOT NULL,
+    input_modalities text[] NOT NULL,
+    output_modalities text[] NOT NULL,
+    capabilities text[] NOT NULL,
+    constraints jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(constraints) = 'object'),
+    reasoning_mappings jsonb NOT NULL DEFAULT '[]'::jsonb
+        CHECK (jsonb_typeof(reasoning_mappings) = 'array' AND jsonb_array_length(reasoning_mappings) <= 4),
+    price_source text CHECK (char_length(price_source) BETWEEN 1 AND 500),
+    price_lookup_key text CHECK (char_length(price_lookup_key) BETWEEN 1 AND 500),
+    manual_price jsonb CHECK (manual_price IS NULL OR jsonb_typeof(manual_price) = 'object'),
+    created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+    UNIQUE (provider_id, provider_model_name),
+    CHECK ((price_source IS NULL) = (price_lookup_key IS NULL))
+);
+
+CREATE TABLE router.assignment_candidates (
+    assignment_id uuid NOT NULL REFERENCES router.assignment_definitions(id) ON DELETE CASCADE,
+    position integer NOT NULL CHECK (position BETWEEN 0 AND 63),
+    provider_model_id uuid NOT NULL REFERENCES router.provider_models(id) ON DELETE RESTRICT,
+    PRIMARY KEY (assignment_id, position),
+    UNIQUE (assignment_id, provider_model_id)
 );
 
 CREATE TABLE router.request_logs (

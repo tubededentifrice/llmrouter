@@ -9,6 +9,22 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 ApiName = str
+ProviderAdapter = Literal[
+    "openai",
+    "openai_compatible",
+    "openrouter",
+    "custom",
+    "wavespeed",
+    "ollama",
+    "local_embeddings",
+    "fake",
+]
+InputModality = Literal["text", "image"]
+OutputModality = Literal[
+    "text", "structured_json", "embedding", "image", "video", "audio"
+]
+ModelCapability = Literal["tool_calling", "streaming", "reasoning"]
+ReasoningLevel = Literal["none", "low", "medium", "high"]
 UsageUnit = Literal[
     "input_token",
     "output_token",
@@ -131,6 +147,241 @@ class ServiceKeyPage(BaseModel):
 
     items: list[ServiceKey]
     page: PageInfo
+
+
+class ProviderWrite(ClosedModel):
+    """One complete provider connection value."""
+
+    api_name: str = Field(pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+    display_name: str = Field(min_length=1, max_length=200)
+    adapter: ProviderAdapter
+    endpoint: str | None = Field(default=None, min_length=1, max_length=4096)
+    credential_api_name: str | None = Field(
+        default=None, pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+    )
+    enabled: bool
+
+
+class Provider(ProviderWrite):
+    """One safe current provider connection."""
+
+    created_at: datetime
+
+
+class ProviderPage(ClosedModel):
+    """Provider page."""
+
+    items: list[Provider]
+    page: PageInfo
+
+
+class ModelConstraints(ClosedModel):
+    """Bounded embedding and media limits."""
+
+    embedding_dimensions: list[int] | None = Field(
+        default=None, min_length=1, max_length=64
+    )
+    max_input_images: int | None = Field(default=None, ge=0, le=8)
+    max_input_image_bytes: int | None = Field(default=None, ge=1, le=20 * 1024 * 1024)
+    max_output_duration_seconds: int | None = Field(default=None, ge=1, le=86_400)
+
+
+class ReasoningMapping(ClosedModel):
+    """Map one common reasoning level to a provider value."""
+
+    level: ReasoningLevel
+    provider_value: str = Field(min_length=1, max_length=200)
+
+
+class UnitPriceWrite(ClosedModel):
+    """One fixed-decimal unit price."""
+
+    unit: UsageUnit
+    amount: str = Field(pattern=r"^[0-9]+(?:\.[0-9]+)?$")
+
+
+class Price(ClosedModel):
+    """One current manual or catalog price."""
+
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
+    unit_prices: list[UnitPriceWrite] = Field(min_length=1, max_length=16)
+    source: str | None = Field(default=None, max_length=500)
+    synchronized_at: datetime | None = None
+
+
+class ModelWrite(ClosedModel):
+    """One complete canonical model value."""
+
+    api_name: str = Field(pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+    display_name: str = Field(min_length=1, max_length=200)
+    input_modalities: list[InputModality] = Field(min_length=1, max_length=2)
+    output_modalities: list[OutputModality] = Field(min_length=1, max_length=6)
+    capabilities: list[ModelCapability] = Field(max_length=3)
+    constraints: ModelConstraints | None = None
+    price_source: str | None = Field(default=None, min_length=1, max_length=500)
+    price_lookup_key: str | None = Field(default=None, min_length=1, max_length=500)
+    manual_price: Price | None = None
+
+
+class Model(ClosedModel):
+    """One current canonical model."""
+
+    api_name: str
+    display_name: str
+    input_modalities: list[InputModality]
+    output_modalities: list[OutputModality]
+    capabilities: list[ModelCapability]
+    constraints: ModelConstraints | None = None
+    price_source: str | None = None
+    price_lookup_key: str | None = None
+    current_price: Price | None = None
+    created_at: datetime
+
+
+class ModelPage(ClosedModel):
+    """Canonical model page."""
+
+    items: list[Model]
+    page: PageInfo
+
+
+class ProviderModelWrite(ClosedModel):
+    """One complete provider-model mapping value."""
+
+    api_name: str = Field(pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+    provider_api_name: str = Field(pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+    model_api_name: str = Field(pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+    provider_model_name: str = Field(min_length=1, max_length=500)
+    enabled: bool
+    input_modalities: list[InputModality] | None = Field(
+        default=None, min_length=1, max_length=2
+    )
+    output_modalities: list[OutputModality] | None = Field(
+        default=None, min_length=1, max_length=6
+    )
+    capabilities: list[ModelCapability] | None = Field(default=None, max_length=3)
+    constraints: ModelConstraints | None = None
+    reasoning_mappings: list[ReasoningMapping] | None = Field(
+        default=None, max_length=4
+    )
+    price_source: str | None = Field(default=None, min_length=1, max_length=500)
+    price_lookup_key: str | None = Field(default=None, min_length=1, max_length=500)
+    manual_price: Price | None = None
+
+
+class ProviderModel(ClosedModel):
+    """One current expanded provider-model mapping."""
+
+    api_name: str
+    provider_api_name: str
+    model_api_name: str
+    provider_model_name: str
+    enabled: bool
+    input_modalities: list[InputModality]
+    output_modalities: list[OutputModality]
+    capabilities: list[ModelCapability]
+    constraints: ModelConstraints | None = None
+    reasoning_mappings: list[ReasoningMapping]
+    price_source: str | None = None
+    price_lookup_key: str | None = None
+    effective_price: Price | None = None
+    created_at: datetime
+
+
+class ProviderModelPage(ClosedModel):
+    """Provider-model page."""
+
+    items: list[ProviderModel]
+    page: PageInfo
+
+
+class AvailableProviderModel(ClosedModel):
+    """Service-safe enabled provider-model data."""
+
+    api_name: str
+    display_name: str
+    input_modalities: list[InputModality]
+    output_modalities: list[OutputModality]
+    capabilities: list[ModelCapability]
+    constraints: ModelConstraints | None = None
+    effective_price: Price | None = None
+
+
+class AvailableProviderModelPage(ClosedModel):
+    """Service-safe provider-model page."""
+
+    items: list[AvailableProviderModel]
+    page: PageInfo
+
+
+class CredentialWrite(ClosedModel):
+    """Write-only credential input."""
+
+    api_name: str = Field(pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+    secret: str = Field(min_length=1, max_length=10_000)
+
+
+class Credential(ClosedModel):
+    """Credential metadata without its encrypted control."""
+
+    api_name: str
+    fingerprint: str = Field(pattern=r"^[0-9a-f]{12}$")
+    created_at: datetime
+    updated_at: datetime
+
+
+class CredentialPage(ClosedModel):
+    """Credential metadata page."""
+
+    items: list[Credential]
+    page: PageInfo
+
+
+class ModelImportPreviewRequest(ClosedModel):
+    """Select one registered provider catalog."""
+
+    provider_api_name: str = Field(pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+
+
+class ModelImportCandidate(ClosedModel):
+    """One deterministic registered catalog entry."""
+
+    catalog_key: str = Field(min_length=1, max_length=500)
+    display_name: str = Field(min_length=1, max_length=200)
+    provider_model_name: str = Field(min_length=1, max_length=500)
+    input_modalities: list[InputModality]
+    output_modalities: list[OutputModality]
+    capabilities: list[ModelCapability]
+    constraints: ModelConstraints | None = None
+
+
+class ModelImportPreview(ClosedModel):
+    """One no-write catalog preview."""
+
+    provider_api_name: str
+    candidates: list[ModelImportCandidate]
+
+
+class ModelImportSelection(ClosedModel):
+    """Name one catalog entry and its two new resource identities."""
+
+    catalog_key: str = Field(min_length=1, max_length=500)
+    model_api_name: str = Field(pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+    provider_model_api_name: str = Field(pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+
+
+class ModelImportRequest(ClosedModel):
+    """One bounded atomic selected import."""
+
+    provider_api_name: str = Field(pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+    selections: list[ModelImportSelection] = Field(min_length=1, max_length=1000)
+
+
+class ModelImportResult(ClosedModel):
+    """Resources created by one selected import."""
+
+    models: list[Model]
+    provider_models: list[ProviderModel]
 
 
 class ActivityEvent(BaseModel):

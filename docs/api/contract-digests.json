@@ -10,7 +10,7 @@
     },
     {
       "path": "docs/api/openapi.yaml",
-      "sha256": "a5c9037a895ce114ea6be31564afe81edaacc25e0957c90c969317b326f4e787"
+      "sha256": "fdcb595d0a4e8b73cc0f80ee01edd9a2d454ba6dfeab1df2ba407eea35cd34b7"
     },
     {
       "path": "docs/api/stream-protocol.md",
@@ -34,10 +34,10 @@
     "AssignmentWrite": "7408ad1c8563296050ceb2863641fa2492280ecb5627b37c7d272c4a8f7858f3",
     "AssistantContentPart": "9af970a93d6014fe40c2849688601038adcb391e7f610e9516d66dfbd0916bdd",
     "AssistantMessage": "b07eb3facb93a57f5edd98b918ce2296186de823a7de4710dcea0c01ce61c203",
-    "AvailableProviderModel": "91628c9e7b1d48167f18c37e6dbd26242e998bca3ccc33cbea007cdb91d59722",
+    "AvailableProviderModel": "47401180d346ef6cb6c3486f49e066d30904addbc6f7c92105da16d6a5d9a2ae",
     "AvailableProviderModelPage": "eee07a809bb150bbebcf2adfbeb3b296aa4b228e41acc69e5edbfe072e8db293",
     "Cooldown": "2f780e311d619c9a2f62b2ac4c5b479445c9eacfa270a6daf26cee1fdff482b8",
-    "Credential": "557e32cef288736863edf633c9ddb5eeb11448f9e337509bf4678fe31f1fb4d4",
+    "Credential": "e90aa646be6550b417385aa884081b0010907c84eb8a18dd1bc19d9dad7f048c",
     "CredentialPage": "3dc8e462eab584c24382e931473210f43884520b54e7e0550794c4bd902766ad",
     "CredentialWrite": "014ab0f3ed5f4ef7af9a29d60db2dce318a2dd0e792ac62211a97102acfb8cf8",
     "EffectiveAssignmentChain": "aae9d81634ec915be390f70644ae85fa63005930704ccab44b66ee134fe4d798",
@@ -86,14 +86,14 @@
     "PriceSyncItem": "f20ebb4ab1b84d0a119c2c70b435b887f945df5ff7ead78e9fba3906e22d6618",
     "PriceSyncRequest": "29cd3235feaf7c4ba47b5213ff99f81661395795be74c38b19c6557b9976b1a9",
     "PriceSyncResult": "b0036f98544c9f7e1b2b9b05820adea692f34c51ba43b9c2c7260b531d2ed972",
-    "Provider": "c3ea4889265a44053fc87f5800a3ecb8543108747d48408e261a2aea2bb26559",
+    "Provider": "b7e3d38c8a13cfe9b431c473f28fa9508c9a0b742bbcd8e2f59005ffb1bd1a20",
     "ProviderAdapter": "cbca31991bb0e5160af376d388747122beaba730d5d0b575c0d01013834a8f45",
-    "ProviderModel": "76150c91fd7e2c5ec3674c3733d8085365fe0ac18f1d8ac0384b84167ece4407",
+    "ProviderModel": "516c9986326eb33b2a10f7d2569bb0de3843facd5fc52da7dec9b457e7a65194",
     "ProviderModelCandidate": "e82a86157f91b6406ac115e2a78660742468aad0b6e71943a566c4f5db8d4ed2",
     "ProviderModelPage": "26a66da9d2716b3ea64b6ee0f75d18f9e8b15d1f6d8a701184adf128978102de",
     "ProviderModelWrite": "659e386c004f2ad6ab58712225d43e2e7bc9cb2e03c73239bb6c1dd5777e9ec1",
     "ProviderPage": "6bd8ef41fa82d1504c8d6df645102805023ce129d1cd6890bfa9dc2936acb55d",
-    "ProviderWrite": "b4d0fdacb6c1af3bd3d16754c77ce1d76d4932d0ac2da5f0e116389fb6df3fe5",
+    "ProviderWrite": "2dd3fe4519977266bbb9f5bc621a68de5780f66c9d16e31a65c8614d9e9696c3",
     "ReasoningLevel": "88f58729acbf1fa41460a38739c1a4a2826899e2a1aa58d2758415f3c47c2d71",
     "ReasoningMapping": "e3e9b0b2a65b0edaf55997d2ae278237b2418c4c2616fee73f1b71a87e8f9896",
     "RequestAttempt": "ac3d78338b2a2188134f747804c239d2f64e574a0f21e64df2849a66f2b47220",
@@ -138,6 +138,6 @@
   },
   "contract_set": "llmrouter-v1",
   "generator_version": 3,
-  "source_sha256": "a5c9037a895ce114ea6be31564afe81edaacc25e0957c90c969317b326f4e787",
+  "source_sha256": "fdcb595d0a4e8b73cc0f80ee01edd9a2d454ba6dfeab1df2ba407eea35cd34b7",
   "version": "1.0.0"
 }

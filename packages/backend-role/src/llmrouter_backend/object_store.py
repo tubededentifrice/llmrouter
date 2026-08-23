@@ -3,15 +3,15 @@
 
 from __future__ import annotations
 
-import os
 import re
-import stat
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import boto3
 from botocore.client import Config
 from botocore.exceptions import ClientError
+
+from llmrouter_backend.control_files import ControlFileError, read_control_file
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -178,29 +178,10 @@ def _validate_control_file(path: Path, *, maximum: int) -> None:
 
 
 def _read_control_file(path: Path, *, maximum: int) -> bytes:
-    descriptor = -1
     try:
-        descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
-        metadata = os.fstat(descriptor)
-        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
-            raise ObjectStoreError
-        chunks: list[bytes] = []
-        remaining = maximum + 1
-        while remaining:
-            chunk = os.read(descriptor, remaining)
-            if not chunk:
-                break
-            chunks.append(chunk)
-            remaining -= len(chunk)
-        raw = b"".join(chunks)
-    except OSError as error:
+        return read_control_file(path, maximum=maximum)
+    except ControlFileError as error:
         raise ObjectStoreError from error
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-    if not 1 <= len(raw) <= maximum:
-        raise ObjectStoreError
-    return raw
 
 
 def _require_object_key(key: str) -> None:

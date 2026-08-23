@@ -108,6 +108,11 @@ def main() -> None:
         "file: .local-development/pocket-id-administrator-subjects",
         "file: .local-development/administrator-digest-key",
         "file: .local-development/administrator-encryption-key",
+        (
+            "LLMROUTER_PROVIDER_CREDENTIAL_WRAPPING_KEY_FILE: "
+            "/run/secrets/provider_credential_wrapping_key"
+        ),
+        "file: .local-development/provider-credential-wrapping-key",
     }
     if any(value not in text for value in required_identity_inputs):
         raise SystemExit("The Pocket ID deployment inputs are not preserved.")

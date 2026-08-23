@@ -118,6 +118,7 @@ prepare_secrets() {
   install_secret "${state_directory}/postgres-password" 32
   install_secret "${state_directory}/administrator-digest-key" 32
   install_secret "${state_directory}/administrator-encryption-key" 32
+  install_secret "${state_directory}/provider-credential-wrapping-key" 32
   install_secret "${state_directory}/pocket-id-client-id" 0 400
   install_secret "${state_directory}/pocket-id-client-secret" 0 400
   install_secret "${state_directory}/pocket-id-administrator-subjects" 0 400

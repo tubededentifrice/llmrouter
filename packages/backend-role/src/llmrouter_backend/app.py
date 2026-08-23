@@ -23,6 +23,7 @@ from pydantic import ValidationError
 from starlette.exceptions import HTTPException as StarletteHttpException
 from starlette.middleware.base import RequestResponseEndpoint
 
+from llmrouter_backend import catalog
 from llmrouter_backend.config import Settings
 from llmrouter_backend.database import migration_plan
 from llmrouter_backend.diagnostics import (
@@ -47,9 +48,27 @@ from llmrouter_backend.models import (
     AdministratorHealth,
     AdministratorSession,
     AdministratorSessionStart,
+    AvailableProviderModel,
+    AvailableProviderModelPage,
+    Credential,
+    CredentialPage,
+    CredentialWrite,
     HealthComponent,
     LogRetentionSettings,
+    Model,
+    ModelImportPreview,
+    ModelImportPreviewRequest,
+    ModelImportRequest,
+    ModelImportResult,
+    ModelPage,
+    ModelWrite,
     PageInfo,
+    Provider,
+    ProviderModel,
+    ProviderModelPage,
+    ProviderModelWrite,
+    ProviderPage,
+    ProviderWrite,
     RequestLog,
     RequestLogPage,
     RequestLogSummary,
@@ -319,6 +338,25 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
         )
         _commit_public_delete_and_cleanup(database, objects)
         return Response(status_code=HTTPStatus.NO_CONTENT)
+
+    @application.get(
+        "/v1/provider-models",
+        response_model=AvailableProviderModelPage,
+        response_model_exclude_none=True,
+    )
+    def service_list_provider_models(
+        limit: Annotated[int, Query(ge=1, le=200)] = 50,
+        cursor: Annotated[str | None, Query(min_length=1, max_length=500)] = None,
+        _actor: ServiceActor = Depends(service_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+    ) -> AvailableProviderModelPage:
+        items, next_cursor = catalog.list_available_provider_models(
+            database, limit=limit, cursor=cursor
+        )
+        return AvailableProviderModelPage(
+            items=[AvailableProviderModel.model_validate(item) for item in items],
+            page=PageInfo(has_more=next_cursor is not None, next_cursor=next_cursor),
+        )
 
     @application.get(
         "/v1/service-keys",
@@ -777,6 +815,491 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
             actor_subject=actor.activity_subject,
         )
         return Response(status_code=HTTPStatus.NO_CONTENT)
+
+    @application.get(
+        "/v1/admin/providers",
+        response_model=ProviderPage,
+        response_model_exclude_none=True,
+    )
+    def admin_list_providers(
+        limit: Annotated[int, Query(ge=1, le=200)] = 50,
+        cursor: Annotated[str | None, Query(min_length=1, max_length=500)] = None,
+        _actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+    ) -> ProviderPage:
+        items, next_cursor = catalog.list_providers(
+            database, limit=limit, cursor=cursor
+        )
+        return ProviderPage(
+            items=[Provider.model_validate(item) for item in items],
+            page=PageInfo(has_more=next_cursor is not None, next_cursor=next_cursor),
+        )
+
+    @application.post(
+        "/v1/admin/providers",
+        response_model=Provider,
+        response_model_exclude_none=True,
+        status_code=HTTPStatus.CREATED,
+    )
+    def admin_create_provider(
+        body: ProviderWrite,
+        request: Request,
+        actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+        controls: ControlKeys = Depends(control_keys),
+    ) -> dict[str, Any]:
+        _require_browser_write(request, actor, controls)
+        return cast(
+            "dict[str, Any]",
+            catalog.configuration_change(
+                database,
+                actor,
+                action="provider.create",
+                resource_type="provider",
+                resource_api_name=body.api_name,
+                operation=lambda: catalog.create_provider(database, body),
+            ),
+        )
+
+    @application.get(
+        "/v1/admin/providers/{provider_api_name}",
+        response_model=Provider,
+        response_model_exclude_none=True,
+    )
+    def admin_get_provider(
+        provider_api_name: ApiNamePath,
+        _actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+    ) -> dict[str, Any]:
+        row = catalog.provider_by_api_name(database, provider_api_name)
+        if row is None:
+            raise not_found("provider")
+        return row
+
+    @application.put(
+        "/v1/admin/providers/{provider_api_name}",
+        response_model=Provider,
+        response_model_exclude_none=True,
+    )
+    def admin_put_provider(
+        provider_api_name: ApiNamePath,
+        body: ProviderWrite,
+        request: Request,
+        actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+        controls: ControlKeys = Depends(control_keys),
+    ) -> dict[str, Any]:
+        _require_browser_write(request, actor, controls)
+        return cast(
+            "dict[str, Any]",
+            catalog.configuration_change(
+                database,
+                actor,
+                action="provider.update",
+                resource_type="provider",
+                resource_api_name=provider_api_name,
+                operation=lambda: catalog.replace_provider(
+                    database, provider_api_name, body
+                ),
+            ),
+        )
+
+    @application.delete(
+        "/v1/admin/providers/{provider_api_name}",
+        status_code=HTTPStatus.NO_CONTENT,
+    )
+    def admin_delete_provider(
+        provider_api_name: ApiNamePath,
+        request: Request,
+        actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+        controls: ControlKeys = Depends(control_keys),
+    ) -> Response:
+        _require_browser_write(request, actor, controls)
+        catalog.configuration_change(
+            database,
+            actor,
+            action="provider.delete",
+            resource_type="provider",
+            resource_api_name=provider_api_name,
+            operation=lambda: catalog.delete_provider(database, provider_api_name),
+        )
+        return Response(status_code=HTTPStatus.NO_CONTENT)
+
+    @application.get(
+        "/v1/admin/models",
+        response_model=ModelPage,
+        response_model_exclude_none=True,
+    )
+    def admin_list_models(
+        limit: Annotated[int, Query(ge=1, le=200)] = 50,
+        cursor: Annotated[str | None, Query(min_length=1, max_length=500)] = None,
+        _actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+    ) -> ModelPage:
+        items, next_cursor = catalog.list_models(database, limit=limit, cursor=cursor)
+        return ModelPage(
+            items=[Model.model_validate(item) for item in items],
+            page=PageInfo(has_more=next_cursor is not None, next_cursor=next_cursor),
+        )
+
+    @application.post(
+        "/v1/admin/models",
+        response_model=Model,
+        response_model_exclude_none=True,
+        status_code=HTTPStatus.CREATED,
+    )
+    def admin_create_model(
+        body: ModelWrite,
+        request: Request,
+        actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+        controls: ControlKeys = Depends(control_keys),
+    ) -> dict[str, Any]:
+        _require_browser_write(request, actor, controls)
+        return cast(
+            "dict[str, Any]",
+            catalog.configuration_change(
+                database,
+                actor,
+                action="model.create",
+                resource_type="model",
+                resource_api_name=body.api_name,
+                operation=lambda: catalog.create_model(database, body),
+            ),
+        )
+
+    @application.get(
+        "/v1/admin/models/{model_api_name}",
+        response_model=Model,
+        response_model_exclude_none=True,
+    )
+    def admin_get_model(
+        model_api_name: ApiNamePath,
+        _actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+    ) -> dict[str, Any]:
+        row = catalog.model_by_api_name(database, model_api_name)
+        if row is None:
+            raise not_found("model")
+        return row
+
+    @application.put(
+        "/v1/admin/models/{model_api_name}",
+        response_model=Model,
+        response_model_exclude_none=True,
+    )
+    def admin_put_model(
+        model_api_name: ApiNamePath,
+        body: ModelWrite,
+        request: Request,
+        actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+        controls: ControlKeys = Depends(control_keys),
+    ) -> dict[str, Any]:
+        _require_browser_write(request, actor, controls)
+        return cast(
+            "dict[str, Any]",
+            catalog.configuration_change(
+                database,
+                actor,
+                action="model.update",
+                resource_type="model",
+                resource_api_name=model_api_name,
+                operation=lambda: catalog.replace_model(database, model_api_name, body),
+            ),
+        )
+
+    @application.delete(
+        "/v1/admin/models/{model_api_name}", status_code=HTTPStatus.NO_CONTENT
+    )
+    def admin_delete_model(
+        model_api_name: ApiNamePath,
+        request: Request,
+        actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+        controls: ControlKeys = Depends(control_keys),
+    ) -> Response:
+        _require_browser_write(request, actor, controls)
+        catalog.configuration_change(
+            database,
+            actor,
+            action="model.delete",
+            resource_type="model",
+            resource_api_name=model_api_name,
+            operation=lambda: catalog.delete_model(database, model_api_name),
+        )
+        return Response(status_code=HTTPStatus.NO_CONTENT)
+
+    @application.get(
+        "/v1/admin/provider-models",
+        response_model=ProviderModelPage,
+        response_model_exclude_none=True,
+    )
+    def admin_list_provider_models(
+        limit: Annotated[int, Query(ge=1, le=200)] = 50,
+        cursor: Annotated[str | None, Query(min_length=1, max_length=500)] = None,
+        _actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+    ) -> ProviderModelPage:
+        items, next_cursor = catalog.list_provider_models(
+            database, limit=limit, cursor=cursor
+        )
+        return ProviderModelPage(
+            items=[ProviderModel.model_validate(item) for item in items],
+            page=PageInfo(has_more=next_cursor is not None, next_cursor=next_cursor),
+        )
+
+    @application.post(
+        "/v1/admin/provider-models",
+        response_model=ProviderModel,
+        response_model_exclude_none=True,
+        status_code=HTTPStatus.CREATED,
+    )
+    def admin_create_provider_model(
+        body: ProviderModelWrite,
+        request: Request,
+        actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+        controls: ControlKeys = Depends(control_keys),
+    ) -> dict[str, Any]:
+        _require_browser_write(request, actor, controls)
+        return cast(
+            "dict[str, Any]",
+            catalog.configuration_change(
+                database,
+                actor,
+                action="provider_model.create",
+                resource_type="provider_model",
+                resource_api_name=body.api_name,
+                operation=lambda: catalog.create_provider_model(database, body),
+            ),
+        )
+
+    @application.get(
+        "/v1/admin/provider-models/{provider_model_api_name}",
+        response_model=ProviderModel,
+        response_model_exclude_none=True,
+    )
+    def admin_get_provider_model(
+        provider_model_api_name: ApiNamePath,
+        _actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+    ) -> dict[str, Any]:
+        row = catalog.provider_model_by_api_name(database, provider_model_api_name)
+        if row is None:
+            raise not_found("provider-model")
+        return row
+
+    @application.put(
+        "/v1/admin/provider-models/{provider_model_api_name}",
+        response_model=ProviderModel,
+        response_model_exclude_none=True,
+    )
+    def admin_put_provider_model(
+        provider_model_api_name: ApiNamePath,
+        body: ProviderModelWrite,
+        request: Request,
+        actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+        controls: ControlKeys = Depends(control_keys),
+    ) -> dict[str, Any]:
+        _require_browser_write(request, actor, controls)
+        return cast(
+            "dict[str, Any]",
+            catalog.configuration_change(
+                database,
+                actor,
+                action="provider_model.update",
+                resource_type="provider_model",
+                resource_api_name=provider_model_api_name,
+                operation=lambda: catalog.replace_provider_model(
+                    database, provider_model_api_name, body
+                ),
+            ),
+        )
+
+    @application.delete(
+        "/v1/admin/provider-models/{provider_model_api_name}",
+        status_code=HTTPStatus.NO_CONTENT,
+    )
+    def admin_delete_provider_model(
+        provider_model_api_name: ApiNamePath,
+        request: Request,
+        actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+        controls: ControlKeys = Depends(control_keys),
+    ) -> Response:
+        _require_browser_write(request, actor, controls)
+        catalog.configuration_change(
+            database,
+            actor,
+            action="provider_model.delete",
+            resource_type="provider_model",
+            resource_api_name=provider_model_api_name,
+            operation=lambda: catalog.delete_provider_model(
+                database, provider_model_api_name
+            ),
+        )
+        return Response(status_code=HTTPStatus.NO_CONTENT)
+
+    @application.get(
+        "/v1/admin/credentials",
+        response_model=CredentialPage,
+        response_model_exclude_none=True,
+    )
+    def admin_list_credentials(
+        limit: Annotated[int, Query(ge=1, le=200)] = 50,
+        cursor: Annotated[str | None, Query(min_length=1, max_length=500)] = None,
+        _actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+    ) -> CredentialPage:
+        items, next_cursor = catalog.list_credentials(
+            database, limit=limit, cursor=cursor
+        )
+        return CredentialPage(
+            items=[Credential.model_validate(item) for item in items],
+            page=PageInfo(has_more=next_cursor is not None, next_cursor=next_cursor),
+        )
+
+    @application.post(
+        "/v1/admin/credentials",
+        response_model=Credential,
+        response_model_exclude_none=True,
+        status_code=HTTPStatus.CREATED,
+    )
+    def admin_create_credential(
+        body: CredentialWrite,
+        request: Request,
+        actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+        controls: ControlKeys = Depends(control_keys),
+    ) -> dict[str, Any]:
+        _require_browser_write(request, actor, controls)
+        return cast(
+            "dict[str, Any]",
+            catalog.configuration_change(
+                database,
+                actor,
+                action="credential.create",
+                resource_type="credential",
+                resource_api_name=body.api_name,
+                operation=lambda: catalog.create_credential(
+                    database,
+                    api_name=body.api_name,
+                    secret=body.secret,
+                    keys=catalog.ProviderCredentialKeys.load(
+                        request.app.state.settings
+                    ),
+                ),
+            ),
+        )
+
+    @application.put(
+        "/v1/admin/credentials/{credential_api_name}",
+        response_model=Credential,
+        response_model_exclude_none=True,
+    )
+    def admin_put_credential(
+        credential_api_name: ApiNamePath,
+        body: CredentialWrite,
+        request: Request,
+        actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+        controls: ControlKeys = Depends(control_keys),
+    ) -> dict[str, Any]:
+        _require_browser_write(request, actor, controls)
+        if body.api_name != credential_api_name:
+            raise invalid_request("api_name", "The body identity must match the path.")
+        return cast(
+            "dict[str, Any]",
+            catalog.configuration_change(
+                database,
+                actor,
+                action="credential.update",
+                resource_type="credential",
+                resource_api_name=credential_api_name,
+                operation=lambda: catalog.replace_credential(
+                    database,
+                    api_name=credential_api_name,
+                    secret=body.secret,
+                    keys=catalog.ProviderCredentialKeys.load(
+                        request.app.state.settings
+                    ),
+                ),
+            ),
+        )
+
+    @application.delete(
+        "/v1/admin/credentials/{credential_api_name}",
+        status_code=HTTPStatus.NO_CONTENT,
+    )
+    def admin_delete_credential(
+        credential_api_name: ApiNamePath,
+        request: Request,
+        actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+        controls: ControlKeys = Depends(control_keys),
+    ) -> Response:
+        _require_browser_write(request, actor, controls)
+        catalog.configuration_change(
+            database,
+            actor,
+            action="credential.delete",
+            resource_type="credential",
+            resource_api_name=credential_api_name,
+            operation=lambda: catalog.delete_credential(database, credential_api_name),
+        )
+        return Response(status_code=HTTPStatus.NO_CONTENT)
+
+    @application.post(
+        "/v1/admin/model-imports/preview",
+        response_model=ModelImportPreview,
+        response_model_exclude_none=True,
+    )
+    def admin_preview_model_import(
+        body: ModelImportPreviewRequest,
+        request: Request,
+        actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+        controls: ControlKeys = Depends(control_keys),
+    ) -> ModelImportPreview:
+        _require_browser_write(request, actor, controls)
+        return ModelImportPreview(
+            provider_api_name=body.provider_api_name,
+            candidates=catalog.catalog_preview(database, body.provider_api_name),
+        )
+
+    @application.post(
+        "/v1/admin/model-imports",
+        response_model=ModelImportResult,
+        response_model_exclude_none=True,
+    )
+    def admin_import_models(
+        body: ModelImportRequest,
+        request: Request,
+        actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+        controls: ControlKeys = Depends(control_keys),
+    ) -> ModelImportResult:
+        _require_browser_write(request, actor, controls)
+        result = cast(
+            "tuple[list[dict[str, Any]], list[dict[str, Any]]]",
+            catalog.configuration_change(
+                database,
+                actor,
+                action="model_import.apply",
+                resource_type="provider",
+                resource_api_name=body.provider_api_name,
+                operation=lambda: catalog.import_catalog(
+                    database, body.provider_api_name, body.selections
+                ),
+            ),
+        )
+        return ModelImportResult(
+            models=[Model.model_validate(item) for item in result[0]],
+            provider_models=[ProviderModel.model_validate(item) for item in result[1]],
+        )
 
     @application.get(
         "/v1/admin/activity",

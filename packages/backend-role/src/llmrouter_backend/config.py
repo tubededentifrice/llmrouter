@@ -43,6 +43,7 @@ class Settings:
     administrator_subjects_file: Path | None = None
     administrator_digest_key_file: Path | None = None
     administrator_encryption_key_file: Path | None = None
+    provider_credential_wrapping_key_file: Path | None = None
     administrator_session_hours: int = 24
     allowed_origins: tuple[str, ...] = _DEFAULT_ALLOWED_ORIGINS
     object_store_endpoint: str | None = None
@@ -79,6 +80,16 @@ class Settings:
         if len(set(self.allowed_origins)) != len(self.allowed_origins):
             message = "Administrator origins must be unique."
             raise ValueError(message)
+        if self.provider_credential_wrapping_key_file is not None and (
+            self.provider_credential_wrapping_key_file
+            in {
+                self.administrator_digest_key_file,
+                self.administrator_encryption_key_file,
+                self.object_store_secret_key_file,
+            }
+        ):
+            message = "The provider credential wrapping key must have one purpose."
+            raise ValueError(message)
         _validate_object_store(self)
 
     @classmethod
@@ -110,6 +121,9 @@ class Settings:
             administrator_digest_key_file=_path("LLMROUTER_ADMIN_DIGEST_KEY_FILE"),
             administrator_encryption_key_file=_path(
                 "LLMROUTER_ADMIN_ENCRYPTION_KEY_FILE"
+            ),
+            provider_credential_wrapping_key_file=_path(
+                "LLMROUTER_PROVIDER_CREDENTIAL_WRAPPING_KEY_FILE"
             ),
             administrator_session_hours=hours,
             allowed_origins=origins,

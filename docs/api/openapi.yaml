@@ -2476,6 +2476,7 @@ components:
         endpoint:
           type: string
           format: uri
+          maxLength: 4096
         credential_api_name:
           $ref: "#/components/schemas/ApiName"
         enabled:
@@ -2494,6 +2495,7 @@ components:
         endpoint:
           type: string
           format: uri
+          maxLength: 4096
         credential_api_name:
           $ref: "#/components/schemas/ApiName"
         enabled:
@@ -2703,7 +2705,7 @@ components:
     ProviderModel:
       type: object
       additionalProperties: false
-      required: [api_name, provider_api_name, model_api_name, provider_model_name, enabled, input_modalities, output_modalities, capabilities, reasoning_mappings, effective_price, created_at]
+      required: [api_name, provider_api_name, model_api_name, provider_model_name, enabled, input_modalities, output_modalities, capabilities, reasoning_mappings, created_at]
       properties:
         api_name:
           $ref: "#/components/schemas/ApiName"
@@ -2757,7 +2759,7 @@ components:
     AvailableProviderModel:
       type: object
       additionalProperties: false
-      required: [api_name, display_name, input_modalities, output_modalities, capabilities, effective_price]
+      required: [api_name, display_name, input_modalities, output_modalities, capabilities]
       properties:
         api_name:
           $ref: "#/components/schemas/ApiName"
@@ -2807,10 +2809,13 @@ components:
     Credential:
       type: object
       additionalProperties: false
-      required: [api_name, created_at, updated_at]
+      required: [api_name, fingerprint, created_at, updated_at]
       properties:
         api_name:
           $ref: "#/components/schemas/ApiName"
+        fingerprint:
+          type: string
+          pattern: "^[0-9a-f]{12}$"
         created_at:
           $ref: "#/components/schemas/Timestamp"
         updated_at:
