@@ -88,6 +88,7 @@ def create_service(
         "service.create",
         "service",
         resource_api_name=api_name,
+        resource_id=row["id"],
     )
     return cast("dict[str, Any]", row)
 
@@ -118,6 +119,7 @@ def update_service(
         "service.update",
         "service",
         resource_api_name=api_name,
+        resource_id=row["id"],
     )
     return cast("dict[str, Any]", row)
 
@@ -137,6 +139,7 @@ def delete_service(
         "service.delete",
         "service",
         resource_api_name=api_name,
+        resource_id=deleted["id"],
     )
 
 
@@ -181,7 +184,7 @@ def create_workspace(
     row = connection.execute(
         """INSERT INTO router.workspaces (service_id, api_name, display_name)
            VALUES (%s, %s, %s)
-           RETURNING api_name, display_name, created_at""",
+           RETURNING id, api_name, display_name, created_at""",
         (service_id, api_name, display_name),
     ).fetchone()
     assert row is not None
@@ -193,7 +196,9 @@ def create_workspace(
         "workspace",
         service_api_name=service_name,
         resource_api_name=api_name,
+        resource_id=row["id"],
     )
+    del row["id"]
     return cast("dict[str, Any]", row)
 
 
@@ -220,6 +225,7 @@ def delete_workspace(
         "workspace",
         service_api_name=service_name,
         resource_api_name=api_name,
+        resource_id=deleted["id"],
     )
 
 
@@ -368,20 +374,32 @@ def store_oidc_flow(
     )
 
 
-def consume_oidc_flow(connection: Connection[Any], state_verifier: bytes) -> bytes:
-    """Consume one unexpired state value before external token work."""
+def lock_oidc_flow(connection: Connection[Any], state_verifier: bytes) -> bytes:
+    """Lock and read one unexpired flow before browser-binding validation."""
     row = connection.execute(
-        """DELETE FROM router.administrator_oidc_flows
+        """SELECT encrypted_control FROM router.administrator_oidc_flows
            WHERE state_verifier = %s AND expires_at > statement_timestamp()
-           RETURNING encrypted_control""",
+           FOR UPDATE""",
         (state_verifier,),
     ).fetchone()
     if row is None:
         raise authentication_required()
+    return cast("bytes", row["encrypted_control"])
+
+
+def consume_oidc_flow(connection: Connection[Any], state_verifier: bytes) -> None:
+    """Consume one locked state value before external token work."""
+    deleted = connection.execute(
+        """DELETE FROM router.administrator_oidc_flows
+           WHERE state_verifier = %s AND expires_at > statement_timestamp()
+           RETURNING state_verifier""",
+        (state_verifier,),
+    ).fetchone()
+    if deleted is None:
+        raise authentication_required()
     # State remains consumed if discovery, authorization-code work, or validation fails.
     # A later session insert starts a new transaction on this connection.
     connection.commit()
-    return cast("bytes", row["encrypted_control"])
 
 
 def create_administrator_session(

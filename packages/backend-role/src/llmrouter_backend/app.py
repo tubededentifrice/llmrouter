@@ -13,12 +13,13 @@ from typing import Annotated, Any
 
 import httpx
 import psycopg
-from fastapi import Cookie, Depends, FastAPI, Header, Path, Query, Request, Response
+from fastapi import Depends, FastAPI, Path, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, RedirectResponse
 from psycopg.rows import dict_row
 from pydantic import ValidationError
 from starlette.exceptions import HTTPException as StarletteHttpException
+from starlette.middleware.base import RequestResponseEndpoint
 
 from llmrouter_backend.config import Settings
 from llmrouter_backend.database import migration_plan
@@ -72,6 +73,7 @@ from llmrouter_backend.store import (
     list_keys,
     list_services,
     list_workspaces,
+    lock_oidc_flow,
     revoke_key,
     service_by_api_name,
     service_id,
@@ -101,6 +103,17 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
     application.state.oidc_transport = oidc_transport
     _install_error_handlers(application)
 
+    @application.middleware("http")
+    async def prevent_sensitive_response_caching(
+        request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
+        response = await call_next(request)
+        if request.url.path.startswith("/v1/admin/") or request.url.path.startswith(
+            "/v1/service-keys"
+        ):
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
     def connection(request: Request) -> Iterator[psycopg.Connection[Any]]:
         configured_url = request.app.state.database_url or os.environ.get(
             "LLMROUTER_DATABASE_URL"
@@ -122,10 +135,11 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
         return ControlKeys.load(request.app.state.settings)
 
     def service_actor(
-        authorization: Annotated[str | None, Header()] = None,
+        request: Request,
         database: psycopg.Connection[Any] = Depends(connection),
         controls: ControlKeys = Depends(control_keys),
     ) -> ServiceActor:
+        authorization = _single_header(request, "authorization")
         if authorization is None or not authorization.startswith("Bearer "):
             raise authentication_required()
         bearer = authorization.removeprefix("Bearer ")
@@ -134,12 +148,11 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
         return authenticate_service_key(database, bearer, controls)
 
     def administrator_actor(
-        session_token: Annotated[
-            str | None, Cookie(alias=_ADMINISTRATOR_COOKIE)
-        ] = None,
+        request: Request,
         database: psycopg.Connection[Any] = Depends(connection),
         controls: ControlKeys = Depends(control_keys),
     ) -> AdministratorActor:
+        session_token = _control_cookie(request, _ADMINISTRATOR_COOKIE)
         if session_token is None:
             raise authentication_required()
         require_canonical_token(session_token)
@@ -370,13 +383,15 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
         request: Request,
         code: Annotated[str, Query(min_length=1, max_length=2_000)],
         state: Annotated[str, Query(min_length=1, max_length=2_000)],
-        browser_binding: Annotated[str | None, Cookie(alias=_OIDC_FLOW_COOKIE)] = None,
         database: psycopg.Connection[Any] = Depends(connection),
     ) -> RedirectResponse:
+        _require_single_query_value(request, "code", code)
+        _require_single_query_value(request, "state", state)
         settings_value: Settings = request.app.state.settings
         secrets_value = AdministratorSecrets.load(settings_value)
         require_canonical_token(state)
-        encrypted_flow = consume_oidc_flow(database, secrets_value.verifier(state))
+        state_verifier = secrets_value.verifier(state)
+        encrypted_flow = lock_oidc_flow(database, state_verifier)
         flow = secrets_value.decrypt(encrypted_flow)
         if set(flow) != {
             "binding_verifier",
@@ -385,6 +400,7 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
             "verifier",
         } or not valid_return_path(flow.get("return_to", "")):
             raise authentication_required()
+        browser_binding = _control_cookie(request, _OIDC_FLOW_COOKIE)
         if browser_binding is None:
             raise authentication_required()
         require_canonical_token(browser_binding)
@@ -396,6 +412,7 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
             secrets_value.verifier(browser_binding), expected_binding
         ):
             raise authentication_required()
+        consume_oidc_flow(database, state_verifier)
         oidc = OidcClient(
             settings_value,
             secrets_value,
@@ -741,8 +758,10 @@ def _require_browser_write(
     request: Request, actor: AdministratorActor, control_keys: ControlKeys
 ) -> None:
     """Require exact origin and the session-bound CSRF token."""
-    origin = request.headers.get("Origin")
-    supplied_csrf = request.headers.get("X-CSRF-Token")
+    origins = request.headers.getlist("origin")
+    csrf_values = request.headers.getlist("x-csrf-token")
+    origin = origins[0] if len(origins) == 1 else None
+    supplied_csrf = csrf_values[0] if len(csrf_values) == 1 else None
     settings: Settings = request.app.state.settings
     if (
         origin not in settings.allowed_origins
@@ -754,6 +773,39 @@ def _require_browser_write(
         control_keys.verifier(supplied_csrf), actor.csrf_verifier
     ):
         raise ApiError(403, "permission_denied", "The browser write is not permitted.")
+
+
+def _single_header(request: Request, name: str) -> str | None:
+    values = request.headers.getlist(name)
+    if not values:
+        return None
+    if len(values) != 1:
+        raise authentication_required()
+    return values[0]
+
+
+def _control_cookie(request: Request, name: str) -> str | None:
+    cookie_headers = request.headers.getlist("cookie")
+    if not cookie_headers:
+        return None
+    if len(cookie_headers) != 1:
+        raise authentication_required()
+    matches: list[str] = []
+    for item in cookie_headers[0].split(";"):
+        cookie_name, separator, value = item.strip().partition("=")
+        if separator and cookie_name == name:
+            matches.append(value)
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise authentication_required()
+    return matches[0]
+
+
+def _require_single_query_value(request: Request, name: str, value: str) -> None:
+    values = request.query_params.getlist(name)
+    if values != [value]:
+        raise invalid_request(name, f"The {name} parameter must occur exactly once.")
 
 
 def _administrator_session(actor: AdministratorActor) -> AdministratorSession:

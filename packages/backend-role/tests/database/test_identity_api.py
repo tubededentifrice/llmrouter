@@ -149,6 +149,17 @@ def test_services_workspaces_keys_and_activity_are_isolated(
         headers={**context.admin_headers, "X-CSRF-Token": new_token()},
     )
     assert denied_csrf.status_code == HTTPStatus.FORBIDDEN
+    duplicate_origin = client.post(
+        "/v1/admin/services",
+        json={"api_name": "alpha", "display_name": "Alpha"},
+        headers=[
+            ("Cookie", f"llmrouter_admin_session={context.session_token}"),
+            ("Origin", ADMIN_ORIGIN),
+            ("Origin", ADMIN_ORIGIN),
+            ("X-CSRF-Token", context.csrf_token),
+        ],
+    )
+    assert duplicate_origin.status_code == HTTPStatus.FORBIDDEN
 
     for api_name in ("alpha", "beta"):
         response = client.post(
@@ -157,6 +168,7 @@ def test_services_workspaces_keys_and_activity_are_isolated(
             headers=context.admin_headers,
         )
         assert response.status_code == HTTPStatus.CREATED
+        assert response.headers["cache-control"] == "no-store"
         assert set(response.json()) == {
             "api_name",
             "display_name",
@@ -179,6 +191,7 @@ def test_services_workspaces_keys_and_activity_are_isolated(
             headers=context.admin_headers,
         )
         assert response.status_code == HTTPStatus.CREATED
+        assert response.headers["cache-control"] == "no-store"
         document = response.json()
         key_prefix = f"llmr_sk_{document['key']['id']}_"
         assert document["secret"].startswith(key_prefix)
@@ -197,6 +210,14 @@ def test_services_workspaces_keys_and_activity_are_isolated(
 
     alpha_headers = {"Authorization": f"Bearer {alpha_secret}"}
     beta_headers = {"Authorization": f"Bearer {keys['beta'][1]}"}
+    duplicate_authorization = client.get(
+        "/v1/workspaces",
+        headers=[
+            ("Authorization", f"Bearer {alpha_secret}"),
+            ("Authorization", f"Bearer {alpha_secret}"),
+        ],
+    )
+    assert duplicate_authorization.status_code == HTTPStatus.UNAUTHORIZED
     created_workspace = client.post(
         "/v1/workspaces",
         json={"api_name": "main", "display_name": "Main"},
@@ -320,6 +341,7 @@ def test_services_workspaces_keys_and_activity_are_isolated(
     assert all(
         item["service_api_name"] in {"alpha", "beta"}
         and "resource_api_name" not in item
+        and "resource_id" in item
         for item in service_key_events
     )
     service_events = [
@@ -327,9 +349,14 @@ def test_services_workspaces_keys_and_activity_are_isolated(
     ]
     assert all(
         "service_api_name" not in item
-        and "resource_id" not in item
+        and "resource_id" in item
         and item["resource_api_name"] in {"alpha", "beta"}
         for item in service_events
+    )
+    assert all(
+        "resource_id" in item
+        for item in activity.json()["items"]
+        if item["resource_type"] == "workspace"
     )
 
 
@@ -380,6 +407,41 @@ def test_parent_cycles_are_atomic_and_child_deletion_is_blocked(
         )
         assert response.status_code == HTTPStatus.BAD_REQUEST
         assert response.json()["error"]["code"] == "invalid_request"
+
+
+def test_activity_targets_stay_unambiguous_after_api_name_reuse(
+    migrated_database: str, identity_settings: Settings
+) -> None:
+    """Keep one stable resource ID for each historical service instance."""
+    context = IdentityTestContext(migrated_database, identity_settings)
+    context.seed_administrator()
+    for _ in range(2):
+        created = context.client.post(
+            "/v1/admin/services",
+            json={"api_name": "reused", "display_name": "Reused"},
+            headers=context.admin_headers,
+        )
+        assert created.status_code == HTTPStatus.CREATED
+        if _ == 0:
+            deleted = context.client.delete(
+                "/v1/admin/services/reused", headers=context.admin_headers
+            )
+            assert deleted.status_code == HTTPStatus.NO_CONTENT
+    now = datetime.now(tz=UTC)
+    events = context.client.get(
+        "/v1/admin/activity",
+        params={
+            "from": (now - timedelta(minutes=1)).isoformat(),
+            "to": (now + timedelta(minutes=1)).isoformat(),
+        },
+        headers=context.admin_read_headers,
+    ).json()["items"]
+    reused = [item for item in events if item.get("resource_api_name") == "reused"]
+    creates = [item for item in reused if item["action"] == "service.create"]
+    deleted = next(item for item in reused if item["action"] == "service.delete")
+    assert len(creates) == 2
+    assert creates[0]["resource_id"] != creates[1]["resource_id"]
+    assert deleted["resource_id"] in {item["resource_id"] for item in creates}
 
 
 def test_concurrent_opposite_parent_moves_create_no_cycle(
@@ -446,11 +508,41 @@ def test_workspace_delete_cascades_and_blocks_late_media_results(
         workspace = workspace_row[0]
         job_row = connection.execute(
             """INSERT INTO router.media_jobs (service_id, workspace_id)
-               VALUES (%s, %s) RETURNING id""",
+               VALUES (%s, %s) RETURNING id, state""",
             (service, workspace),
         ).fetchone()
         assert job_row is not None
         job = job_row[0]
+        assert job_row[1] == "pending"
+        with (
+            pytest.raises(psycopg.errors.CheckViolation),
+            connection.transaction(),
+        ):
+            connection.execute(
+                """INSERT INTO router.media_jobs (service_id, workspace_id, state)
+                   VALUES (%s, %s, 'queued')""",
+                (service, workspace),
+            )
+        connection.execute(
+            "UPDATE router.media_jobs SET state = 'running' WHERE id = %s", (job,)
+        )
+        with (
+            pytest.raises(psycopg.errors.CheckViolation),
+            connection.transaction(),
+        ):
+            connection.execute(
+                "UPDATE router.media_jobs SET state = 'pending' WHERE id = %s", (job,)
+            )
+        connection.execute(
+            "UPDATE router.media_jobs SET state = 'succeeded' WHERE id = %s", (job,)
+        )
+        with (
+            pytest.raises(psycopg.errors.CheckViolation),
+            connection.transaction(),
+        ):
+            connection.execute(
+                "UPDATE router.media_jobs SET state = 'failed' WHERE id = %s", (job,)
+            )
         for table in ("request_logs", "raw_accounting"):
             connection.execute(
                 (
@@ -471,6 +563,16 @@ def test_workspace_delete_cascades_and_blocks_late_media_results(
                VALUES (%s, %s, %s, 'object')""",
             (service, workspace, job),
         )
+        with (
+            pytest.raises(psycopg.errors.UniqueViolation),
+            connection.transaction(),
+        ):
+            connection.execute(
+                """INSERT INTO router.media_objects
+                       (service_id, workspace_id, object_key)
+                   VALUES (%s, %s, 'object')""",
+                (service, workspace),
+            )
         connection.execute("DELETE FROM router.workspaces WHERE id = %s", (workspace,))
         for table in (
             "request_logs",
@@ -498,6 +600,16 @@ def test_workspace_delete_cascades_and_blocks_late_media_results(
                VALUES (%s, 'default')""",
             (service,),
         )
+        with (
+            pytest.raises(psycopg.errors.CheckViolation),
+            connection.transaction(),
+        ):
+            connection.execute(
+                """INSERT INTO router.assignment_definitions
+                       (service_id, api_name)
+                   VALUES (%s, 'Invalid')""",
+                (service,),
+            )
         connection.execute(
             """INSERT INTO router.service_api_keys
                    (service_id, name, verifier)
@@ -535,11 +647,21 @@ class OidcMock:
         self.token_authorization = ""
         self.transport = httpx.MockTransport(self.handle)
 
-    def handle(self, request: httpx.Request) -> httpx.Response:
+    def handle(self, request: httpx.Request) -> httpx.Response:  # noqa: PLR0911
         """Serve discovery, token, and JWKS responses."""
         if request.url.path == "/.well-known/openid-configuration":
             if self.code_mode == "oversized_discovery":
                 return httpx.Response(200, headers={"Content-Length": "1000001"})
+            if self.code_mode == "duplicate_discovery":
+                return httpx.Response(
+                    200,
+                    content=(
+                        '{"issuer":"https://identity.example.test",'
+                        '"issuer":"https://identity.example.test"}'
+                    ),
+                )
+            if self.code_mode == "malformed_discovery":
+                return httpx.Response(200, content="{")
             token_auth_methods = (
                 ["client_secret_post"]
                 if self.code_mode == "unsupported_token_auth"
@@ -548,7 +670,11 @@ class OidcMock:
             document: dict[str, Any] = {
                 "issuer": ISSUER,
                 "authorization_endpoint": f"{ISSUER}/authorize",
-                "token_endpoint": f"{ISSUER}/token",
+                "token_endpoint": (
+                    "http://127.0.0.1:1/token"
+                    if self.code_mode == "insecure_endpoint"
+                    else f"{ISSUER}/token"
+                ),
                 "jwks_uri": f"{ISSUER}/jwks",
             }
             if self.code_mode != "omitted_token_auth":
@@ -567,7 +693,7 @@ class OidcMock:
             return httpx.Response(200, json={"id_token": self._token()})
         return httpx.Response(404)
 
-    def _token(self) -> str:
+    def _token(self) -> str:  # noqa: C901
         now = datetime.now(tz=UTC).timestamp()
         claims: dict[str, Any] = {
             "iss": ISSUER,
@@ -590,7 +716,22 @@ class OidcMock:
             claims["sub"] = "not-allowed"
         elif self.code_mode == "issued_at":
             claims.pop("iat")
-        token = _signed_token(self.private_key, claims)
+        elif self.code_mode == "duplicate_audience":
+            claims["aud"] = ["test-client", "test-client"]
+        elif self.code_mode == "oversized_numeric_date":
+            claims["exp"] = 10**400
+        if self.code_mode == "duplicate_claim":
+            payload = json.dumps(claims, separators=(",", ":"))
+            payload = payload[:-1] + ',"aud":"test-client"}'
+            token = _signed_token_payload(self.private_key, payload)
+        elif self.code_mode == "non_finite_time":
+            claims["exp"] = float("inf")
+            payload = json.dumps(claims, separators=(",", ":")).replace(
+                '"exp":Infinity', '"exp":1e400'
+            )
+            token = _signed_token_payload(self.private_key, payload)
+        else:
+            token = _signed_token(self.private_key, claims)
         if self.code_mode == "signature":
             token = f"{token.rsplit('.', 1)[0]}.{_b64(b'bad-signature')}"
         return token
@@ -618,6 +759,7 @@ def test_oidc_pkce_callback_session_csrf_logout_and_expiry(
         "/v1/admin/session/start", json={"return_to": "/services?selected=one"}
     )
     assert started.status_code == HTTPStatus.OK
+    assert started.headers["cache-control"] == "no-store"
     authorization = urlsplit(started.json()["authorization_url"])
     query = parse_qs(authorization.query, strict_parsing=True)
     assert query["redirect_uri"] == [REDIRECT_URI]
@@ -649,6 +791,7 @@ def test_oidc_pkce_callback_session_csrf_logout_and_expiry(
         params={"code": "code", "state": query["state"][0]},
     )
     assert completed.status_code == HTTPStatus.SEE_OTHER
+    assert completed.headers["cache-control"] == "no-store"
     assert completed.headers["location"] == "/services?selected=one"
     cookie = completed.headers["set-cookie"]
     assert "Secure" in cookie
@@ -676,6 +819,17 @@ def test_oidc_pkce_callback_session_csrf_logout_and_expiry(
     read_headers = {"Cookie": f"llmrouter_admin_session={session_token}"}
     session = client.get("/v1/admin/session", headers=read_headers)
     assert session.status_code == HTTPStatus.OK
+    assert session.headers["cache-control"] == "no-store"
+    duplicate_session_cookie = client.get(
+        "/v1/admin/session",
+        headers={
+            "Cookie": (
+                f"llmrouter_admin_session={session_token}; "
+                f"llmrouter_admin_session={session_token}"
+            )
+        },
+    )
+    assert duplicate_session_cookie.status_code == HTTPStatus.UNAUTHORIZED
     csrf_token = session.json()["csrf_token"]
     assert session.json()["subject"] == ADMIN_SUBJECT
     write_headers = {
@@ -708,10 +862,29 @@ def test_oidc_pkce_callback_session_csrf_logout_and_expiry(
     )
 
 
+def test_corrupt_session_control_data_fails_as_authentication(
+    migrated_database: str, identity_settings: Settings
+) -> None:
+    """Return one safe authentication result for invalid encrypted control data."""
+    context = IdentityTestContext(migrated_database, identity_settings)
+    context.seed_administrator()
+    with psycopg.connect(migrated_database) as connection:
+        connection.execute(
+            "UPDATE router.administrator_sessions SET encrypted_csrf_token = %s",
+            (b"invalid",),
+        )
+    response = context.client.get(
+        "/v1/admin/session", headers=context.admin_read_headers
+    )
+    assert response.status_code == HTTPStatus.UNAUTHORIZED
+    assert response.json()["error"]["code"] == "authentication_required"
+    assert response.headers["cache-control"] == "no-store"
+
+
 def test_oidc_flow_is_bound_to_the_starting_browser(
     migrated_database: str, identity_settings: Settings
 ) -> None:
-    """Consume state without a session when the browser binding does not match."""
+    """Do not let another browser consume the valid one-time state."""
     provider = OidcMock()
     context = IdentityTestContext(
         migrated_database, identity_settings, transport=provider.transport
@@ -730,13 +903,19 @@ def test_oidc_flow_is_bound_to_the_starting_browser(
     )
     assert missing.status_code == HTTPStatus.UNAUTHORIZED
     assert "location" not in missing.headers
+    provider.nonce = missing_query["nonce"][0]
+    missing_retry = client.get(
+        "/v1/admin/oidc/callback",
+        params={"code": "code", "state": missing_query["state"][0]},
+        headers={"Cookie": f"llmrouter_admin_oidc_flow={missing_binding}"},
+    )
+    assert missing_retry.status_code == HTTPStatus.SEE_OTHER
     missing_replay = client.get(
         "/v1/admin/oidc/callback",
         params={"code": "code", "state": missing_query["state"][0]},
         headers={"Cookie": f"llmrouter_admin_oidc_flow={missing_binding}"},
     )
     assert missing_replay.status_code == HTTPStatus.UNAUTHORIZED
-    assert "location" not in missing_replay.headers
 
     wrong_start = client.post(
         "/v1/admin/session/start", json={"return_to": "/services"}
@@ -751,18 +930,51 @@ def test_oidc_flow_is_bound_to_the_starting_browser(
     )
     assert wrong.status_code == HTTPStatus.UNAUTHORIZED
     assert "location" not in wrong.headers
+    provider.nonce = wrong_query["nonce"][0]
+    wrong_retry = client.get(
+        "/v1/admin/oidc/callback",
+        params={"code": "code", "state": wrong_query["state"][0]},
+        headers={"Cookie": f"llmrouter_admin_oidc_flow={correct_binding}"},
+    )
+    assert wrong_retry.status_code == HTTPStatus.SEE_OTHER
     wrong_replay = client.get(
         "/v1/admin/oidc/callback",
         params={"code": "code", "state": wrong_query["state"][0]},
         headers={"Cookie": f"llmrouter_admin_oidc_flow={correct_binding}"},
     )
     assert wrong_replay.status_code == HTTPStatus.UNAUTHORIZED
-    assert "location" not in wrong_replay.headers
-    assert provider.token_form == {}
     with psycopg.connect(migrated_database) as connection:
         assert connection.execute(
             "SELECT count(*) FROM router.administrator_sessions"
-        ).fetchone() == (0,)
+        ).fetchone() == (2,)
+
+
+def test_oidc_rejects_duplicate_query_controls_without_consuming_state(
+    migrated_database: str, identity_settings: Settings
+) -> None:
+    """Reject duplicate callback controls and keep the valid browser flow."""
+    provider = OidcMock()
+    context = IdentityTestContext(
+        migrated_database, identity_settings, transport=provider.transport
+    )
+    started = context.client.post("/v1/admin/session/start", json={"return_to": "/"})
+    query = parse_qs(urlsplit(started.json()["authorization_url"]).query)
+    provider.nonce = query["nonce"][0]
+    duplicate = context.client.get(
+        "/v1/admin/oidc/callback",
+        params=[
+            ("code", "code"),
+            ("state", query["state"][0]),
+            ("state", query["state"][0]),
+        ],
+    )
+    assert duplicate.status_code == HTTPStatus.BAD_REQUEST
+    assert duplicate.headers["cache-control"] == "no-store"
+    completed = context.client.get(
+        "/v1/admin/oidc/callback",
+        params={"code": "code", "state": query["state"][0]},
+    )
+    assert completed.status_code == HTTPStatus.SEE_OTHER
 
 
 @pytest.mark.parametrize(
@@ -774,6 +986,10 @@ def test_oidc_flow_is_bound_to_the_starting_browser(
         ("nonce", HTTPStatus.UNAUTHORIZED),
         ("signature", HTTPStatus.UNAUTHORIZED),
         ("issued_at", HTTPStatus.UNAUTHORIZED),
+        ("duplicate_audience", HTTPStatus.UNAUTHORIZED),
+        ("duplicate_claim", HTTPStatus.UNAUTHORIZED),
+        ("non_finite_time", HTTPStatus.UNAUTHORIZED),
+        ("oversized_numeric_date", HTTPStatus.UNAUTHORIZED),
         ("subject", HTTPStatus.FORBIDDEN),
     ],
 )
@@ -819,6 +1035,23 @@ def test_oidc_rejects_an_oversized_provider_document(
     response = context.client.post("/v1/admin/session/start", json={"return_to": "/"})
     assert response.status_code == HTTPStatus.UNAUTHORIZED
     assert "location" not in response.headers
+
+
+@pytest.mark.parametrize(
+    "mode", ["duplicate_discovery", "malformed_discovery", "insecure_endpoint"]
+)
+def test_oidc_rejects_duplicate_or_malformed_provider_data(
+    migrated_database: str, identity_settings: Settings, mode: str
+) -> None:
+    """Reject invalid provider JSON before an authorization flow starts."""
+    provider = OidcMock()
+    provider.code_mode = mode
+    context = IdentityTestContext(
+        migrated_database, identity_settings, transport=provider.transport
+    )
+    response = context.client.post("/v1/admin/session/start", json={"return_to": "/"})
+    assert response.status_code == HTTPStatus.UNAUTHORIZED
+    assert response.headers["cache-control"] == "no-store"
 
 
 def test_oidc_rejects_an_incompatible_token_authentication_method(
@@ -889,6 +1122,50 @@ def test_session_duration_configuration_is_bounded(identity_settings: Settings) 
             Settings(**values)
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("oidc_issuer", "http://identity.example.test"),
+        ("oidc_issuer", "https://identity.example.test/path"),
+        ("oidc_issuer", "https://identity.example.test?"),
+        ("oidc_redirect_uri", "https://llmrouter.opendle.dev/other-callback"),
+        ("oidc_redirect_uri", "http://llmrouter.opendle.dev/v1/admin/oidc/callback"),
+    ],
+)
+def test_oidc_authorities_and_callback_configuration_are_exact(
+    identity_settings: Settings, field: str, value: str
+) -> None:
+    """Reject an unsafe issuer or a redirect that cannot reach the callback."""
+    values = {
+        setting: getattr(identity_settings, setting)
+        for setting in identity_settings.__slots__
+    }
+    values[field] = value
+    with pytest.raises(ValueError, match="OpenID Connect"):
+        Settings(**values)
+
+
+@pytest.mark.parametrize(
+    "origins",
+    [
+        (ADMIN_ORIGIN, ADMIN_ORIGIN),
+        ("http://administration.example.test",),
+        (f"{ADMIN_ORIGIN}/path",),
+    ],
+)
+def test_administrator_origin_configuration_is_exact(
+    identity_settings: Settings, origins: tuple[str, ...]
+) -> None:
+    """Reject duplicate, insecure, or path-bearing browser origins."""
+    values = {
+        setting: getattr(identity_settings, setting)
+        for setting in identity_settings.__slots__
+    }
+    values["allowed_origins"] = origins
+    with pytest.raises(ValueError, match="origin"):
+        Settings(**values)
+
+
 def _b64(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
 
@@ -899,7 +1176,14 @@ def _integer_b64(value: int) -> str:
 
 def _signed_token(private_key: rsa.RSAPrivateKey, claims: dict[str, Any]) -> str:
     header = _b64(json.dumps({"alg": "RS256", "kid": "test-key"}).encode())
-    payload = _b64(json.dumps(claims).encode())
+    return _signed_token_payload(private_key, json.dumps(claims), header=header)
+
+
+def _signed_token_payload(
+    private_key: rsa.RSAPrivateKey, payload_json: str, *, header: str | None = None
+) -> str:
+    header = header or _b64(json.dumps({"alg": "RS256", "kid": "test-key"}).encode())
+    payload = _b64(payload_json.encode())
     signed = f"{header}.{payload}".encode("ascii")
     signature = private_key.sign(signed, padding.PKCS1v15(), hashes.SHA256())
     return f"{signed.decode()}.{_b64(signature)}"

@@ -438,6 +438,10 @@ paths:
                 minLength: 1
                 maxLength: 1000
                 pattern: "^/(?:[A-Za-z0-9_?&=.-][A-Za-z0-9/_?&=.-]*)?$"
+            Set-Cookie:
+              description: Host-only administrator session and expired flow cookies.
+              schema:
+                type: string
         default:
           $ref: "#/components/responses/ErrorResponse"
   /v1/admin/session:
@@ -3071,6 +3075,9 @@ components:
       type: object
       additionalProperties: false
       required: [id, actor_subject, action, resource_type, result, occurred_at]
+      anyOf:
+        - required: [resource_api_name]
+        - required: [resource_id]
       properties:
         id:
           $ref: "#/components/schemas/OpaqueId"

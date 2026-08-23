@@ -5,6 +5,9 @@ COMMENT ON SCHEMA router IS 'LLM Router application data';
 CREATE DOMAIN router.api_name AS text
     CHECK (VALUE ~ '^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$');
 
+CREATE DOMAIN router.assignment_name AS text
+    CHECK (VALUE ~ '^[a-z0-9][a-z0-9._-]{0,126}$');
+
 CREATE TABLE router.services (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     api_name router.api_name NOT NULL UNIQUE,
@@ -116,7 +119,7 @@ CREATE INDEX activity_events_time ON router.activity_events(occurred_at DESC, id
 CREATE TABLE router.assignment_definitions (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     service_id uuid NOT NULL REFERENCES router.services(id) ON DELETE CASCADE,
-    api_name text NOT NULL,
+    api_name router.assignment_name NOT NULL,
     payload jsonb NOT NULL DEFAULT '{}'::jsonb,
     UNIQUE (service_id, api_name)
 );
@@ -155,7 +158,8 @@ CREATE TABLE router.media_jobs (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     service_id uuid NOT NULL,
     workspace_id uuid NOT NULL,
-    state text NOT NULL DEFAULT 'queued',
+    state text NOT NULL DEFAULT 'pending'
+        CHECK (state IN ('pending', 'running', 'succeeded', 'failed')),
     payload jsonb NOT NULL DEFAULT '{}'::jsonb,
     created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
     UNIQUE (service_id, workspace_id, id),
@@ -163,12 +167,33 @@ CREATE TABLE router.media_jobs (
         REFERENCES router.workspaces(service_id, id) ON DELETE CASCADE
 );
 
+CREATE FUNCTION router.enforce_media_job_state_transition() RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, router
+AS $$
+BEGIN
+    IF NEW.state = OLD.state
+        OR (OLD.state = 'pending'
+            AND NEW.state IN ('running', 'succeeded', 'failed'))
+        OR (OLD.state = 'running'
+            AND NEW.state IN ('succeeded', 'failed')) THEN
+        RETURN NEW;
+    END IF;
+    RAISE EXCEPTION 'A media job state must move forward.'
+        USING ERRCODE = '23514', CONSTRAINT = 'media_jobs_state_transition';
+END;
+$$;
+
+CREATE TRIGGER media_jobs_enforce_state_transition
+BEFORE UPDATE OF state ON router.media_jobs
+FOR EACH ROW EXECUTE FUNCTION router.enforce_media_job_state_transition();
+
 CREATE TABLE router.media_objects (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     service_id uuid NOT NULL,
     workspace_id uuid NOT NULL,
     media_job_id uuid,
-    object_key text NOT NULL,
+    object_key text NOT NULL UNIQUE CHECK (octet_length(object_key) BETWEEN 1 AND 1024),
     created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
     FOREIGN KEY (service_id, workspace_id)
         REFERENCES router.workspaces(service_id, id) ON DELETE CASCADE,

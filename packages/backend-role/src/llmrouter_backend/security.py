@@ -8,6 +8,7 @@ import binascii
 import hashlib
 import hmac
 import json
+import math
 import re
 import secrets
 import uuid
@@ -18,7 +19,7 @@ from typing import TYPE_CHECKING, Any, TypeIs, cast
 from urllib.parse import urlsplit
 
 import httpx
-from cryptography.exceptions import InvalidSignature
+from cryptography.exceptions import InvalidSignature, InvalidTag
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -34,6 +35,7 @@ _CONTROL_ASSOCIATED_DATA = b"llmrouter-administrator-control-v1"
 _TOKEN_BYTES = 32
 _OIDC_TIMEOUT_SECONDS = 10.0
 _MAXIMUM_OIDC_DOCUMENT_BYTES = 1_000_000
+_MAXIMUM_NUMERIC_DATE = 253_402_300_799
 _RETURN_PATH = re.compile(r"^/(?:[A-Za-z0-9_?&=.-][A-Za-z0-9/_?&=.-]*)?$")
 _BASE64URL = re.compile(r"^[A-Za-z0-9_-]+$")
 
@@ -82,7 +84,7 @@ class ControlKeys:
                 value[:12], value[12:], _CONTROL_ASSOCIATED_DATA
             )
             document = json.loads(plaintext)
-        except (ValueError, UnicodeError, json.JSONDecodeError) as error:
+        except (InvalidTag, ValueError, UnicodeError, json.JSONDecodeError) as error:
             raise authentication_required() from error
         if not isinstance(document, dict) or any(
             not isinstance(key, str) or not isinstance(item, str)
@@ -185,6 +187,11 @@ class OidcClient:
         authorization_endpoint = _required_url(document, "authorization_endpoint")
         token_endpoint = _required_url(document, "token_endpoint")
         jwks_uri = _required_url(document, "jwks_uri")
+        if urlsplit(issuer).scheme == "https" and any(
+            urlsplit(endpoint).scheme != "https"
+            for endpoint in (authorization_endpoint, token_endpoint, jwks_uri)
+        ):
+            raise authentication_required()
         _require_basic_token_authentication(document)
         return OidcMetadata(authorization_endpoint, token_endpoint, jwks_uri)
 
@@ -230,7 +237,15 @@ class OidcClient:
     ) -> OidcIdentity:
         """Verify the ID token signature, authority, audience, expiry, and nonce."""
         header, claims, signing_input, signature = _jwt_parts(id_token)
-        if header.get("alg") != "RS256" or not isinstance(header.get("kid"), str):
+        key_id = header.get("kid")
+        if (
+            header.get("alg") != "RS256"
+            or not isinstance(key_id, str)
+            or not 1 <= len(key_id) <= 500
+            or any(
+                ord(character) <= 0x20 or ord(character) == 0x7F for character in key_id
+            )
+        ):
             raise authentication_required()
         jwks = self._json_request("GET", metadata.jwks_uri)
         keys = jwks.get("keys")
@@ -240,7 +255,7 @@ class OidcClient:
             key
             for key in keys
             if isinstance(key, dict)
-            and key.get("kid") == header["kid"]
+            and key.get("kid") == key_id
             and key.get("kty") == "RSA"
             and key.get("use", "sig") == "sig"
             and key.get("alg", "RS256") == "RS256"
@@ -250,15 +265,19 @@ class OidcClient:
         _verify_rs256(cast(dict[str, Any], matches[0]), signing_input, signature)
         issuer = claims.get("iss")
         subject = claims.get("sub")
-        if issuer != self._settings.oidc_issuer or not isinstance(subject, str):
+        if (
+            issuer != self._settings.oidc_issuer
+            or not isinstance(subject, str)
+            or "\x00" in subject
+        ):
             raise authentication_required()
+        _verify_audience(claims, self._secrets.client_id)
+        _verify_time_and_nonce(claims, nonce)
         if (
             not 1 <= len(subject) <= 500
             or subject not in self._secrets.allowed_subjects
         ):
             raise ApiError(403, "permission_denied", "Administrator access is denied.")
-        _verify_audience(claims, self._secrets.client_id)
-        _verify_time_and_nonce(claims, nonce)
         display = claims.get("name") or claims.get("preferred_username")
         if (
             not isinstance(display, str)
@@ -370,7 +389,7 @@ def _read_control_bytes(path: Path) -> bytes:
 
 def _validate_exact_issuer(value: str) -> None:
     parsed = urlsplit(value)
-    if parsed.path or parsed.query or parsed.fragment:
+    if parsed.path or parsed.query or parsed.fragment or "?" in value or "#" in value:
         raise authentication_required()
     _validate_endpoint(value)
 
@@ -388,10 +407,12 @@ def _validate_endpoint(value: str) -> None:
         or parsed.username is not None
         or parsed.password is not None
         or parsed.fragment
+        or "#" in value
+        or "\\" in value
         or (parsed_port is not None and not 1 <= parsed_port <= 65_535)
         or not 1 <= len(value) <= 4_096
         or value.strip() != value
-        or any(character.isspace() for character in value)
+        or any(ord(character) <= 0x20 or ord(character) == 0x7F for character in value)
     ):
         raise authentication_required()
 
@@ -491,11 +512,19 @@ def _verify_audience(claims: Mapping[str, Any], client_id: str) -> None:
     if (
         not isinstance(audiences, list)
         or not audiences
-        or any(not isinstance(item, str) for item in audiences)
+        or len(audiences) > 20
+        or any(
+            not isinstance(item, str) or not 1 <= len(item) <= 2_000
+            for item in audiences
+        )
+        or len(set(audiences)) != len(audiences)
         or client_id not in audiences
     ):
         raise authentication_required()
-    if len(audiences) > 1 and claims.get("azp") != client_id:
+    authorized_party = claims.get("azp")
+    if (
+        len(audiences) > 1 or authorized_party is not None
+    ) and authorized_party != client_id:
         raise authentication_required()
 
 
@@ -505,19 +534,24 @@ def _verify_time_and_nonce(claims: Mapping[str, Any], nonce: str) -> None:
     issued_at = claims.get("iat")
     now = datetime.now(tz=UTC).timestamp()
     if (
-        not _is_number(expires_at)
+        not _is_finite_numeric_date(expires_at)
         or expires_at <= now
         or claims.get("nonce") != nonce
-        or (not_before is not None and not _is_number(not_before))
-        or not _is_number(issued_at)
-        or (_is_number(not_before) and not_before > now)
-        or (_is_number(issued_at) and issued_at > now + 60)
+        or (not_before is not None and not _is_finite_numeric_date(not_before))
+        or not _is_finite_numeric_date(issued_at)
+        or (_is_finite_numeric_date(not_before) and not_before > now)
+        or issued_at > now + 60
+        or issued_at > expires_at
     ):
         raise authentication_required()
 
 
-def _is_number(value: object) -> TypeIs[int | float]:
-    return isinstance(value, int | float) and not isinstance(value, bool)
+def _is_finite_numeric_date(value: object) -> TypeIs[int | float]:
+    if not isinstance(value, int | float) or isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return abs(value) <= _MAXIMUM_NUMERIC_DATE
+    return math.isfinite(value) and abs(value) <= _MAXIMUM_NUMERIC_DATE
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
