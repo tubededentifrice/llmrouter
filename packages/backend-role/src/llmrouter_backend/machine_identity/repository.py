@@ -128,13 +128,16 @@ class MachineCredentialRepository:
         if row[0] != "active":
             msg = "invalid_token"
             raise MachineIdentityError(msg, context.request_id)
-        if connection.execute(
-            """
+        if (
+            connection.execute(
+                """
             SELECT 1 FROM router.service_bootstrap_generations
             WHERE service_id = %s
             """,
-            (parsed_service_id,),
-        ).fetchone() is not None:
+                (parsed_service_id,),
+            ).fetchone()
+            is not None
+        ):
             msg = "insufficient_scope"
             raise MachineIdentityError(msg, context.request_id)
         _insert_generation(

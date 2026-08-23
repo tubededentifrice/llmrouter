@@ -629,6 +629,34 @@ def _prove_global_administration() -> None:
             diagnostic_route_id=diagnostic_route_id,
             diagnostic_revision=diagnostic_revision,
         )
+        browser.click_button("Open global tasks")
+        browser.wait_for_text("Run LLM Router")
+        browser.click_button("Audit events")
+        browser.wait_for_text("Security and administration activity")
+        browser.wait_until(
+            lambda: (
+                browser.evaluate(
+                    'document.querySelectorAll(".audit-event-card").length'
+                )
+                not in {None, 0}
+            ),
+            "The global audit page did not load its safe events.",
+        )
+        audit_text = browser.body_text()
+        assert "permitted" in audit_text
+        assert SERVICE_ID in audit_text
+        assert WORKSPACE_ID in audit_text
+        assert admin_secret not in audit_text
+        assert "Return the deterministic response." not in audit_text
+        assert "local response" not in audit_text
+        browser.set_viewport(390, 844)
+        assert browser.has_no_horizontal_overflow()
+        assert browser.focus_labeled_control("From (UTC)")
+        browser.click_button("Apply range")
+        browser.wait_until(
+            lambda: browser.active_element_label() == "Audit event results",
+            "The refreshed audit results did not receive focus.",
+        )
         browser.click_button("Provider credentials")
         browser.wait_for_text("Store OpenRouter credential")
         credential_count = browser.evaluate(

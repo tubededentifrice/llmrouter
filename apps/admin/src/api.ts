@@ -312,6 +312,32 @@ export interface AccountingSummary {
   readonly corrections: string;
 }
 
+export interface AuditSafeDetail {
+  readonly resource_type?: string;
+  readonly resource_id?: string;
+  readonly reason?: string;
+  readonly safe_error_code?: string;
+}
+
+export interface AuditEvent {
+  readonly event_id: string;
+  readonly occurred_at: string;
+  readonly actor: string;
+  readonly action: string;
+  readonly outcome: "permitted" | "denied";
+  readonly scope: {
+    readonly authority_class: "service" | "global_administrator" | "system";
+    readonly service_id?: string;
+    readonly workspace_id?: string;
+  };
+  readonly safe_detail?: AuditSafeDetail;
+}
+
+export interface AuditPage {
+  readonly items: readonly AuditEvent[];
+  readonly next_cursor: string | null;
+}
+
 export interface AdministrationSnapshot {
   readonly state: ScopedState | null;
   readonly credentials: readonly Credential[];
@@ -416,6 +442,14 @@ export interface AdministrationClient {
     kind: "providers" | "models",
     signal?: AbortSignal,
   ): Promise<readonly CatalogEntry[]>;
+  listAuditEvents(
+    range: {
+      readonly from: string;
+      readonly to: string;
+      readonly cursor?: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<AuditPage>;
   createService(input: {
     readonly displayName: string;
     readonly parentServiceId: string | null;
@@ -932,6 +966,15 @@ export function createFetchAdministrationClient({
     listCatalog(kind, signal) {
       return allPages<CatalogEntry>(`/v1/admin/catalog/${kind}`, signal).then(
         (result) => result.items,
+      );
+    },
+
+    listAuditEvents(range, signal) {
+      const query = new URLSearchParams({ from: range.from, to: range.to });
+      if (range.cursor !== undefined) query.set("cursor", range.cursor);
+      return request<AuditPage>(
+        `/v1/admin/audit-events?${query.toString()}`,
+        signal === undefined ? {} : { signal },
       );
     },
 

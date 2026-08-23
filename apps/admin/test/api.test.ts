@@ -898,4 +898,50 @@ describe("administration API client", () => {
       });
     },
   );
+
+  it("loads one exact bounded audit page with an opaque next cursor", async () => {
+    const received: string[] = [];
+    const controller = new AbortController();
+    const client = createFetchAdministrationClient({
+      fetcher: vi.fn((input: string | URL | Request) => {
+        received.push(requestUrl(input));
+        return Promise.resolve(
+          json({
+            items: [
+              {
+                event_id: "event-one",
+                occurred_at: "2026-08-20T12:00:00Z",
+                actor: "administrator:actor-one",
+                action: "service.manage",
+                outcome: "permitted",
+                scope: { authority_class: "global_administrator" },
+              },
+            ],
+            next_cursor: "opaque-cursor-value",
+          }),
+        );
+      }),
+    });
+
+    const first = await client.listAuditEvents(
+      {
+        from: "2026-08-13T12:00:00.000Z",
+        to: "2026-08-20T12:00:00.000Z",
+      },
+      controller.signal,
+    );
+    const nextCursor = first.next_cursor;
+    if (nextCursor === null) throw new Error("The audit cursor is missing.");
+    await client.listAuditEvents({
+      from: "2026-08-13T12:00:00.000Z",
+      to: "2026-08-20T12:00:00.000Z",
+      cursor: nextCursor,
+    });
+
+    expect(first.items[0]?.action).toBe("service.manage");
+    expect(received[0]).toBe(
+      "/v1/admin/audit-events?from=2026-08-13T12%3A00%3A00.000Z&to=2026-08-20T12%3A00%3A00.000Z",
+    );
+    expect(received[1]).toContain("cursor=opaque-cursor-value");
+  });
 });

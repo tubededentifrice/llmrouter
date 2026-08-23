@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
@@ -12,7 +12,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from llmrouter_backend.accounting import AccountingSummary
-from llmrouter_backend.administration import AdministrationService
+from llmrouter_backend.administration import AdministrationService, AuditDiscoveryError
 from llmrouter_backend.administration.http import (
     install_administration_service,
     router,
@@ -419,8 +419,54 @@ class FakeAccounting:
         start: datetime,
         end: datetime,
     ) -> AccountingSummary:
-        assert start < end
+        if start >= end:
+            raise AuditDiscoveryError(
+                "from,to",
+                "The audit time range must contain an aware start before its end.",
+            )
         return AccountingSummary("USD", 1, 1, (), Decimal("0.01"), Decimal(0))
+
+
+class FakeAudit:
+    def list_events(
+        self,
+        context: RequestContext,
+        *,
+        start: datetime,
+        end: datetime,
+        cursor: str | None = None,
+    ) -> tuple[tuple[dict[str, object], ...], str | None]:
+        assert context.operation == "audit.read"
+        assert context.scope == Scope()
+        if start >= end:
+            raise AuditDiscoveryError(
+                "from,to",
+                "The audit time range must contain an aware start before its end.",
+            )
+        if cursor == "invalid":
+            raise AuditDiscoveryError(
+                "cursor", "The audit page cursor is invalid for this time range."
+            )
+        return (
+            (
+                {
+                    "event_id": str(uuid.UUID(int=75)),
+                    "occurred_at": NOW.isoformat(),
+                    "actor": "administrator:administrator-1",
+                    "action": "service.create",
+                    "outcome": "permitted",
+                    "scope": {
+                        "authority_class": "global_administrator",
+                        "service_id": SERVICE_ID,
+                    },
+                    "safe_detail": {
+                        "resource_type": "service",
+                        "resource_id": SERVICE_ID,
+                    },
+                },
+            ),
+            None,
+        )
 
 
 class FakeBudgets:
@@ -503,7 +549,7 @@ class FakeDiagnostics:
         exact_route_id: str,
         reason: str,
         now: datetime,
-    ) -> dict[str, object]:
+    ) -> tuple[dict[str, object], bool]:
         assert logical_request_id == DIAGNOSTIC_REQUEST_ID
         assert exact_route_id == ROUTE_ID
         assert reason == "Verify the route"
@@ -549,6 +595,7 @@ def administration(
         lifecycle=lifecycle,
         requests=FakeRequests(),
         accounting=FakeAccounting(),
+        audit=FakeAudit(),
         budgets=FakeBudgets(),
         diagnostics=FakeDiagnostics(),
         now=lambda: NOW,
@@ -559,6 +606,80 @@ def administration(
     app.include_router(router)
     install_administration_service(app, service)
     return TestClient(app), authority, credentials
+
+
+def test_global_audit_route_uses_exact_read_authority_and_safe_filters(
+    administration: tuple[TestClient, FakeAuthority, FakeCredentials],
+) -> None:
+    client, authority, _credentials = administration
+    response = client.get(
+        "/v1/admin/audit-events",
+        params={
+            "from": "2026-08-15T00:00:00+00:00",
+            "to": "2026-08-17T00:00:00+00:00",
+        },
+        headers=_headers(),
+    )
+    invalid = client.get(
+        "/v1/admin/audit-events",
+        params={
+            "from": "2026-08-15T00:00:00+00:00",
+            "to": "2026-08-17T00:00:00+00:00",
+            "cursor": "invalid",
+        },
+        headers=_headers(),
+    )
+    invalid_range = client.get(
+        "/v1/admin/audit-events",
+        params={
+            "from": "2026-08-17T00:00:00+00:00",
+            "to": "2026-08-15T00:00:00+00:00",
+        },
+        headers=_headers(),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["action"] == "service.create"
+    assert response.json()["next_cursor"] is None
+    assert authority.policies[-2].operation == "audit.read"
+    assert authority.policies[-2].scope_kind.value == "global"
+    assert authority.policies[-2].sensitive is False
+    assert invalid.status_code == 400
+    assert invalid.json()["error"]["field_errors"] == [
+        {
+            "path": "cursor",
+            "code": "invalid_request",
+            "message": "The audit page cursor is invalid for this time range.",
+        }
+    ]
+    assert invalid_range.status_code == 400
+    assert invalid_range.json()["error"]["field_errors"][0]["path"] == "from,to"
+
+
+def test_global_audit_authorizes_before_repository_availability() -> None:
+    authority = FakeAuthority()
+    service = AdministrationService(
+        authority=authority,
+        configuration=FakeConfiguration(),
+        credentials=FakeCredentials(),
+        lifecycle=FakeLifecycle(),
+        requests=FakeRequests(),
+        accounting=FakeAccounting(),
+        now=lambda: NOW,
+        identity_factory=lambda: uuid.UUID(int=40),
+    )
+
+    with pytest.raises(RuntimeError, match="audit repository is unavailable"):
+        service.audit_events(
+            SESSION,
+            request_id="audit-repository-unavailable",
+            start=NOW - timedelta(days=1),
+            end=NOW,
+            cursor=None,
+        )
+
+    assert authority.policies[-1].operation == "audit.read"
+    assert authority.policies[-1].scope_kind.value == "global"
 
 
 def test_embed_snapshot_rejects_non_embed_context() -> None:

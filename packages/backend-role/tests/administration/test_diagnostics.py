@@ -147,8 +147,8 @@ def test_runner_consumes_one_use_authority_and_returns_no_content() -> None:
     models = FakeModels(authenticator)
     runner = AdministratorDiagnosticRunner(
         FakeGrants(),
-        models,
-        authenticator,  # type: ignore[arg-type]
+        models,  # type: ignore[arg-type]
+        authenticator,
     )
 
     result, replayed = runner.run(

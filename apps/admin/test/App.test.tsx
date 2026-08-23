@@ -14,6 +14,7 @@ import {
   AdministrationDashboard,
   AdministrationStateView,
   App,
+  AuditView,
   LocalAdministrationGateView,
   LocalAdministratorActivation,
   StaleRevisionBanner,
@@ -31,6 +32,7 @@ import {
   scheduleAdministrationSessionInspection,
   type AdministrationClient,
   type AdministrationSnapshot,
+  type AuditPage,
   type RequestStatus,
   type ScopeSelection,
   type ServiceSummary,
@@ -236,6 +238,7 @@ const client: AdministrationClient = {
   listServices: vi.fn(),
   listCredentials: vi.fn(),
   listCatalog: vi.fn(),
+  listAuditEvents: vi.fn().mockResolvedValue({ items: [], next_cursor: null }),
   createService: vi.fn(),
   putService: vi.fn(),
   changeService: vi.fn(),
@@ -255,6 +258,7 @@ function dashboard(
     | "overview"
     | "services"
     | "credentials"
+    | "audit"
     | "setup"
     | "configuration"
     | "assignments"
@@ -397,8 +401,170 @@ describe("administration app states", () => {
     expect(html).toContain('aria-current="page"');
     expect(html).toContain("Global administrator tasks");
     expect(html).toContain("Overview");
+    expect(html).toContain("Audit events");
     expect(html).toContain("mobile-service-selector");
   });
+
+  /* eslint-disable @typescript-eslint/no-deprecated -- This renderer verifies audit page state changes. */
+  it("shows audit loading, safe events, and stable next-page controls", async () => {
+    const first = deferred<AuditPage>();
+    const listAuditEvents = vi
+      .fn<AdministrationClient["listAuditEvents"]>()
+      .mockImplementationOnce(() => first.promise)
+      .mockResolvedValueOnce({
+        items: [
+          {
+            event_id: "event-two",
+            occurred_at: "2026-08-19T12:00:00Z",
+            actor: "system:router",
+            action: "administrator.session.create",
+            outcome: "denied",
+            scope: { authority_class: "system" },
+            safe_detail: { safe_error_code: "insufficient_scope" },
+          },
+        ],
+        next_cursor: null,
+      });
+    const auditClient = { ...client, listAuditEvents };
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(<AuditView client={auditClient} />);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(renderedText(renderer.root)).toContain("Loading audit events");
+
+    await act(async () => {
+      first.resolve({
+        items: [
+          {
+            event_id: "event-one",
+            occurred_at: "2026-08-20T12:00:00Z",
+            actor: "administrator:actor-one",
+            action: "service.manage",
+            outcome: "permitted",
+            scope: {
+              authority_class: "global_administrator",
+              service_id: "service-one",
+              workspace_id: "workspace-one",
+            },
+            safe_detail: {
+              resource_type: "service",
+              resource_id: "service-one",
+            },
+          },
+        ],
+        next_cursor: "stable-next-cursor",
+      });
+      await first.promise;
+      await Promise.resolve();
+    });
+    expect(renderedText(renderer.root)).toContain("service manage");
+    expect(renderedText(renderer.root)).toContain("Load next page");
+    const next = renderer.root
+      .findAllByType("button")
+      .find((item) => renderedText(item).includes("Load next page"));
+    if (next === undefined) throw new Error("Audit next page did not render.");
+    await act(async () => {
+      (next.props.onClick as () => void)();
+      await Promise.resolve();
+    });
+    expect(renderedText(renderer.root)).toContain(
+      "administrator session create",
+    );
+    expect(renderedText(renderer.root)).toContain(
+      "The complete selected range is shown.",
+    );
+    expect(listAuditEvents.mock.calls[1]?.[0]).toMatchObject({
+      cursor: "stable-next-cursor",
+    });
+    act(() => {
+      renderer.unmount();
+    });
+  });
+
+  it("shows audit failure, retry, and empty states", async () => {
+    const listAuditEvents = vi
+      .fn<AdministrationClient["listAuditEvents"]>()
+      .mockRejectedValueOnce(
+        new AdministrationApiError("The administration service is offline.", {
+          code: "offline",
+          requestId: null,
+          status: 0,
+        }),
+      )
+      .mockResolvedValueOnce({ items: [], next_cursor: null });
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<AuditView client={{ ...client, listAuditEvents }} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(renderedText(renderer.root)).toContain(
+      "Audit events are not available",
+    );
+    const retry = renderer.root
+      .findAllByType("button")
+      .find((item) => renderedText(item).includes("Try again"));
+    if (retry === undefined) throw new Error("Audit retry did not render.");
+    await act(async () => {
+      (retry.props.onClick as () => void)();
+      await Promise.resolve();
+    });
+    expect(renderedText(renderer.root)).toContain(
+      "No audit events in this range",
+    );
+    act(() => {
+      renderer.unmount();
+    });
+  });
+
+  it("keeps an invalid audit range after an older request finishes", async () => {
+    const first = deferred<AuditPage>();
+    const listAuditEvents = vi
+      .fn<AdministrationClient["listAuditEvents"]>()
+      .mockReturnValue(first.promise);
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(<AuditView client={{ ...client, listAuditEvents }} />);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const inputs = renderer.root.findAllByType("input");
+    const endInput = inputs[1];
+    if (endInput === undefined) throw new Error("Audit end input is absent.");
+    act(() => {
+      (endInput.props.onChange as (event: unknown) => void)({
+        currentTarget: { value: "2020-01-01T00:00" },
+      });
+    });
+    act(() => {
+      (
+        renderer.root.findByType("form").props.onSubmit as (event: {
+          preventDefault(): void;
+        }) => void
+      )({ preventDefault: vi.fn() });
+    });
+    expect(listAuditEvents.mock.calls[0]?.[1]?.aborted).toBe(true);
+    expect(renderedText(renderer.root)).toContain(
+      "Select a start time that is before the end time.",
+    );
+
+    await act(async () => {
+      first.resolve({ items: [], next_cursor: null });
+      await first.promise;
+      await Promise.resolve();
+    });
+    expect(renderedText(renderer.root)).toContain(
+      "Select a start time that is before the end time.",
+    );
+    act(() => {
+      renderer.unmount();
+    });
+  });
+  /* eslint-enable @typescript-eslint/no-deprecated */
 
   it("shows registered service names in the scope control", () => {
     const html = renderToStaticMarkup(
@@ -538,6 +704,9 @@ describe("administration app states", () => {
     expect(styles).toContain("overflow-x: auto");
     expect(styles).toContain("@media (max-width: 600px)");
     expect(styles).toContain("grid-template-columns: 1fr");
+    expect(styles).toMatch(
+      /\.audit-event-detail\s*{[^}]*grid-template-columns: 1fr/s,
+    );
     expect(styles).toMatch(/\.content\s*{[^}]*width: 100%/s);
     expect(styles).not.toContain("width: min(1240px");
     expect(styles).toMatch(/\.service-graph-page\s*{[^}]*padding: 12px/s);

@@ -27,6 +27,7 @@ from llmrouter_backend.lifecycle import LifecycleError, ServiceAction
 from llmrouter_backend.model_requests import ModelRequestError
 from llmrouter_backend.routing import RoutingError
 
+from .audit import AuditDiscoveryError
 from .model import (
     AssignmentInput,
     BudgetLimitInput,
@@ -98,6 +99,29 @@ async def list_services(request: Request) -> Response:
                 request_id=request_id,
                 cursor=_optional_query(request, "cursor"),
                 limit=_limit(request),
+            ),
+            request_id,
+        )
+        return _json(result)
+    except Exception as error:
+        return _error_response(error, request_id)
+
+
+@router.get("/admin/audit-events", response_model=None)
+async def list_audit_events(request: Request) -> Response:
+    """List one stable bounded global audit page."""
+    request_id = _request_id()
+    try:
+        start = datetime.fromisoformat(_query(request, "from", request_id))
+        end = datetime.fromisoformat(_query(request, "to", request_id))
+        result = await _run(
+            request,
+            lambda service: service.audit_events(
+                _session(request, request_id),
+                request_id=request_id,
+                start=start,
+                end=end,
+                cursor=_optional_query(request, "cursor"),
             ),
             request_id,
         )
@@ -862,6 +886,19 @@ def _safe_error(
             for detail in error.errors(include_input=False, include_context=False)[:100]
         ]
         return "invalid_request", 422, False, fields
+    if isinstance(error, AuditDiscoveryError):
+        return (
+            "invalid_request",
+            400,
+            False,
+            [
+                {
+                    "path": error.field,
+                    "code": "invalid_request",
+                    "message": error.safe_message,
+                }
+            ],
+        )
     if isinstance(error, (_AuthenticationError, AdministratorAuthError)):
         code = error.code
         return code, _status(code), code == "temporarily_unavailable", []

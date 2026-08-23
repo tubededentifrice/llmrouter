@@ -51,6 +51,7 @@ import {
   type AdministrationClient,
   type AdministrationSnapshot,
   type Assignment,
+  type AuditEvent,
   type BudgetSummary,
   type CatalogEntry,
   type Credential,
@@ -75,6 +76,7 @@ type Section =
   | "overview"
   | "services"
   | "credentials"
+  | "audit"
   | "setup"
   | "configuration"
   | "assignments"
@@ -120,6 +122,7 @@ const globalSections: readonly SectionItem[] = [
   { id: "overview", label: "Overview", icon: "grid" },
   { id: "services", label: "Services & inheritance", icon: "layers" },
   { id: "credentials", label: "Provider credentials", icon: "key" },
+  { id: "audit", label: "Audit events", icon: "audit" },
 ];
 
 const serviceSections: readonly SectionItem[] = [
@@ -2255,6 +2258,346 @@ function AccountingView({ summary }: { readonly summary: AccountingSummary }) {
   );
 }
 
+interface AuditRange {
+  readonly from: string;
+  readonly to: string;
+}
+
+interface AuditLoadState {
+  readonly items: readonly AuditEvent[];
+  readonly nextCursor: string | null;
+  readonly loading: "initial" | "next" | null;
+  readonly failure: string | null;
+}
+
+type AuditLoadAction =
+  | { readonly type: "start"; readonly append: boolean }
+  | {
+      readonly type: "success";
+      readonly append: boolean;
+      readonly items: readonly AuditEvent[];
+      readonly nextCursor: string | null;
+    }
+  | { readonly type: "failure"; readonly message: string }
+  | { readonly type: "finish" }
+  | { readonly type: "invalid_range"; readonly message: string };
+
+function reduceAuditLoad(
+  state: AuditLoadState,
+  action: AuditLoadAction,
+): AuditLoadState {
+  switch (action.type) {
+    case "start":
+      return {
+        ...state,
+        items: action.append ? state.items : [],
+        nextCursor: action.append ? state.nextCursor : null,
+        loading: action.append ? "next" : "initial",
+        failure: null,
+      };
+    case "success":
+      return {
+        ...state,
+        items: action.append ? [...state.items, ...action.items] : action.items,
+        nextCursor: action.nextCursor,
+      };
+    case "failure":
+      return { ...state, failure: action.message };
+    case "finish":
+      return { ...state, loading: null };
+    case "invalid_range":
+      return {
+        items: [],
+        nextCursor: null,
+        loading: null,
+        failure: action.message,
+      };
+  }
+}
+
+function defaultAuditRange(now = new Date()): AuditRange {
+  const to = new Date(Math.floor(now.getTime() / 60_000) * 60_000 + 60_000)
+    .toISOString()
+    .slice(0, 16);
+  const from = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 16);
+  return { from, to };
+}
+
+function auditRangeQuery(range: AuditRange): { from: string; to: string } {
+  const from = new Date(`${range.from}:00.000Z`);
+  const to = new Date(`${range.to}:00.000Z`);
+  if (
+    Number.isNaN(from.getTime()) ||
+    Number.isNaN(to.getTime()) ||
+    from >= to
+  ) {
+    throw new Error("Select a start time that is before the end time.");
+  }
+  return { from: from.toISOString(), to: to.toISOString() };
+}
+
+function auditLabel(value: string): string {
+  return value.replaceAll(/[._:]+/g, " ");
+}
+
+function AuditEventCard({ value }: { readonly value: AuditEvent }) {
+  const details = Object.entries(value.safe_detail ?? {});
+  return (
+    <li className="audit-event-card">
+      <div className="audit-event-heading">
+        <div>
+          <strong>{auditLabel(value.action)}</strong>
+          <time dateTime={value.occurred_at}>{value.occurred_at}</time>
+        </div>
+        <StatusPill tone={value.outcome === "permitted" ? "green" : "red"}>
+          {value.outcome}
+        </StatusPill>
+      </div>
+      <dl className="audit-event-detail">
+        <div>
+          <dt>Actor</dt>
+          <dd>{value.actor}</dd>
+        </div>
+        <div>
+          <dt>Authority</dt>
+          <dd>{auditLabel(value.scope.authority_class)}</dd>
+        </div>
+        <div>
+          <dt>Service</dt>
+          <dd>{value.scope.service_id ?? "Router-wide"}</dd>
+        </div>
+        <div>
+          <dt>Workspace</dt>
+          <dd>{value.scope.workspace_id ?? "Not applicable"}</dd>
+        </div>
+        <div>
+          <dt>Event ID</dt>
+          <dd>{value.event_id}</dd>
+        </div>
+        {details.map(([name, detail]) => (
+          <div key={name}>
+            <dt>{auditLabel(name)}</dt>
+            <dd>{detail}</dd>
+          </div>
+        ))}
+      </dl>
+    </li>
+  );
+}
+
+export function AuditView({
+  client,
+}: {
+  readonly client: AdministrationClient;
+}) {
+  const initialRange = useMemo(() => defaultAuditRange(), []);
+  const [draft, updateDraft] = useReducer(
+    (state: AuditRange, update: Partial<AuditRange>) => ({
+      ...state,
+      ...update,
+    }),
+    initialRange,
+  );
+  const [auditState, dispatchAudit] = useReducer(reduceAuditLoad, {
+    items: [],
+    nextCursor: null,
+    loading: "initial",
+    failure: null,
+  });
+  const { failure, items, loading, nextCursor } = auditState;
+  const controller = useRef<AbortController | null>(null);
+  const range = useRef<AuditRange>(initialRange);
+  const failedCursor = useRef<string | undefined>(undefined);
+  const results = useRef<HTMLDivElement | null>(null);
+  const focusAfterLoad = useRef(false);
+
+  const load = useCallback(
+    async (selectedRange: AuditRange, cursor?: string) => {
+      controller.current?.abort();
+      const nextController = new AbortController();
+      controller.current = nextController;
+      const append = cursor !== undefined;
+      dispatchAudit({ type: "start", append });
+      failedCursor.current = undefined;
+      try {
+        const query = auditRangeQuery(selectedRange);
+        const page = await client.listAuditEvents(
+          { ...query, ...(cursor === undefined ? {} : { cursor }) },
+          nextController.signal,
+        );
+        if (!nextController.signal.aborted) {
+          dispatchAudit({
+            type: "success",
+            append,
+            items: page.items,
+            nextCursor: page.next_cursor,
+          });
+        }
+      } catch (error) {
+        if (!nextController.signal.aborted) {
+          failedCursor.current = cursor;
+          dispatchAudit({
+            type: "failure",
+            message:
+              error instanceof Error &&
+              !(error instanceof AdministrationApiError)
+                ? error.message
+                : errorMessage(error),
+          });
+        }
+      } finally {
+        if (!nextController.signal.aborted) dispatchAudit({ type: "finish" });
+      }
+    },
+    [client],
+  );
+
+  useEffect(() => {
+    const cancelLoad = scheduleAdministrationSessionInspection(() => {
+      void load(range.current);
+    });
+    return () => {
+      cancelLoad();
+      controller.current?.abort();
+    };
+  }, [load]);
+
+  useEffect(() => {
+    if (!focusAfterLoad.current || loading !== null) return;
+    results.current?.focus();
+    focusAfterLoad.current = false;
+  }, [failure, items, loading]);
+
+  function submit(event: SubmitEvent<HTMLFormElement>) {
+    event.preventDefault();
+    focusAfterLoad.current = true;
+    try {
+      auditRangeQuery(draft);
+      range.current = draft;
+      void load(range.current);
+    } catch (error) {
+      controller.current?.abort();
+      controller.current = null;
+      failedCursor.current = undefined;
+      dispatchAudit({
+        type: "invalid_range",
+        message:
+          error instanceof Error ? error.message : "The time range is invalid.",
+      });
+    }
+  }
+
+  let state: ReactNode;
+  if (loading === "initial") {
+    state = (
+      <StatePanel kind="loading" title="Loading audit events">
+        The Router is loading one bounded content-free audit page.
+      </StatePanel>
+    );
+  } else if (failure !== null) {
+    state = (
+      <StatePanel
+        kind="error"
+        title="Audit events are not available"
+        onRetry={() => {
+          focusAfterLoad.current = true;
+          void load(range.current, failedCursor.current);
+        }}
+      >
+        {failure}
+      </StatePanel>
+    );
+  } else if (items.length === 0) {
+    state = (
+      <StatePanel kind="empty" title="No audit events in this range">
+        Change the UTC time range or refresh this page.
+      </StatePanel>
+    );
+  } else {
+    state = (
+      <>
+        <ol className="audit-event-list">
+          {items.map((item) => (
+            <AuditEventCard key={item.event_id} value={item} />
+          ))}
+        </ol>
+        {nextCursor === null ? (
+          <p className="audit-page-end">
+            The complete selected range is shown.
+          </p>
+        ) : (
+          <div className="audit-page-actions">
+            <Button
+              variant="secondary"
+              disabled={loading === "next"}
+              onClick={() => {
+                focusAfterLoad.current = true;
+                void load(range.current, nextCursor);
+              }}
+            >
+              {loading === "next" ? "Loading next page…" : "Load next page"}
+            </Button>
+          </div>
+        )}
+      </>
+    );
+  }
+
+  return (
+    <div className="panel-stack">
+      <PageHeading
+        eyebrow="Global administration"
+        title="Audit events"
+        description="Review safe actions, authority, scope, and outcomes. This page does not return prompts, outputs, tool data, credentials, tokens, cookies, or provider error bodies."
+      />
+      <Panel>
+        <PanelHeader
+          kicker="Bounded discovery"
+          title="Security and administration activity"
+          description="Times use UTC. Each page contains at most 100 events in newest-first order."
+        />
+        <form className="audit-filter" onSubmit={submit}>
+          <label>
+            <span>From (UTC)</span>
+            <input
+              type="datetime-local"
+              value={draft.from}
+              onChange={(event) => {
+                updateDraft({ from: event.currentTarget.value });
+              }}
+              required
+            />
+          </label>
+          <label>
+            <span>To (UTC)</span>
+            <input
+              type="datetime-local"
+              value={draft.to}
+              onChange={(event) => {
+                updateDraft({ to: event.currentTarget.value });
+              }}
+              required
+            />
+          </label>
+          <Button type="submit">Apply range</Button>
+        </form>
+        <div
+          ref={results}
+          className="audit-results"
+          tabIndex={-1}
+          aria-label="Audit event results"
+          aria-live="polite"
+          aria-busy={loading !== null}
+        >
+          {state}
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
 function decimalLessThan(left: string, right: string): boolean {
   const [leftWhole = "0", leftFraction = ""] = left.split(".");
   const [rightWhole = "0", rightFraction = ""] = right.split(".");
@@ -3989,6 +4332,7 @@ export function AdministrationDashboard({
           }}
         />
       ) : null}
+      {section === "audit" ? <AuditView client={client} /> : null}
       {section === "setup" && snapshot !== null ? (
         <ServiceSetup
           snapshot={snapshot}

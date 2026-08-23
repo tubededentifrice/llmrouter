@@ -32,6 +32,7 @@ from llmrouter_backend.adapters.openrouter import (
     OpenRouterAdapter,
     openrouter_registered_schemas,
 )
+from llmrouter_backend.administration.audit import PostgresAuditRepository
 from llmrouter_backend.administration.diagnostics import (
     AdministratorDiagnosticRunner,
     TransientDiagnosticAuthenticator,
@@ -706,6 +707,12 @@ def install_local_runtime(
             lifecycle=lifecycle,
             requests=views,
             accounting=accounting,
+            audit=PostgresAuditRepository(
+                database_url,
+                cursor_key=hmac.digest(
+                    digest_key, b"llmrouter-audit-cursor-v1", "sha256"
+                ),
+            ),
             budgets=budget_repository,
             diagnostics=AdministratorDiagnosticRunner(
                 routing_repository, service, diagnostic_authenticator

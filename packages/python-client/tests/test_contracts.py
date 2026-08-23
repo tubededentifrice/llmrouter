@@ -119,12 +119,8 @@ def test_administrator_diagnostic_contract_is_closed_and_content_free() -> None:
     request = cast(
         "dict[str, Any]", CONTRACT_SCHEMAS["AdministrationDiagnosticRunRequest"]
     )
-    phase = cast(
-        "dict[str, Any]", CONTRACT_SCHEMAS["AdministrationDiagnosticPhase"]
-    )
-    result = cast(
-        "dict[str, Any]", CONTRACT_SCHEMAS["AdministrationDiagnosticRun"]
-    )
+    phase = cast("dict[str, Any]", CONTRACT_SCHEMAS["AdministrationDiagnosticPhase"])
+    result = cast("dict[str, Any]", CONTRACT_SCHEMAS["AdministrationDiagnosticRun"])
     assert request["additionalProperties"] is False
     assert phase["additionalProperties"] is False
     assert result["additionalProperties"] is False
@@ -145,11 +141,7 @@ def test_administrator_diagnostic_contract_is_closed_and_content_free() -> None:
     ]
     result_properties = cast("dict[str, Any]", result["properties"])
     phases = cast("dict[str, Any]", result_properties["phases"])
-    assert (
-        phases["minItems"]
-        == phases["maxItems"]
-        == EXPECTED_DIAGNOSTIC_PHASE_COUNT
-    )
+    assert phases["minItems"] == phases["maxItems"] == EXPECTED_DIAGNOSTIC_PHASE_COUNT
     assert phases["items"] == {
         "$ref": "#/components/schemas/AdministrationDiagnosticPhase"
     }

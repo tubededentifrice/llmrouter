@@ -251,6 +251,19 @@ class AccountingStore(Protocol):
     ) -> AccountingSummary: ...
 
 
+class AuditStore(Protocol):
+    """Read bounded content-free global audit pages."""
+
+    def list_events(
+        self,
+        context: RequestContext,
+        *,
+        start: datetime,
+        end: datetime,
+        cursor: str | None = None,
+    ) -> tuple[tuple[dict[str, object], ...], str | None]: ...
+
+
 class BudgetStore(Protocol):
     """Read and change exact hierarchical budgets."""
 
@@ -299,6 +312,7 @@ class AdministrationService:
         lifecycle: LifecycleStore,
         requests: RequestStatusStore,
         accounting: AccountingStore,
+        audit: AuditStore | None = None,
         budgets: BudgetStore | None = None,
         diagnostics: DiagnosticRunner | None = None,
         machine: MachineCredentialRepository | None = None,
@@ -311,6 +325,7 @@ class AdministrationService:
         self._lifecycle = lifecycle
         self._requests = requests
         self._accounting = accounting
+        self._audit = audit
         self._budgets = budgets
         self._diagnostics = diagnostics
         self._machine = machine
@@ -1141,6 +1156,29 @@ class AdministrationService:
             "cost": format(result.cost, "f"),
             "corrections": format(result.corrections, "f"),
         }
+
+    def audit_events(
+        self,
+        session_token: str,
+        *,
+        request_id: str,
+        start: datetime,
+        end: datetime,
+        cursor: str | None,
+    ) -> dict[str, object]:
+        """Read one stable content-free global audit page."""
+        context = self._context(
+            session_token,
+            request_id=request_id,
+            operation="audit.read",
+            scope=Scope(),
+        )
+        if self._audit is None:
+            raise RuntimeError("The audit repository is unavailable.")
+        items, next_cursor = self._audit.list_events(
+            context, start=start, end=end, cursor=cursor
+        )
+        return {"items": list(items), "next_cursor": next_cursor}
 
     def embed_snapshot(
         self,
