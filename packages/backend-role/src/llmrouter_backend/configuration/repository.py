@@ -1076,6 +1076,10 @@ def _price_currency_issues(
     content: ScopeConfiguration,
 ) -> tuple[ValidationIssue, ...]:
     """Require each route price to match every applicable hard-budget currency."""
+    connection.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+        ("budget-hierarchy",),
+    )
     issues: list[ValidationIssue] = []
     for index, item in enumerate(content.provider_model_routes):
         try:

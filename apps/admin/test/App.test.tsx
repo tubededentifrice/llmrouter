@@ -33,8 +33,9 @@ import {
   type ServiceSummary,
 } from "../src/api.js";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
-  true;
+(
+  globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
 
 const globalScope: ScopeSelection = {
   mode: "global",
@@ -72,6 +73,25 @@ const styles = readFileSync(
   new URL("../src/styles.css", import.meta.url),
   "utf8",
 );
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
+}
+
+// React Test Renderer supplies the node tree for reducer interaction tests.
+// eslint-disable-next-line @typescript-eslint/no-deprecated
+function renderedText(item: ReactTestInstance): string {
+  return item.children
+    .map((child) => (typeof child === "string" ? child : renderedText(child)))
+    .join("");
+}
 
 const snapshot: AdministrationSnapshot = {
   state: {
@@ -626,6 +646,8 @@ describe("protected administration dashboard", () => {
   });
 
   it("distinguishes loading and empty supported-model catalogs", () => {
+    const noEligibleModelMessage =
+      "No active model supports both chat completion and streaming. Add or enable a compatible model in the global catalog.";
     const loadingHtml = renderToStaticMarkup(
       <AdministrationDashboard
         client={client}
@@ -651,11 +673,170 @@ describe("protected administration dashboard", () => {
         snapshot={snapshot}
       />,
     );
+    const inactiveHtml = renderToStaticMarkup(
+      <AdministrationDashboard
+        client={client}
+        initialSection="configuration"
+        notice={null}
+        onNotice={vi.fn()}
+        onReload={vi.fn()}
+        scope={serviceLevelScope}
+        services={[registeredService]}
+        catalogModels={catalogModels.map((model) => ({
+          ...model,
+          state: "disabled" as const,
+        }))}
+        snapshot={snapshot}
+      />,
+    );
+    const limitedHtml = renderToStaticMarkup(
+      <AdministrationDashboard
+        client={client}
+        initialSection="configuration"
+        notice={null}
+        onNotice={vi.fn()}
+        onReload={vi.fn()}
+        scope={serviceLevelScope}
+        services={[registeredService]}
+        catalogModels={catalogModels.map((model) => ({
+          ...model,
+          capabilities: ["chat.complete"],
+        }))}
+        snapshot={snapshot}
+      />,
+    );
     expect(loadingHtml).toContain("Supported models are loading");
     expect(loadingHtml).not.toContain("Publish route");
-    expect(emptyHtml).toContain("No active supported model is available");
+    expect(emptyHtml).toContain(noEligibleModelMessage);
     expect(emptyHtml).not.toContain("Publish route");
+    expect(inactiveHtml).toContain(noEligibleModelMessage);
+    expect(inactiveHtml).not.toContain("Publish route");
+    expect(limitedHtml).toContain(noEligibleModelMessage);
+    expect(limitedHtml).not.toContain("Publish route");
   });
+
+  /* eslint-disable @typescript-eslint/no-deprecated -- This renderer verifies the configuration refresh callback. */
+  it("retries global catalog data from Configuration Refresh", async () => {
+    const onGlobalReload = vi.fn(() => Promise.resolve());
+    const onReload = vi.fn(() => Promise.resolve());
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        <AdministrationDashboard
+          client={client}
+          initialSection="configuration"
+          notice={null}
+          onNotice={vi.fn()}
+          onGlobalReload={onGlobalReload}
+          onReload={onReload}
+          scope={serviceLevelScope}
+          services={[registeredService]}
+          catalogModels={catalogModels}
+          snapshot={snapshot}
+        />,
+      );
+    });
+    const refresh = renderer.root
+      .findAllByType("button")
+      .find((item) => renderedText(item).trim() === "Refresh");
+    if (refresh === undefined) throw new Error("Refresh did not render.");
+    await act(async () => {
+      (refresh.props.onClick as () => void)();
+      await Promise.resolve();
+    });
+    expect(onGlobalReload).toHaveBeenCalledOnce();
+    expect(onReload).not.toHaveBeenCalled();
+    act(() => {
+      renderer.unmount();
+    });
+  });
+  /* eslint-enable @typescript-eslint/no-deprecated */
+
+  /* eslint-disable @typescript-eslint/no-deprecated -- This renderer verifies asynchronous reload ordering. */
+  it("does not let an old global reload replace a newer result", async () => {
+    const oldServices = deferred<readonly ServiceSummary[]>();
+    const oldCredentials = deferred<readonly []>();
+    const oldModels = deferred<typeof catalogModels>();
+    const newService = { ...registeredService, display_name: "New service" };
+    const baseModel = catalogModels[0];
+    if (baseModel === undefined) throw new Error("The model fixture is empty.");
+    const oldModel = [{ ...baseModel, display_name: "Old model" }];
+    const newModel = [{ ...baseModel, display_name: "New model" }];
+    const listCatalog = vi
+      .fn()
+      .mockResolvedValueOnce(catalogModels)
+      .mockImplementationOnce(() => oldModels.promise)
+      .mockResolvedValue(newModel);
+    const reloadClient: AdministrationClient = {
+      ...client,
+      listServices: vi
+        .fn()
+        .mockResolvedValueOnce([registeredService])
+        .mockImplementationOnce(() => oldServices.promise)
+        .mockResolvedValue([newService]),
+      listCredentials: vi
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockImplementationOnce(() => oldCredentials.promise)
+        .mockResolvedValue([]),
+      listCatalog,
+      load: vi.fn().mockResolvedValue(snapshot),
+    };
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <App client={reloadClient} startingScope={serviceLevelScope} />,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const configuration = renderer.root
+      .findAllByType("button")
+      .find((item) => renderedText(item).includes("Effective configuration"));
+    if (configuration === undefined) {
+      throw new Error("Configuration navigation did not render.");
+    }
+    act(() => {
+      (configuration.props.onClick as () => void)();
+    });
+    const refresh = renderer.root
+      .findAllByType("button")
+      .find((item) => renderedText(item).trim() === "Refresh");
+    if (refresh === undefined) throw new Error("Refresh did not render.");
+    await act(async () => {
+      (refresh.props.onClick as () => void)();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      (refresh.props.onClick as () => void)();
+      await Promise.resolve();
+    });
+    expect(renderedText(renderer.root)).toContain("New model");
+    oldServices.resolve([
+      { ...registeredService, display_name: "Old service" },
+    ]);
+    oldCredentials.resolve([]);
+    oldModels.resolve(oldModel);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(renderedText(renderer.root)).toContain("New model");
+    expect(renderedText(renderer.root)).not.toContain("Old model");
+    expect(listCatalog).toHaveBeenCalledTimes(3);
+    expect(listCatalog).toHaveBeenNthCalledWith(
+      1,
+      "models",
+      expect.any(AbortSignal),
+    );
+    expect(listCatalog).toHaveBeenNthCalledWith(2, "models", undefined);
+    expect(listCatalog).toHaveBeenNthCalledWith(3, "models", undefined);
+    act(() => {
+      renderer.unmount();
+    });
+  });
+  /* eslint-enable @typescript-eslint/no-deprecated */
 
   it("uses semantic keyboard controls and a table alternative", () => {
     const html = dashboard("assignments");
@@ -764,12 +945,13 @@ describe("protected administration dashboard", () => {
       label: string,
       elementType: "input" | "select",
     ): ReactTestInstance => {
-      const labelElement = renderer.root.findAllByType("label").find(
-        (item) =>
+      const labelElement = renderer.root
+        .findAllByType("label")
+        .find((item) =>
           item.children.some(
             (child) => typeof child === "string" && child.includes(label),
           ),
-      );
+        );
       const control = labelElement?.findByType(elementType);
       if (control === undefined) {
         throw new Error(`The ${label} control did not render.`);
@@ -798,9 +980,11 @@ describe("protected administration dashboard", () => {
     });
     expect(labeledControl("Hard limit", "input").props.value).toBe("20");
     expect(labeledControl("Currency", "input").props.value).toBe("EUR");
-    expect(labeledControl("Warning threshold", "input").props.value).toBe(
-      "15",
+    expect(labeledControl("Currency", "input").props.disabled).toBe(true);
+    expect(renderedText(renderer.root)).toContain(
+      "Currency cannot change after this budget is created.",
     );
+    expect(labeledControl("Warning threshold", "input").props.value).toBe("15");
     expect(labeledControl("Reset period", "select").props.value).toBe("daily");
     act(() => {
       renderer.unmount();

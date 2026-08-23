@@ -39,6 +39,8 @@ from llmrouter_backend.configuration import (
     AssignmentCandidate,
     CatalogEntry,
     CatalogKind,
+    ConfigurationError,
+    ConfigurationErrorCode,
     ConfigurationScope,
     ConfigurationWriteResult,
     EffectiveConfiguration,
@@ -582,21 +584,41 @@ class AdministrationService:
             scope=Scope(),
         )
         layer = self._configuration.owned(context, ConfigurationScope())
+        revision = None if layer is None else layer.revision_id
         values = (
             ()
             if layer is None
             else tuple(item for item in layer.content.catalog if item.kind is kind)
         )
+        item_cursor = None
+        if cursor is not None:
+            cursor_revision, separator, item_cursor = cursor.partition(":")
+            if not separator or not item_cursor:
+                raise ConfigurationError(
+                    ConfigurationErrorCode.INVALID_REQUEST, request_id
+                )
+            if revision is None or cursor_revision != revision:
+                raise ConfigurationError(
+                    ConfigurationErrorCode.REVISION_CONFLICT,
+                    request_id,
+                    current_revision=revision,
+                )
         page, next_cursor = _page(
             values,
-            cursor=cursor,
+            cursor=item_cursor,
             limit=limit,
             identity=lambda item: item.stable_id,
         )
         return {
-            "items": [_catalog_document(item, layer.revision_id) for item in page],
-            "next_cursor": next_cursor,
-            "configuration_revision": None if layer is None else layer.revision_id,
+            "items": (
+                []
+                if revision is None
+                else [_catalog_document(item, revision) for item in page]
+            ),
+            "next_cursor": (
+                None if next_cursor is None else f"{revision}:{next_cursor}"
+            ),
+            "configuration_revision": revision,
         }
 
     def budget_summary(

@@ -769,6 +769,7 @@ const initialRouteForm: RouteFormState = {
 };
 
 const nonNegativeDecimal = /^(0|[1-9][0-9]*)(\.[0-9]+)?$/;
+const mvpRouteCapabilities = ["chat.complete", "chat.stream"] as const;
 
 function RouteForm({
   client,
@@ -799,7 +800,11 @@ function RouteForm({
     form.providerId !== "" &&
     models.some(
       (model) =>
-        model.stable_id === form.canonicalModelId && model.state === "active",
+        model.stable_id === form.canonicalModelId &&
+        model.state === "active" &&
+        mvpRouteCapabilities.every((capability) =>
+          model.capabilities.includes(capability),
+        ),
     ) &&
     form.wireModel.trim() !== "" &&
     nonNegativeDecimal.test(form.inputPrice) &&
@@ -1122,6 +1127,13 @@ function ConfigurationView(props: {
 }) {
   const { client, scope, snapshot, onChanged, onNotice } = props;
   const expectedRevision = configurationRevisionForScope(snapshot, scope);
+  const eligibleModels = props.models.filter(
+    (model) =>
+      model.state === "active" &&
+      mvpRouteCapabilities.every((capability) =>
+        model.capabilities.includes(capability),
+      ),
+  );
   const serviceConfigurationWritable =
     scope.workspaceId === "" && snapshot.failures.state === undefined;
   return (
@@ -1238,17 +1250,17 @@ function ConfigurationView(props: {
               title="Supported models are not available"
               message={props.catalogFailure}
             />
-          ) : props.models.length === 0 ? (
+          ) : eligibleModels.length === 0 ? (
             <p>
-              No active supported model is available. Add a model to the global
-              catalog first.
+              No active model supports both chat completion and streaming. Add
+              or enable a compatible model in the global catalog.
             </p>
           ) : (
             <RouteForm
               client={client}
               scope={scope}
               providers={snapshot.providers}
-              models={props.models}
+              models={eligibleModels}
               expectedRevision={expectedRevision}
               onChanged={onChanged}
               onNotice={onNotice}
@@ -1912,6 +1924,7 @@ function BudgetView({
                 required
                 pattern="[A-Z]{3}"
                 maxLength={3}
+                disabled={summary !== null}
                 value={form.currency}
                 onChange={(event) => {
                   updateForm({
@@ -1919,6 +1932,11 @@ function BudgetView({
                   });
                 }}
               />
+              {summary === null ? null : (
+                <small>
+                  Currency cannot change after this budget is created.
+                </small>
+              )}
             </label>
             <label>
               Warning threshold (optional)
@@ -2652,7 +2670,13 @@ export function AdministrationDashboard({
                 <Button
                   variant="quiet"
                   icon={<Icon name="refresh" size={16} />}
-                  onClick={() => void onReload().catch(() => undefined)}
+                  onClick={() =>
+                    void (
+                      section === "configuration"
+                        ? (onGlobalReload ?? onReload)()
+                        : onReload()
+                    ).catch(() => undefined)
+                  }
                 >
                   Refresh
                 </Button>
@@ -3245,6 +3269,7 @@ export function App({
     true,
   );
   const loadGeneration = useRef(0);
+  const globalLoadGeneration = useRef(0);
   const load = useCallback(
     async (signal?: AbortSignal) => {
       if (signal?.aborted) return false;
@@ -3292,11 +3317,11 @@ export function App({
   const reloadGlobalData = useCallback(
     async (signal?: AbortSignal) => {
       if (signal?.aborted) return false;
+      const generation = ++globalLoadGeneration.current;
       setCatalogLoading(true);
       const results = await Promise.allSettled([
         client.listServices(signal),
         client.listCredentials(signal),
-        client.listCatalog("providers", signal),
         client.listCatalog("models", signal),
       ] as const);
       const failures: Partial<
@@ -3308,14 +3333,10 @@ export function App({
       if (results[1].status === "rejected") {
         failures.credentials = errorMessage(results[1].reason);
       }
-      if (
-        results[2].status === "rejected" ||
-        results[3].status === "rejected"
-      ) {
-        failures.catalog =
-          "The supported provider and model catalog is not available.";
+      if (results[2].status === "rejected") {
+        failures.catalog = "The supported model catalog is not available.";
       }
-      if (!signal?.aborted) {
+      if (generation === globalLoadGeneration.current && !signal?.aborted) {
         setGlobalState((current) => ({
           failures,
           data: {
@@ -3328,14 +3349,18 @@ export function App({
                 ? results[1].value
                 : current.data.credentials,
             catalogModels:
-              results[3].status === "fulfilled"
-                ? results[3].value
+              results[2].status === "fulfilled"
+                ? results[2].value
                 : current.data.catalogModels,
           },
         }));
         setCatalogLoading(false);
       }
-      return !signal?.aborted && Object.keys(failures).length === 0;
+      return (
+        generation === globalLoadGeneration.current &&
+        !signal?.aborted &&
+        Object.keys(failures).length === 0
+      );
     },
     [client],
   );

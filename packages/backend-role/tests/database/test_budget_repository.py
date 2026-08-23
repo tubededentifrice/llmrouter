@@ -34,13 +34,17 @@ from llmrouter_backend.budgets import (
 from llmrouter_backend.database import migrate
 
 from .helpers import (
+    CONFIGURATION_ID,
     FIXTURE_ASSIGNMENT_ID,
+    FIXTURE_ROUTE_ID,
     OTHER_SERVICE_ID,
+    OTHER_WORKSPACE_ID,
     REQUEST_ID,
     REQUEST_ROW_ID,
     SERVICE_ID,
     WORKSPACE_ID,
     insert_request,
+    seed_request_target,
     seed_scope,
 )
 
@@ -118,6 +122,22 @@ def _service_budget_write() -> RequestContext:
         Audience.CONFIGURATION,
         "budget.write",
         Scope(SERVICE_ID),
+        NOW,
+        None,
+        mutation=True,
+    )
+
+
+def _administrator_budget_write(target: BudgetTarget) -> RequestContext:
+    return RequestContext(
+        "budget-write",
+        PrincipalKind.ADMINISTRATOR,
+        "administrator-one",
+        AuthorityClass.GLOBAL_ADMINISTRATOR,
+        AuthorityPath.GLOBAL_ADMINISTRATION,
+        None,
+        "budget.write",
+        Scope(target.service_id, target.workspace_id),
         NOW,
         None,
         mutation=True,
@@ -1848,6 +1868,205 @@ def test_service_limit_insertion_reparents_existing_workspace_budget(
             "SELECT parent_budget_scope_id::text FROM router.budget_scopes WHERE id = %s",
             (WORKSPACE_BUDGET,),
         ).fetchone() == (limit.scope_id,)
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        BudgetTarget(
+            BudgetScopeKind.SERVICE,
+            "0198a080-0000-7000-8000-000000000099",
+        ),
+        BudgetTarget(BudgetScopeKind.WORKSPACE, SERVICE_ID, OTHER_WORKSPACE_ID),
+    ],
+    ids=["unknown-service", "cross-service-workspace"],
+)
+def test_limit_write_rejects_an_unknown_exact_scope(
+    database_url: str, target: BudgetTarget
+) -> None:
+    with psycopg.connect(database_url) as connection:
+        migrate(connection)
+        seed_scope(connection)
+    repository = PostgresBudgetRepository(database_url)
+    with pytest.raises(BudgetError) as error:
+        repository.put_limit(
+            _administrator_budget_write(target),
+            target,
+            hard_limit=Decimal(20),
+            currency="USD",
+            warning_threshold=None,
+            reset_period=ResetPeriod.NONE,
+            expected_revision="0",
+            idempotency_key=f"unknown-budget-scope-{target.kind.value}",
+            now=NOW,
+        )
+    assert error.value.code is BudgetErrorCode.NOT_FOUND
+
+
+@pytest.mark.parametrize(
+    ("target", "table", "identity_column", "identity"),
+    [
+        (
+            BudgetTarget(BudgetScopeKind.SERVICE, SERVICE_ID),
+            "services",
+            "id",
+            SERVICE_ID,
+        ),
+        (
+            BudgetTarget(BudgetScopeKind.WORKSPACE, SERVICE_ID, WORKSPACE_ID),
+            "workspaces",
+            "id",
+            WORKSPACE_ID,
+        ),
+    ],
+    ids=["service", "workspace"],
+)
+def test_limit_write_allows_a_disabled_exact_scope(
+    database_url: str,
+    target: BudgetTarget,
+    table: str,
+    identity_column: str,
+    identity: str,
+) -> None:
+    with psycopg.connect(database_url) as connection:
+        migrate(connection)
+        seed_scope(connection)
+        connection.execute(
+            f"""UPDATE router.{table}
+                SET state = 'disabled', state_revision = state_revision + 1
+                WHERE {identity_column} = %s""",  # noqa: S608
+            (identity,),
+        )
+    repository = PostgresBudgetRepository(database_url)
+    result = repository.put_limit(
+        _administrator_budget_write(target),
+        target,
+        hard_limit=Decimal(20),
+        currency="USD",
+        warning_threshold=None,
+        reset_period=ResetPeriod.NONE,
+        expected_revision="0",
+        idempotency_key=f"disabled-budget-scope-{target.kind.value}",
+        now=NOW,
+    )
+    assert result.revision == "1"
+
+
+@pytest.mark.parametrize(
+    ("target", "table", "identity"),
+    [
+        (
+            BudgetTarget(BudgetScopeKind.SERVICE, SERVICE_ID),
+            "services",
+            SERVICE_ID,
+        ),
+        (
+            BudgetTarget(BudgetScopeKind.WORKSPACE, SERVICE_ID, WORKSPACE_ID),
+            "workspaces",
+            WORKSPACE_ID,
+        ),
+    ],
+    ids=["service", "workspace"],
+)
+def test_limit_write_rejects_a_retired_exact_scope(
+    database_url: str, target: BudgetTarget, table: str, identity: str
+) -> None:
+    with psycopg.connect(database_url) as connection:
+        migrate(connection)
+        seed_scope(connection)
+        connection.execute(
+            f"""UPDATE router.{table}
+                SET state = 'retired', retired_at = %s,
+                    state_revision = state_revision + 1
+                WHERE id = %s""",  # noqa: S608
+            (NOW, identity),
+        )
+    repository = PostgresBudgetRepository(database_url)
+    with pytest.raises(BudgetError) as error:
+        repository.put_limit(
+            _administrator_budget_write(target),
+            target,
+            hard_limit=Decimal(20),
+            currency="USD",
+            warning_threshold=None,
+            reset_period=ResetPeriod.NONE,
+            expected_revision="0",
+            idempotency_key=f"retired-budget-scope-{target.kind.value}",
+            now=NOW,
+        )
+    assert error.value.code is BudgetErrorCode.NOT_FOUND
+
+
+def test_existing_limit_rejects_a_currency_change_without_history(
+    database_url: str,
+) -> None:
+    with psycopg.connect(database_url) as connection:
+        migrate(connection)
+        seed_scope(connection)
+    repository = PostgresBudgetRepository(database_url)
+    target = BudgetTarget(BudgetScopeKind.SERVICE, SERVICE_ID)
+    repository.put_limit(
+        _administrator_budget_write(target),
+        target,
+        hard_limit=Decimal(20),
+        currency="USD",
+        warning_threshold=None,
+        reset_period=ResetPeriod.NONE,
+        expected_revision="0",
+        idempotency_key="original-service-budget-currency",
+        now=NOW,
+    )
+    with pytest.raises(BudgetError) as error:
+        repository.put_limit(
+            _administrator_budget_write(target),
+            target,
+            hard_limit=Decimal(20),
+            currency="EUR",
+            warning_threshold=None,
+            reset_period=ResetPeriod.NONE,
+            expected_revision="1",
+            idempotency_key="changed-service-budget-currency",
+            now=NOW,
+        )
+    assert error.value.code is BudgetErrorCode.CURRENCY_MISMATCH
+
+
+def test_new_limit_rejects_an_eligible_bound_route_price_currency(
+    database_url: str,
+) -> None:
+    price_version_id = "0198a080-0000-7000-8000-000000000236"
+    with psycopg.connect(database_url) as connection:
+        migrate(connection)
+        seed_scope(connection)
+        seed_request_target(connection)
+        connection.execute(
+            """INSERT INTO router.route_price_versions (
+                   id, provider_model_route_id, version_number, currency, status
+               ) VALUES (%s, %s, 1, 'USD', 'current')""",
+            (price_version_id, FIXTURE_ROUTE_ID),
+        )
+        connection.execute(
+            """INSERT INTO router.configuration_price_bindings (
+                   configuration_revision_id, provider_model_route_id,
+                   price_version_id
+               ) VALUES (%s, %s, %s)""",
+            (CONFIGURATION_ID, FIXTURE_ROUTE_ID, price_version_id),
+        )
+    repository = PostgresBudgetRepository(database_url)
+    target = BudgetTarget(BudgetScopeKind.SERVICE, SERVICE_ID)
+    with pytest.raises(BudgetError) as error:
+        repository.put_limit(
+            _administrator_budget_write(target),
+            target,
+            hard_limit=Decimal(20),
+            currency="EUR",
+            warning_threshold=None,
+            reset_period=ResetPeriod.NONE,
+            expected_revision="0",
+            idempotency_key="route-price-budget-currency",
+            now=NOW,
+        )
+    assert error.value.code is BudgetErrorCode.CURRENCY_MISMATCH
 
 
 def test_service_reparent_updates_compatible_budget_parents(database_url: str) -> None:

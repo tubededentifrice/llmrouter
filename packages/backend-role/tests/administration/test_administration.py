@@ -461,6 +461,8 @@ class FakeBudgets:
     ) -> BudgetLimit:
         assert idempotency_key and now == NOW
         self.contexts.append(context)
+        if currency != "USD":
+            raise BudgetError(BudgetErrorCode.CURRENCY_MISMATCH, context.request_id)
         key = (target.service_id or "", target.workspace_id)
         current = self.revisions.get(key, 0)
         if int(expected_revision) != current:
@@ -801,31 +803,32 @@ def test_provider_route_listing_returns_safe_eligibility_metadata(
 def test_named_catalog_discovery_separates_kinds_and_pages() -> None:
     configuration = FakeConfiguration()
     revision = str(uuid.UUID(int=81))
+    content = ScopeConfiguration(
+        catalog=(
+            CatalogEntry(
+                CatalogKind.PROVIDER,
+                "openai_compatible.v1",
+                "OpenRouter",
+                frozenset({"chat.complete"}),
+            ),
+            CatalogEntry(
+                CatalogKind.PROVIDER,
+                "provider.second",
+                "Second provider",
+                frozenset({"chat.complete"}),
+            ),
+            CatalogEntry(
+                CatalogKind.MODEL,
+                str(uuid.UUID(int=82)),
+                "DeepSeek V4 Flash",
+                frozenset({"chat.complete"}),
+            ),
+        )
+    )
     configuration.layer = RevisionLayer(
         ConfigurationScope(),
         revision,
-        ScopeConfiguration(
-            catalog=(
-                CatalogEntry(
-                    CatalogKind.PROVIDER,
-                    "openai_compatible.v1",
-                    "OpenRouter",
-                    frozenset({"chat.complete"}),
-                ),
-                CatalogEntry(
-                    CatalogKind.PROVIDER,
-                    "provider.second",
-                    "Second provider",
-                    frozenset({"chat.complete"}),
-                ),
-                CatalogEntry(
-                    CatalogKind.MODEL,
-                    str(uuid.UUID(int=82)),
-                    "DeepSeek V4 Flash",
-                    frozenset({"chat.complete"}),
-                ),
-            )
-        ),
+        content,
     )
     service = AdministrationService(
         authority=FakeAuthority(),
@@ -848,16 +851,25 @@ def test_named_catalog_discovery_separates_kinds_and_pages() -> None:
         headers=_headers(),
     ).json()
     models = client.get("/v1/admin/catalog/models", headers=_headers()).json()
+    next_revision = str(uuid.UUID(int=83))
+    configuration.layer = RevisionLayer(ConfigurationScope(), next_revision, content)
+    stale = client.get(
+        f"/v1/admin/catalog/providers?limit=1&cursor={first['next_cursor']}",
+        headers=_headers(),
+    )
     invalid = client.get("/v1/admin/catalog/secrets", headers=_headers())
 
     assert first["items"][0]["display_name"] == "OpenRouter"
     assert first["items"][0]["active_revision"] == revision
     assert first["configuration_revision"] == revision
+    assert first["next_cursor"].startswith(f"{revision}:")
     assert second["items"][0]["display_name"] == "Second provider"
     assert second["configuration_revision"] == revision
     assert models["items"][0]["display_name"] == "DeepSeek V4 Flash"
     assert models["configuration_revision"] == revision
     assert all(item["kind"] == "model" for item in models["items"])
+    assert stale.status_code == 409
+    assert stale.json()["error"]["code"] == "configuration_revision_conflict"
     assert invalid.status_code == 400
 
 
@@ -893,6 +905,17 @@ def test_budget_routes_keep_exact_scope_revision_and_signed_correction(
             "expected_revision": "3",
         },
     )
+    currency_mismatch = client.put(
+        f"/v1/admin/services/{SERVICE_ID}/budgets?workspace_id={workspace_id}",
+        headers=_headers(mutation=True),
+        json={
+            "hard_limit": "31",
+            "currency": "EUR",
+            "warning_threshold": None,
+            "reset_period": "none",
+            "expected_revision": "4",
+        },
+    )
     missing = client.get(
         f"/v1/admin/services/{SERVICE_ID}/budgets?workspace_id={uuid.UUID(int=3)}",
         headers=_headers(),
@@ -907,6 +930,8 @@ def test_budget_routes_keep_exact_scope_revision_and_signed_correction(
     assert changed.json()["revision"] == "4"
     assert stale.status_code == 409
     assert stale.json()["error"]["code"] == "state_revision_conflict"
+    assert currency_mismatch.status_code == 400
+    assert currency_mismatch.json()["error"]["code"] == "invalid_request"
     assert missing.status_code == 404
     assert authority.policies[-1].operation == "budget.read"
 

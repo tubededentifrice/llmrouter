@@ -363,6 +363,7 @@ class PostgresBudgetRepository:
                         BudgetErrorCode.IDEMPOTENCY_CONFLICT, context.request_id
                     )
                 return _limit_from_operation(replay)
+            _require_exact_limit_target(connection, target, context.request_id)
             if target.workspace_id is not None:
                 ceiling = connection.execute(
                     """SELECT amount, currency::text
@@ -394,7 +395,7 @@ class PostgresBudgetRepository:
                         BudgetErrorCode.INVALID_REQUEST, context.request_id
                     )
             current = connection.execute(
-                """SELECT id::text, revision
+                """SELECT id::text, revision, currency::text
                    FROM router.budget_scopes
                    WHERE scope_kind = %s
                      AND service_id IS NOT DISTINCT FROM %s
@@ -411,6 +412,11 @@ class PostgresBudgetRepository:
             actual = 0 if current is None else int(current["revision"])
             if actual != expected_number:
                 raise BudgetError(BudgetErrorCode.CONFLICT, context.request_id)
+            if current is not None and current["currency"] != currency:
+                raise BudgetError(BudgetErrorCode.CURRENCY_MISMATCH, context.request_id)
+            _require_compatible_route_prices(
+                connection, target, currency, context.request_id
+            )
             scope_id = self._identity_factory() if current is None else current["id"]
             parent_id = _nearest_parent(connection, target, current_scope_id=scope_id)
             _validate_limit_hierarchy(
@@ -1103,13 +1109,20 @@ def _scope_balance(
     else:
         query = """SELECT
                COALESCE(sum(CASE
-                   WHEN event_kind = 'reservation' THEN amount
-                   WHEN event_kind = 'release' THEN -amount ELSE 0 END), 0) AS reserved,
-               COALESCE(sum(CASE WHEN event_kind = 'usage'
-                   AND occurred_at >= %s THEN amount ELSE 0 END), 0) AS used,
-               COALESCE(sum(CASE WHEN event_kind = 'correction'
-                   AND occurred_at >= %s THEN amount ELSE 0 END), 0) AS corrected
-           FROM router.budget_ledger_entries WHERE budget_scope_id = %s"""
+                   WHEN ledger.event_kind = 'reservation' THEN ledger.amount
+                   WHEN ledger.event_kind = 'release' THEN -ledger.amount
+                   ELSE 0 END), 0) AS reserved,
+               COALESCE(sum(CASE WHEN ledger.event_kind = 'usage'
+                   AND ledger.occurred_at >= %s
+                   THEN ledger.amount ELSE 0 END), 0) AS used,
+               COALESCE(sum(CASE WHEN ledger.event_kind = 'correction'
+                   AND EXISTS (
+                       SELECT 1 FROM router.budget_ledger_entries AS source
+                       WHERE source.event_id = ledger.source_event_id
+                         AND source.occurred_at >= %s
+                   ) THEN ledger.amount ELSE 0 END), 0) AS corrected
+           FROM router.budget_ledger_entries AS ledger
+           WHERE ledger.budget_scope_id = %s"""
         params = (start, start, scope.scope_id)
     row = connection.execute(query, params).fetchone()
     if row is None:
@@ -1325,6 +1338,98 @@ def _period_start(period: ResetPeriod, now: datetime) -> datetime | None:
     if period is ResetPeriod.DAILY:
         return value.replace(hour=0, minute=0, second=0, microsecond=0)
     return value.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+def _require_exact_limit_target(
+    connection: Connection[DictRow], target: BudgetTarget, request_id: str
+) -> None:
+    """Lock and validate the exact non-retired scope for one budget write."""
+    if target.kind is BudgetScopeKind.GLOBAL:
+        return
+    service = connection.execute(
+        "SELECT state FROM router.services WHERE id = %s FOR SHARE",
+        (target.service_id,),
+    ).fetchone()
+    if service is None or service["state"] == "retired":
+        raise BudgetError(BudgetErrorCode.NOT_FOUND, request_id)
+    if target.workspace_id is None:
+        return
+    workspace = connection.execute(
+        """SELECT state FROM router.workspaces
+           WHERE id = %s AND service_id = %s FOR SHARE""",
+        (target.workspace_id, target.service_id),
+    ).fetchone()
+    if workspace is None or workspace["state"] == "retired":
+        raise BudgetError(BudgetErrorCode.NOT_FOUND, request_id)
+
+
+def _require_compatible_route_prices(
+    connection: Connection[DictRow],
+    target: BudgetTarget,
+    currency: str,
+    request_id: str,
+) -> None:
+    """Require each current route price affected by the budget to use its currency."""
+    include_descendants = target.kind in {
+        BudgetScopeKind.GLOBAL,
+        BudgetScopeKind.SERVICE,
+    }
+    rows = connection.execute(
+        """WITH RECURSIVE affected_services AS (
+               SELECT service.id
+               FROM router.services AS service
+               WHERE service.state <> 'retired'
+                 AND (%s::boolean OR service.id = %s)
+             UNION
+               SELECT child.id
+               FROM router.services AS child
+               JOIN affected_services AS parent
+                 ON child.parent_service_id = parent.id
+               WHERE %s::boolean AND child.state <> 'retired'
+           )
+           SELECT DISTINCT version.currency::text
+           FROM affected_services AS service
+           JOIN router.provider_model_routes AS route
+             ON route.state = 'active' AND route.current_revision IS NOT NULL
+           JOIN router.provider_instances AS instance
+             ON instance.id = route.provider_instance_id
+            AND instance.state = 'active'
+           JOIN router.configuration_price_bindings AS binding
+             ON binding.configuration_revision_id = route.current_revision
+            AND binding.provider_model_route_id = route.id
+           JOIN router.route_price_versions AS version
+             ON version.id = binding.price_version_id
+            AND version.provider_model_route_id = route.id
+           WHERE router.provider_route_is_eligible(route.id, service.id)
+             AND router.provider_resource_is_enabled(
+                 'provider_model_route', route.id, service.id, %s
+             )
+             AND router.provider_resource_is_enabled(
+                 'provider_instance', instance.id, service.id, %s
+             )
+             AND (
+                 %s::uuid IS NULL
+                 OR EXISTS (
+                     SELECT 1
+                     FROM router.assignment_candidates AS candidate
+                     JOIN router.active_configurations AS active
+                       ON active.revision_id = candidate.configuration_revision_id
+                     WHERE candidate.assignment_id = %s
+                       AND candidate.provider_model_route_id = route.id
+                 )
+             )""",
+        (
+            target.kind is BudgetScopeKind.GLOBAL,
+            target.service_id,
+            include_descendants,
+            target.workspace_id,
+            target.workspace_id,
+            target.assignment_id,
+            target.assignment_id,
+        ),
+    ).fetchall()
+    if any(row["currency"] != currency for row in rows):
+        raise BudgetError(BudgetErrorCode.CURRENCY_MISMATCH, request_id)
 
 
 def _nearest_parent(
