@@ -839,12 +839,17 @@ describe("administration API client", () => {
       fetcher,
     });
     const requestId = "0198a080-0000-7000-8000-000000000032";
+    const controller = new AbortController();
 
-    await client.runDiagnostic(scope, {
-      requestId,
-      exactRoute: "route-1",
-      reason: "Verify route",
-    });
+    await client.runDiagnostic(
+      scope,
+      {
+        requestId,
+        exactRoute: "route-1",
+        reason: "Verify route",
+      },
+      controller.signal,
+    );
 
     expect(receivedUrl).toBe(
       "/v1/admin/services/service-one/diagnostics?workspace_id=workspace-one",
@@ -861,6 +866,7 @@ describe("administration API client", () => {
         reason: "Verify route",
       }),
     );
+    expect(received?.signal).toBe(controller.signal);
   });
 
   it.each([

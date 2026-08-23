@@ -375,8 +375,14 @@ class LocalBudgetGate:
 class LocalCancelableAdapter:
     """Expose only active plans as durable cancellation callbacks."""
 
-    def __init__(self, adapter: OpenRouterAdapter) -> None:
+    def __init__(
+        self,
+        adapter: OpenRouterAdapter,
+        *,
+        confirm_submitted_stop: bool = False,
+    ) -> None:
         self._adapter = adapter
+        self._confirm_submitted_stop = confirm_submitted_stop
         self._active: dict[str, AttemptPlan] = {}
         self._lock = threading.RLock()
 
@@ -393,6 +399,11 @@ class LocalCancelableAdapter:
         with self._lock:
             active = self._active.get(plan.attempt_id)
         evidence = self._adapter.cancel(plan)
+        if (
+            isinstance(self._adapter, OpenRouterAdapter)
+            and not self._confirm_submitted_stop
+        ):
+            return evidence
         if active is not None and evidence.stop_requested:
             return AdapterStopEvidence(
                 evidence.operation_id,
@@ -565,7 +576,10 @@ def install_local_runtime(
         output=inputs.output_for_plan,
         transport=_local_openrouter_transport(openrouter_live_flag),
     )
-    cancelable_adapter = LocalCancelableAdapter(adapter)
+    cancelable_adapter = LocalCancelableAdapter(
+        adapter,
+        confirm_submitted_stop=openrouter_live_flag in {None, "", "0"},
+    )
 
     def account(plan: AttemptPlan, result: AdapterResult) -> None:
         reservation_id, accounting_scope_id = budget.evidence(plan)

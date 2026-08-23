@@ -1004,6 +1004,7 @@ describe("protected administration dashboard", () => {
     expect(runDiagnostic).toHaveBeenCalledWith(
       globalScope,
       expect.objectContaining({ exactRoute: "route-1" }),
+      expect.any(AbortSignal),
     );
     expect(renderedText(renderer.root)).toContain("Diagnostic active");
     expect(renderedText(renderer.root)).toContain("route-revision-1");
@@ -1023,12 +1024,336 @@ describe("protected administration dashboard", () => {
     expect(getRequest).toHaveBeenCalledWith(
       globalScope,
       "0198a080-0000-7000-8000-000000000032",
+      expect.any(AbortSignal),
     );
     expect(renderedText(renderer.root)).toContain("Diagnostic succeeded");
     act(() => {
       renderer.unmount();
     });
   });
+  /* eslint-enable @typescript-eslint/no-deprecated */
+
+  /* eslint-disable @typescript-eslint/no-deprecated -- This renderer verifies diagnostic result state and focus. */
+  it("keeps one admitted diagnostic active after its used permission expires", async () => {
+    const runDiagnostic = vi.fn().mockResolvedValue({
+      request_id: "0198a080-0000-7000-8000-000000000032",
+      service_id: globalScope.serviceId,
+      workspace_id: globalScope.workspaceId,
+      exact_route: "route-1",
+      route_configuration_revision: "route-revision-1",
+      authorization_expires_at: "2020-08-23T07:05:00Z",
+      state: "active",
+      phases: [],
+      status_url: "/v1/model-requests/0198a080-0000-7000-8000-000000000032",
+    });
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        <AdministrationDashboard
+          client={{ ...client, runDiagnostic }}
+          initialSection="diagnostics"
+          notice={null}
+          onNotice={vi.fn()}
+          onReload={vi.fn()}
+          scope={globalScope}
+          services={[registeredService]}
+          snapshot={snapshot}
+        />,
+      );
+    });
+    const form = renderer.root.findByType("form");
+    await act(async () => {
+      (form.props.onSubmit as (event: { preventDefault(): void }) => void)({
+        preventDefault: vi.fn(),
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(renderedText(renderer.root)).toContain("Diagnostic active");
+    expect(renderedText(renderer.root)).not.toContain(
+      "Diagnostic permission expired",
+    );
+    act(() => {
+      renderer.unmount();
+    });
+  });
+
+  it("moves focus through diagnostic actions and aborts an old scope", () => {
+    const pending =
+      deferred<Awaited<ReturnType<AdministrationClient["runDiagnostic"]>>>();
+    let runSignal: AbortSignal | undefined;
+    const runDiagnostic = vi.fn<AdministrationClient["runDiagnostic"]>(
+      (_scope, _input, signal) => {
+        runSignal = signal;
+        return pending.promise;
+      },
+    );
+    const resultFocus = vi.fn();
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        <AdministrationDashboard
+          client={{ ...client, runDiagnostic }}
+          initialSection="diagnostics"
+          notice={null}
+          onNotice={vi.fn()}
+          onReload={vi.fn()}
+          scope={globalScope}
+          services={[registeredService]}
+          snapshot={snapshot}
+        />,
+        {
+          createNodeMock(element) {
+            const props = element.props as Record<string, unknown>;
+            if (
+              element.type === "div" &&
+              props.className === "diagnostic-result-focus"
+            ) {
+              return { focus: resultFocus };
+            }
+            return null;
+          },
+        },
+      );
+    });
+    const form = renderer.root.findByType("form");
+    act(() => {
+      (form.props.onSubmit as (event: { preventDefault(): void }) => void)({
+        preventDefault: vi.fn(),
+      });
+    });
+    expect(renderedText(renderer.root)).toContain("Diagnostic starting");
+    expect(resultFocus).toHaveBeenCalledOnce();
+    expect(runSignal?.aborted).toBe(false);
+
+    const changedScope = {
+      ...globalScope,
+      workspaceId: "0198a080-0000-7000-8000-000000000099",
+    };
+    if (snapshot.state === null) throw new Error("Snapshot state is absent.");
+    const currentState = snapshot.state;
+    act(() => {
+      renderer.update(
+        <AdministrationDashboard
+          client={{ ...client, runDiagnostic }}
+          initialSection="diagnostics"
+          notice={null}
+          onNotice={vi.fn()}
+          onReload={vi.fn()}
+          scope={changedScope}
+          services={[registeredService]}
+          snapshot={{
+            ...snapshot,
+            state: {
+              ...currentState,
+              workspace_id: changedScope.workspaceId,
+            },
+          }}
+        />,
+      );
+    });
+    expect(runSignal?.aborted).toBe(true);
+    expect(renderedText(renderer.root)).toContain("Ready to run");
+    act(() => {
+      renderer.unmount();
+    });
+  });
+
+  it("reuses one request identity after an uncertain diagnostic admission", async () => {
+    const runDiagnostic = vi
+      .fn<AdministrationClient["runDiagnostic"]>()
+      .mockRejectedValueOnce(
+        new AdministrationApiError(
+          "The connection failed during the change. The outcome is uncertain.",
+          {
+            code: "offline",
+            requestId: null,
+            status: 0,
+            outcomeUncertain: true,
+          },
+        ),
+      )
+      .mockResolvedValueOnce({
+        request_id: "0198a080-0000-7000-8000-000000000032",
+        service_id: globalScope.serviceId,
+        workspace_id: globalScope.workspaceId,
+        exact_route: "route-1",
+        route_configuration_revision: "route-revision-1",
+        authorization_expires_at: "2099-08-23T07:05:00Z",
+        state: "active",
+        phases: [],
+        status_url: "/v1/model-requests/request-one",
+      });
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        <AdministrationDashboard
+          client={{ ...client, runDiagnostic }}
+          initialSection="diagnostics"
+          notice={null}
+          onNotice={vi.fn()}
+          onReload={vi.fn()}
+          scope={globalScope}
+          services={[registeredService]}
+          snapshot={snapshot}
+        />,
+      );
+    });
+    const form = renderer.root.findByType("form");
+    await act(async () => {
+      (form.props.onSubmit as (event: { preventDefault(): void }) => void)({
+        preventDefault: vi.fn(),
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const firstIdentity = runDiagnostic.mock.calls[0]?.[1].requestId;
+    expect(firstIdentity).toBeDefined();
+    expect(renderedText(renderer.root)).toContain(
+      "Diagnostic admission outcome uncertain",
+    );
+    expect(renderedText(renderer.root)).toContain(firstIdentity);
+    const retry = renderer.root
+      .findAllByType("button")
+      .find(
+        (item) => renderedText(item).trim() === "Retry same diagnostic request",
+      );
+    if (retry === undefined) throw new Error("Diagnostic retry is absent.");
+    await act(async () => {
+      (retry.props.onClick as () => void)();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(runDiagnostic.mock.calls[1]?.[1].requestId).toBe(firstIdentity);
+    expect(renderedText(renderer.root)).toContain("Diagnostic active");
+    act(() => {
+      renderer.unmount();
+    });
+  });
+
+  it.each([
+    ["cancel_requested", "Diagnostic cancellation requested"],
+    ["cancelled", "Diagnostic cancelled"],
+    ["interrupted", "Diagnostic interrupted"],
+    ["uncertain", "Diagnostic result uncertain"],
+  ] as const)("shows the exact %s diagnostic state", async (state, title) => {
+    const runDiagnostic = vi.fn().mockResolvedValue({
+      request_id: "0198a080-0000-7000-8000-000000000032",
+      service_id: globalScope.serviceId,
+      workspace_id: globalScope.workspaceId,
+      exact_route: "route-1",
+      route_configuration_revision: "route-revision-1",
+      authorization_expires_at: "2099-08-23T07:05:00Z",
+      state: "active",
+      phases: [
+        { name: "authorization", state: "succeeded" },
+        { name: "route_eligibility", state: "succeeded" },
+        { name: "admission", state: "succeeded" },
+        { name: "provider", state: "active" },
+        { name: "accounting", state: "pending" },
+      ],
+      status_url: "/v1/model-requests/request-one",
+    });
+    const getRequest = vi.fn().mockResolvedValue({
+      ...snapshot.requests[0],
+      request_id: "0198a080-0000-7000-8000-000000000032",
+      exact_route: "route-1",
+      state,
+    });
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        <AdministrationDashboard
+          client={{ ...client, runDiagnostic, getRequest }}
+          initialSection="diagnostics"
+          notice={null}
+          onNotice={vi.fn()}
+          onReload={vi.fn()}
+          scope={globalScope}
+          services={[registeredService]}
+          snapshot={snapshot}
+        />,
+      );
+    });
+    await act(async () => {
+      (
+        renderer.root.findByType("form").props.onSubmit as (event: {
+          preventDefault(): void;
+        }) => void
+      )({ preventDefault: vi.fn() });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const refresh = renderer.root
+      .findAllByType("button")
+      .find(
+        (item) => renderedText(item).trim() === "Refresh diagnostic status",
+      );
+    if (refresh === undefined) throw new Error("Diagnostic refresh is absent.");
+    await act(async () => {
+      (refresh.props.onClick as () => void)();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(renderedText(renderer.root)).toContain(title);
+    expect(renderedText(renderer.root)).toContain("accountingpending");
+    act(() => {
+      renderer.unmount();
+    });
+  });
+
+  it("shows a safe stale diagnostic refresh action", async () => {
+    const onReload = vi.fn().mockResolvedValue(undefined);
+    const runDiagnostic = vi.fn().mockRejectedValue(
+      new AdministrationApiError("The active configuration is stale.", {
+        code: "stale_configuration",
+        requestId: "request-one",
+        status: 503,
+      }),
+    );
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        <AdministrationDashboard
+          client={{ ...client, runDiagnostic }}
+          initialSection="diagnostics"
+          notice={null}
+          onNotice={vi.fn()}
+          onReload={onReload}
+          scope={globalScope}
+          services={[registeredService]}
+          snapshot={snapshot}
+        />,
+      );
+    });
+    await act(async () => {
+      (
+        renderer.root.findByType("form").props.onSubmit as (event: {
+          preventDefault(): void;
+        }) => void
+      )({ preventDefault: vi.fn() });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(renderedText(renderer.root)).toContain(
+      "Diagnostic configuration is stale",
+    );
+    const refresh = renderer.root
+      .findAllByType("button")
+      .find((item) => renderedText(item).trim() === "Refresh selected service");
+    if (refresh === undefined) throw new Error("Stale refresh is absent.");
+    await act(async () => {
+      (refresh.props.onClick as () => void)();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(onReload).toHaveBeenCalledOnce();
+    expect(renderedText(renderer.root)).toContain("Ready to run");
+    act(() => {
+      renderer.unmount();
+    });
+  });
+
   /* eslint-enable @typescript-eslint/no-deprecated */
 
   /* eslint-disable @typescript-eslint/no-deprecated -- This renderer verifies the complete request-detail interaction. */

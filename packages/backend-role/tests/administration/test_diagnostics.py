@@ -20,6 +20,7 @@ from llmrouter_backend.authority import (
 )
 from llmrouter_backend.model_requests.model import CreateModelRequestResult
 from llmrouter_backend.routing import DiagnosticGrant
+from llmrouter_backend.routing.model import DiagnosticAuthorization
 
 NOW = datetime(2026, 8, 23, 7, tzinfo=UTC)
 SERVICE_ID = "0198a080-0000-7000-8000-000000000001"
@@ -35,6 +36,18 @@ class RejectingFallback:
 
 
 class FakeGrants:
+    prior: tuple[DiagnosticAuthorization, datetime, str] | None = None
+
+    def find_diagnostic_authorization(
+        self,
+        context: RequestContext,
+        *,
+        logical_request_id: str,
+    ) -> tuple[DiagnosticAuthorization, datetime, str] | None:
+        assert context.scope == Scope(SERVICE_ID, WORKSPACE_ID)
+        assert logical_request_id == REQUEST_ID
+        return self.prior
+
     def create_diagnostic_grant(
         self,
         context: RequestContext,
@@ -64,6 +77,7 @@ class FakeModels:
     def __init__(self, authenticator: TransientDiagnosticAuthenticator) -> None:
         self._authenticator = authenticator
         self.body: dict[str, object] | None = None
+        self.status_document: dict[str, object] = {}
 
     def create(
         self,
@@ -84,13 +98,40 @@ class FakeModels:
             201, {"status_url": f"/v1/model-requests/{request_id}"}
         )
 
+    def authorize_existing(
+        self,
+        token: str,
+        request_id: str,
+        operation: str,
+        *,
+        error_request_id: str,
+    ) -> object:
+        principal = self._authenticator.authenticate(
+            token, request_id=error_request_id, now=NOW
+        )
+        assert principal.operations == frozenset({"model.create", "model.read"})
+        assert request_id == REQUEST_ID
+        assert operation == "model.read"
+        return object()
 
-def _context(*, recent: datetime | None = NOW) -> RequestContext:
+    def status(
+        self, _scoped: object, request_id: str, *, error_request_id: str
+    ) -> dict[str, object]:
+        assert request_id == REQUEST_ID
+        assert error_request_id == "administrator-operation"
+        return self.status_document
+
+
+def _context(
+    *,
+    recent: datetime | None = NOW,
+    authority_class: AuthorityClass = AuthorityClass.GLOBAL_ADMINISTRATOR,
+) -> RequestContext:
     return RequestContext(
         request_id="administrator-operation",
         actor_kind=PrincipalKind.ADMINISTRATOR,
         actor_id="administrator-1",
-        authority_class=AuthorityClass.GLOBAL_ADMINISTRATOR,
+        authority_class=authority_class,
         authority_path=AuthorityPath.GLOBAL_ADMINISTRATION,
         machine_audience=None,
         operation="diagnostic.run",
@@ -110,7 +151,7 @@ def test_runner_consumes_one_use_authority_and_returns_no_content() -> None:
         authenticator,  # type: ignore[arg-type]
     )
 
-    result = runner.run(
+    result, replayed = runner.run(
         _context(),
         logical_request_id=REQUEST_ID,
         exact_route_id=ROUTE_ID,
@@ -118,6 +159,7 @@ def test_runner_consumes_one_use_authority_and_returns_no_content() -> None:
         now=NOW,
     )
 
+    assert replayed is False
     assert result["request_id"] == REQUEST_ID
     assert result["workspace_id"] == WORKSPACE_ID
     assert result["route_configuration_revision"] == REVISION_ID
@@ -131,10 +173,61 @@ def test_runner_consumes_one_use_authority_and_returns_no_content() -> None:
     assert models.body["exact_route_grant"] == "g" * 43
 
 
-def test_transient_authority_rejects_old_or_non_global_administrator() -> None:
+def test_transient_authority_accepts_an_authorized_service_administrator() -> None:
+    authenticator = TransientDiagnosticAuthenticator(RejectingFallback())  # type: ignore[arg-type]
+    token = authenticator.issue(
+        _context(authority_class=AuthorityClass.SERVICE),
+        now=NOW,
+    )
+
+    principal = authenticator.authenticate(
+        token, request_id="administrator-operation", now=NOW
+    )
+
+    assert principal.service_id == SERVICE_ID
+    assert principal.allowed_workspace_ids == frozenset({WORKSPACE_ID})
+
+
+def test_transient_authority_rejects_old_administrator() -> None:
     authenticator = TransientDiagnosticAuthenticator(RejectingFallback())  # type: ignore[arg-type]
     with pytest.raises(PermissionError):
         authenticator.issue(
             _context(recent=NOW - timedelta(minutes=6)),
             now=NOW,
         )
+
+
+def test_runner_returns_current_content_free_replay_without_a_new_grant() -> None:
+    authenticator = TransientDiagnosticAuthenticator(RejectingFallback())  # type: ignore[arg-type]
+    grants = FakeGrants()
+    grants.prior = (
+        DiagnosticAuthorization(
+            "0198a080-0000-7000-8000-000000000006",
+            SERVICE_ID,
+            WORKSPACE_ID,
+            ROUTE_ID,
+            REVISION_ID,
+        ),
+        NOW + timedelta(minutes=5),
+        "Verify route",
+    )
+    models = FakeModels(authenticator)
+    models.status_document = {
+        "state": "succeeded",
+        "attempts": [],
+        "admission": {"status_url": f"/v1/model-requests/{REQUEST_ID}"},
+    }
+    runner = AdministratorDiagnosticRunner(grants, models, authenticator)  # type: ignore[arg-type]
+
+    result, replayed = runner.run(
+        _context(authority_class=AuthorityClass.SERVICE),
+        logical_request_id=REQUEST_ID,
+        exact_route_id=ROUTE_ID,
+        reason="Verify route",
+        now=NOW,
+    )
+
+    assert replayed is True
+    assert result["state"] == "succeeded"
+    assert result["phases"][3] == {"name": "provider", "state": "succeeded"}  # type: ignore[index]
+    assert models.body is None

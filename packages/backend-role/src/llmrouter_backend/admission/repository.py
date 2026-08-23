@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from collections.abc import Mapping
 from contextlib import ExitStack
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
@@ -41,6 +42,9 @@ from .model import (
     RequestStatus,
     uuidv7_time,
 )
+
+_MINIMUM_ATTEMPT_TIMEOUT_MS = 100
+_MAXIMUM_ATTEMPT_TIMEOUT_MS = 120_000
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -219,6 +223,9 @@ class PostgresAdmissionRepository:
                         assignment_revision_id=target[0],
                         assignment_id=target[1],
                         exact_route_id=target[2],
+                        exact_route_attempt_timeout_ms=(
+                            _exact_route_attempt_timeout(request)
+                        ),
                         admitted_at=now,
                     )
                     _require_distributed_credentials(
@@ -631,6 +638,7 @@ def _snapshot_routing_chain(
     assignment_id: uuid.UUID | None,
     exact_route_id: uuid.UUID | None,
     admitted_at: datetime,
+    exact_route_attempt_timeout_ms: int = _MAXIMUM_ATTEMPT_TIMEOUT_MS,
 ) -> None:
     """Store the complete ordered route chain in the admission transaction."""
     connection.execute(
@@ -662,7 +670,8 @@ def _snapshot_routing_chain(
             WHERE candidate.assignment_id = %(assignment_id)s
               AND candidate.configuration_revision_id = %(assignment_revision_id)s
           UNION ALL
-            SELECT 1, %(exact_route_id)s::uuid, 120000, '{}'::jsonb
+            SELECT 1, %(exact_route_id)s::uuid,
+                   %(exact_route_attempt_timeout_ms)s, '{}'::jsonb
             WHERE %(assignment_id)s::uuid IS NULL
         ), values AS (
             SELECT %(request_row_id)s::uuid AS request_row_id,
@@ -775,6 +784,7 @@ def _snapshot_routing_chain(
             "assignment_revision_id": assignment_revision_id,
             "assignment_id": assignment_id,
             "exact_route_id": exact_route_id,
+            "exact_route_attempt_timeout_ms": exact_route_attempt_timeout_ms,
             "admitted_at": admitted_at,
         },
     ).fetchall()
@@ -791,6 +801,20 @@ def _snapshot_routing_chain(
     ordinals = sorted(row["candidate_ordinal"] for row in rows)
     if len(rows) != expected or ordinals != list(range(1, expected + 1)):
         raise AdmissionError(AdmissionErrorCode.ASSIGNMENT_UNAVAILABLE, request_id)
+
+
+def _exact_route_attempt_timeout(request: AdmissionRequest) -> int:
+    """Use the fingerprinted native timeout for one exact-route snapshot."""
+    limits = request.fingerprint.execution.get("limits")
+    if isinstance(limits, Mapping):
+        value = limits.get("attempt_timeout_ms")
+        if (
+            isinstance(value, int)
+            and not isinstance(value, bool)
+            and _MINIMUM_ATTEMPT_TIMEOUT_MS <= value <= _MAXIMUM_ATTEMPT_TIMEOUT_MS
+        ):
+            return value
+    return _MAXIMUM_ATTEMPT_TIMEOUT_MS
 
 
 def _enter_distribution_admission(

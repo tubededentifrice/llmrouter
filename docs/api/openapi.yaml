@@ -1122,15 +1122,25 @@ paths:
           application/json:
             schema: {$ref: '#/components/schemas/AdministrationDiagnosticRunRequest'}
       responses:
+        '200':
+          description: The equal diagnostic replay returned its current content-free state.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdministrationDiagnosticRun'}
         '201':
           description: The exact-route diagnostic was admitted through normal routing controls.
           content:
             application/json:
               schema: {$ref: '#/components/schemas/AdministrationDiagnosticRun'}
+        '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '410': {$ref: '#/components/responses/Gone'}
         '422': {$ref: '#/components/responses/Unprocessable'}
+        '429': {$ref: '#/components/responses/Retryable'}
+        '503': {$ref: '#/components/responses/Retryable'}
   /v1/admin/services/{service_id}/budgets:
     parameters:
       - $ref: '#/components/parameters/ServiceId'

@@ -284,7 +284,7 @@ class DiagnosticRunner(Protocol):
         exact_route_id: str,
         reason: str,
         now: datetime,
-    ) -> dict[str, object]: ...
+    ) -> tuple[dict[str, object], bool]: ...
 
 
 class AdministrationService:
@@ -1079,7 +1079,7 @@ class AdministrationService:
         *,
         request_id: str,
         workspace_id: str | None,
-    ) -> dict[str, object]:
+    ) -> tuple[dict[str, object], bool]:
         """Run one content-free diagnostic in the exact selected scope."""
         if idempotency_key != value.request_id:
             raise ValueError("The diagnostic idempotency key must match its request.")

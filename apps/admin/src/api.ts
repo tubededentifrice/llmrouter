@@ -451,6 +451,7 @@ export interface AdministrationClient {
       readonly exactRoute: string;
       readonly reason: string;
     },
+    signal?: AbortSignal,
   ): Promise<DiagnosticRun>;
   createCredential(input: {
     readonly ownerScope: string;
@@ -1130,7 +1131,7 @@ export function createFetchAdministrationClient({
       );
     },
 
-    runDiagnostic(scope, input) {
+    runDiagnostic(scope, input, signal) {
       return request<DiagnosticRun>(
         servicePath(scope, "diagnostics", true),
         {
@@ -1141,6 +1142,7 @@ export function createFetchAdministrationClient({
             exact_route: input.exactRoute,
             reason: input.reason,
           }),
+          ...(signal === undefined ? {} : { signal }),
         },
         true,
       );

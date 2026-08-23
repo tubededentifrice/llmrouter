@@ -690,6 +690,12 @@ td small {
   text-transform: capitalize;
 }
 
+.diagnostic-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--od-space-sm);
+}
+
 @media (max-width: 760px) {
   .diagnostic-form {
     grid-template-columns: 1fr;

@@ -82,129 +82,188 @@ def _prepare() -> None:
             expected={200, 201},
         )
     credential_id = str(credential["credential_id"])
-    provider = _request(
+    providers = _request(
         admin,
-        "POST",
-        f"/v1/admin/services/{SERVICE_ID}/provider-instances",
-        idempotency="local-e2e-provider-v1",
-        json={
-            "provider_catalog_id": "openai_compatible.v1",
-            "display_name": "Local OpenRouter",
-            "endpoint": "https://openrouter.ai/api/v1",
-            "credential_id": credential_id,
-            "state": "active",
-            "settings": {
-                "schema_name": "adapter.openai_compatible.settings",
-                "major_version": 1,
-                "document": {
-                    "profile": "openrouter",
-                    "supported_operations": ["chat.complete", "chat.stream"],
+        "GET",
+        f"/v1/admin/services/{SERVICE_ID}/provider-instances?limit=100",
+    )
+    provider = next(
+        (
+            item
+            for item in providers["items"]
+            if item["display_name"] == "Local OpenRouter"
+        ),
+        None,
+    )
+    if provider is None:
+        provider = _request(
+            admin,
+            "POST",
+            f"/v1/admin/services/{SERVICE_ID}/provider-instances",
+            idempotency="local-e2e-provider-v1",
+            json={
+                "provider_catalog_id": "openai_compatible.v1",
+                "display_name": "Local OpenRouter",
+                "endpoint": "https://openrouter.ai/api/v1",
+                "credential_id": credential_id,
+                "state": "active",
+                "settings": {
+                    "schema_name": "adapter.openai_compatible.settings",
+                    "major_version": 1,
+                    "document": {
+                        "profile": "openrouter",
+                        "supported_operations": ["chat.complete", "chat.stream"],
+                    },
                 },
+                "expected_revision": None,
+                "reason": "Create the deterministic local provider",
+                "eligible_service_ids": [],
             },
-            "expected_revision": None,
-            "reason": "Create the deterministic local provider",
-            "eligible_service_ids": [],
-        },
-        expected={200, 201},
+            expected={200, 201},
+        )
+    provider_id_value = provider.get(
+        "resource_id", provider.get("provider_instance_id")
     )
-    provider_id = str(provider["resource_id"])
-    revision = str(provider["active_revision"])
-    fallback_route = _request(
+    assert isinstance(provider_id_value, str)
+    provider_id = provider_id_value
+    routes = _request(
         admin,
-        "POST",
-        f"/v1/admin/services/{SERVICE_ID}/provider-model-routes",
-        idempotency="local-e2e-fallback-route-v1",
-        json={
-            "provider_instance_id": provider_id,
-            "canonical_model_id": "0198a080-0000-7000-8000-000000000120",
-            "wire_model": "local/missing-model",
-            "capabilities": ["chat.complete", "chat.stream"],
-            "settings": {
-                "schema_name": "adapter.openai_compatible.route",
-                "major_version": 1,
-                "document": {},
-            },
-            "price_authority": {
-                "mode": "manual",
-                "source_name": None,
-                "lookup_identifier": None,
-            },
-            "prices": [
-                _price("input_token", "0.10"),
-                _price("output_token", "0.20"),
-                _price("request", "0.001"),
-            ],
-            "synchronization_schedule": "0 0 * * 0",
-            "stale_after_seconds": 1_209_600,
-            "state": "active",
-            "expected_revision": revision,
-            "reason": "Create the deterministic failed fallback route",
-            "eligible_service_ids": [],
-        },
-        expected={200, 201},
+        "GET",
+        f"/v1/admin/services/{SERVICE_ID}/provider-model-routes?limit=100",
     )
-    fallback_route_id = str(fallback_route["resource_id"])
-    revision = str(fallback_route["active_revision"])
-    route = _request(
-        admin,
-        "POST",
-        f"/v1/admin/services/{SERVICE_ID}/provider-model-routes",
-        idempotency="local-e2e-deepseek-route-v1",
-        json={
-            "provider_instance_id": provider_id,
-            "canonical_model_id": "0198a080-0000-7000-8000-000000000120",
-            "wire_model": "deepseek/deepseek-v4-flash",
-            "capabilities": ["chat.complete", "chat.stream"],
-            "settings": {
-                "schema_name": "adapter.openai_compatible.route",
-                "major_version": 1,
-                "document": {},
-            },
-            "price_authority": {
-                "mode": "manual",
-                "source_name": None,
-                "lookup_identifier": None,
-            },
-            "prices": [
-                _price("input_token", "0.10"),
-                _price("output_token", "0.20"),
-                _price("request", "0.001"),
-            ],
-            "synchronization_schedule": "0 0 * * 0",
-            "stale_after_seconds": 1_209_600,
-            "state": "active",
-            "expected_revision": revision,
-            "reason": "Create the deterministic DeepSeek route",
-            "eligible_service_ids": [],
-        },
-        expected={200, 201},
+    revision = str(routes["configuration_revision"])
+    fallback_route = next(
+        (
+            item
+            for item in routes["items"]
+            if item["wire_model"] == "local/missing-model"
+        ),
+        None,
     )
-    route_id = str(route["resource_id"])
-    revision = str(route["active_revision"])
-    assignment = _request(
-        admin,
-        "PUT",
-        f"/v1/admin/services/{SERVICE_ID}/assignments/general",
-        idempotency="local-e2e-assignment-v1",
-        json={
-            "expected_revision": revision,
-            "state": "active",
-            "candidates": [
-                {
-                    "provider_model_route_id": fallback_route_id,
-                    "attempt_timeout_ms": 30_000,
+    if fallback_route is None:
+        fallback_route = _request(
+            admin,
+            "POST",
+            f"/v1/admin/services/{SERVICE_ID}/provider-model-routes",
+            idempotency="local-e2e-fallback-route-v1",
+            json={
+                "provider_instance_id": provider_id,
+                "canonical_model_id": "0198a080-0000-7000-8000-000000000120",
+                "wire_model": "local/missing-model",
+                "capabilities": ["chat.complete", "chat.stream"],
+                "settings": {
+                    "schema_name": "adapter.openai_compatible.route",
+                    "major_version": 1,
+                    "document": {},
                 },
-                {
-                    "provider_model_route_id": route_id,
-                    "attempt_timeout_ms": 30_000,
+                "price_authority": {
+                    "mode": "manual",
+                    "source_name": None,
+                    "lookup_identifier": None,
                 },
-            ],
-            "required_capabilities": ["chat.complete", "chat.stream"],
-            "reason": "Publish the deterministic fallback chain",
-        },
-        expected={200, 201},
+                "prices": [
+                    _price("input_token", "0.10"),
+                    _price("output_token", "0.20"),
+                    _price("request", "0.001"),
+                ],
+                "synchronization_schedule": "0 0 * * 0",
+                "stale_after_seconds": 1_209_600,
+                "state": "active",
+                "expected_revision": revision,
+                "reason": "Create the deterministic failed fallback route",
+                "eligible_service_ids": [],
+            },
+            expected={200, 201},
+        )
+        revision = str(fallback_route["active_revision"])
+    fallback_route_id_value = fallback_route.get(
+        "resource_id", fallback_route.get("provider_model_route_id")
     )
-    assert assignment["distribution_state"] in {"current", "distributing"}
+    assert isinstance(fallback_route_id_value, str)
+    fallback_route_id = fallback_route_id_value
+    if isinstance(fallback_route.get("provider_instance_id"), str):
+        provider_id = fallback_route["provider_instance_id"]
+    route = next(
+        (
+            item
+            for item in routes["items"]
+            if item["wire_model"] == "deepseek/deepseek-v4-flash"
+        ),
+        None,
+    )
+    if route is None:
+        route = _request(
+            admin,
+            "POST",
+            f"/v1/admin/services/{SERVICE_ID}/provider-model-routes",
+            idempotency="local-e2e-deepseek-route-v1",
+            json={
+                "provider_instance_id": provider_id,
+                "canonical_model_id": "0198a080-0000-7000-8000-000000000120",
+                "wire_model": "deepseek/deepseek-v4-flash",
+                "capabilities": ["chat.complete", "chat.stream"],
+                "settings": {
+                    "schema_name": "adapter.openai_compatible.route",
+                    "major_version": 1,
+                    "document": {},
+                },
+                "price_authority": {
+                    "mode": "manual",
+                    "source_name": None,
+                    "lookup_identifier": None,
+                },
+                "prices": [
+                    _price("input_token", "0.10"),
+                    _price("output_token", "0.20"),
+                    _price("request", "0.001"),
+                ],
+                "synchronization_schedule": "0 0 * * 0",
+                "stale_after_seconds": 1_209_600,
+                "state": "active",
+                "expected_revision": revision,
+                "reason": "Create the deterministic DeepSeek route",
+                "eligible_service_ids": [],
+            },
+            expected={200, 201},
+        )
+        revision = str(route["active_revision"])
+    route_id_value = route.get("resource_id", route.get("provider_model_route_id"))
+    assert isinstance(route_id_value, str)
+    route_id = route_id_value
+    assignments = _request(
+        admin,
+        "GET",
+        f"/v1/admin/services/{SERVICE_ID}/assignments?limit=100",
+    )
+    assignment = next(
+        (item for item in assignments["items"] if item["name"] == "general"),
+        None,
+    )
+    if assignment is None:
+        assignment = _request(
+            admin,
+            "PUT",
+            f"/v1/admin/services/{SERVICE_ID}/assignments/general",
+            idempotency="local-e2e-assignment-v1",
+            json={
+                "expected_revision": revision,
+                "state": "active",
+                "candidates": [
+                    {
+                        "provider_model_route_id": fallback_route_id,
+                        "attempt_timeout_ms": 30_000,
+                    },
+                    {
+                        "provider_model_route_id": route_id,
+                        "attempt_timeout_ms": 30_000,
+                    },
+                ],
+                "required_capabilities": ["chat.complete", "chat.stream"],
+                "reason": "Publish the deterministic fallback chain",
+            },
+            expected={200, 201},
+        )
+        assert assignment["distribution_state"] in {"current", "distributing"}
 
     request_id = _uuidv7()
     body = _model_body("Return the deterministic response.")
@@ -334,7 +393,7 @@ def _resume() -> None:
         ).fetchone()
         assert cancelled_accounting == (1,)
     _prove_service_scoped_embed()
-    _prove_global_administration(str(state["successful_id"]))
+    _prove_global_administration()
     print(
         "The deterministic API, accounting, persistence, recovery, and embed proof "
         "passed."
@@ -377,10 +436,13 @@ def _prove_service_scoped_embed() -> None:
         assert "Configuration" in new_text
 
 
-def _prove_global_administration(successful_request_id: str) -> None:
+def _prove_global_administration() -> None:
     """Prove deterministic global administration data and secret controls."""
+    state = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+    successful_request_id = str(state["successful_id"])
+    administration_url = f"http://127.0.0.1:5174/?view=global&service_id={SERVICE_ID}"
     with _CdpBrowser() as browser:
-        browser.navigate(f"http://127.0.0.1:5174/?view=global&service_id={SERVICE_ID}")
+        browser.navigate(administration_url)
         browser.wait_for_text("Activate administrator session")
         browser.activate_administrator(secrets.token_urlsafe(24))
         browser.wait_for_text("The local administrator session was not activated.")
@@ -396,7 +458,13 @@ def _prove_global_administration(successful_request_id: str) -> None:
         browser.activate_administrator(admin_secret)
         browser.wait_for_text("Effective configuration")
         browser.click_button("Effective configuration")
-        browser.wait_for_text("Local OpenRouter")
+        try:
+            browser.wait_for_text("Local OpenRouter")
+        except AssertionError:
+            browser.navigate(administration_url)
+            browser.wait_for_text("Effective configuration")
+            browser.click_button("Effective configuration")
+            browser.wait_for_text("Local OpenRouter")
         admin_text = browser.body_text()
         assert "LLM Router" in admin_text and "Administration" in admin_text
         assert "Global administrator" in admin_text
@@ -434,18 +502,20 @@ def _prove_global_administration(successful_request_id: str) -> None:
             "Revision",
         ):
             assert label in budget_text
-        assert _displayed_usd(browser.definition_value("Hard limit")) == Decimal(5)
+        old_hard_limit = _displayed_usd(browser.definition_value("Hard limit"))
+        new_hard_limit = Decimal(6) if old_hard_limit == Decimal(5) else Decimal(5)
+        new_warning_threshold = new_hard_limit - Decimal("1.5")
         old_budget_revision = browser.definition_value("Revision")
         assert old_budget_revision.isdecimal()
-        browser.fill_labeled_input("Hard limit", "6")
-        browser.fill_labeled_input("Warning threshold", "4.5")
+        browser.fill_labeled_input("Hard limit", str(new_hard_limit))
+        browser.fill_labeled_input("Warning threshold", str(new_warning_threshold))
         browser.click_button("Save budget")
         browser.wait_for_text("Budget revision")
         browser.wait_until(
             lambda: (
-                _displayed_usd(browser.definition_value("Hard limit")) == Decimal(6)
+                _displayed_usd(browser.definition_value("Hard limit")) == new_hard_limit
                 and _displayed_usd(browser.definition_value("Warning threshold"))
-                == Decimal("4.5")
+                == new_warning_threshold
                 and browser.definition_value("Revision") != old_budget_revision
             ),
             "The committed budget did not refresh with its new revision.",
@@ -458,9 +528,10 @@ def _prove_global_administration(successful_request_id: str) -> None:
         assert "active" in assignment_text
         browser.click_button("Budgets")
         browser.wait_for_text("Budget summary")
-        assert _displayed_usd(browser.definition_value("Hard limit")) == Decimal(6)
-        assert _displayed_usd(browser.definition_value("Warning threshold")) == Decimal(
-            "4.5"
+        assert _displayed_usd(browser.definition_value("Hard limit")) == new_hard_limit
+        assert (
+            _displayed_usd(browser.definition_value("Warning threshold"))
+            == new_warning_threshold
         )
         assert browser.definition_value("Revision") != old_budget_revision
         browser.navigate(
@@ -514,7 +585,13 @@ def _prove_global_administration(successful_request_id: str) -> None:
         diagnostic_route_id = browser.labeled_select_value("Provider-model route")
         assert diagnostic_route_id != ""
         browser.click_button("Run diagnostic")
-        browser.wait_for_text("Diagnostic active")
+        browser.wait_until(
+            lambda: any(
+                state in browser.body_text()
+                for state in ("Diagnostic active", "Diagnostic succeeded")
+            ),
+            "The diagnostic did not become active or succeed.",
+        )
         for _attempt in range(30):
             if "Diagnostic succeeded" in browser.body_text():
                 break

@@ -777,7 +777,10 @@ def test_exact_route_is_bound_to_active_configuration_and_blocks_lossy_rollback(
             "api_version": "1",
             "exact_route": ROUTE_ID,
             "messages": [{"role": "user", "content": "Hello"}],
-            "limits": {"logical_timeout_ms": 120000},
+            "limits": {
+                "attempt_timeout_ms": 30000,
+                "logical_timeout_ms": 120000,
+            },
             "output": {"format": "text"},
         },
         resolved_exact_route_scope={
@@ -815,8 +818,17 @@ def test_exact_route_is_bound_to_active_configuration_and_blocks_lossy_rollback(
                WHERE request.request_id = %s""",
             (request_id,),
         ).fetchone()
+        timeout = connection.execute(
+            """SELECT attempt_timeout_ms
+               FROM router.provider_route_execution_snapshots
+               WHERE request_row_id = (
+                   SELECT row_id FROM router.logical_requests WHERE request_id = %s
+               )""",
+            (request_id,),
+        ).fetchone()
     assert authorization_count == (1,)
     assert revisions == (NEXT_GLOBAL_CONFIGURATION_ID, GLOBAL_CONFIGURATION_ID)
+    assert timeout == (30_000,)
     with (
         psycopg.connect(database_url) as connection,
         pytest.raises(psycopg.Error, match="cannot roll back without data loss"),

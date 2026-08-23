@@ -481,7 +481,7 @@ def test_global_administrator_diagnostic_grant_is_exact_and_audited(
         PostgresBudgetRepository,
     ],
 ) -> None:
-    _admission, _execution, routing, _budget = repositories
+    admission, _execution, routing, _budget = repositories
     now = _now()
 
     grant = routing.create_diagnostic_grant(
@@ -495,6 +495,21 @@ def test_global_administrator_diagnostic_grant_is_exact_and_audited(
     assert grant.workspace_id == WORKSPACE_ID
     assert grant.exact_route_id == ROUTE_ID
     assert grant.expires_at <= now + timedelta(minutes=5, seconds=1)
+    request_id = _uuidv7(now, 32)
+    admission.admit(
+        _context(),
+        _exact_request(request_id, grant.grant),
+        now=now,
+    )
+    prior = routing.find_diagnostic_authorization(
+        _administrator_grant_context(now),
+        logical_request_id=request_id,
+    )
+    assert prior is not None
+    authorization, expires_at, reason = prior
+    assert authorization.exact_route_id == ROUTE_ID
+    assert expires_at == grant.expires_at
+    assert reason == "administrator diagnostic test"
     with psycopg.connect(database_url) as connection:
         audit = connection.execute(
             """SELECT actor_kind, actor_id, authority_class, action,

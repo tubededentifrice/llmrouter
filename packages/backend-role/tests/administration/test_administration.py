@@ -509,23 +509,26 @@ class FakeDiagnostics:
         assert reason == "Verify the route"
         assert now == NOW
         self.context = context
-        return {
-            "request_id": logical_request_id,
-            "service_id": SERVICE_ID,
-            "workspace_id": None,
-            "exact_route": exact_route_id,
-            "route_configuration_revision": "route-revision-1",
-            "authorization_expires_at": "2026-08-16T12:05:00+00:00",
-            "state": "active",
-            "phases": [
-                {"name": "authorization", "state": "succeeded"},
-                {"name": "route_eligibility", "state": "succeeded"},
-                {"name": "admission", "state": "succeeded"},
-                {"name": "provider", "state": "active"},
-                {"name": "accounting", "state": "pending"},
-            ],
-            "status_url": f"/v1/model-requests/{logical_request_id}",
-        }
+        return (
+            {
+                "request_id": logical_request_id,
+                "service_id": SERVICE_ID,
+                "workspace_id": None,
+                "exact_route": exact_route_id,
+                "route_configuration_revision": "route-revision-1",
+                "authorization_expires_at": "2026-08-16T12:05:00+00:00",
+                "state": "active",
+                "phases": [
+                    {"name": "authorization", "state": "succeeded"},
+                    {"name": "route_eligibility", "state": "succeeded"},
+                    {"name": "admission", "state": "succeeded"},
+                    {"name": "provider", "state": "active"},
+                    {"name": "accounting", "state": "pending"},
+                ],
+                "status_url": f"/v1/model-requests/{logical_request_id}",
+            },
+            False,
+        )
 
 
 @pytest.fixture

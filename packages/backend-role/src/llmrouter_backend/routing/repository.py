@@ -32,6 +32,7 @@ from .model import (
     AttemptOutcome,
     AttemptPlan,
     AttemptTimeouts,
+    DiagnosticAuthorization,
     DiagnosticGrant,
     FallbackDecision,
     SafeFailureEvidence,
@@ -78,7 +79,8 @@ class PostgresRoutingRepository:
         administrator_authority = (
             context.operation == "diagnostic.run"
             and context.actor_kind is PrincipalKind.ADMINISTRATOR
-            and context.authority_class is AuthorityClass.GLOBAL_ADMINISTRATOR
+            and context.authority_class
+            in {AuthorityClass.GLOBAL_ADMINISTRATOR, AuthorityClass.SERVICE}
             and context.authority_path is AuthorityPath.GLOBAL_ADMINISTRATION
             and context.machine_audience is None
             and context.recent_authentication_at is not None
@@ -221,6 +223,69 @@ class PostgresRoutingRepository:
             str(route_identity),
             str(route["current_revision"]),
             expires_at,
+        )
+
+    def find_diagnostic_authorization(
+        self,
+        context: RequestContext,
+        *,
+        logical_request_id: str,
+    ) -> tuple[DiagnosticAuthorization, datetime, str] | None:
+        """Find one prior administrator diagnostic in the exact scope."""
+        administrator_authority = (
+            context.operation == "diagnostic.run"
+            and context.mutation
+            and context.actor_kind is PrincipalKind.ADMINISTRATOR
+            and context.authority_class
+            in {AuthorityClass.GLOBAL_ADMINISTRATOR, AuthorityClass.SERVICE}
+            and context.authority_path is AuthorityPath.GLOBAL_ADMINISTRATION
+            and context.machine_audience is None
+            and context.recent_authentication_at is not None
+            and context.scope.service_id is not None
+        )
+        if not administrator_authority:
+            raise RoutingError(RoutingErrorCode.INSUFFICIENT_SCOPE, context.request_id)
+        try:
+            request_identity = uuid.UUID(logical_request_id)
+        except ValueError as error:
+            raise RoutingError(
+                RoutingErrorCode.NOT_FOUND, context.request_id
+            ) from error
+        with psycopg.connect(self._database_url, row_factory=dict_row) as connection:
+            row = connection.execute(
+                """SELECT diagnostic_grant.grant_id,
+                          diagnostic_grant.service_id,
+                          diagnostic_grant.workspace_id,
+                          diagnostic_grant.exact_route_id,
+                          diagnostic_grant.route_configuration_revision_id,
+                          diagnostic_grant.expires_at,
+                          diagnostic_grant.reason
+                   FROM router.diagnostic_route_authorizations
+                        AS diagnostic_authorization
+                   JOIN router.diagnostic_route_grants AS diagnostic_grant
+                     ON diagnostic_grant.grant_id = diagnostic_authorization.grant_id
+                   WHERE diagnostic_authorization.request_id = %s
+                     AND diagnostic_authorization.service_id = %s
+                     AND diagnostic_authorization.workspace_id
+                         IS NOT DISTINCT FROM %s""",
+                (
+                    request_identity,
+                    context.scope.service_id,
+                    context.scope.workspace_id,
+                ),
+            ).fetchone()
+        if row is None:
+            return None
+        return (
+            DiagnosticAuthorization(
+                str(row["grant_id"]),
+                str(row["service_id"]),
+                None if row["workspace_id"] is None else str(row["workspace_id"]),
+                str(row["exact_route_id"]),
+                str(row["route_configuration_revision_id"]),
+            ),
+            cast("datetime", row["expires_at"]),
+            cast("str", row["reason"]),
         )
 
     def pending_accounting(

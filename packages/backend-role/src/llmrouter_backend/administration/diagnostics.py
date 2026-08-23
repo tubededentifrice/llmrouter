@@ -7,8 +7,9 @@ import json
 import secrets
 import threading
 import uuid
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, cast
 
 from llmrouter_backend.authority import (
     RECENT_AUTH_LIMIT,
@@ -19,10 +20,13 @@ from llmrouter_backend.authority import (
     RequestContext,
     ServicePrincipal,
 )
+from llmrouter_backend.model_requests import ModelRequestError
 
 if TYPE_CHECKING:
     from llmrouter_backend.model_requests import ModelRequestService
-    from llmrouter_backend.routing import DiagnosticGrant
+    from llmrouter_backend.routing import DiagnosticAuthorization, DiagnosticGrant
+
+_HTTP_OK = 200
 
 
 class MachineAuthenticator(Protocol):
@@ -46,6 +50,13 @@ class DiagnosticGrantStore(Protocol):
         lifetime: timedelta = timedelta(minutes=5),
     ) -> DiagnosticGrant: ...
 
+    def find_diagnostic_authorization(
+        self,
+        context: RequestContext,
+        *,
+        logical_request_id: str,
+    ) -> tuple[DiagnosticAuthorization, datetime, str] | None: ...
+
 
 class TransientDiagnosticAuthenticator:
     """Add one-use in-process model authority to the normal authenticator."""
@@ -63,7 +74,8 @@ class TransientDiagnosticAuthenticator:
             or not context.mutation
             or context.actor_kind is not PrincipalKind.ADMINISTRATOR
             or context.authority_path is not AuthorityPath.GLOBAL_ADMINISTRATION
-            or context.authority_class is not AuthorityClass.GLOBAL_ADMINISTRATOR
+            or context.authority_class
+            not in {AuthorityClass.GLOBAL_ADMINISTRATOR, AuthorityClass.SERVICE}
             or context.scope.service_id is None
             or recent is None
             or recent > now
@@ -81,7 +93,7 @@ class TransientDiagnosticAuthenticator:
             token_id=str(uuid.uuid4()),
             audience=Audience.DATA_PLANE,
             service_id=context.scope.service_id,
-            operations=frozenset({"model.create"}),
+            operations=frozenset({"model.create", "model.read"}),
             issued_at=now,
             expires_at=now + timedelta(minutes=5),
             credential_generation=1,
@@ -128,8 +140,50 @@ class AdministratorDiagnosticRunner:
         exact_route_id: str,
         reason: str,
         now: datetime,
-    ) -> dict[str, object]:
+    ) -> tuple[dict[str, object], bool]:
         """Admit one fixed content-safe probe and return no prompt or output."""
+        prior = self._grants.find_diagnostic_authorization(
+            context,
+            logical_request_id=logical_request_id,
+        )
+        if prior is not None:
+            authorization, expires_at, prior_reason = prior
+            if authorization.exact_route_id != exact_route_id or prior_reason != reason:
+                raise ModelRequestError(
+                    "idempotency_conflict",
+                    409,
+                    "The idempotency key was used for different content.",
+                    context.request_id,
+                )
+            token = self._authenticator.issue(context, now=now)
+            try:
+                scoped = self._models.authorize_existing(
+                    token,
+                    logical_request_id,
+                    "model.read",
+                    error_request_id=context.request_id,
+                )
+                status = self._models.status(
+                    scoped,
+                    logical_request_id,
+                    error_request_id=context.request_id,
+                )
+            finally:
+                self._authenticator.discard(token)
+            return (
+                _diagnostic_document(
+                    logical_request_id=logical_request_id,
+                    service_id=authorization.service_id,
+                    workspace_id=authorization.workspace_id,
+                    exact_route_id=authorization.exact_route_id,
+                    route_configuration_revision=(
+                        authorization.route_configuration_revision
+                    ),
+                    authorization_expires_at=expires_at,
+                    status=status,
+                ),
+                True,
+            )
         grant = self._grants.create_diagnostic_grant(
             context,
             exact_route_id=exact_route_id,
@@ -157,20 +211,106 @@ class AdministratorDiagnosticRunner:
             )
         finally:
             self._authenticator.discard(token)
-        return {
-            "request_id": logical_request_id,
-            "service_id": grant.service_id,
-            "workspace_id": grant.workspace_id,
-            "exact_route": grant.exact_route_id,
-            "route_configuration_revision": grant.route_configuration_revision,
-            "authorization_expires_at": grant.expires_at.isoformat(),
-            "state": "active",
-            "phases": [
-                {"name": "authorization", "state": "succeeded"},
-                {"name": "route_eligibility", "state": "succeeded"},
-                {"name": "admission", "state": "succeeded"},
-                {"name": "provider", "state": "active"},
-                {"name": "accounting", "state": "pending"},
-            ],
-            "status_url": result.receipt["status_url"],
-        }
+        return (
+            {
+                "request_id": logical_request_id,
+                "service_id": grant.service_id,
+                "workspace_id": grant.workspace_id,
+                "exact_route": grant.exact_route_id,
+                "route_configuration_revision": grant.route_configuration_revision,
+                "authorization_expires_at": grant.expires_at.isoformat(),
+                "state": "active",
+                "phases": _active_phases(),
+                "status_url": result.receipt["status_url"],
+            },
+            result.status_code == _HTTP_OK,
+        )
+
+
+def _active_phases() -> list[dict[str, str]]:
+    return [
+        {"name": "authorization", "state": "succeeded"},
+        {"name": "route_eligibility", "state": "succeeded"},
+        {"name": "admission", "state": "succeeded"},
+        {"name": "provider", "state": "active"},
+        {"name": "accounting", "state": "pending"},
+    ]
+
+
+def _diagnostic_document(  # noqa: C901, PLR0913
+    *,
+    logical_request_id: str,
+    service_id: str,
+    workspace_id: str | None,
+    exact_route_id: str,
+    route_configuration_revision: str,
+    authorization_expires_at: datetime,
+    status: dict[str, object],
+) -> dict[str, object]:
+    """Map a replay to one current content-free diagnostic result."""
+    raw_state = status.get("state")
+    terminal_failure = raw_state in {
+        "failed",
+        "interrupted",
+        "cancelled",
+        "uncertain",
+    }
+    state = (
+        "succeeded"
+        if raw_state == "succeeded"
+        else "failed"
+        if terminal_failure
+        else "active"
+    )
+    phases = _active_phases()
+    failure_class: str | None = None
+    error = status.get("error")
+    if isinstance(error, Mapping) and isinstance(error.get("class"), str):
+        failure_class = cast("str", error["class"])
+    attempts = status.get("attempts")
+    if failure_class is None and isinstance(attempts, Sequence):
+        for attempt in reversed(attempts):
+            if not isinstance(attempt, Mapping):
+                continue
+            attempt_error = attempt.get("error")
+            if isinstance(attempt_error, Mapping) and isinstance(
+                attempt_error.get("class"), str
+            ):
+                failure_class = cast("str", attempt_error["class"])
+                break
+    if failure_class is None and raw_state == "cancelled":
+        failure_class = "cancelled"
+    if failure_class is None and raw_state == "uncertain":
+        failure_class = "uncertain_effect"
+    for phase in phases:
+        if phase["name"] == "provider":
+            phase["state"] = (
+                "succeeded"
+                if raw_state == "succeeded"
+                else "failed"
+                if terminal_failure
+                else "active"
+            )
+            if failure_class is not None:
+                phase["failure_class"] = failure_class
+        elif phase["name"] == "accounting" and raw_state == "succeeded":
+            phase["state"] = "succeeded"
+    admission = status.get("admission")
+    status_url = (
+        admission.get("status_url")
+        if isinstance(admission, Mapping)
+        and isinstance(admission.get("status_url"), str)
+        else f"/v1/model-requests/{logical_request_id}"
+    )
+    return {
+        "request_id": logical_request_id,
+        "service_id": service_id,
+        "workspace_id": workspace_id,
+        "exact_route": exact_route_id,
+        "route_configuration_revision": route_configuration_revision,
+        "authorization_expires_at": authorization_expires_at.isoformat(),
+        "state": state,
+        "phases": phases,
+        **({} if failure_class is None else {"failure_class": failure_class}),
+        "status_url": status_url,
+    }

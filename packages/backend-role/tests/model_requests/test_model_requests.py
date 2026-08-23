@@ -53,6 +53,7 @@ from llmrouter_backend.execution import (
     ExecutionTarget,
     StreamEvent,
     TerminalError,
+    TerminalErrorClass,
     make_event,
 )
 from llmrouter_backend.local_runtime import LocalCancelableAdapter
@@ -1071,12 +1072,15 @@ def test_compatible_handler_finishes_when_local_provider_stalls_before_headers()
     assert entered.is_set()
     assert elapsed < 1
     assert response.status_code == 200
-    assert response.json()["x_llmrouter_state"] == "failed"
+    assert response.json()["x_llmrouter_state"] == "uncertain"
     assert "private prompt" not in response.text
     assert routing.result is not None
-    assert routing.result.outcome is AttemptOutcome.FAILED
+    assert routing.result.outcome is AttemptOutcome.UNCERTAIN
     assert routing.result.failure is not None
-    assert routing.result.failure.evidence.detail_code == "execution_timeout"
+    assert (
+        routing.result.failure.error.error_class is TerminalErrorClass.UNCERTAIN_EFFECT
+    )
+    assert routing.result.failure.evidence.detail_code == "uncertain_effect"
 
 
 def test_http_rejects_bad_headers_and_duplicate_json_without_content_leak() -> None:

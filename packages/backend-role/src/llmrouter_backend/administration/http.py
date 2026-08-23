@@ -455,7 +455,7 @@ async def run_model_diagnostic(request: Request, service_id: str) -> Response:
     request_id = _request_id()
     try:
         value = await _document(request, DiagnosticRunInput, request_id)
-        result = await _run(
+        result, replayed = await _run(
             request,
             lambda service: service.run_diagnostic(
                 _session(request, request_id),
@@ -469,7 +469,7 @@ async def run_model_diagnostic(request: Request, service_id: str) -> Response:
             ),
             request_id,
         )
-        return _json(result, status_code=201)
+        return _json(result, status_code=200 if replayed else 201)
     except Exception as error:
         return _error_response(error, request_id)
 
