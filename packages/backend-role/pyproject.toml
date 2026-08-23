@@ -9,7 +9,7 @@ description = "LLM Router web application"
 requires-python = "==3.14.*"
 dependencies = [
   "boto3==1.40.0",
-  "cryptography==49.0.0",
+  "cryptography==50.0.0",
   "fastapi==0.140.13",
   "httpx==0.28.1",
   "opendle-lib @ git+https://github.com/opendle/opendle-lib.git@main",
