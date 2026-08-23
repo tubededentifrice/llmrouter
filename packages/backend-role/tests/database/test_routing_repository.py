@@ -122,6 +122,22 @@ def _grant_context(now: datetime) -> RequestContext:
     )
 
 
+def _administrator_grant_context(now: datetime) -> RequestContext:
+    return RequestContext(
+        "administrator-diagnostic",
+        PrincipalKind.ADMINISTRATOR,
+        "administrator-1",
+        AuthorityClass.GLOBAL_ADMINISTRATOR,
+        AuthorityPath.GLOBAL_ADMINISTRATION,
+        None,
+        "diagnostic.run",
+        Scope(SERVICE_ID, WORKSPACE_ID),
+        now,
+        now,
+        True,
+    )
+
+
 def _admit_running(
     admission: PostgresAdmissionRepository,
     execution: PostgresExecutionRepository,
@@ -454,6 +470,83 @@ def test_deadline_before_first_claim_is_durable_and_replayable(
             (first.request_row_id,),
         ).fetchone()
     assert durable == (1,)
+
+
+def test_global_administrator_diagnostic_grant_is_exact_and_audited(
+    database_url: str,
+    repositories: tuple[
+        PostgresAdmissionRepository,
+        PostgresExecutionRepository,
+        PostgresRoutingRepository,
+        PostgresBudgetRepository,
+    ],
+) -> None:
+    _admission, _execution, routing, _budget = repositories
+    now = _now()
+
+    grant = routing.create_diagnostic_grant(
+        _administrator_grant_context(now),
+        exact_route_id=ROUTE_ID,
+        reason="administrator diagnostic test",
+        now=now,
+    )
+
+    assert grant.service_id == SERVICE_ID
+    assert grant.workspace_id == WORKSPACE_ID
+    assert grant.exact_route_id == ROUTE_ID
+    assert grant.expires_at <= now + timedelta(minutes=5, seconds=1)
+    with psycopg.connect(database_url) as connection:
+        audit = connection.execute(
+            """SELECT actor_kind, actor_id, authority_class, action,
+                      safe_details ? 'exact_route_id',
+                      safe_details ? 'diagnostic_grant_id'
+               FROM router.audit_events
+               WHERE event_id = (
+                   SELECT creation_audit_event_id
+                   FROM router.diagnostic_route_grants WHERE grant_id = %s
+               )""",
+            (grant.grant_id,),
+        ).fetchone()
+    assert audit == (
+        "administrator",
+        "administrator-1",
+        "global_administrator",
+        "diagnostic.grant.create",
+        True,
+        True,
+    )
+
+
+def test_exact_route_claim_accepts_a_null_assignment(
+    repositories: tuple[
+        PostgresAdmissionRepository,
+        PostgresExecutionRepository,
+        PostgresRoutingRepository,
+        PostgresBudgetRepository,
+    ],
+) -> None:
+    """Claim one admitted exact route without an assignment identity."""
+    admission, execution, routing, _budget = repositories
+    now = _now()
+    grant = routing.create_diagnostic_grant(
+        _grant_context(now),
+        exact_route_id=ROUTE_ID,
+        reason="exact route claim test",
+        now=now,
+    )
+    request_id = _uuidv7(now, 31)
+    admission.admit(_context(), _exact_request(request_id, grant.grant), now=now)
+    execution.transition(
+        _context(),
+        ExecutionTarget(ExecutionKind.MODEL, request_id),
+        expected_revision=1,
+        new_state=ExecutionState.RUNNING,
+    )
+
+    plan = routing.claim(_context(), request_id=request_id, owner_id="worker-one")
+
+    assert plan.assignment_id is None
+    assert plan.provider_model_route_id == ROUTE_ID
 
 
 def test_diagnostic_grant_is_exact_single_use_and_credential_bound(

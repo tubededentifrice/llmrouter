@@ -386,12 +386,16 @@ def _resolve_target(
                   ON revision.id = active.revision_id
                 WHERE active.scope_kind = 'global'
             )
-            SELECT route.current_revision, route.id
+            SELECT owner.revision_id AS configuration_revision,
+                   route.current_revision, route.id
             FROM router.provider_model_routes AS route
             JOIN router.provider_instances AS instance
               ON instance.id = route.provider_instance_id
-            JOIN scope_revisions AS owner
-              ON owner.revision_id = route.current_revision
+            JOIN scope_revisions AS owner ON EXISTS (
+                SELECT 1 FROM router.configuration_price_bindings AS binding
+                WHERE binding.configuration_revision_id = owner.revision_id
+                  AND binding.provider_model_route_id = route.id
+            )
             WHERE route.id = %s AND route.state = 'active'
               AND instance.state = 'active'
               AND (route.owner_kind = 'global' OR route.owner_service_id IN (
@@ -416,6 +420,8 @@ def _resolve_target(
               AND router.provider_resource_is_enabled(
                   'provider_instance', instance.id, %s, %s
               )
+            ORDER BY owner.priority
+            LIMIT 1
             FOR SHARE OF route
             """,
             (
@@ -440,7 +446,7 @@ def _resolve_target(
             route_revision_id=row["current_revision"],
             now=now,
         )
-        return row["current_revision"], None, row["id"]
+        return row["configuration_revision"], None, row["id"]
     row = connection.execute(
         """
         WITH RECURSIVE service_chain AS (

@@ -8,7 +8,7 @@ import secrets
 import uuid
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import psycopg
 from psycopg.rows import dict_row
@@ -67,15 +67,23 @@ class PostgresRoutingRepository:
         lifetime: timedelta = timedelta(minutes=5),
     ) -> DiagnosticGrant:
         """Create one exact short-lived grant and return its bearer once."""
-        if (
-            context.operation != "diagnostic.grant.create"
-            or not context.mutation
-            or context.actor_kind is not PrincipalKind.SERVICE
-            or context.actor_id != context.scope.service_id
-            or context.authority_class is not AuthorityClass.SERVICE
-            or context.authority_path is not AuthorityPath.MACHINE
-            or context.machine_audience is not Audience.CONFIGURATION
-        ):
+        service_authority = (
+            context.operation == "diagnostic.grant.create"
+            and context.actor_kind is PrincipalKind.SERVICE
+            and context.actor_id == context.scope.service_id
+            and context.authority_class is AuthorityClass.SERVICE
+            and context.authority_path is AuthorityPath.MACHINE
+            and context.machine_audience is Audience.CONFIGURATION
+        )
+        administrator_authority = (
+            context.operation == "diagnostic.run"
+            and context.actor_kind is PrincipalKind.ADMINISTRATOR
+            and context.authority_class is AuthorityClass.GLOBAL_ADMINISTRATOR
+            and context.authority_path is AuthorityPath.GLOBAL_ADMINISTRATION
+            and context.machine_audience is None
+            and context.recent_authentication_at is not None
+        )
+        if not context.mutation or not (service_authority or administrator_authority):
             raise RoutingError(RoutingErrorCode.INSUFFICIENT_SCOPE, context.request_id)
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("The diagnostic grant time must include a time zone.")
@@ -208,7 +216,7 @@ class PostgresRoutingRepository:
         return DiagnosticGrant(
             str(grant_id),
             raw,
-            context.scope.service_id,
+            cast("str", context.scope.service_id),
             context.scope.workspace_id,
             str(route_identity),
             str(route["current_revision"]),
@@ -1228,7 +1236,7 @@ def _controls(
                     AND credential.current_revision = snapshot.credential_revision_id
                     AS credential_revision_current,
                   router.provider_route_is_eligible(route.id, %s) AS route_eligible,
-                  (%s IS NOT NULL OR EXISTS (
+                  (%s::uuid IS NOT NULL OR EXISTS (
                       SELECT 1
                       FROM router.diagnostic_route_authorizations AS diagnostic_use
                       WHERE diagnostic_use.request_id = %s

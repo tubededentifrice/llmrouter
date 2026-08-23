@@ -53,6 +53,7 @@ from .helpers import CONFIGURATION_ID, SERVICE_ID, WORKSPACE_ID, seed_scope
 NOW = datetime(2026, 8, 13, 18, tzinfo=UTC)
 ASSIGNMENT_ID = "0198a080-0000-7000-8000-000000000110"
 GLOBAL_CONFIGURATION_ID = "0198a080-0000-7000-8000-000000000116"
+NEXT_GLOBAL_CONFIGURATION_ID = "0198a080-0000-7000-8000-000000000119"
 MODEL_ID = "0198a080-0000-7000-8000-000000000111"
 CREDENTIAL_ID = "0198a080-0000-7000-8000-000000000112"
 INSTANCE_ID = "0198a080-0000-7000-8000-000000000113"
@@ -225,15 +226,19 @@ def _seed_admission_target(connection: psycopg.Connection[object]) -> None:
 
 
 def _configured_distribution(
-    *, received_at: datetime = NOW, content_sha256: bytes = bytes.fromhex("55" * 32)
+    *,
+    received_at: datetime = NOW,
+    content_sha256: bytes = bytes.fromhex("55" * 32),
+    revision_id: str = GLOBAL_CONFIGURATION_ID,
+    revision_number: int = 1,
 ) -> ConfigurationRevisionDistribution:
     authenticator = RevisionAuthenticator(TEST_DISTRIBUTION_KEY)
     distribution = ConfigurationRevisionDistribution(authenticator)
     for workspace_id in (WORKSPACE_ID, None):
         revision = NormalConfigurationRevision(
             DistributionScope(SERVICE_ID, workspace_id),
-            GLOBAL_CONFIGURATION_ID,
-            1,
+            revision_id,
+            revision_number,
             content_sha256,
             received_at,
         )
@@ -681,6 +686,26 @@ def test_exact_route_is_bound_to_active_configuration_and_blocks_lossy_rollback(
     grant_id = uuid.uuid4()
     audit_id = uuid.uuid4()
     with psycopg.connect(database_url) as connection:
+        connection.execute(
+            """INSERT INTO router.configuration_revisions (
+                   id, scope_kind, revision_number, content, content_sha256,
+                   created_by_kind, created_by_id
+               ) VALUES (%s, 'global', 2, '{}'::jsonb, %s, 'system', 'test')""",
+            (NEXT_GLOBAL_CONFIGURATION_ID, bytes.fromhex("56" * 32)),
+        )
+        connection.execute(
+            """UPDATE router.active_configurations
+               SET revision_id = %s, revision_number = 2, activated_at = %s
+               WHERE scope_kind = 'global'""",
+            (NEXT_GLOBAL_CONFIGURATION_ID, NOW + timedelta(seconds=1)),
+        )
+        connection.execute(
+            """INSERT INTO router.configuration_price_bindings (
+                   configuration_revision_id, provider_model_route_id,
+                   price_version_id
+               ) VALUES (%s, %s, %s)""",
+            (NEXT_GLOBAL_CONFIGURATION_ID, ROUTE_ID, PRICE_VERSION_ID),
+        )
         timestamp_row = connection.execute("SELECT transaction_timestamp()").fetchone()
         assert timestamp_row is not None
         created_at = timestamp_row[0]
@@ -734,6 +759,14 @@ def test_exact_route_is_bound_to_active_configuration_and_blocks_lossy_rollback(
                 audit_id,
             ),
         )
+    repository = PostgresAdmissionRepository(
+        database_url,
+        distribution=_configured_distribution(
+            content_sha256=bytes.fromhex("56" * 32),
+            revision_id=NEXT_GLOBAL_CONFIGURATION_ID,
+            revision_number=2,
+        ),
+    )
     fingerprint = FingerprintInput(
         "model.create",
         1,
@@ -771,7 +804,19 @@ def test_exact_route_is_bound_to_active_configuration_and_blocks_lossy_rollback(
                WHERE request_id = %s""",
             (request_id,),
         ).fetchone()
+        revisions = connection.execute(
+            """SELECT request.configuration_revision_id::text,
+                      diagnostic_authorization.route_configuration_revision_id::text
+               FROM router.logical_requests AS request
+               JOIN router.diagnostic_route_authorizations AS diagnostic_authorization
+                 ON diagnostic_authorization.request_id = request.request_id
+                AND diagnostic_authorization.service_id = request.service_id
+                AND diagnostic_authorization.workspace_id IS NOT DISTINCT FROM request.workspace_id
+               WHERE request.request_id = %s""",
+            (request_id,),
+        ).fetchone()
     assert authorization_count == (1,)
+    assert revisions == (NEXT_GLOBAL_CONFIGURATION_ID, GLOBAL_CONFIGURATION_ID)
     with (
         psycopg.connect(database_url) as connection,
         pytest.raises(psycopg.Error, match="cannot roll back without data loss"),

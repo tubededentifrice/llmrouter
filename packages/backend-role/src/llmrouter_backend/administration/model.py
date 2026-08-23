@@ -15,6 +15,12 @@ from llmrouter_backend.machine_identity import WorkspaceLimit
 
 OpaqueId = Annotated[str, Field(min_length=1, max_length=200)]
 Reason = Annotated[str, Field(min_length=1, max_length=500)]
+UuidV7 = Annotated[
+    str,
+    Field(
+        pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    ),
+]
 
 
 class ClosedAdministrationModel(BaseModel):
@@ -147,6 +153,14 @@ class BudgetLimitInput(ClosedAdministrationModel):
     ) = None
     reset_period: ResetPeriod
     expected_revision: Annotated[str, Field(pattern=r"^(0|[1-9][0-9]*)$")]
+
+
+class DiagnosticRunInput(ClosedAdministrationModel):
+    """One bounded exact-route administrator diagnostic."""
+
+    request_id: UuidV7
+    exact_route: OpaqueId
+    reason: Reason
 
 
 class ServiceStateDocument(ClosedAdministrationModel):

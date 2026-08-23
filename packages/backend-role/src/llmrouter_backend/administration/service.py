@@ -78,6 +78,7 @@ from .model import (
     BudgetLimitInput,
     CredentialChangeInput,
     CredentialCreateInput,
+    DiagnosticRunInput,
     ProviderInstanceInput,
     ProviderModelRouteInput,
     RegisteredDocumentInput,
@@ -272,6 +273,20 @@ class BudgetStore(Protocol):
     ) -> BudgetLimit: ...
 
 
+class DiagnosticRunner(Protocol):
+    """Run one authorized exact-route request without returning content."""
+
+    def run(
+        self,
+        context: RequestContext,
+        *,
+        logical_request_id: str,
+        exact_route_id: str,
+        reason: str,
+        now: datetime,
+    ) -> dict[str, object]: ...
+
+
 class AdministrationService:
     """Provide the small protected administration workflow for the MVP."""
 
@@ -285,6 +300,7 @@ class AdministrationService:
         requests: RequestStatusStore,
         accounting: AccountingStore,
         budgets: BudgetStore | None = None,
+        diagnostics: DiagnosticRunner | None = None,
         machine: MachineCredentialRepository | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
         identity_factory: Callable[[], uuid.UUID] = uuid.uuid4,
@@ -296,6 +312,7 @@ class AdministrationService:
         self._requests = requests
         self._accounting = accounting
         self._budgets = budgets
+        self._diagnostics = diagnostics
         self._machine = machine
         self._now = now
         self._identity_factory = identity_factory
@@ -1049,6 +1066,41 @@ class AdministrationService:
         )
         return self._requests.status(
             context, ExecutionTarget(ExecutionKind.MODEL, logical_request_id)
+        )
+
+    def run_diagnostic(
+        self,
+        session_token: str,
+        csrf_token: str,
+        origin: str,
+        idempotency_key: str,
+        service_id: str,
+        value: DiagnosticRunInput,
+        *,
+        request_id: str,
+        workspace_id: str | None,
+    ) -> dict[str, object]:
+        """Run one content-free diagnostic in the exact selected scope."""
+        if idempotency_key != value.request_id:
+            raise ValueError("The diagnostic idempotency key must match its request.")
+        if self._diagnostics is None:
+            raise RuntimeError("The administrator diagnostic runner is unavailable.")
+        context = self._context(
+            session_token,
+            request_id=request_id,
+            operation="diagnostic.run",
+            scope=Scope(service_id, workspace_id),
+            mutation=True,
+            sensitive=True,
+            csrf_token=csrf_token,
+            origin=origin,
+        )
+        return self._diagnostics.run(
+            context,
+            logical_request_id=value.request_id,
+            exact_route_id=value.exact_route,
+            reason=value.reason,
+            now=self._now(),
         )
 
     def accounting_summary(

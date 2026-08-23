@@ -241,6 +241,7 @@ const client: AdministrationClient = {
   changeService: vi.fn(),
   load: vi.fn(),
   getRequest: vi.fn(),
+  runDiagnostic: vi.fn(),
   createCredential: vi.fn(),
   changeCredential: vi.fn(),
   putProvider: vi.fn(),
@@ -258,6 +259,7 @@ function dashboard(
     | "configuration"
     | "assignments"
     | "requests"
+    | "diagnostics"
     | "budgets"
     | "accounting",
   scope = serviceLevelScope,
@@ -913,6 +915,121 @@ describe("protected administration dashboard", () => {
     expect(accountingHtml).toContain("0.0001 USD");
     expect(accountingHtml).toContain("input_token");
   });
+
+  it("shows one exact content-free diagnostic workflow", () => {
+    const html = dashboard("diagnostics", globalScope);
+    expect(html).toContain("Safe route diagnostic");
+    expect(html).toContain(globalScope.serviceId);
+    expect(html).toContain(globalScope.workspaceId);
+    expect(html).toContain("deepseek/deepseek-v4-flash");
+    expect(html).toContain("Ready to run");
+    expect(html).toContain("read-only grant");
+    expect(html).not.toContain("PRIVATE MODEL OUTPUT");
+    expect(html).not.toContain("Reply only with OK");
+  });
+
+  it("offers an active non-streaming chat route for the fixed diagnostic", () => {
+    const diagnosticSnapshot = {
+      ...snapshot,
+      routes: snapshot.routes.map((route) => ({
+        ...route,
+        capabilities: ["chat.complete"],
+      })),
+    };
+    const html = renderToStaticMarkup(
+      <AdministrationDashboard
+        client={client}
+        initialSection="diagnostics"
+        notice={null}
+        onNotice={vi.fn()}
+        onReload={vi.fn()}
+        scope={globalScope}
+        services={[registeredService]}
+        snapshot={diagnosticSnapshot}
+      />,
+    );
+    expect(html).toContain("deepseek/deepseek-v4-flash");
+    expect(html).not.toContain("No active chat route is eligible");
+  });
+
+  /* eslint-disable @typescript-eslint/no-deprecated -- This renderer verifies the complete diagnostic interaction. */
+  it("runs and refreshes one safe diagnostic without a bearer value", async () => {
+    const runDiagnostic = vi.fn().mockResolvedValue({
+      request_id: "0198a080-0000-7000-8000-000000000032",
+      service_id: globalScope.serviceId,
+      workspace_id: globalScope.workspaceId,
+      exact_route: "route-1",
+      route_configuration_revision: "route-revision-1",
+      authorization_expires_at: "2099-08-23T07:05:00Z",
+      state: "active",
+      phases: [
+        { name: "authorization", state: "succeeded" },
+        { name: "route_eligibility", state: "succeeded" },
+        { name: "admission", state: "succeeded" },
+        { name: "provider", state: "active" },
+        { name: "accounting", state: "pending" },
+      ],
+      status_url: "/v1/model-requests/0198a080-0000-7000-8000-000000000032",
+    });
+    const getRequest = vi.fn().mockResolvedValue({
+      ...snapshot.requests[0],
+      request_id: "0198a080-0000-7000-8000-000000000032",
+      assignment: undefined,
+      exact_route: "route-1",
+      state: "succeeded",
+    });
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        <AdministrationDashboard
+          client={{ ...client, runDiagnostic, getRequest }}
+          initialSection="diagnostics"
+          notice={null}
+          onNotice={vi.fn()}
+          onReload={vi.fn()}
+          scope={globalScope}
+          services={[registeredService]}
+          snapshot={snapshot}
+        />,
+      );
+    });
+    const form = renderer.root.findByType("form");
+    await act(async () => {
+      (form.props.onSubmit as (event: { preventDefault(): void }) => void)({
+        preventDefault: vi.fn(),
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(runDiagnostic).toHaveBeenCalledWith(
+      globalScope,
+      expect.objectContaining({ exactRoute: "route-1" }),
+    );
+    expect(renderedText(renderer.root)).toContain("Diagnostic active");
+    expect(renderedText(renderer.root)).toContain("route-revision-1");
+    expect(renderedText(renderer.root)).not.toContain("Reply only with OK");
+
+    const refresh = renderer.root
+      .findAllByType("button")
+      .find(
+        (item) => renderedText(item).trim() === "Refresh diagnostic status",
+      );
+    if (refresh === undefined) throw new Error("Diagnostic refresh is absent.");
+    await act(async () => {
+      (refresh.props.onClick as () => void)();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(getRequest).toHaveBeenCalledWith(
+      globalScope,
+      "0198a080-0000-7000-8000-000000000032",
+    );
+    expect(renderedText(renderer.root)).toContain("Diagnostic succeeded");
+    act(() => {
+      renderer.unmount();
+    });
+  });
+  /* eslint-enable @typescript-eslint/no-deprecated */
 
   /* eslint-disable @typescript-eslint/no-deprecated -- This renderer verifies the complete request-detail interaction. */
   it("selects, refreshes, and closes a safe ordered request detail", async () => {

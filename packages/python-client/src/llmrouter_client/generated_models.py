@@ -666,6 +666,31 @@ AdministrationRequestStatusPage = TypedDict('AdministrationRequestStatusPage', {
     'next_cursor': 'NotRequired[str | None]',
 })
 
+AdministrationDiagnosticRunRequest = TypedDict('AdministrationDiagnosticRunRequest', {
+    'request_id': 'UuidV7',
+    'exact_route': 'OpaqueId',
+    'reason': 'str',
+})
+
+AdministrationDiagnosticPhase = TypedDict('AdministrationDiagnosticPhase', {
+    'name': 'Literal["authorization", "route_eligibility", "admission", "provider", "accounting"]',
+    'state': 'Literal["pending", "active", "succeeded", "failed"]',
+    'failure_class': 'NotRequired[Literal["authentication", "policy", "budget", "rate_limit", "timeout", "transport", "provider_unavailable", "invalid_provider_response", "incompatible_request", "cancelled", "uncertain_effect", "router_internal"]]',
+})
+
+AdministrationDiagnosticRun = TypedDict('AdministrationDiagnosticRun', {
+    'request_id': 'UuidV7',
+    'service_id': 'OpaqueId',
+    'workspace_id': 'OpaqueId | None',
+    'exact_route': 'OpaqueId',
+    'route_configuration_revision': 'OpaqueId',
+    'authorization_expires_at': 'Timestamp',
+    'state': 'Literal["active", "succeeded", "failed", "expired"]',
+    'phases': 'list[AdministrationDiagnosticPhase]',
+    'failure_class': 'NotRequired[Literal["authentication", "policy", "budget", "rate_limit", "timeout", "transport", "provider_unavailable", "invalid_provider_response", "incompatible_request", "cancelled", "uncertain_effect", "router_internal"]]',
+    'status_url': 'str',
+})
+
 EmbeddingRequestState: TypeAlias = Literal["admitted", "running", "succeeded", "failed"]
 
 EmbeddingAdmissionReceipt = TypedDict('EmbeddingAdmissionReceipt', {
@@ -1732,6 +1757,155 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
     },
     "required": [
       "expected_revision",
+      "reason"
+    ],
+    "type": "object"
+  },
+  "AdministrationDiagnosticPhase": {
+    "additionalProperties": false,
+    "properties": {
+      "failure_class": {
+        "enum": [
+          "authentication",
+          "policy",
+          "budget",
+          "rate_limit",
+          "timeout",
+          "transport",
+          "provider_unavailable",
+          "invalid_provider_response",
+          "incompatible_request",
+          "cancelled",
+          "uncertain_effect",
+          "router_internal"
+        ],
+        "type": "string"
+      },
+      "name": {
+        "enum": [
+          "authorization",
+          "route_eligibility",
+          "admission",
+          "provider",
+          "accounting"
+        ],
+        "type": "string"
+      },
+      "state": {
+        "enum": [
+          "pending",
+          "active",
+          "succeeded",
+          "failed"
+        ],
+        "type": "string"
+      }
+    },
+    "required": [
+      "name",
+      "state"
+    ],
+    "type": "object"
+  },
+  "AdministrationDiagnosticRun": {
+    "additionalProperties": false,
+    "description": "Content-free state for one exact-route administrator diagnostic.",
+    "properties": {
+      "authorization_expires_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "exact_route": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "failure_class": {
+        "enum": [
+          "authentication",
+          "policy",
+          "budget",
+          "rate_limit",
+          "timeout",
+          "transport",
+          "provider_unavailable",
+          "invalid_provider_response",
+          "incompatible_request",
+          "cancelled",
+          "uncertain_effect",
+          "router_internal"
+        ],
+        "type": "string"
+      },
+      "phases": {
+        "items": {
+          "$ref": "#/components/schemas/AdministrationDiagnosticPhase"
+        },
+        "maxItems": 5,
+        "minItems": 5,
+        "type": "array"
+      },
+      "request_id": {
+        "$ref": "#/components/schemas/UuidV7"
+      },
+      "route_configuration_revision": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "service_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "state": {
+        "enum": [
+          "active",
+          "succeeded",
+          "failed",
+          "expired"
+        ],
+        "type": "string"
+      },
+      "status_url": {
+        "format": "uri-reference",
+        "type": "string"
+      },
+      "workspace_id": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "request_id",
+      "service_id",
+      "workspace_id",
+      "exact_route",
+      "route_configuration_revision",
+      "authorization_expires_at",
+      "state",
+      "phases",
+      "status_url"
+    ],
+    "type": "object"
+  },
+  "AdministrationDiagnosticRunRequest": {
+    "additionalProperties": false,
+    "properties": {
+      "exact_route": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "reason": {
+        "maxLength": 500,
+        "minLength": 1,
+        "type": "string"
+      },
+      "request_id": {
+        "$ref": "#/components/schemas/UuidV7"
+      }
+    },
+    "required": [
+      "request_id",
+      "exact_route",
       "reason"
     ],
     "type": "object"

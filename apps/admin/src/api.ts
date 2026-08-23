@@ -272,6 +272,32 @@ export interface RequestStatus {
   readonly error?: SafeRequestError | null;
 }
 
+export type DiagnosticPhaseName =
+  | "authorization"
+  | "route_eligibility"
+  | "admission"
+  | "provider"
+  | "accounting";
+
+export interface DiagnosticPhase {
+  readonly name: DiagnosticPhaseName;
+  readonly state: "pending" | "active" | "succeeded" | "failed";
+  readonly failure_class?: RequestFailureClass;
+}
+
+export interface DiagnosticRun {
+  readonly request_id: string;
+  readonly service_id: string;
+  readonly workspace_id: string | null;
+  readonly exact_route: string;
+  readonly route_configuration_revision: string;
+  readonly authorization_expires_at: string;
+  readonly state: "active" | "succeeded" | "failed" | "expired";
+  readonly phases: readonly DiagnosticPhase[];
+  readonly failure_class?: RequestFailureClass;
+  readonly status_url: string;
+}
+
 export interface AccountingSummary {
   readonly from: string;
   readonly to: string;
@@ -418,6 +444,14 @@ export interface AdministrationClient {
     requestId: string,
     signal?: AbortSignal,
   ): Promise<RequestStatus>;
+  runDiagnostic(
+    scope: ScopeSelection,
+    input: {
+      readonly requestId: string;
+      readonly exactRoute: string;
+      readonly reason: string;
+    },
+  ): Promise<DiagnosticRun>;
   createCredential(input: {
     readonly ownerScope: string;
     readonly secret: string;
@@ -678,6 +712,34 @@ function randomKey(): string {
   return globalThis.crypto.randomUUID();
 }
 
+export function newLogicalRequestId(
+  milliseconds: number = Date.now(),
+  randomBytes: Uint8Array = globalThis.crypto.getRandomValues(
+    new Uint8Array(10),
+  ),
+): string {
+  if (
+    !Number.isSafeInteger(milliseconds) ||
+    milliseconds < 0 ||
+    milliseconds > 0xffffffffffff ||
+    randomBytes.length !== 10
+  ) {
+    throw new Error("The logical request identity input is invalid.");
+  }
+  const bytes = new Uint8Array(16);
+  let time = milliseconds;
+  for (let index = 5; index >= 0; index -= 1) {
+    bytes[index] = time % 256;
+    time = Math.floor(time / 256);
+  }
+  bytes.set(randomBytes, 6);
+  if (randomBytes.every((value) => value === 0)) bytes[15] = 1;
+  bytes[6] = ((bytes.at(6) ?? 0) & 0x0f) | 0x70;
+  bytes[8] = ((bytes.at(8) ?? 0) & 0x3f) | 0x80;
+  const hex = [...bytes].map((value) => value.toString(16).padStart(2, "0"));
+  return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex.slice(6, 8).join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10).join("")}`;
+}
+
 export function createFetchAdministrationClient({
   baseUrl = "",
   csrfToken: suppliedCsrfToken,
@@ -705,7 +767,9 @@ export function createFetchAdministrationClient({
     }
     if (mutation) {
       headers.set("X-CSRF-Token", csrfToken ?? "");
-      headers.set("Idempotency-Key", randomKey());
+      if (!headers.has("Idempotency-Key")) {
+        headers.set("Idempotency-Key", randomKey());
+      }
     }
     let response: Response;
     try {
@@ -1063,6 +1127,22 @@ export function createFetchAdministrationClient({
           true,
         ),
         signal === undefined ? {} : { signal },
+      );
+    },
+
+    runDiagnostic(scope, input) {
+      return request<DiagnosticRun>(
+        servicePath(scope, "diagnostics", true),
+        {
+          method: "POST",
+          headers: { "Idempotency-Key": input.requestId },
+          body: JSON.stringify({
+            request_id: input.requestId,
+            exact_route: input.exactRoute,
+            reason: input.reason,
+          }),
+        },
+        true,
       );
     },
 

@@ -26,7 +26,7 @@
     },
     {
       "path": "docs/api/openapi.yaml",
-      "sha256": "fc0357793023d2d6cd88d740a73dfb1ef7c0918c6f2b8c33ff6f4112bbd3577e"
+      "sha256": "14018523db535f91668cdd7ab55b2199d598ae55180cda5451769e069ad7b46a"
     },
     {
       "path": "docs/api/request-fingerprint.md",
@@ -46,6 +46,9 @@
     "AdministrationAssignment": "0c458293ce1dd3c42a380f46f2b26c48b48be70d036861dbe8462f237ce50299",
     "AdministrationAssignmentPage": "1f2d589d7c12e61cd83a2713e50613960d0262c4d0e5e1c800e9e30bed4f733b",
     "AdministrationChange": "73028097433a5aafd20854e850b5b68b22a4286cf45b00188de1af5ebcb77739",
+    "AdministrationDiagnosticPhase": "3c8e5c76c10b262d79f59f004cd5d678564f83868ed804e6896331c396cf2397",
+    "AdministrationDiagnosticRun": "27bcc86066d1eb03a7dd21e812bc8bae2ea36a4b125fbdbc7d9048aeefef1b2f",
+    "AdministrationDiagnosticRunRequest": "022a2132d107ceaf644e36aa1a5b48e1e038a00973337ddb17e0c4db523a0608",
     "AdministrationProviderInstance": "74f375f0f798dd96a8af6500089ab05d0f7fee0f4a9ed2b63ad2d2e03e1424f8",
     "AdministrationProviderInstancePage": "3fd75cd20f4c79526dd3182ccd75671d4b3b83b24a0483946e6dd8a30e1bcb4e",
     "AdministrationProviderModelRoute": "296cb693d29b41047b3f2a54feb8da52f193e6982240803b7122e368d29183d3",
@@ -201,6 +204,6 @@
   },
   "contract_set": "llmrouter-v1",
   "generator_version": 1,
-  "source_sha256": "fc0357793023d2d6cd88d740a73dfb1ef7c0918c6f2b8c33ff6f4112bbd3577e",
+  "source_sha256": "14018523db535f91668cdd7ab55b2199d598ae55180cda5451769e069ad7b46a",
   "version": "1.0.0"
 }

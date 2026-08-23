@@ -1,5 +1,5 @@
 """FastAPI routes for the protected basic administration surface."""
-# ruff: noqa: BLE001, EM101, EM102, PLR0911, PLR2004, TRY003
+# ruff: noqa: BLE001, C901, EM101, EM102, PLR0911, PLR2004, TRY003
 
 from __future__ import annotations
 
@@ -24,12 +24,15 @@ from llmrouter_backend.credential_store import (
 )
 from llmrouter_backend.execution import ExecutionError
 from llmrouter_backend.lifecycle import LifecycleError, ServiceAction
+from llmrouter_backend.model_requests import ModelRequestError
+from llmrouter_backend.routing import RoutingError
 
 from .model import (
     AssignmentInput,
     BudgetLimitInput,
     CredentialChangeInput,
     CredentialCreateInput,
+    DiagnosticRunInput,
     ProviderInstanceInput,
     ProviderModelRouteInput,
     ServiceActionInput,
@@ -442,6 +445,31 @@ async def get_model_request_status(
             request_id,
         )
         return _json(result)
+    except Exception as error:
+        return _error_response(error, request_id)
+
+
+@router.post("/admin/services/{service_id}/diagnostics", response_model=None)
+async def run_model_diagnostic(request: Request, service_id: str) -> Response:
+    """Run one content-free exact-route diagnostic."""
+    request_id = _request_id()
+    try:
+        value = await _document(request, DiagnosticRunInput, request_id)
+        result = await _run(
+            request,
+            lambda service: service.run_diagnostic(
+                _session(request, request_id),
+                _header(request, "x-csrf-token", request_id),
+                _header(request, "origin", request_id),
+                _idempotency_key(request, request_id),
+                service_id,
+                value,
+                request_id=request_id,
+                workspace_id=_optional_query(request, "workspace_id"),
+            ),
+            request_id,
+        )
+        return _json(result, status_code=201)
     except Exception as error:
         return _error_response(error, request_id)
 
@@ -864,6 +892,19 @@ def _safe_error(
     if isinstance(error, ExecutionError):
         code = error.code.value
         return code, _status(code), False, []
+    if isinstance(error, RoutingError):
+        code = error.code.value
+        return code, _status(code), code == "temporarily_unavailable", []
+    if isinstance(error, ModelRequestError):
+        return (
+            error.code,
+            error.status_code,
+            error.retryable,
+            [
+                {"path": item.path, "code": item.code, "message": item.message}
+                for item in error.field_errors
+            ],
+        )
     if isinstance(error, _UnavailableError):
         return "temporarily_unavailable", 503, True, []
     if isinstance(error, (AccountingError, ValueError, json.JSONDecodeError)):

@@ -32,6 +32,10 @@ from llmrouter_backend.adapters.openrouter import (
     OpenRouterAdapter,
     openrouter_registered_schemas,
 )
+from llmrouter_backend.administration.diagnostics import (
+    AdministratorDiagnosticRunner,
+    TransientDiagnosticAuthenticator,
+)
 from llmrouter_backend.administration.http import install_administration_service
 from llmrouter_backend.administration.service import AdministrationService
 from llmrouter_backend.admission import PostgresAdmissionRepository
@@ -530,20 +534,6 @@ def install_local_runtime(
             local_authority, production_administrator_authority
         )
     )
-    install_administration_service(
-        app,
-        AdministrationService(
-            authority=authority,
-            configuration=configuration,
-            credentials=credentials,
-            lifecycle=lifecycle,
-            requests=views,
-            accounting=accounting,
-            budgets=budget_repository,
-            machine=machine,
-        ),
-    )
-
     signer = RevisionAuthenticator(distribution_key)
     distribution = ConfigurationRevisionDistribution(signer)
     admission_repository = PostgresAdmissionRepository(
@@ -680,8 +670,9 @@ def install_local_runtime(
                 raise
 
     submitter = ThreadWorkSubmitter(maximum_workers=4)
+    diagnostic_authenticator = TransientDiagnosticAuthenticator(machine)
     service = ModelRequestService(
-        authenticator=machine,
+        authenticator=diagnostic_authenticator,
         admission=admission,
         execution=execution,
         routing=LocalRoutingExecutor(),
@@ -692,6 +683,22 @@ def install_local_runtime(
         active_stops=cancelable_adapter.active_stops,
     )
     install_model_request_service(app, service)
+    install_administration_service(
+        app,
+        AdministrationService(
+            authority=authority,
+            configuration=configuration,
+            credentials=credentials,
+            lifecycle=lifecycle,
+            requests=views,
+            accounting=accounting,
+            budgets=budget_repository,
+            diagnostics=AdministratorDiagnosticRunner(
+                routing_repository, service, diagnostic_authenticator
+            ),
+            machine=machine,
+        ),
+    )
     app.state.local_admin_authority = local_authority
     app.state.dual_administrator_authority = (
         production_administrator_authority is not None

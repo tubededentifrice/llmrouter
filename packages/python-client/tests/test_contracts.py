@@ -9,7 +9,8 @@ from llmrouter_client import ContractValidationError, validate_contract
 from llmrouter_client.generated_models import CONTRACT_SCHEMA_NAMES, CONTRACT_SCHEMAS
 
 ROOT = Path(__file__).parents[3]
-EXPECTED_SCHEMA_COUNT = 156
+EXPECTED_SCHEMA_COUNT = 159
+EXPECTED_DIAGNOSTIC_PHASE_COUNT = 5
 FIXTURES = {
     "ContractManifest": "contract-manifest.json",
     "ServiceToken": "service-token.json",
@@ -111,6 +112,47 @@ def test_administrator_request_status_forbids_retained_result_content() -> None:
     assert item_schema["$ref"] == "#/components/schemas/AdministrationRequestStatus"
     embed = cast("dict[str, Any]", CONTRACT_SCHEMAS["EmbedRequestStatus"])
     assert embed["$ref"] == "#/components/schemas/AdministrationRequestStatus"
+
+
+def test_administrator_diagnostic_contract_is_closed_and_content_free() -> None:
+    """Administrator diagnostic schemas expose only bounded safe state."""
+    request = cast(
+        "dict[str, Any]", CONTRACT_SCHEMAS["AdministrationDiagnosticRunRequest"]
+    )
+    phase = cast(
+        "dict[str, Any]", CONTRACT_SCHEMAS["AdministrationDiagnosticPhase"]
+    )
+    result = cast(
+        "dict[str, Any]", CONTRACT_SCHEMAS["AdministrationDiagnosticRun"]
+    )
+    assert request["additionalProperties"] is False
+    assert phase["additionalProperties"] is False
+    assert result["additionalProperties"] is False
+
+    forbidden = {"prompt", "output", "credential", "bearer"}
+    for schema in (request, phase, result):
+        properties = cast("dict[str, Any]", schema["properties"])
+        assert forbidden.isdisjoint(properties)
+
+    phase_properties = cast("dict[str, Any]", phase["properties"])
+    phase_name = cast("dict[str, Any]", phase_properties["name"])
+    assert phase_name["enum"] == [
+        "authorization",
+        "route_eligibility",
+        "admission",
+        "provider",
+        "accounting",
+    ]
+    result_properties = cast("dict[str, Any]", result["properties"])
+    phases = cast("dict[str, Any]", result_properties["phases"])
+    assert (
+        phases["minItems"]
+        == phases["maxItems"]
+        == EXPECTED_DIAGNOSTIC_PHASE_COUNT
+    )
+    assert phases["items"] == {
+        "$ref": "#/components/schemas/AdministrationDiagnosticPhase"
+    }
 
 
 def test_identity_and_exact_route_negative_cases() -> None:

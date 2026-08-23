@@ -82,6 +82,7 @@ ADMINISTRATOR_OPERATIONS = frozenset(
         "budget.write",
         "accounting.read",
         "request_status.read",
+        "diagnostic.run",
         "retention.manage",
         "grant.manage",
         "audit.read",
@@ -116,6 +117,7 @@ SENSITIVE_ADMINISTRATOR_OPERATIONS = frozenset(
     {
         "business_tool_gateway.approve",
         "content.read",
+        "diagnostic.run",
         "high_availability.promote",
         "high_availability.failback",
         "restore.validate",

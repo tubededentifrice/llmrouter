@@ -84,6 +84,8 @@ ORIGIN = "https://admin.example.test"
 SECRET = "test-secret-value"
 DETAIL_REQUEST_ID = "0198a080-0000-7000-8000-000000000030"
 MISSING_REQUEST_ID = "0198a080-0000-7000-8000-000000000031"
+DIAGNOSTIC_REQUEST_ID = "0198a080-0000-7000-8000-000000000032"
+ROUTE_ID = "0198a080-0000-7000-8000-000000000033"
 
 
 class FakeAuthority:
@@ -489,6 +491,43 @@ class FakeMachine:
     pass
 
 
+class FakeDiagnostics:
+    def __init__(self) -> None:
+        self.context: RequestContext | None = None
+
+    def run(
+        self,
+        context: RequestContext,
+        *,
+        logical_request_id: str,
+        exact_route_id: str,
+        reason: str,
+        now: datetime,
+    ) -> dict[str, object]:
+        assert logical_request_id == DIAGNOSTIC_REQUEST_ID
+        assert exact_route_id == ROUTE_ID
+        assert reason == "Verify the route"
+        assert now == NOW
+        self.context = context
+        return {
+            "request_id": logical_request_id,
+            "service_id": SERVICE_ID,
+            "workspace_id": None,
+            "exact_route": exact_route_id,
+            "route_configuration_revision": "route-revision-1",
+            "authorization_expires_at": "2026-08-16T12:05:00+00:00",
+            "state": "active",
+            "phases": [
+                {"name": "authorization", "state": "succeeded"},
+                {"name": "route_eligibility", "state": "succeeded"},
+                {"name": "admission", "state": "succeeded"},
+                {"name": "provider", "state": "active"},
+                {"name": "accounting", "state": "pending"},
+            ],
+            "status_url": f"/v1/model-requests/{logical_request_id}",
+        }
+
+
 @pytest.fixture
 def lifecycle() -> FakeLifecycle:
     return FakeLifecycle()
@@ -508,6 +547,7 @@ def administration(
         requests=FakeRequests(),
         accounting=FakeAccounting(),
         budgets=FakeBudgets(),
+        diagnostics=FakeDiagnostics(),
         now=lambda: NOW,
         identity_factory=lambda: uuid.UUID(int=40),
         machine=FakeMachine(),  # type: ignore[arg-type]
@@ -723,7 +763,6 @@ def test_provider_configuration_write_requires_recent_authentication(
     assert response.status_code in {200, 201}
     assert authority.policies[-1].operation == "provider_instance.manage"
     assert authority.policies[-1].sensitive is True
-
     listing = client.get(
         f"/v1/admin/services/{SERVICE_ID}/provider-instances",
         headers=_headers(),
@@ -733,6 +772,48 @@ def test_provider_configuration_write_requires_recent_authentication(
         listing.json()["configuration_revision"] == response.json()["active_revision"]
     )
     assert listing.json()["items"][0]["eligible_service_ids"] == []
+
+
+def test_administrator_diagnostic_is_recent_auth_content_free_and_exact(
+    administration: tuple[TestClient, FakeAuthority, FakeCredentials],
+) -> None:
+    client, authority, _credentials = administration
+    response = client.post(
+        f"/v1/admin/services/{SERVICE_ID}/diagnostics",
+        headers={
+            **_headers(mutation=True),
+            "idempotency-key": DIAGNOSTIC_REQUEST_ID,
+        },
+        json={
+            "request_id": DIAGNOSTIC_REQUEST_ID,
+            "exact_route": ROUTE_ID,
+            "reason": "Verify the route",
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["request_id"] == DIAGNOSTIC_REQUEST_ID
+    assert response.json()["service_id"] == SERVICE_ID
+    assert response.json()["workspace_id"] is None
+    assert response.json()["exact_route"] == ROUTE_ID
+    assert response.json()["state"] == "active"
+    assert "grant" not in response.text
+    assert "Reply only" not in response.text
+    assert "output" not in response.text
+    assert authority.policies[-1].operation == "diagnostic.run"
+    assert authority.policies[-1].mutation is True
+    assert authority.policies[-1].sensitive is True
+
+    wrong_key = client.post(
+        f"/v1/admin/services/{SERVICE_ID}/diagnostics",
+        headers=_headers(mutation=True),
+        json={
+            "request_id": DIAGNOSTIC_REQUEST_ID,
+            "exact_route": ROUTE_ID,
+            "reason": "Verify the route",
+        },
+    )
+    assert wrong_key.status_code == 400
 
 
 def test_configuration_listing_retries_a_concurrent_target_revision() -> None:

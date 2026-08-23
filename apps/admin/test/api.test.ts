@@ -6,6 +6,7 @@ import {
   createFetchAdministrationClient,
   errorMessage,
   inspectLocalAdministratorSession,
+  newLogicalRequestId,
   startPocketIDAdministratorSession,
   startPocketIDRecentAuthentication,
   type ScopeSelection,
@@ -30,6 +31,15 @@ function requestUrl(input: string | URL | Request): string {
 }
 
 describe("administration API client", () => {
+  it("creates a canonical opaque UUIDv7 for one logical request", () => {
+    const value = newLogicalRequestId(
+      1_777_777_777_777,
+      new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
+    );
+    expect(value).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+  });
   it("consumes only one generated trusted-grant fragment before requests", () => {
     const replaceState = vi.fn();
     const token = "A".repeat(43);
@@ -799,6 +809,58 @@ describe("administration API client", () => {
     expect(paths).toEqual([
       "/v1/admin/services/service-one/model-requests/request%2Fwith%20a%20space?workspace_id=workspace-one",
     ]);
+  });
+
+  it("runs a diagnostic with matching request and idempotency identities", async () => {
+    let receivedUrl = "";
+    let received: RequestInit | undefined;
+    const fetcher = vi.fn(
+      (input: string | URL | Request, init?: RequestInit) => {
+        receivedUrl = requestUrl(input);
+        received = init;
+        return Promise.resolve(
+          json({
+            request_id: "0198a080-0000-7000-8000-000000000032",
+            service_id: scope.serviceId,
+            workspace_id: scope.workspaceId,
+            exact_route: "route-1",
+            route_configuration_revision: "revision-1",
+            authorization_expires_at: "2026-08-23T07:05:00Z",
+            state: "active",
+            phases: [],
+            status_url:
+              "/v1/model-requests/0198a080-0000-7000-8000-000000000032",
+          }),
+        );
+      },
+    );
+    const client = createFetchAdministrationClient({
+      csrfToken: "csrf-token-with-at-least-thirty-two-characters",
+      fetcher,
+    });
+    const requestId = "0198a080-0000-7000-8000-000000000032";
+
+    await client.runDiagnostic(scope, {
+      requestId,
+      exactRoute: "route-1",
+      reason: "Verify route",
+    });
+
+    expect(receivedUrl).toBe(
+      "/v1/admin/services/service-one/diagnostics?workspace_id=workspace-one",
+    );
+    const headers = new Headers(received?.headers);
+    expect(headers.get("Idempotency-Key")).toBe(requestId);
+    expect(headers.get("X-CSRF-Token")).toBe(
+      "csrf-token-with-at-least-thirty-two-characters",
+    );
+    expect(received?.body).toBe(
+      JSON.stringify({
+        request_id: requestId,
+        exact_route: "route-1",
+        reason: "Verify route",
+      }),
+    );
   });
 
   it.each([

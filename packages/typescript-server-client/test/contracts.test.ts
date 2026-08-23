@@ -30,7 +30,7 @@ function loadFixture(filename: string): Record<string, unknown> {
 
 describe("generated contract models", () => {
   it("contains every accepted component schema", () => {
-    expect(Object.keys(contractSchemas)).toHaveLength(156);
+    expect(Object.keys(contractSchemas)).toHaveLength(159);
     expect(contractSchemas).toHaveProperty("AdministrationRequestStatus");
     expect(contractSchemas).toHaveProperty("AdministrationRequestStatusPage");
     expect(contractSchemas).toHaveProperty("EmbedBootstrap");
@@ -126,6 +126,35 @@ describe("generated contract models", () => {
     });
     expect(contractSchemas.EmbedRequestStatus).toMatchObject({
       $ref: "#/components/schemas/AdministrationRequestStatus",
+    });
+  });
+
+  it("keeps administrator diagnostics closed and content-free", () => {
+    const request = contractSchemas.AdministrationDiagnosticRunRequest;
+    const phase = contractSchemas.AdministrationDiagnosticPhase;
+    const result = contractSchemas.AdministrationDiagnosticRun;
+    expect(request.additionalProperties).toBe(false);
+    expect(phase.additionalProperties).toBe(false);
+    expect(result.additionalProperties).toBe(false);
+
+    const forbidden = ["prompt", "output", "credential", "bearer"];
+    for (const schema of [request, phase, result]) {
+      for (const field of forbidden) {
+        expect(schema.properties).not.toHaveProperty(field);
+      }
+    }
+
+    expect(phase.properties.name.enum).toEqual([
+      "authorization",
+      "route_eligibility",
+      "admission",
+      "provider",
+      "accounting",
+    ]);
+    expect(result.properties.phases).toMatchObject({
+      minItems: 5,
+      maxItems: 5,
+      items: { $ref: "#/components/schemas/AdministrationDiagnosticPhase" },
     });
   });
 

@@ -110,6 +110,12 @@ export type AdministrationRequestStatus = { readonly request_id: UuidV7; readonl
 
 export type AdministrationRequestStatusPage = { readonly items: ReadonlyArray<AdministrationRequestStatus>; readonly next_cursor?: string | null; };
 
+export type AdministrationDiagnosticRunRequest = { readonly request_id: UuidV7; readonly exact_route: OpaqueId; readonly reason: string; };
+
+export type AdministrationDiagnosticPhase = { readonly name: "authorization" | "route_eligibility" | "admission" | "provider" | "accounting"; readonly state: "pending" | "active" | "succeeded" | "failed"; readonly failure_class?: "authentication" | "policy" | "budget" | "rate_limit" | "timeout" | "transport" | "provider_unavailable" | "invalid_provider_response" | "incompatible_request" | "cancelled" | "uncertain_effect" | "router_internal"; };
+
+export type AdministrationDiagnosticRun = { readonly request_id: UuidV7; readonly service_id: OpaqueId; readonly workspace_id: OpaqueId | null; readonly exact_route: OpaqueId; readonly route_configuration_revision: OpaqueId; readonly authorization_expires_at: Timestamp; readonly state: "active" | "succeeded" | "failed" | "expired"; readonly phases: ReadonlyArray<AdministrationDiagnosticPhase>; readonly failure_class?: "authentication" | "policy" | "budget" | "rate_limit" | "timeout" | "transport" | "provider_unavailable" | "invalid_provider_response" | "incompatible_request" | "cancelled" | "uncertain_effect" | "router_internal"; readonly status_url: string; };
+
 export type EmbeddingRequestState = "admitted" | "running" | "succeeded" | "failed";
 
 export type EmbeddingAdmissionReceipt = { readonly request_id: UuidV7; readonly admitted_at: Timestamp; readonly state: EmbeddingRequestState; readonly state_revision: number; readonly status_url: string; readonly fingerprint_version: "rfc8785-sha256-v1"; readonly capture_enabled: boolean; readonly capture_reason: "configured" | "spool_pressure"; readonly capture_expires_at: Timestamp; };
@@ -505,6 +511,155 @@ export const contractSchemas = {
     },
     "required": [
       "expected_revision",
+      "reason"
+    ],
+    "type": "object"
+  },
+  "AdministrationDiagnosticPhase": {
+    "additionalProperties": false,
+    "properties": {
+      "failure_class": {
+        "enum": [
+          "authentication",
+          "policy",
+          "budget",
+          "rate_limit",
+          "timeout",
+          "transport",
+          "provider_unavailable",
+          "invalid_provider_response",
+          "incompatible_request",
+          "cancelled",
+          "uncertain_effect",
+          "router_internal"
+        ],
+        "type": "string"
+      },
+      "name": {
+        "enum": [
+          "authorization",
+          "route_eligibility",
+          "admission",
+          "provider",
+          "accounting"
+        ],
+        "type": "string"
+      },
+      "state": {
+        "enum": [
+          "pending",
+          "active",
+          "succeeded",
+          "failed"
+        ],
+        "type": "string"
+      }
+    },
+    "required": [
+      "name",
+      "state"
+    ],
+    "type": "object"
+  },
+  "AdministrationDiagnosticRun": {
+    "additionalProperties": false,
+    "description": "Content-free state for one exact-route administrator diagnostic.",
+    "properties": {
+      "authorization_expires_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "exact_route": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "failure_class": {
+        "enum": [
+          "authentication",
+          "policy",
+          "budget",
+          "rate_limit",
+          "timeout",
+          "transport",
+          "provider_unavailable",
+          "invalid_provider_response",
+          "incompatible_request",
+          "cancelled",
+          "uncertain_effect",
+          "router_internal"
+        ],
+        "type": "string"
+      },
+      "phases": {
+        "items": {
+          "$ref": "#/components/schemas/AdministrationDiagnosticPhase"
+        },
+        "maxItems": 5,
+        "minItems": 5,
+        "type": "array"
+      },
+      "request_id": {
+        "$ref": "#/components/schemas/UuidV7"
+      },
+      "route_configuration_revision": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "service_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "state": {
+        "enum": [
+          "active",
+          "succeeded",
+          "failed",
+          "expired"
+        ],
+        "type": "string"
+      },
+      "status_url": {
+        "format": "uri-reference",
+        "type": "string"
+      },
+      "workspace_id": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "request_id",
+      "service_id",
+      "workspace_id",
+      "exact_route",
+      "route_configuration_revision",
+      "authorization_expires_at",
+      "state",
+      "phases",
+      "status_url"
+    ],
+    "type": "object"
+  },
+  "AdministrationDiagnosticRunRequest": {
+    "additionalProperties": false,
+    "properties": {
+      "exact_route": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "reason": {
+        "maxLength": 500,
+        "minLength": 1,
+        "type": "string"
+      },
+      "request_id": {
+        "$ref": "#/components/schemas/UuidV7"
+      }
+    },
+    "required": [
+      "request_id",
+      "exact_route",
       "reason"
     ],
     "type": "object"

@@ -506,6 +506,52 @@ def _prove_global_administration(successful_request_id: str) -> None:
         browser.wait_for_text(successful_request_id)
         assert browser.active_element_label() == f"View request {successful_request_id}"
         assert browser.focus_region("Logical requests table")
+        browser.click_button("Diagnostics")
+        browser.wait_for_text("Safe route diagnostic")
+        browser.select_labeled_option_containing(
+            "Provider-model route", "deepseek/deepseek-v4-flash"
+        )
+        diagnostic_route_id = browser.labeled_select_value("Provider-model route")
+        assert diagnostic_route_id != ""
+        browser.click_button("Run diagnostic")
+        browser.wait_for_text("Diagnostic active")
+        for _attempt in range(30):
+            if "Diagnostic succeeded" in browser.body_text():
+                break
+            browser.wait_for_enabled_button("Refresh diagnostic status")
+            browser.click_button("Refresh diagnostic status")
+            browser.wait_until(
+                lambda: (
+                    "Diagnostic succeeded" in browser.body_text()
+                    or browser.button_is_enabled("Refresh diagnostic status")
+                ),
+                "The diagnostic status refresh did not finish.",
+            )
+        browser.wait_for_text("Diagnostic succeeded")
+        assert browser.definition_value("Service") == SERVICE_ID
+        assert browser.definition_value("Workspace") == WORKSPACE_ID
+        assert browser.definition_value("Route") == diagnostic_route_id
+        diagnostic_revision = browser.definition_value("Route revision")
+        assert diagnostic_revision != ""
+        diagnostic_text = browser.body_text()
+        for safe_phase in (
+            "authorization",
+            "route eligibility",
+            "admission",
+            "provider",
+            "accounting",
+        ):
+            assert safe_phase in diagnostic_text.lower()
+        assert "Reply only with OK" not in diagnostic_text
+        assert "local response" not in diagnostic_text
+        assert admin_secret not in diagnostic_text
+        browser.set_viewport(390, 844)
+        assert browser.has_no_horizontal_overflow()
+        assert browser.focus_labeled_control("Provider-model route")
+        _prove_diagnostic_database(
+            diagnostic_route_id=diagnostic_route_id,
+            diagnostic_revision=diagnostic_revision,
+        )
         browser.click_button("Provider credentials")
         browser.wait_for_text("Store OpenRouter credential")
         credential_count = browser.evaluate(
@@ -554,6 +600,79 @@ def _prove_global_administration(successful_request_id: str) -> None:
         browser.wait_for_text("The credential was retired.")
         browser.click_button("Sign out")
         browser.wait_for_text("Activate administrator session")
+
+
+def _prove_diagnostic_database(
+    *, diagnostic_route_id: str, diagnostic_revision: str
+) -> None:
+    """Prove exact audit, execution, and accounting for the browser diagnostic."""
+    with psycopg_connect() as connection:
+        authorization = connection.execute(
+            """SELECT diagnostic_authorization.request_id::text,
+                      diagnostic_authorization.route_configuration_revision_id::text,
+                      grant_audit.action, use_audit.action
+               FROM router.diagnostic_route_authorizations AS diagnostic_authorization
+               JOIN router.diagnostic_route_grants AS diagnostic_grant
+                 ON diagnostic_grant.grant_id = diagnostic_authorization.grant_id
+               JOIN router.audit_events AS grant_audit
+                 ON grant_audit.event_id = diagnostic_grant.creation_audit_event_id
+               JOIN router.audit_events AS use_audit
+                 ON use_audit.event_id = diagnostic_authorization.use_audit_event_id
+               WHERE diagnostic_authorization.service_id = %s
+                 AND diagnostic_authorization.workspace_id = %s
+                 AND diagnostic_authorization.exact_route_id = %s
+               ORDER BY diagnostic_authorization.authorized_at DESC
+               LIMIT 1""",
+            (SERVICE_ID, WORKSPACE_ID, diagnostic_route_id),
+        ).fetchone()
+        assert authorization is not None
+        request_id, route_revision, grant_action, use_action = authorization
+        assert route_revision == diagnostic_revision
+        assert grant_action == "diagnostic.grant.create"
+        assert use_action == "diagnostic.route.use"
+        execution = connection.execute(
+            """SELECT request.state,
+                      count(DISTINCT attempt.id),
+                      count(DISTINCT fact.event_id) FILTER (
+                          WHERE fact.subject_kind = 'provider_attempt'
+                      )
+               FROM router.logical_requests AS request
+               JOIN router.provider_attempts AS attempt
+                 ON attempt.request_row_id = request.row_id
+               LEFT JOIN router.accounting_facts AS fact
+                 ON fact.request_row_id = request.row_id
+               WHERE request.service_id = %s
+                 AND request.workspace_id = %s
+                 AND request.request_id = %s
+                 AND attempt.provider_model_route_id = %s
+               GROUP BY request.state""",
+            (SERVICE_ID, WORKSPACE_ID, request_id, diagnostic_route_id),
+        ).fetchone()
+        assert execution is not None
+        assert execution[0] == "succeeded"
+        assert execution[1] == 1
+        assert execution[2] >= 1
+        leaked_audit = connection.execute(
+            """SELECT count(*)
+               FROM router.audit_events
+               WHERE event_id IN (
+                   SELECT diagnostic_grant.creation_audit_event_id
+                   FROM router.diagnostic_route_grants AS diagnostic_grant
+                   JOIN router.diagnostic_route_authorizations
+                     AS diagnostic_authorization
+                     ON diagnostic_authorization.grant_id = diagnostic_grant.grant_id
+                   WHERE diagnostic_authorization.request_id = %s
+                   UNION ALL
+                   SELECT diagnostic_authorization.use_audit_event_id
+                   FROM router.diagnostic_route_authorizations
+                     AS diagnostic_authorization
+                   WHERE diagnostic_authorization.request_id = %s
+               )
+                 AND (safe_details::text LIKE '%%Reply only with OK%%'
+                      OR safe_details::text LIKE '%%local response%%')""",
+            (request_id, request_id),
+        ).fetchone()
+        assert leaked_audit == (0,)
 
 
 def _displayed_usd(value: str) -> Decimal:
@@ -763,6 +882,79 @@ class _CdpBrowser:
             }})()"""
         )
         assert selected is True
+
+    def select_labeled_option_containing(self, label: str, text: str) -> None:
+        """Select one option that contains the specified visible text."""
+        selected = self.evaluate(
+            f"""(() => {{
+              const control = [...document.querySelectorAll("label")]
+                .find((item) => item.textContent?.includes({json.dumps(label)}))
+                ?.querySelector("select");
+              if (!(control instanceof HTMLSelectElement)) return false;
+              const option = [...control.options].find(
+                (item) => item.textContent?.includes({json.dumps(text)})
+              );
+              if (option === undefined) return false;
+              const setter = Object.getOwnPropertyDescriptor(
+                HTMLSelectElement.prototype, "value"
+              )?.set;
+              setter?.call(control, option.value);
+              control.dispatchEvent(new Event("change", {{ bubbles: true }}));
+              return true;
+            }})()"""
+        )
+        assert selected is True
+
+    def labeled_select_value(self, label: str) -> str:
+        """Read the current value from one labeled select control."""
+        value = self.evaluate(
+            f"""(() => {{
+              const control = [...document.querySelectorAll("label")]
+                .find((item) => item.textContent?.includes({json.dumps(label)}))
+                ?.querySelector("select");
+              return control instanceof HTMLSelectElement ? control.value : "";
+            }})()"""
+        )
+        return value if isinstance(value, str) else ""
+
+    def button_is_enabled(self, label: str) -> bool:
+        """Report whether one exact visible button is enabled."""
+        value = self.evaluate(
+            f"""(() => {{
+              const button = [...document.querySelectorAll("button")]
+                .find((item) => item.textContent?.trim() === {json.dumps(label)});
+              return button instanceof HTMLButtonElement && !button.disabled;
+            }})()"""
+        )
+        return value is True
+
+    def wait_for_enabled_button(self, label: str) -> None:
+        """Wait for one exact visible button to accept input."""
+        self.wait_until(
+            lambda: self.button_is_enabled(label),
+            "The expected local browser action did not become available.",
+        )
+
+    def focus_labeled_control(self, label: str) -> bool:
+        """Focus one labeled form control and confirm keyboard access."""
+        value = self.evaluate(
+            f"""(() => {{
+              const control = [...document.querySelectorAll("label")]
+                .find((item) => item.textContent?.includes({json.dumps(label)}))
+                ?.querySelector("input, select, textarea, button");
+              if (!(control instanceof HTMLElement)) return false;
+              control.focus();
+              return document.activeElement === control;
+            }})()"""
+        )
+        return value is True
+
+    def has_no_horizontal_overflow(self) -> bool:
+        """Confirm that the current viewport has no page-level overflow."""
+        value = self.evaluate(
+            "document.documentElement.scrollWidth <= window.innerWidth"
+        )
+        return value is True
 
     def definition_value(self, label: str) -> str:
         """Read one value from the visible definition list."""

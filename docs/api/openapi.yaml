@@ -1099,6 +1099,38 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/AdministrationRequestStatus'}
         '404': {$ref: '#/components/responses/NotFound'}
+  /v1/admin/services/{service_id}/diagnostics:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+    post:
+      tags: [Administration]
+      operationId: runScopedAdministrationDiagnostic
+      summary: Run one bounded content-free diagnostic on one exact eligible route.
+      description: >-
+        The Router uses a fixed internal probe. The request and response do not
+        contain the prompt, model output, provider error body, credential, or
+        short-lived bearer value.
+      security: [{administratorSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceIdQuery'
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/Origin'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AdministrationDiagnosticRunRequest'}
+      responses:
+        '201':
+          description: The exact-route diagnostic was admitted through normal routing controls.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdministrationDiagnosticRun'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
   /v1/admin/services/{service_id}/budgets:
     parameters:
       - $ref: '#/components/parameters/ServiceId'
@@ -3040,6 +3072,49 @@ components:
       properties:
         items: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/AdministrationRequestStatus'}}
         next_cursor: {type: [string, 'null']}
+    AdministrationDiagnosticRunRequest:
+      type: object
+      additionalProperties: false
+      required: [request_id, exact_route, reason]
+      properties:
+        request_id: {$ref: '#/components/schemas/UuidV7'}
+        exact_route: {$ref: '#/components/schemas/OpaqueId'}
+        reason: {type: string, minLength: 1, maxLength: 500}
+    AdministrationDiagnosticPhase:
+      type: object
+      additionalProperties: false
+      required: [name, state]
+      properties:
+        name:
+          type: string
+          enum: [authorization, route_eligibility, admission, provider, accounting]
+        state: {type: string, enum: [pending, active, succeeded, failed]}
+        failure_class:
+          type: string
+          enum: [authentication, policy, budget, rate_limit, timeout, transport, provider_unavailable, invalid_provider_response, incompatible_request, cancelled, uncertain_effect, router_internal]
+    AdministrationDiagnosticRun:
+      type: object
+      additionalProperties: false
+      description: Content-free state for one exact-route administrator diagnostic.
+      required: [request_id, service_id, workspace_id, exact_route, route_configuration_revision, authorization_expires_at, state, phases, status_url]
+      properties:
+        request_id: {$ref: '#/components/schemas/UuidV7'}
+        service_id: {$ref: '#/components/schemas/OpaqueId'}
+        workspace_id:
+          oneOf: [{$ref: '#/components/schemas/OpaqueId'}, {type: 'null'}]
+        exact_route: {$ref: '#/components/schemas/OpaqueId'}
+        route_configuration_revision: {$ref: '#/components/schemas/OpaqueId'}
+        authorization_expires_at: {$ref: '#/components/schemas/Timestamp'}
+        state: {type: string, enum: [active, succeeded, failed, expired]}
+        phases:
+          type: array
+          minItems: 5
+          maxItems: 5
+          items: {$ref: '#/components/schemas/AdministrationDiagnosticPhase'}
+        failure_class:
+          type: string
+          enum: [authentication, policy, budget, rate_limit, timeout, transport, provider_unavailable, invalid_provider_response, incompatible_request, cancelled, uncertain_effect, router_internal]
+        status_url: {type: string, format: uri-reference}
     EmbeddingRequestState:
       type: string
       enum: [admitted, running, succeeded, failed]

@@ -39,6 +39,7 @@ import {
   endAdministratorSession,
   errorMessage,
   inspectLocalAdministratorSession,
+  newLogicalRequestId,
   scheduleAdministrationSessionInspection,
   scopeFromSearch,
   scopeSearch,
@@ -52,6 +53,8 @@ import {
   type BudgetSummary,
   type CatalogEntry,
   type Credential,
+  type DiagnosticPhase,
+  type DiagnosticRun,
   type ProviderInstance,
   type ProviderModelRoute,
   type RequestStatus,
@@ -75,6 +78,7 @@ type Section =
   | "configuration"
   | "assignments"
   | "requests"
+  | "diagnostics"
   | "accounting"
   | "budgets";
 type SessionAction =
@@ -122,6 +126,7 @@ const serviceSections: readonly SectionItem[] = [
   { id: "setup", label: "Setup", icon: "health" },
   { id: "assignments", label: "Assignments", icon: "layers" },
   { id: "requests", label: "Requests", icon: "list" },
+  { id: "diagnostics", label: "Diagnostics", icon: "health" },
   { id: "budgets", label: "Budgets", icon: "shield" },
   { id: "accounting", label: "Usage & cost", icon: "activity" },
 ];
@@ -3046,6 +3051,381 @@ function SelectedBudgetSection({
   );
 }
 
+type DiagnosticViewState =
+  | "ready"
+  | "submitting"
+  | "active"
+  | "succeeded"
+  | "failed"
+  | "expired"
+  | "forbidden"
+  | "recent_auth"
+  | "read_only";
+
+interface DiagnosticFormState {
+  readonly routeId: string;
+  readonly reason: string;
+  readonly run: DiagnosticRun | null;
+  readonly status: RequestStatus | null;
+  readonly pending: boolean;
+  readonly failure: DiagnosticViewState | null;
+}
+
+function updateDiagnosticFormState(
+  state: DiagnosticFormState,
+  update: Partial<DiagnosticFormState>,
+): DiagnosticFormState {
+  return { ...state, ...update };
+}
+
+const diagnosticTimestampFormatter = new Intl.DateTimeFormat(undefined, {
+  dateStyle: "medium",
+  timeStyle: "medium",
+});
+
+function formatDiagnosticTimestamp(value: string): string {
+  return diagnosticTimestampFormatter.format(Date.parse(value));
+}
+
+function diagnosticViewState(
+  run: DiagnosticRun | null,
+  status: RequestStatus | null,
+  failure: DiagnosticViewState | null,
+): DiagnosticViewState {
+  if (failure !== null) return failure;
+  if (run === null) return "ready";
+  if (
+    status === null &&
+    new Date(run.authorization_expires_at).getTime() <= Date.now()
+  ) {
+    return "expired";
+  }
+  if (status?.state === "succeeded") return "succeeded";
+  if (
+    status !== null &&
+    ["failed", "interrupted", "cancelled", "uncertain"].includes(status.state)
+  ) {
+    return "failed";
+  }
+  return "active";
+}
+
+function diagnosticPhases(
+  run: DiagnosticRun,
+  status: RequestStatus | null,
+): readonly DiagnosticPhase[] {
+  if (status === null) return run.phases;
+  const terminal = [
+    "succeeded",
+    "failed",
+    "interrupted",
+    "cancelled",
+    "uncertain",
+  ].includes(status.state);
+  const failed = terminal && status.state !== "succeeded";
+  const lastFailedAttempt = [...status.attempts]
+    .reverse()
+    .find((attempt) => attempt.error !== undefined);
+  const failureClass = status.error?.class ?? lastFailedAttempt?.error?.class;
+  return run.phases.map((phase) => {
+    if (phase.name === "provider") {
+      return {
+        name: phase.name,
+        state: failed ? "failed" : terminal ? "succeeded" : "active",
+        ...(failureClass === undefined ? {} : { failure_class: failureClass }),
+      };
+    }
+    if (phase.name === "accounting") {
+      return { name: phase.name, state: terminal ? "succeeded" : "pending" };
+    }
+    return phase;
+  });
+}
+
+function DiagnosticsView({
+  client,
+  scope,
+  snapshot,
+}: {
+  readonly client: AdministrationClient;
+  readonly scope: ScopeSelection;
+  readonly snapshot: AdministrationSnapshot;
+}) {
+  const routes = snapshot.routes.filter(
+    (route) =>
+      route.state === "active" && route.capabilities.includes("chat.complete"),
+  );
+  const [form, updateForm] = useReducer(updateDiagnosticFormState, {
+    routeId: routes[0]?.provider_model_route_id ?? "",
+    reason: "Verify the selected provider-model route.",
+    run: null,
+    status: null,
+    pending: false,
+    failure: null,
+  });
+  const { routeId, reason, run, status, pending, failure } = form;
+  const state = pending
+    ? "submitting"
+    : diagnosticViewState(run, status, failure);
+  const phases = run === null ? [] : diagnosticPhases(run, status);
+  const failureClass = phases.find(
+    (phase) => phase.failure_class !== undefined,
+  )?.failure_class;
+
+  function mapFailure(error: unknown): DiagnosticViewState {
+    if (!(error instanceof AdministrationApiError)) return "failed";
+    if (error.code === "recent_auth_required") return "recent_auth";
+    if (error.code === "insufficient_scope") return "read_only";
+    if (error.status === 401 || error.status === 403) return "forbidden";
+    return "failed";
+  }
+
+  async function refreshStatus(current: DiagnosticRun) {
+    updateForm({ pending: true, failure: null });
+    try {
+      updateForm({
+        status: await client.getRequest(scope, current.request_id),
+      });
+    } catch (error) {
+      updateForm({ failure: mapFailure(error) });
+    } finally {
+      updateForm({ pending: false });
+    }
+  }
+
+  async function submit(event: SubmitEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (routeId === "" || reason.trim() === "") return;
+    updateForm({ pending: true, failure: null, run: null, status: null });
+    try {
+      const created = await client.runDiagnostic(scope, {
+        requestId: newLogicalRequestId(),
+        exactRoute: routeId,
+        reason: reason.trim(),
+      });
+      updateForm({ run: created });
+    } catch (error) {
+      updateForm({ failure: mapFailure(error) });
+    } finally {
+      updateForm({ pending: false });
+    }
+  }
+
+  const stateTitle = {
+    ready: "Ready to run",
+    submitting: "Diagnostic starting",
+    active: "Diagnostic active",
+    succeeded: "Diagnostic succeeded",
+    failed: "Diagnostic failed",
+    expired: "Diagnostic permission expired",
+    forbidden: "Diagnostic forbidden",
+    recent_auth: "Recent authentication required",
+    read_only: "Read-only administrator grant",
+  }[state];
+  const tone =
+    state === "succeeded"
+      ? "green"
+      : ["failed", "expired", "forbidden", "recent_auth", "read_only"].includes(
+            state,
+          )
+        ? "red"
+        : state === "ready"
+          ? "blue"
+          : "amber";
+
+  return (
+    <div className="diagnostic-workspace">
+      <PageHeading
+        eyebrow="Selected service"
+        title="Safe route diagnostic"
+        description="Run one fixed, content-free probe through normal policy, budget, rate, accounting, and audit controls. Prompts, model output, provider error bodies, credentials, and bearer values do not return to this page."
+      />
+      <Panel>
+        <PanelHeader
+          kicker="Exact scope"
+          title="Select one eligible route"
+          description={`Service ${scope.serviceId} · ${scope.workspaceId === "" ? "Service level" : `Workspace ${scope.workspaceId}`}`}
+        />
+        {snapshot.failures.routes === undefined ? null : (
+          <ScopedReadFailure
+            title="Eligible routes are not available"
+            message={snapshot.failures.routes}
+          />
+        )}
+        <form
+          className="diagnostic-form"
+          onSubmit={(event) => void submit(event)}
+        >
+          <label>
+            <span>Provider-model route</span>
+            <select
+              value={routeId}
+              disabled={routes.length === 0 || pending}
+              onChange={(event) => {
+                updateForm({ routeId: event.currentTarget.value });
+              }}
+            >
+              {routes.length === 0 ? (
+                <option value="">No eligible route</option>
+              ) : null}
+              {routes.map((route) => (
+                <option
+                  key={route.provider_model_route_id}
+                  value={route.provider_model_route_id}
+                >
+                  {route.wire_model} · {route.provider_model_route_id}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Audit reason</span>
+            <input
+              value={reason}
+              maxLength={500}
+              disabled={pending}
+              onChange={(event) => {
+                updateForm({ reason: event.currentTarget.value });
+              }}
+            />
+          </label>
+          <Button
+            type="submit"
+            disabled={routeId === "" || reason.trim() === "" || pending}
+          >
+            {pending ? "Starting diagnostic" : "Run diagnostic"}
+          </Button>
+        </form>
+        {routes.length === 0 && snapshot.failures.routes === undefined ? (
+          <StateMessage kind="empty">
+            No active chat route is eligible in this exact scope.
+          </StateMessage>
+        ) : null}
+      </Panel>
+      <Panel className="diagnostic-result" aria-live="polite">
+        <PanelHeader
+          kicker="Content-free result"
+          title={stateTitle}
+          description="A read-only grant can inspect current data but cannot run this diagnostic."
+          actions={
+            <StatusPill tone={tone}>{state.replace("_", " ")}</StatusPill>
+          }
+        />
+        {state === "recent_auth" ? (
+          <p>Authenticate with Pocket ID again, then start a new diagnostic.</p>
+        ) : null}
+        {state === "forbidden" || state === "read_only" ? (
+          <p>
+            The current administrator grant does not permit this exact action
+            and scope.
+          </p>
+        ) : null}
+        {run === null ? null : (
+          <>
+            <dl className="diagnostic-scope">
+              <div>
+                <dt>Service</dt>
+                <dd>{run.service_id}</dd>
+              </div>
+              <div>
+                <dt>Workspace</dt>
+                <dd>{run.workspace_id ?? "Service level"}</dd>
+              </div>
+              <div>
+                <dt>Route</dt>
+                <dd>{run.exact_route}</dd>
+              </div>
+              <div>
+                <dt>Route revision</dt>
+                <dd>{run.route_configuration_revision}</dd>
+              </div>
+              <div>
+                <dt>Authorization expires</dt>
+                <dd>
+                  {formatDiagnosticTimestamp(run.authorization_expires_at)}
+                </dd>
+              </div>
+              <div>
+                <dt>Failure class</dt>
+                <dd>{failureClass ?? "None"}</dd>
+              </div>
+            </dl>
+            <ol
+              className="diagnostic-phases"
+              aria-label="Safe diagnostic phases"
+            >
+              {phases.map((phase) => (
+                <li key={phase.name}>
+                  <span>{phase.name.replace("_", " ")}</span>
+                  <StatusPill tone={toneForState(phase.state)}>
+                    {phase.state}
+                  </StatusPill>
+                </li>
+              ))}
+            </ol>
+            <Button
+              variant="secondary"
+              disabled={pending}
+              onClick={() => void refreshStatus(run)}
+            >
+              Refresh diagnostic status
+            </Button>
+          </>
+        )}
+      </Panel>
+    </div>
+  );
+}
+
+function OperationalSections({
+  section,
+  client,
+  scope,
+  snapshot,
+}: {
+  readonly section: Section;
+  readonly client: AdministrationClient;
+  readonly scope: ScopeSelection;
+  readonly snapshot: AdministrationSnapshot | null;
+}) {
+  if (snapshot === null) return null;
+  if (section === "requests") {
+    return (
+      <Panel>
+        <PanelHeader
+          kicker="Content-free status"
+          title="Logical requests"
+          description="This view does not contain prompts, model output, or provider secrets."
+        />
+        {snapshot.failures.requests === undefined ? (
+          <RequestsView
+            key={`${scope.serviceId}:${scope.workspaceId}`}
+            client={client}
+            scope={scope}
+            values={snapshot.requests}
+          />
+        ) : (
+          <ScopedReadFailure
+            title="Request status is not available"
+            message={snapshot.failures.requests}
+          />
+        )}
+      </Panel>
+    );
+  }
+  if (section === "diagnostics") {
+    return (
+      <DiagnosticsView
+        key={`${scope.serviceId}:${scope.workspaceId}:${snapshot.configuration_revision ?? "none"}`}
+        client={client}
+        scope={scope}
+        snapshot={snapshot}
+      />
+    );
+  }
+  return null;
+}
+
 export function AdministrationDashboard({
   client,
   scope,
@@ -3288,28 +3668,12 @@ export function AdministrationDashboard({
           onNotice={onNotice}
         />
       ) : null}
-      {section === "requests" && snapshot !== null ? (
-        <Panel>
-          <PanelHeader
-            kicker="Content-free status"
-            title="Logical requests"
-            description="This view does not contain prompts, model output, or provider secrets."
-          />
-          {snapshot.failures.requests === undefined ? (
-            <RequestsView
-              key={`${scope.serviceId}:${scope.workspaceId}`}
-              client={client}
-              scope={scope}
-              values={snapshot.requests}
-            />
-          ) : (
-            <ScopedReadFailure
-              title="Request status is not available"
-              message={snapshot.failures.requests}
-            />
-          )}
-        </Panel>
-      ) : null}
+      <OperationalSections
+        section={section}
+        client={client}
+        scope={scope}
+        snapshot={snapshot}
+      />
       {section === "accounting" && snapshot !== null ? (
         snapshot.accounting === null ? (
           <ScopedReadFailure
