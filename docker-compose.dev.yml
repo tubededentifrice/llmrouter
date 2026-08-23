@@ -102,6 +102,7 @@ services:
       GARAGE_DEFAULT_BUCKET: llmrouter-local
       RUST_LOG: warn
     command: ["/garage", "server", "--single-node", "--default-bucket"]
+    network_mode: "service:backend"
     depends_on:
       object-storage-init:
         condition: service_completed_successfully
@@ -139,8 +140,6 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
-      object-storage:
-        condition: service_healthy
     environment:
       LLMROUTER_PUBLIC_ADMIN_AUTH: ${LLMROUTER_PUBLIC_ADMIN_AUTH:-0}
       LLMROUTER_OIDC_ISSUER: https://auth.opendle.dev
@@ -152,7 +151,7 @@ services:
       LLMROUTER_ADMINISTRATOR_SUBJECTS_FILE: /run/secrets/administrator_subjects
       LLMROUTER_ADMIN_DIGEST_KEY_FILE: /run/secrets/administrator_digest_key
       LLMROUTER_ADMIN_ENCRYPTION_KEY_FILE: /run/secrets/administrator_encryption_key
-      LLMROUTER_OBJECT_STORE_ENDPOINT: http://object-storage:3900
+      LLMROUTER_OBJECT_STORE_ENDPOINT: http://127.0.0.1:3900
       LLMROUTER_OBJECT_STORE_BUCKET: llmrouter-local
       LLMROUTER_OBJECT_STORE_REGION: garage
       LLMROUTER_OBJECT_STORE_ACCESS_KEY_FILE: /run/secrets/object_store_access_key

@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import re
+import tomllib
 from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 COMPOSE_PATH = REPOSITORY_ROOT / "docker-compose.dev.yml"
+STORAGE_CONFIG_PATH = REPOSITORY_ROOT / "scripts/local-development-object-storage.toml"
 IMMUTABLE_IMAGE = re.compile(r"^[^\s@]+(?:[:][^\s@]+)?@sha256:[0-9a-f]{64}$")
 PORT_BINDING = re.compile(
     r"^\s+-\s+['\"]?(?P<binding>[^'\"\s#]*\d+:\d+(?:/tcp)?)['\"]?\s*$",
@@ -19,6 +21,33 @@ EXPECTED_PORT_BINDINGS = {
     "127.0.0.1:5174:5173",
 }
 EXPECTED_IMAGE_COUNT = 4
+
+
+def _check_storage_isolation() -> None:
+    """Require each Garage listener to use its exact loopback address."""
+    try:
+        with STORAGE_CONFIG_PATH.open("rb") as stream:
+            config = tomllib.load(stream)
+    except OSError, tomllib.TOMLDecodeError:
+        raise SystemExit(
+            "The object-store endpoint is not isolated on loopback."
+        ) from None
+    expected = {
+        ("rpc_bind_addr",): "127.0.0.1:3901",
+        ("rpc_public_addr",): "127.0.0.1:3901",
+        ("s3_api", "api_bind_addr"): "127.0.0.1:3900",
+        ("admin", "api_bind_addr"): "127.0.0.1:3903",
+    }
+    for path, value in expected.items():
+        current: object = config
+        for name in path:
+            if not isinstance(current, dict) or name not in current:
+                raise SystemExit(
+                    "The object-store endpoint is not isolated on loopback."
+                )
+            current = current[name]
+        if current != value:
+            raise SystemExit("The object-store endpoint is not isolated on loopback.")
 
 
 def main() -> None:
@@ -90,7 +119,7 @@ def main() -> None:
         raise SystemExit("The container Python environment is not isolated.")
     required_storage_inputs = {
         "GARAGE_DEFAULT_BUCKET: llmrouter-local",
-        "LLMROUTER_OBJECT_STORE_ENDPOINT: http://object-storage:3900",
+        "LLMROUTER_OBJECT_STORE_ENDPOINT: http://127.0.0.1:3900",
         "LLMROUTER_OBJECT_STORE_BUCKET: llmrouter-local",
         "LLMROUTER_OBJECT_STORE_ACCESS_KEY_FILE: /run/secrets/object_store_access_key",
         "LLMROUTER_OBJECT_STORE_SECRET_KEY_FILE: /run/secrets/object_store_secret_key",
@@ -99,6 +128,9 @@ def main() -> None:
     }
     if any(value not in text for value in required_storage_inputs):
         raise SystemExit("The private object-store deployment inputs are incomplete.")
+    if 'network_mode: "service:backend"' not in text:
+        raise SystemExit("The object-store endpoint is not isolated on loopback.")
+    _check_storage_isolation()
 
     required_proxy = {
         "networks:\n      - default\n      - traefik-proxy\n    labels:",

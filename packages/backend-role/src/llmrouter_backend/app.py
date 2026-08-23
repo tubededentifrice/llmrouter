@@ -65,7 +65,7 @@ from llmrouter_backend.models import (
     WorkspaceCreate,
     WorkspacePage,
 )
-from llmrouter_backend.object_store import ObjectStore, ObjectStoreError
+from llmrouter_backend.object_store import ObjectStore
 from llmrouter_backend.security import (
     AdministratorSecrets,
     ControlKeys,
@@ -102,6 +102,8 @@ from llmrouter_backend.store import (
 )
 
 _DATABASE_CONNECT_TIMEOUT_SECONDS = 2
+_DATABASE_STATEMENT_TIMEOUT_MILLISECONDS = 2_000
+_DATABASE_LOCK_TIMEOUT_MILLISECONDS = 500
 _ADMINISTRATOR_COOKIE = "llmrouter_admin_session"
 _OIDC_FLOW_COOKIE = "llmrouter_admin_oidc_flow"
 _OIDC_FLOW_MINUTES = 10
@@ -117,7 +119,11 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
 ) -> FastAPI:
     """Create one application with optional fixed runtime dependencies."""
     settings_value = settings or Settings.from_environment()
-    object_store_value = object_store or ObjectStore.from_settings(settings_value)
+    object_store_value = (
+        object_store
+        if object_store is not None
+        else ObjectStore.from_settings(settings_value)
+    )
 
     @asynccontextmanager
     async def lifespan(_application: FastAPI) -> AsyncIterator[None]:
@@ -163,6 +169,7 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
             configured_url,
             connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
             row_factory=dict_row,
+            options=_database_timeout_options(),
         ) as database:
             yield database
 
@@ -224,6 +231,7 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
             with psycopg.connect(
                 configured_url,
                 connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
+                options=_database_timeout_options(),
             ) as database:
                 schema_row = database.execute(
                     "SELECT to_regnamespace('router') IS NOT NULL"
@@ -1019,7 +1027,7 @@ def _commit_public_delete_and_cleanup(
     database.commit()
     try:
         apply_retention_and_cleanup(database, object_store)
-    except ObjectStoreError, psycopg.Error:
+    except Exception:  # noqa: BLE001 - Cleanup cannot reverse the public deletion.
         database.rollback()
 
 
@@ -1045,10 +1053,19 @@ def _run_scheduled_cleanup(
             database_url,
             connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
             row_factory=dict_row,
+            options=_database_timeout_options(),
         ) as database:
             apply_retention_and_cleanup(database, object_store)
-    except OSError, UnicodeError, RuntimeError, psycopg.Error:
+    except Exception:  # noqa: BLE001 - One dependency failure must not stop retries.
         return
+
+
+def _database_timeout_options() -> str:
+    """Bound each statement and database lock wait from connection start."""
+    return (
+        f"-c statement_timeout={_DATABASE_STATEMENT_TIMEOUT_MILLISECONDS} "
+        f"-c lock_timeout={_DATABASE_LOCK_TIMEOUT_MILLISECONDS}"
+    )
 
 
 def _install_error_handlers(application: FastAPI) -> None:

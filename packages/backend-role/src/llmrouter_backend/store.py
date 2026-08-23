@@ -1,5 +1,5 @@
 """Transactional PostgreSQL access for identity and ownership records."""
-# ruff: noqa: EM101, PLR0913, S101, TRY003
+# ruff: noqa: EM101, PLR0913, TRY003
 
 from __future__ import annotations
 
@@ -80,7 +80,8 @@ def create_service(
            RETURNING id, api_name, display_name, created_at""",
         (api_name, display_name, parent_id),
     ).fetchone()
-    assert row is not None
+    if row is None:
+        raise RuntimeError("The service insert did not return its row.")
     row["parent_service_api_name"] = parent_api_name
     record_activity(
         connection,
@@ -187,7 +188,8 @@ def create_workspace(
            RETURNING id, api_name, display_name, created_at""",
         (service_id, api_name, display_name),
     ).fetchone()
-    assert row is not None
+    if row is None:
+        raise RuntimeError("The workspace insert did not return its row.")
     service_name = _service_api_name(connection, service_id)
     record_activity(
         connection,
@@ -265,7 +267,8 @@ def create_key(
            RETURNING id, name, created_at, last_used_at""",
         (key_id, service_id, name, control_keys.verifier(secret)),
     ).fetchone()
-    assert row is not None
+    if row is None:
+        raise RuntimeError("The service-key insert did not return its row.")
     row["id"] = str(row["id"])
     service_name = _service_api_name(connection, service_id)
     record_activity(

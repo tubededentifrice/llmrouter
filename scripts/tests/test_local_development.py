@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 CHECK_PATH = REPOSITORY_ROOT / "scripts/check-local-development.py"
 COMPOSE_PATH = REPOSITORY_ROOT / "docker-compose.dev.yml"
+STORAGE_CONFIG_PATH = REPOSITORY_ROOT / "scripts/local-development-object-storage.toml"
 SUBJECTS_INPUT = (
     "LLMROUTER_ADMINISTRATOR_SUBJECTS_FILE: /run/secrets/administrator_subjects"
 )
@@ -69,6 +70,61 @@ def test_local_contract_rejects_unsafe_or_incomplete_compose(
         module.main()
 
 
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        (
+            'rpc_bind_addr = "127.0.0.1:3901"',
+            'rpc_bind_addr = "0.0.0.0:3901"',
+        ),
+        (
+            'rpc_public_addr = "127.0.0.1:3901"',
+            'rpc_public_addr = "0.0.0.0:3901"',
+        ),
+        (
+            'api_bind_addr = "127.0.0.1:3900"',
+            'api_bind_addr = "0.0.0.0:3900"',
+        ),
+        (
+            'api_bind_addr = "127.0.0.1:3903"',
+            'api_bind_addr = "0.0.0.0:3903"',
+        ),
+        ('api_bind_addr = "127.0.0.1:3903"\n', ""),
+    ],
+)
+def test_local_contract_rejects_unsafe_or_missing_storage_binding(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    old: str,
+    new: str,
+) -> None:
+    """Reject public or missing Garage bindings in each required section."""
+    unsafe = tmp_path / "garage.toml"
+    source = STORAGE_CONFIG_PATH.read_text(encoding="utf-8")
+    assert old in source
+    unsafe.write_text(source.replace(old, new, 1), encoding="utf-8")
+    module = _module()
+    monkeypatch.setattr(module, "STORAGE_CONFIG_PATH", unsafe)
+    with pytest.raises(SystemExit, match="not isolated on loopback"):
+        module.main()
+
+
+def test_local_contract_rejects_duplicate_storage_section(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Reject a duplicate Garage section instead of using substring matches."""
+    unsafe = tmp_path / "garage.toml"
+    source = STORAGE_CONFIG_PATH.read_text(encoding="utf-8")
+    unsafe.write_text(
+        f'{source}\n[admin]\napi_bind_addr = "127.0.0.1:3903"\n',
+        encoding="utf-8",
+    )
+    module = _module()
+    monkeypatch.setattr(module, "STORAGE_CONFIG_PATH", unsafe)
+    with pytest.raises(SystemExit, match="not isolated on loopback"):
+        module.main()
+
+
 def test_local_wrapper_preserves_identity_inputs_and_resets_database() -> None:
     """Keep Pocket ID inputs while the reset deletes database volumes."""
     script = (REPOSITORY_ROOT / "scripts/local-development.sh").read_text(
@@ -118,14 +174,26 @@ def test_local_start_reruns_migrations_before_the_application() -> None:
     )
     migration_command = (
         "compose up --detach --remove-orphans --force-recreate \\\n"
-        "        object-storage migrate node-dependencies"
+        "        object-storage-init migrate node-dependencies"
     )
-    stop = script.index("compose stop admin-dev backend")
+    stop = script.index("compose stop admin-dev object-storage backend")
     migration = script.index(migration_command, stop)
-    jobs_complete = script.index("compose wait migrate node-dependencies", migration)
-    application_command = (
-        "compose up --detach --remove-orphans --no-deps backend admin-dev"
+    jobs_complete = script.index(
+        "compose wait object-storage-init migrate node-dependencies", migration
     )
+    application_command = "compose up --detach --remove-orphans --no-deps backend"
     application = script.index(application_command, jobs_complete)
+    storage = script.index(
+        "compose up --detach --remove-orphans --no-deps object-storage admin-dev",
+        application,
+    )
     readiness = script.index("wait_until_ready", application)
-    assert stop < migration < jobs_complete < application < readiness
+    assert stop < migration < jobs_complete < application < storage < readiness
+    readiness_function = script[
+        script.index("wait_until_ready()") : script.index("main()")
+    ]
+    assert "compose ps --quiet object-storage" in readiness_function
+    assert "State.Health.Status" in readiness_function
+    assert readiness_function.index(
+        "object_storage_container"
+    ) < readiness_function.index("http://127.0.0.1:8010/ready")

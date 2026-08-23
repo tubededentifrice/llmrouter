@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 BACKEND_RESET_PATH = REPOSITORY_ROOT / "scripts/check-backend-reset.py"
+DEPENDENCY_POLICY_PATH = REPOSITORY_ROOT / "scripts/check-dependency-policy.py"
 
 
 def _backend_reset_module() -> ModuleType:
@@ -24,6 +25,80 @@ def _backend_reset_module() -> ModuleType:
     module = importlib.util.module_from_spec(specification)
     specification.loader.exec_module(module)
     return module
+
+
+def _dependency_policy_module() -> ModuleType:
+    specification = importlib.util.spec_from_file_location(
+        "check_dependency_policy", DEPENDENCY_POLICY_PATH
+    )
+    assert specification is not None
+    assert specification.loader is not None
+    module = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module)
+    return module
+
+
+def test_dependency_policy_accepts_approved_python_security_update() -> None:
+    """Accept only the mature exact cryptography security update."""
+    module = _dependency_policy_module()
+    policy = {"exclude-newer-package": {"cryptography": "2026-08-09T00:00:00Z"}}
+    assert not module.check_python_security_overrides(
+        policy,
+        ["cryptography==50.0.0"],
+        now=module.datetime(2026, 8, 23, tzinfo=module.UTC),
+    )
+
+
+@pytest.mark.parametrize(
+    ("policy", "dependencies", "message"),
+    [
+        (
+            {"exclude-newer-package": {"unknown": "2026-08-09T00:00:00Z"}},
+            ["cryptography==50.0.0"],
+            "approved security update cutoffs",
+        ),
+        (
+            {"exclude-newer-package": {"cryptography": "2026-08-09T00:00:00Z"}},
+            ["cryptography==49.0.0"],
+            "approved security version 50.0.0",
+        ),
+        (
+            {"exclude-newer-package": "cryptography=2026-08-09"},
+            ["cryptography==50.0.0"],
+            "approved security update cutoffs",
+        ),
+    ],
+)
+def test_dependency_policy_rejects_unsafe_python_override(
+    policy: dict[str, object], dependencies: list[str], message: str
+) -> None:
+    """Reject an unknown, unsupported, or malformed Python override."""
+    module = _dependency_policy_module()
+    errors = module.check_python_security_overrides(
+        policy,
+        dependencies,
+        now=module.datetime(2026, 8, 23, tzinfo=module.UTC),
+    )
+    assert any(message in error for error in errors)
+
+
+def test_dependency_policy_rejects_future_python_cutoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reject an approved cutoff that is not 14 complete days old."""
+    module = _dependency_policy_module()
+    monkeypatch.setitem(
+        module.APPROVED_PYTHON_OVERRIDES["cryptography"],
+        "exclude_newer",
+        "2026-08-22T00:00:00Z",
+    )
+    policy = {"exclude-newer-package": {"cryptography": "2026-08-22T00:00:00Z"}}
+    errors = module.check_python_security_overrides(
+        policy,
+        ["cryptography==50.0.0"],
+        now=module.datetime(2026, 8, 23, tzinfo=module.UTC),
+    )
+    assert any("cutoff is less than 14 days old" in error for error in errors)
 
 
 def test_database_check_runs_the_clean_migration_suite() -> None:

@@ -8,6 +8,7 @@ import json
 import re
 import sys
 import tomllib
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,14 @@ SHARED_BACKEND_SPEC = (
 SHARED_UI_PACKAGE = "@opendle/ui"
 SHARED_UI_SPEC = "git+https://github.com/tubededentifrice/opendle-ui.git#main"
 CUTOFF = "2026-07-30T06:00:00Z"
+MINIMUM_RELEASE_AGE = timedelta(days=14)
+APPROVED_PYTHON_OVERRIDES = {
+    "cryptography": {
+        "version": "50.0.0",
+        "released": "2026-07-31T14:25:10.110000Z",
+        "exclude_newer": "2026-08-09T00:00:00Z",
+    }
+}
 NODE_VERSION = "24.17.0"
 NPM_VERSION = "11.18.0"
 PYTHON_VERSION = "3.14.6"
@@ -78,6 +87,53 @@ def check_package_json(path: Path) -> list[str]:
     return errors
 
 
+def check_python_security_overrides(
+    uv_policy: dict[str, Any],
+    dependencies: list[str],
+    *,
+    now: datetime | None = None,
+) -> list[str]:
+    """Return errors for the exact approved Python security update."""
+    errors: list[str] = []
+    configured = uv_policy.get("exclude-newer-package")
+    expected = {
+        package: approval["exclude_newer"]
+        for package, approval in APPROVED_PYTHON_OVERRIDES.items()
+    }
+    if configured != expected:
+        return [
+            (
+                "pyproject.toml: tool.uv.exclude-newer-package must equal the "
+                "approved security update cutoffs"
+            )
+        ]
+
+    checked_at = now or datetime.now(tz=UTC)
+    for package, approval in APPROVED_PYTHON_OVERRIDES.items():
+        version = approval["version"]
+        if f"{package}=={version}" not in dependencies:
+            errors.append(
+                f"packages/backend-role/pyproject.toml: {package} must be pinned "
+                f"to the approved security version {version}"
+            )
+        try:
+            released = datetime.fromisoformat(approval["released"])
+            cutoff = datetime.fromisoformat(approval["exclude_newer"])
+        except AttributeError, ValueError:
+            errors.append(f"pyproject.toml: approved {package} dates are malformed")
+            continue
+        if checked_at - released < MINIMUM_RELEASE_AGE:
+            errors.append(
+                f"pyproject.toml: approved {package} release is less than 14 days old"
+            )
+        if cutoff > checked_at - MINIMUM_RELEASE_AGE:
+            errors.append(
+                f"pyproject.toml: {package} exclude-newer cutoff is less than "
+                "14 days old"
+            )
+    return errors
+
+
 def check_root_policy() -> list[str]:
     """Return policy errors for pinned root tools and resolver settings."""
     errors: list[str] = []
@@ -85,6 +141,12 @@ def check_root_policy() -> list[str]:
     uv_policy = root.get("tool", {}).get("uv", {})
     if uv_policy.get("exclude-newer") != CUTOFF:
         errors.append(f"pyproject.toml: tool.uv.exclude-newer must be {CUTOFF}")
+    backend = _load_toml(Path("packages/backend-role/pyproject.toml"))
+    errors.extend(
+        check_python_security_overrides(
+            uv_policy, list(backend.get("project", {}).get("dependencies", []))
+        )
+    )
     if uv_policy.get("required-version") != f"=={UV_VERSION}":
         errors.append(
             f"pyproject.toml: tool.uv.required-version must be =={UV_VERSION}"

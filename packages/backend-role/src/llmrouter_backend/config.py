@@ -26,8 +26,9 @@ _MINIMUM_BUCKET_LENGTH = 3
 _MAXIMUM_BUCKET_LENGTH = 63
 _MAXIMUM_OBJECT_STORE_CONNECT_TIMEOUT = 30
 _MAXIMUM_OBJECT_STORE_READ_TIMEOUT = 120
-_DEVELOPMENT_OBJECT_STORE_PORT = 3900
 _BUCKET_NAME = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
+_IP_BUCKET_NAME = re.compile(r"^[0-9]+(?:\.[0-9]+){3}$")
+_OBJECT_STORE_REGION = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,8 +178,12 @@ def _validate_object_store(settings: Settings) -> None:
         and ".." not in settings.object_store_bucket
         and ".-" not in settings.object_store_bucket
         and "-." not in settings.object_store_bucket
+        and _IP_BUCKET_NAME.fullmatch(settings.object_store_bucket) is None
     ):
         message = "The object-store bucket is not valid."
+        raise ValueError(message)
+    if _OBJECT_STORE_REGION.fullmatch(settings.object_store_region) is None:
+        message = "The object-store region is not valid."
         raise ValueError(message)
     if not (
         1
@@ -201,18 +206,7 @@ def _valid_origin(origin: str) -> bool:
 
 
 def _valid_object_store_url(value: str) -> bool:
-    """Permit HTTPS, or the one isolated development service authority."""
-    parsed = urlsplit(value)
-    if parsed.scheme == "http" and parsed.hostname == "object-storage":
-        return bool(
-            parsed.path == ""
-            and not parsed.query
-            and not parsed.fragment
-            and parsed.username is None
-            and parsed.password is None
-            and parsed.port == _DEVELOPMENT_OBJECT_STORE_PORT
-            and value == "http://object-storage:3900"
-        )
+    """Permit standard HTTPS or an explicit loopback development endpoint."""
     return _valid_http_url(value, expected_path="")
 
 

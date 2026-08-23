@@ -4,12 +4,14 @@
 from __future__ import annotations
 
 import dataclasses
+import importlib
+import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta, timezone
 from http import HTTPStatus
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import psycopg
 import pytest
@@ -52,6 +54,7 @@ class MemoryObjectStore:
     def __init__(self, values: dict[str, tuple[bytes, str]] | None = None) -> None:
         self.values = values if values is not None else {}
         self.fail_put = False
+        self.uncertain_put = False
         self.fail_get = False
         self.fail_delete = False
         self.put_calls = 0
@@ -62,6 +65,8 @@ class MemoryObjectStore:
         if self.fail_put:
             raise ObjectStoreError
         self.values[key] = (body, content_type)
+        if self.uncertain_put:
+            raise TimeoutError
 
     def get(self, key: str, maximum_bytes: int = 1024 * 1024 * 1024) -> StoredObject:
         """Read one object or raise the configured safe failure."""
@@ -283,6 +288,23 @@ def test_complete_logs_preserve_model_content_and_hide_control_data(
     assert content.content == MEDIA_BYTES
     assert content.headers["content-type"] == "application/octet-stream"
     assert content.headers["x-content-type-options"] == "nosniff"
+    assert complete.headers["cache-control"] == "no-store"
+    assert content.headers["cache-control"] == "no-store"
+
+    administrator_routes = (
+        f"/v1/admin/request-logs/{log_id}",
+        f"/v1/admin/request-logs/{log_id}/media/{media['id']}/content",
+        "/v1/admin/settings/log-retention",
+        "/v1/admin/health",
+    )
+    for route in administrator_routes:
+        assert context.client.get(route).status_code == HTTPStatus.UNAUTHORIZED
+        assert (
+            context.client.get(
+                route, headers={"Authorization": f"Bearer {context.service_key}"}
+            ).status_code
+            == HTTPStatus.UNAUTHORIZED
+        )
 
 
 def test_log_pagination_and_filters_are_bounded(
@@ -400,6 +422,26 @@ def test_retention_write_bounds_csrf_and_cleanup_failure_health(
         headers={**context.write_headers, "Origin": "https://attacker.example"},
     )
     assert wrong_origin.status_code == HTTPStatus.FORBIDDEN
+    for duplicate_headers in (
+        [
+            ("Cookie", f"llmrouter_admin_session={context.session_token}"),
+            ("Origin", ADMIN_ORIGIN),
+            ("Origin", ADMIN_ORIGIN),
+            ("X-CSRF-Token", context.csrf_token),
+        ],
+        [
+            ("Cookie", f"llmrouter_admin_session={context.session_token}"),
+            ("Origin", ADMIN_ORIGIN),
+            ("X-CSRF-Token", context.csrf_token),
+            ("X-CSRF-Token", context.csrf_token),
+        ],
+    ):
+        duplicate = context.client.put(
+            "/v1/admin/settings/log-retention",
+            json={"duration_days": 1},
+            headers=duplicate_headers,
+        )
+        assert duplicate.status_code == HTTPStatus.FORBIDDEN
     for invalid in (0, 31):
         response = context.client.put(
             "/v1/admin/settings/log-retention",
@@ -631,6 +673,16 @@ def test_invalid_or_failed_best_effort_write_does_not_affect_call_state(
             "SELECT count(*) FROM router.request_logs"
         ).fetchone() == (1,)
 
+    context.objects.fail_put = False
+    context.objects.uncertain_put = True
+    uncertain_id = context.write_log()
+    uncertain = context.client.get(
+        f"/v1/admin/request-logs/{uncertain_id}", headers=context.read_headers
+    )
+    assert uncertain.status_code == HTTPStatus.OK
+    assert "media" not in uncertain.json()
+    assert context.objects.values == {}
+
 
 def test_transaction_rollback_removes_uploaded_orphans(
     database_url: str, tmp_path: Path
@@ -660,17 +712,28 @@ def test_transaction_rollback_removes_uploaded_orphans(
         started_at=datetime.now(tz=UTC),
         media=(CapturedMedia(MEDIA_BYTES, "image/png", "input"),),
     )
+    context.objects.fail_delete = True
     assert (
         write_detailed_log_best_effort(
             database_url, cast("ObjectStore", context.objects), value
         )
         is None
     )
-    assert context.objects.values == {}
+    assert list(context.objects.values.values()) == [(MEDIA_BYTES, "image/png")]
     with psycopg.connect(database_url) as connection:
         assert connection.execute(
             "SELECT count(*) FROM router.request_logs"
         ).fetchone() == (0,)
+        assert connection.execute(
+            """SELECT failure_count, failure_class
+               FROM router.object_deletion_queue"""
+        ).fetchone() == (1, "upload_rollback_failed")
+    context.objects.fail_delete = False
+    with psycopg.connect(database_url, row_factory=dict_row) as connection:
+        assert apply_retention_and_cleanup(
+            connection, cast("ObjectStore", context.objects)
+        ) == (0, 1)
+    assert context.objects.values == {}
 
 
 def test_best_effort_database_boundaries_return_safely(
@@ -719,6 +782,104 @@ def test_best_effort_database_boundaries_return_safely(
         is None
     )
     assert context.objects.values == {}
+
+
+def test_application_database_waits_and_cleanup_failures_are_bounded(
+    database_url: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Set database bounds and keep the scheduled retry entry point safe."""
+    context = LogContext(database_url, tmp_path)
+    backend_app: Any = importlib.import_module("llmrouter_backend.app")
+    observed: dict[str, str] = {}
+
+    def retention(connection: psycopg.Connection[dict[str, object]]) -> int:
+        statement = connection.execute("SHOW statement_timeout").fetchone()
+        lock = connection.execute("SHOW lock_timeout").fetchone()
+        assert statement is not None
+        assert lock is not None
+        observed["statement"] = cast("str", statement["statement_timeout"])
+        observed["lock"] = cast("str", lock["lock_timeout"])
+        return 7
+
+    with monkeypatch.context() as patch:
+        patch.setattr(backend_app, "get_log_retention", retention)
+        response = context.client.get(
+            "/v1/admin/settings/log-retention", headers=context.read_headers
+        )
+    assert response.status_code == HTTPStatus.OK
+    assert observed == {"statement": "2s", "lock": "500ms"}
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            backend_app,
+            "apply_retention_and_cleanup",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(LookupError),
+        )
+        backend_app._run_scheduled_cleanup(database_url, None)  # noqa: SLF001
+
+
+def test_object_store_configuration_and_keys_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Require trusted endpoints, safe control files, and private bounded keys."""
+    access = tmp_path / "access"
+    secret = tmp_path / "secret"
+    access.write_text("access-control", encoding="utf-8")
+    secret.write_text("secret-control", encoding="utf-8")
+
+    def object_settings(
+        endpoint: str,
+        *,
+        bucket: str = "valid-bucket",
+        region: str = "garage",
+        access_path: Path = access,
+    ) -> Settings:
+        return Settings(
+            object_store_endpoint=endpoint,
+            object_store_bucket=bucket,
+            object_store_region=region,
+            object_store_access_key_file=access_path,
+            object_store_secret_key_file=secret,
+        )
+
+    with pytest.raises(ValueError, match="endpoint"):
+        object_settings("http://object-storage:3900")
+    with pytest.raises(ValueError, match="bucket"):
+        object_settings("https://storage.example", bucket="127.0.0.1")
+    with pytest.raises(ValueError, match="region"):
+        object_settings("https://storage.example", region="invalid_region")
+
+    observed: dict[str, object] = {}
+
+    class Client:
+        def put_object(self, **values: object) -> None:
+            observed.update(values)
+
+    def client_factory(_name: str, **values: object) -> Client:
+        observed.update(values)
+        return Client()
+
+    with monkeypatch.context() as patch:
+        patch.setattr("llmrouter_backend.object_store.boto3.client", client_factory)
+        storage = ObjectStore.from_settings(object_settings("http://127.0.0.1:3900"))
+    assert storage is not None
+    assert observed["endpoint_url"] == "http://127.0.0.1:3900"
+    storage.put("2026-08-23/service/workspace/object", b"body", "image/png")
+    assert observed["Key"] == "2026-08-23/service/workspace/object"
+    for unsafe_key in ("../escape", "/absolute", "double//segment", "secret-ä"):
+        with pytest.raises(ObjectStoreError):
+            storage.put(unsafe_key, b"body", "image/png")
+    with pytest.raises(ObjectStoreError):
+        storage.put("safe/key", b"body", "image/png\r\nX-Control: value")
+
+    linked_access = tmp_path / "linked-access"
+    linked_access.hardlink_to(access)
+    with pytest.raises(ObjectStoreError):
+        ObjectStore.from_settings(
+            object_settings("https://storage.example", access_path=linked_access)
+        )
 
 
 def test_concurrent_retention_and_scope_isolation_are_safe(
@@ -791,7 +952,48 @@ def test_concurrent_retention_and_scope_isolation_are_safe(
     with ThreadPoolExecutor(max_workers=2) as executor:
         results = tuple(executor.map(lambda _index: cleanup(), range(2)))
     assert sum(result[0] for result in results) >= 3
-    with psycopg.connect(database_url) as connection:
-        assert connection.execute(
+    with psycopg.connect(database_url) as final_connection:
+        assert final_connection.execute(
             "SELECT count(*) FROM router.request_logs"
         ).fetchone() == (0,)
+
+
+def test_object_cleanup_releases_database_locks_before_dependency_wait(
+    database_url: str, tmp_path: Path
+) -> None:
+    """Do not hold a database row lock during an object-store timeout."""
+    context = LogContext(database_url, tmp_path)
+    context.write_log(started_at=datetime.now(tz=UTC) - timedelta(days=2))
+    with psycopg.connect(database_url, row_factory=dict_row) as connection:
+        connection.execute(
+            "UPDATE router.global_settings SET log_retention_days = 1 WHERE singleton"
+        )
+        apply_retention_and_cleanup(connection, None)
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    class WaitingStore(MemoryObjectStore):
+        def delete(self, key: str) -> None:
+            entered.set()
+            assert release.wait(timeout=2)
+            super().delete(key)
+
+    waiting = WaitingStore(context.objects.values)
+
+    def cleanup() -> tuple[int, int]:
+        with psycopg.connect(database_url, row_factory=dict_row) as connection:
+            return apply_retention_and_cleanup(connection, cast("ObjectStore", waiting))
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(cleanup)
+        assert entered.wait(timeout=2)
+        started = time.monotonic()
+        with psycopg.connect(database_url) as updater:
+            updater.execute(
+                """UPDATE router.object_deletion_queue
+                   SET failure_count = failure_count + 1"""
+            )
+        assert time.monotonic() - started < 1
+        release.set()
+        assert future.result(timeout=2) == (0, 1)

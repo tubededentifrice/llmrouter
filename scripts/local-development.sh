@@ -166,8 +166,12 @@ lock_operation() {
 
 wait_until_ready() {
   local deadline=$((SECONDS + 180))
+  local object_storage_container
   while ((SECONDS < deadline)); do
-    if curl --fail --silent --show-error --max-time 2 \
+    object_storage_container="$(compose ps --quiet object-storage)"
+    if [[ -n "${object_storage_container}" ]] &&
+      [[ "$(docker inspect --format '{{.State.Health.Status}}' "${object_storage_container}")" == "healthy" ]] &&
+      curl --fail --silent --show-error --max-time 2 \
       http://127.0.0.1:8010/ready >/dev/null 2>&1 &&
       curl --fail --silent --show-error --max-time 2 \
         http://127.0.0.1:5174/ >/dev/null 2>&1; then
@@ -196,11 +200,12 @@ main() {
       if [[ -z "$(compose ps --quiet)" ]]; then
         cleanup_new_deployment=1
       fi
-      compose stop admin-dev backend >/dev/null
+      compose stop admin-dev object-storage backend >/dev/null
       compose up --detach --remove-orphans --force-recreate \
-        object-storage migrate node-dependencies
-      compose wait migrate node-dependencies >/dev/null
-      compose up --detach --remove-orphans --no-deps backend admin-dev
+        object-storage-init migrate node-dependencies
+      compose wait object-storage-init migrate node-dependencies >/dev/null
+      compose up --detach --remove-orphans --no-deps backend
+      compose up --detach --remove-orphans --no-deps object-storage admin-dev
       wait_until_ready
       cleanup_new_deployment=0
       trap - EXIT

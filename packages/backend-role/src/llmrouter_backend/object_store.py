@@ -3,20 +3,27 @@
 
 from __future__ import annotations
 
+import os
+import re
+import stat
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import boto3
 from botocore.client import Config
-from botocore.exceptions import BotoCoreError, ClientError
+from botocore.exceptions import ClientError
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from llmrouter_backend.config import Settings
 
-_MAX_CONTROL_FILE_BYTES = 10_000
 _MAX_OBJECT_BYTES = 1024 * 1024 * 1024
+_MAX_OBJECT_KEY_BYTES = 1024
+_MAX_CONTENT_TYPE_CHARACTERS = 200
+_OBJECT_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/()'-]*$")
+_ASCII_SPACE = 0x20
+_ASCII_DELETE = 0x7F
 
 
 class ObjectStoreError(Exception):
@@ -54,31 +61,45 @@ class ObjectStore:
             or settings.object_store_secret_key_file is None
         ):
             raise ObjectStoreError
-        access_key = _read_control(settings.object_store_access_key_file)
-        secret_key = _read_control(settings.object_store_secret_key_file)
+        access_key = _read_control(settings.object_store_access_key_file, maximum=500)
+        secret_key = _read_control(
+            settings.object_store_secret_key_file, maximum=10_000
+        )
+        if settings.object_store_ca_file is not None:
+            _validate_control_file(settings.object_store_ca_file, maximum=1_000_000)
         verify: bool | str = (
             str(settings.object_store_ca_file)
             if settings.object_store_ca_file is not None
             else True
         )
-        client = boto3.client(
-            "s3",
-            endpoint_url=settings.object_store_endpoint,
-            region_name=settings.object_store_region,
-            aws_access_key_id=access_key,
-            aws_secret_access_key=secret_key,
-            verify=verify,
-            config=Config(
-                connect_timeout=settings.object_store_connect_timeout_seconds,
-                read_timeout=settings.object_store_read_timeout_seconds,
-                retries={"max_attempts": 0},
-                s3={"addressing_style": "path"},
-            ),
-        )
+        try:
+            client = boto3.client(
+                "s3",
+                endpoint_url=settings.object_store_endpoint,
+                region_name=settings.object_store_region,
+                aws_access_key_id=access_key,
+                aws_secret_access_key=secret_key,
+                verify=verify,
+                config=Config(
+                    connect_timeout=settings.object_store_connect_timeout_seconds,
+                    read_timeout=settings.object_store_read_timeout_seconds,
+                    retries={"max_attempts": 0},
+                    s3={"addressing_style": "path"},
+                ),
+            )
+        except Exception as error:
+            raise ObjectStoreError from error
         return cls(client, settings.object_store_bucket)
 
     def put(self, key: str, body: bytes, content_type: str) -> None:
         """Write one private object without caller-visible storage metadata."""
+        _require_object_key(key)
+        if (
+            not 1 <= len(body) <= _MAX_OBJECT_BYTES
+            or not 1 <= len(content_type) <= _MAX_CONTENT_TYPE_CHARACTERS
+            or not _valid_content_type(content_type)
+        ):
+            raise ObjectStoreError
         try:
             self._client.put_object(
                 Bucket=self._bucket,
@@ -87,11 +108,12 @@ class ObjectStore:
                 ContentLength=len(body),
                 ContentType=content_type,
             )
-        except (BotoCoreError, ClientError, OSError) as error:
+        except Exception as error:
             raise ObjectStoreError from error
 
     def get(self, key: str, maximum_bytes: int = _MAX_OBJECT_BYTES) -> StoredObject:
         """Read one private object and close the SDK stream."""
+        _require_object_key(key)
         if not 1 <= maximum_bytes <= _MAX_OBJECT_BYTES:
             raise ObjectStoreError
         try:
@@ -106,46 +128,98 @@ class ObjectStore:
             if code in {"NoSuchKey", "NoSuchBucket", "404", "NotFound"}:
                 raise ObjectNotFoundError from error
             raise ObjectStoreError from error
-        except (BotoCoreError, OSError, KeyError, TypeError) as error:
+        except Exception as error:
             raise ObjectStoreError from error
         content_type = response.get("ContentType")
         if (
             not isinstance(body, bytes)
             or len(body) > maximum_bytes
             or not isinstance(content_type, str)
+            or not _valid_content_type(content_type)
         ):
             raise ObjectStoreError
         return StoredObject(body=body, content_type=content_type)
 
     def delete(self, key: str) -> None:
         """Delete one object. S3 deletion is idempotent for an absent key."""
+        _require_object_key(key)
         try:
             self._client.delete_object(Bucket=self._bucket, Key=key)
-        except (BotoCoreError, ClientError, OSError) as error:
+        except Exception as error:
             raise ObjectStoreError from error
 
     def healthy(self) -> bool:
         """Check bucket access without returning deployment details."""
         try:
             self._client.head_bucket(Bucket=self._bucket)
-        except BotoCoreError, ClientError, OSError:
+        except Exception:  # noqa: BLE001 - Health never exposes SDK failure details.
             return False
         return True
 
 
-def _read_control(path: Path) -> str:
-    try:
-        if path.is_symlink() or not path.is_file():
-            raise ObjectStoreError
-        raw = path.read_bytes()
-    except OSError as error:
-        raise ObjectStoreError from error
-    if not 1 <= len(raw) <= _MAX_CONTROL_FILE_BYTES or b"\x00" in raw:
+def _read_control(path: Path, *, maximum: int) -> str:
+    raw = _read_control_file(path, maximum=maximum)
+    if b"\x00" in raw:
         raise ObjectStoreError
     try:
         value = raw.decode("utf-8").strip()
     except UnicodeDecodeError as error:
         raise ObjectStoreError from error
-    if not value:
+    if not value or any(
+        ord(character) <= _ASCII_SPACE or ord(character) == _ASCII_DELETE
+        for character in value
+    ):
         raise ObjectStoreError
     return value
+
+
+def _validate_control_file(path: Path, *, maximum: int) -> None:
+    _read_control_file(path, maximum=maximum)
+
+
+def _read_control_file(path: Path, *, maximum: int) -> bytes:
+    descriptor = -1
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise ObjectStoreError
+        chunks: list[bytes] = []
+        remaining = maximum + 1
+        while remaining:
+            chunk = os.read(descriptor, remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        raw = b"".join(chunks)
+    except OSError as error:
+        raise ObjectStoreError from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    if not 1 <= len(raw) <= maximum:
+        raise ObjectStoreError
+    return raw
+
+
+def _require_object_key(key: str) -> None:
+    try:
+        encoded = key.encode("ascii")
+    except UnicodeEncodeError as error:
+        raise ObjectStoreError from error
+    segments = key.split("/")
+    if (
+        not 1 <= len(encoded) <= _MAX_OBJECT_KEY_BYTES
+        or _OBJECT_KEY.fullmatch(key) is None
+        or any(segment in {"", ".", ".."} for segment in segments)
+    ):
+        raise ObjectStoreError
+
+
+def _valid_content_type(value: str) -> bool:
+    return bool(
+        1 <= len(value) <= _MAX_CONTENT_TYPE_CHARACTERS
+        and "/" in value
+        and all(_ASCII_SPACE < ord(character) < _ASCII_DELETE for character in value)
+    )

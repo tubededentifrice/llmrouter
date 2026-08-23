@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -41,8 +42,7 @@ _MAX_LOG_CONTENT_CHARACTERS = 5_000_000
 _MAX_ATTEMPTS = 16
 _MAX_MEDIA_ITEMS = 16
 _DATABASE_CONNECT_TIMEOUT_SECONDS = 2
-_DATABASE_STATEMENT_TIMEOUT_MILLISECONDS = 2_000
-_DATABASE_LOCK_TIMEOUT_MILLISECONDS = 500
+_DATABASE_TIMEOUT_OPTIONS = "-c statement_timeout=2000 -c lock_timeout=500"
 _SAFE_MEDIA_TYPES = frozenset(
     {
         "image/jpeg",
@@ -99,15 +99,8 @@ def write_detailed_log_best_effort(
             database_url,
             connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
             row_factory=dict_row,
+            options=_DATABASE_TIMEOUT_OPTIONS,
         ) as connection:
-            connection.execute(
-                "SELECT set_config('statement_timeout', %s, true)",
-                (str(_DATABASE_STATEMENT_TIMEOUT_MILLISECONDS),),
-            )
-            connection.execute(
-                "SELECT set_config('lock_timeout', %s, true)",
-                (str(_DATABASE_LOCK_TIMEOUT_MILLISECONDS),),
-            )
             row = connection.execute(
                 """SELECT services.api_name AS service_api_name,
                           workspaces.api_name AS workspace_api_name
@@ -154,7 +147,10 @@ def write_detailed_log_best_effort(
                     )
                     try:
                         object_store.put(object_key, media.body, media.media_type)
-                    except ObjectStoreError:
+                    except Exception:  # noqa: BLE001 - Diagnostic media is best-effort.
+                        _delete_or_queue_best_effort(
+                            database_url, object_store, object_key
+                        )
                         break
                     uploaded.append(object_key)
                     connection.execute(
@@ -175,13 +171,10 @@ def write_detailed_log_best_effort(
                             hashlib.sha256(media.body).digest(),
                         ),
                     )
-    except OSError, OverflowError, UnicodeError, ValueError, psycopg.Error:
+    except Exception:  # noqa: BLE001 - Diagnostics must not change the call result.
         if object_store is not None:
             for object_key in uploaded:
-                try:
-                    object_store.delete(object_key)
-                except ObjectStoreError:
-                    break
+                _delete_or_queue_best_effort(database_url, object_store, object_key)
         return None
     else:
         return log_id
@@ -396,6 +389,9 @@ def apply_retention_and_cleanup(
            )""",
         (cutoff, batch),
     )
+    # Commit database expiry before an object-store timeout. This releases all
+    # row locks and makes the public retention boundary effective at once.
+    connection.commit()
     deleted_objects = _drain_object_deletions(connection, object_store, batch=batch)
     return len(expired_media) + expired_logs, deleted_objects
 
@@ -460,27 +456,38 @@ def _drain_object_deletions(
         return 0
     rows = connection.execute(
         """SELECT object_key FROM router.object_deletion_queue
-           ORDER BY queued_at, object_key LIMIT %s FOR UPDATE SKIP LOCKED""",
-        (min(batch, 20),),
+           ORDER BY queued_at, object_key LIMIT %s""",
+        (min(batch, 4),),
     ).fetchall()
-    deleted = 0
-    for row in rows:
+    connection.commit()
+    if not rows:
+        return 0
+
+    def delete_one(object_key: str) -> tuple[str, bool]:
         try:
-            object_store.delete(row["object_key"])
-        except ObjectStoreError:
+            object_store.delete(object_key)
+        except Exception:  # noqa: BLE001 - Record all dependency failure classes safely.
+            return object_key, False
+        return object_key, True
+
+    # One bounded concurrent group avoids a sequence of object-store timeouts.
+    with ThreadPoolExecutor(max_workers=len(rows)) as executor:
+        results = dict(executor.map(delete_one, (row["object_key"] for row in rows)))
+    deleted = 0
+    for object_key, succeeded in results.items():
+        if not succeeded:
             connection.execute(
                 """UPDATE router.object_deletion_queue
                    SET last_attempt_at = statement_timestamp(),
                        failure_count = failure_count + 1,
                        failure_class = 'object_store_unavailable'
                    WHERE object_key = %s""",
-                (row["object_key"],),
+                (object_key,),
             )
-            break
         else:
             connection.execute(
                 "DELETE FROM router.object_deletion_queue WHERE object_key = %s",
-                (row["object_key"],),
+                (object_key,),
             )
             deleted += 1
     return deleted
@@ -564,3 +571,35 @@ def _object_key(
 ) -> str:
     day = started_at.astimezone(UTC).date().isoformat()
     return f"{day}/{service_id}/{workspace_id}/{media_id}"
+
+
+def _queue_orphaned_object_best_effort(database_url: str, object_key: str) -> None:
+    """Keep cleanup intent when upload rollback cannot delete an object."""
+    try:
+        with psycopg.connect(
+            database_url,
+            connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
+            options=_DATABASE_TIMEOUT_OPTIONS,
+        ) as connection:
+            connection.execute(
+                """INSERT INTO router.object_deletion_queue
+                       (object_key, failure_count, failure_class, last_attempt_at)
+                   VALUES (%s, 1, 'upload_rollback_failed', statement_timestamp())
+                   ON CONFLICT (object_key) DO UPDATE
+                   SET failure_count = router.object_deletion_queue.failure_count + 1,
+                       failure_class = 'upload_rollback_failed',
+                       last_attempt_at = statement_timestamp()""",
+                (object_key,),
+            )
+    except Exception:  # noqa: BLE001 - Diagnostic cleanup stays best-effort.
+        return
+
+
+def _delete_or_queue_best_effort(
+    database_url: str, object_store: ObjectStore, object_key: str
+) -> None:
+    """Delete one uncertain upload or keep durable cleanup intent."""
+    try:
+        object_store.delete(object_key)
+    except Exception:  # noqa: BLE001 - Convert dependency failures to cleanup intent.
+        _queue_orphaned_object_best_effort(database_url, object_key)
