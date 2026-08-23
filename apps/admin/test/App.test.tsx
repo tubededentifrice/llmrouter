@@ -22,7 +22,6 @@ import {
   StateMessage,
   type AppProps,
 } from "../src/App.js";
-import { scheduleFrameStart } from "../src/embedProtocol.js";
 import { recoverAfterMutationFailure } from "../src/mutationRecovery.js";
 import { ServiceManagement } from "../src/ServiceManagement.js";
 import {
@@ -328,23 +327,6 @@ describe("administration app states", () => {
     });
     callbacks[1]?.();
     expect(inspect).toHaveBeenCalledOnce();
-  });
-
-  it("does not consume an embed token from a temporary Strict Mode effect", () => {
-    const callbacks: (() => void)[] = [];
-    const start = vi.fn();
-    const cancel = scheduleFrameStart(start, (callback) => {
-      callbacks.push(callback);
-    });
-    cancel();
-    callbacks[0]?.();
-    expect(start).not.toHaveBeenCalled();
-
-    scheduleFrameStart(start, (callback) => {
-      callbacks.push(callback);
-    });
-    callbacks[1]?.();
-    expect(start).toHaveBeenCalledOnce();
   });
 
   it("uses one write-only local administrator control", () => {

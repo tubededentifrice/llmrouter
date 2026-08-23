@@ -168,7 +168,7 @@ def test_local_start_restarts_source_bound_development_services() -> None:
         encoding="utf-8"
     )
     startup = script.index("compose up --detach --remove-orphans")
-    restart = script.index("compose restart admin-dev backend embed-example")
+    restart = script.index("compose restart admin-dev backend")
     readiness = script.index("wait_until_ready", restart)
     assert startup < restart < readiness
 
@@ -518,77 +518,8 @@ def test_live_openrouter_stream_diagnostic_reads_status_before_sse() -> None:
     isolation = main.index("_assert_isolation(")
     paid = main.index("_run_provider_operations(")
     accounting = main.index("_accounting_cost(")
-    embed = main.index("_load_real_embed(")
     scan = main.index("_assert_no_sensitive_artifact(")
-    assert isolation < paid < accounting < embed < scan
-
-
-def test_browser_proof_keeps_live_embed_separate_from_deterministic_admin() -> None:
-    """Keep live embed scope exact and retain deterministic admin assertions."""
-    e2e = (REPOSITORY_ROOT / "scripts/local-development-e2e.py").read_text(
-        encoding="utf-8"
-    )
-    main = e2e[e2e.index("def main(") : e2e.index("def _prove_service_scoped_embed(")]
-    embed = e2e[
-        e2e.index("def _prove_service_scoped_embed(") : e2e.index(
-            "def _prove_global_administration("
-        )
-    ]
-    admin = e2e[
-        e2e.index("def _prove_global_administration(") : e2e.index("class _CdpBrowser:")
-    ]
-
-    assert "_prove_service_scoped_embed()" in main
-    assert "_prove_global_administration()" in main
-    assert 'headers={"Origin": "http://127.0.0.1:5999"}' in embed
-    assert 'browser.click_button("Switch user")' in embed
-    assert "excluded_id=old_frame" in embed
-    assert "deepseek/deepseek-v4-flash" not in embed
-    assert "Primary" not in embed
-    assert "Fallback 1" not in embed
-    assert "deepseek/deepseek-v4-flash" in admin
-    assert "Primary" in admin
-    assert "Fallback 1" in admin
-
-
-def test_live_openrouter_loads_only_required_service_embed(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Invoke the embed proof and do not invoke deterministic global admin."""
-    module = _live_module()
-    calls: list[str] = []
-    monkeypatch.setattr(
-        module.runpy,
-        "run_path",
-        lambda *_args: {
-            "_prove_service_scoped_embed": lambda: calls.append("embed"),
-            "_prove_global_administration": lambda: calls.append("admin"),
-        },
-    )
-
-    module._load_real_embed()  # noqa: SLF001
-
-    assert calls == ["embed"]
-
-
-def test_live_openrouter_does_not_bypass_failed_service_embed(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Stop the live proof when the required embed proof fails."""
-    module = _live_module()
-
-    def fail() -> None:
-        message = "private browser detail"
-        raise AssertionError(message)
-
-    monkeypatch.setattr(
-        module.runpy,
-        "run_path",
-        lambda *_args: {"_prove_service_scoped_embed": fail},
-    )
-
-    with pytest.raises(module.LiveProofError, match="embed did not load"):
-        module._load_real_embed()  # noqa: SLF001
+    assert isolation < paid < accounting < scan
 
 
 def test_live_openrouter_stream_diagnostic_makes_one_successful_attempt(

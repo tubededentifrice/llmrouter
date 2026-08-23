@@ -9,19 +9,17 @@
     "npm": "11.18.0"
   },
   "workspaces": [
-    "apps/*",
-    "packages/typescript-*"
+    "apps/admin"
   ],
   "scripts": {
     "build": "npm run build:shared-ui && npm run build --workspaces --if-present",
-    "format": "prettier --write apps packages/typescript-* eslint.config.mjs package.json tsconfig.json tsconfig.base.json scripts/check-react-doctor.mjs scripts/tests/fixtures/dependency-policy-invalid/package.json scripts/tests/fixtures/react-doctor-invalid.json",
-    "format:check": "prettier --check apps packages/typescript-* eslint.config.mjs package.json tsconfig.json tsconfig.base.json scripts/check-react-doctor.mjs scripts/tests/fixtures/dependency-policy-invalid/package.json scripts/tests/fixtures/react-doctor-invalid.json",
+    "format": "prettier --write apps/admin eslint.config.mjs package.json tsconfig.json tsconfig.base.json scripts/check-react-doctor.mjs scripts/tests/fixtures/dependency-policy-invalid/package.json scripts/tests/fixtures/react-doctor-invalid.json",
+    "format:check": "prettier --check apps/admin eslint.config.mjs package.json tsconfig.json tsconfig.base.json scripts/check-react-doctor.mjs scripts/tests/fixtures/dependency-policy-invalid/package.json scripts/tests/fixtures/react-doctor-invalid.json",
     "lint": "eslint . --max-warnings 0",
     "typecheck": "npm run build:shared-ui && tsc --build",
     "test": "npm run build:shared-ui && vitest run",
     "security": "npm audit --audit-level=high",
     "react-doctor": "react-doctor apps/admin --json --json-compact --fail-on warning",
-    "react-doctor:embed-example": "react-doctor apps/embed-example --json --json-compact --fail-on warning",
     "build:shared-ui": "node --input-type=module -e \"import('node:fs').then(({existsSync}) => import(existsSync('../opendle-ui/scripts/build-consumer.mjs') ? '../opendle-ui/scripts/build-consumer.mjs' : '@opendle/ui/scripts/build-consumer.mjs'))\""
   },
   "devDependencies": {

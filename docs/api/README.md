@@ -40,6 +40,6 @@ The other normative files are:
 - `errors.md` for the stable error names.
 - `contract-policy.yaml` for operation access and conformance fixtures.
 
-`contract-digests.json` and the client generated-model files are generated from
-this contract. Run `./scripts/check-api-contracts.sh` to validate the contract,
-fixtures, digests, and generated models.
+`contract-digests.json` is generated from this contract. Run
+`./scripts/check-api-contracts.sh` to validate the contract, fixtures, and
+digests.

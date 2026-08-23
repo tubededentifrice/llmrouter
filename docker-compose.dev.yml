@@ -26,7 +26,6 @@ x-node-service: &node-service
     - ../opendle-ui:/opendle-ui
     - llmrouter-node-modules:/workspace/node_modules
     - llmrouter-admin-node-modules:/workspace/apps/admin/node_modules
-    - llmrouter-embed-node-modules:/workspace/apps/embed-example/node_modules
 
 services:
   postgres:
@@ -92,7 +91,7 @@ services:
         - CMD
         - python
         - -c
-        - "import os,time; path='/local-state/example-host-token'; assert os.path.getsize(path) > 0 and time.time() - os.path.getmtime(path) < 270"
+        - "import os,time; path='/local-state/data-plane-token'; assert os.path.getsize(path) > 0 and time.time() - os.path.getmtime(path) < 270"
       interval: 2s
       timeout: 2s
       start_period: 5s
@@ -186,7 +185,6 @@ services:
       - npm run dev --workspace @llmrouter/admin -- --host 0.0.0.0
     ports:
       - "127.0.0.1:5174:5173"
-      - "127.0.0.1:5175:5173"
     networks:
       - default
       - traefik-proxy
@@ -207,43 +205,11 @@ services:
       start_period: 10s
       retries: 30
 
-  embed-example:
-    <<: *node-service
-    restart: unless-stopped
-    depends_on:
-      admin-dev:
-        condition: service_healthy
-      token-worker:
-        condition: service_healthy
-    environment:
-      LLMROUTER_EXAMPLE_HOST_TOKEN_FILE: /run/secrets/example_host_token
-      LLMROUTER_EXAMPLE_ROUTER_API_ORIGIN: http://backend:8000
-      LLMROUTER_EXAMPLE_ROUTER_ORIGIN: http://127.0.0.1:5175
-      LLMROUTER_EXAMPLE_SERVICE_ID: 0198a080-0000-7000-8000-000000000101
-      LLMROUTER_EXAMPLE_WORKSPACE_ID: 0198a080-0000-7000-8000-000000000102
-      LLMROUTER_EXAMPLE_SECOND_WORKSPACE_ID: 0198a080-0000-7000-8000-000000000103
-    secrets:
-      - example_host_token
-    command:
-      - /bin/sh
-      - -euc
-      - npm run dev --workspace @llmrouter/embed-example -- --host 0.0.0.0
-    ports:
-      - "127.0.0.1:5176:5176"
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:5176/"]
-      interval: 3s
-      timeout: 3s
-      start_period: 10s
-      retries: 30
-
 secrets:
   postgres_password:
     file: .local-development/postgres-password
   machine_digest_key:
     file: .local-development/machine-digest-key
-  example_host_token:
-    file: .local-development/example-host-token
   credential_wrapping_key:
     file: .local-development/credential-wrapping-key
   idempotency_digest_key:
@@ -271,7 +237,6 @@ networks:
 
 volumes:
   llmrouter-admin-node-modules:
-  llmrouter-embed-node-modules:
   llmrouter-node-modules:
   llmrouter-postgres-data:
   llmrouter-python-environment:

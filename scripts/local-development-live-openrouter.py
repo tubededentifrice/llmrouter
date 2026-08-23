@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import json
 import os
-import runpy
 import secrets
 import shutil
 import stat
@@ -23,7 +22,7 @@ import httpx
 import psycopg
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Sequence
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 STATE_DIRECTORY = REPOSITORY_ROOT / ".local-development"
@@ -201,7 +200,6 @@ def main(arguments: Sequence[str] = ()) -> None:  # noqa: C901
         if cost < 0 or cost > MAXIMUM_TOTAL_COST:
             _fail("The bounded live accounting cost is outside the safe limit.")
         _assert_safe_missing_status(data_token, challenge)
-        _load_real_embed()
         _assert_no_sensitive_artifact(
             key.encode(),
             challenge.encode(),
@@ -314,7 +312,7 @@ def _provider_preflight(key: str, model_profile: LiveModel) -> dict[str, Decimal
         try:
             if Decimal(str(remaining)) < estimated:
                 _fail("The OpenRouter key limit cannot cover the bounded proof.")
-        except (InvalidOperation, ValueError):
+        except InvalidOperation, ValueError:
             _fail("The OpenRouter key limit metadata is invalid.")
     return prices
 
@@ -703,7 +701,7 @@ def _accounting_cost(
         _fail("The live accounting counts are not exact.")
     try:
         return Decimal(str(document["cost"]))
-    except (InvalidOperation, KeyError):
+    except InvalidOperation, KeyError:
         _fail("The live accounting cost is invalid.")
 
 
@@ -897,17 +895,6 @@ def _assert_safe_missing_status(token: str, challenge: str) -> None:
     )
     if response.status_code != 404 or challenge in response.text:
         _fail("The missing-request error was not safe.")
-
-
-def _load_real_embed() -> None:
-    namespace = runpy.run_path(
-        str(REPOSITORY_ROOT / "scripts/local-development-e2e.py")
-    )
-    proof = cast("Callable[[], None]", namespace["_prove_service_scoped_embed"])
-    try:
-        proof()
-    except Exception:  # noqa: BLE001
-        _fail("The real service administration embed did not load.")
 
 
 def _assert_no_sensitive_artifact(*sensitive_values: bytes) -> None:

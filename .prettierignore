@@ -4,5 +4,3 @@ dist/
 node_modules/
 uv.lock
 package-lock.json
-packages/typescript-browser-client/src/generated-models.ts
-packages/typescript-server-client/src/generated-models.ts

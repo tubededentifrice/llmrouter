@@ -32,7 +32,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ["apps/{admin,embed-example}/**/*.{ts,tsx}"],
+    files: ["apps/admin/**/*.{ts,tsx}"],
     plugins: { "react-hooks": reactHooks, "react-refresh": reactRefresh },
     rules: {
       ...reactHooks.configs.recommended.rules,

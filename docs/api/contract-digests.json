@@ -2,7 +2,7 @@
   "artifacts": [
     {
       "path": "docs/api/README.md",
-      "sha256": "f9f2f21fc90605c31125758638f9203933aaf00e437d628c329e44617d469b87"
+      "sha256": "79715b9458af40c16c573c7f363728b2bb6ec3457e85b526ae739dcbca2e0983"
     },
     {
       "path": "docs/api/errors.md",
@@ -137,7 +137,7 @@
     "WorkspacePage": "d2b54ed08f1bac1947006c1b4d9f1e31f89d28507f55381ebeb7c90b3ee0b26f"
   },
   "contract_set": "llmrouter-v1",
-  "generator_version": 2,
+  "generator_version": 3,
   "source_sha256": "ecfc50cb2429e7ff2c32fe791d1ab7d3ce6097a916e2606470fc11773c363adb",
   "version": "1.0.0"
 }

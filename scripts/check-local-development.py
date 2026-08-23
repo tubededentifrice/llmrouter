@@ -17,8 +17,6 @@ EXPECTED_PORT_BINDINGS = {
     "127.0.0.1:5434:5432",
     "127.0.0.1:8010:8000",
     "127.0.0.1:5174:5173",
-    "127.0.0.1:5175:5173",
-    "127.0.0.1:5176:5176",
 }
 
 
@@ -32,7 +30,6 @@ def main() -> None:
         "backend",
         "node-dependencies",
         "admin-dev",
-        "embed-example",
     }
     missing = sorted(name for name in required if f"\n  {name}:\n" not in text)
     if missing:

@@ -1,4 +1,4 @@
-"""Create deterministic local identities and a short-lived example token."""
+"""Create deterministic local identities and refresh local model authority."""
 # ruff: noqa: EM101, EM102, INP001, PLR2004, TRY003
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ STATE_DIRECTORY = Path("/local-state")
 
 
 def main() -> None:
-    """Seed stable scopes and refresh the example host token."""
+    """Seed stable scopes and refresh local model authority."""
     database_url = _required_environment("LLMROUTER_DATABASE_URL")
     digest_key = _secret_bytes(Path("/run/secrets/machine_digest_key"))
     current = datetime.now(UTC)
@@ -82,10 +82,8 @@ def main() -> None:
             _administrator_context(current),
             SERVICE_ID,
             BootstrapScope(
-                audiences=frozenset({Audience.HOST_BACKEND, Audience.DATA_PLANE}),
-                operations=frozenset(
-                    {"admin_embed.create", "model.create", "model.read", "model.cancel"}
-                ),
+                audiences=frozenset({Audience.DATA_PLANE}),
+                operations=frozenset({"model.create", "model.read", "model.cancel"}),
                 workspace_limit=WorkspaceLimit.EXPLICIT_ONLY,
             ),
             now=current,
@@ -95,16 +93,6 @@ def main() -> None:
         raise SystemExit(
             "The local bootstrap secret is unavailable. Run the reset command."
         )
-    token = machine.exchange(
-        request_id="local-example-token",
-        service_id=SERVICE_ID,
-        bootstrap_secret=_read_secret(bootstrap_path),
-        audience=Audience.HOST_BACKEND,
-        operations=frozenset({"admin_embed.create"}),
-        workspace_ids=frozenset(WORKSPACE_IDS),
-        now=current,
-    )
-    _write_secret(STATE_DIRECTORY / "example-host-token", token.access_token.value)
     data_token = machine.exchange(
         request_id="local-data-plane-token",
         service_id=SERVICE_ID,

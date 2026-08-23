@@ -1,9 +1,4 @@
 {
   "files": [],
-  "references": [
-    { "path": "apps/admin" },
-    { "path": "apps/embed-example" },
-    { "path": "packages/typescript-server-client" },
-    { "path": "packages/typescript-browser-client" }
-  ]
+  "references": [{ "path": "apps/admin" }]
 }

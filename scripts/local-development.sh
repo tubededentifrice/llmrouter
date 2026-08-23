@@ -85,7 +85,6 @@ prepare_secrets() {
   install_secret "${state_directory}/administrator-encryption-key" 32
   install_secret "${state_directory}/pocket-id-client-id" 0 400
   install_secret "${state_directory}/pocket-id-client-secret" 0 400
-  install_secret "${state_directory}/example-host-token" 0
   install_secret "${state_directory}/data-plane-token" 0
 }
 
@@ -126,12 +125,9 @@ wait_until_ready() {
     if curl --fail --silent --show-error --max-time 2 \
       http://127.0.0.1:8010/ready >/dev/null 2>&1 &&
       curl --fail --silent --show-error --max-time 2 \
-        http://127.0.0.1:5174/ >/dev/null 2>&1 &&
-      curl --fail --silent --show-error --max-time 2 \
-        http://127.0.0.1:5176/ >/dev/null 2>&1; then
+        http://127.0.0.1:5174/ >/dev/null 2>&1; then
       echo "The LLM Router localhost foundation is available."
       echo "Administration: http://127.0.0.1:5174"
-      echo "Embed example: http://127.0.0.1:5176"
       echo "Runtime components: http://127.0.0.1:8010/ready"
       echo "Deterministic proof: ./scripts/local-development.sh e2e"
       return
@@ -157,7 +153,7 @@ main() {
         cleanup_new_deployment=1
       fi
       compose up --detach --remove-orphans
-      compose restart admin-dev backend embed-example >/dev/null
+      compose restart admin-dev backend >/dev/null
       wait_until_ready
       cleanup_new_deployment=0
       trap - EXIT
