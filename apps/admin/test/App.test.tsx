@@ -452,6 +452,7 @@ describe("administration app states", () => {
             safe_detail: {
               resource_type: "service",
               resource_id: "service-one",
+              reason: "private operator reason",
             },
           },
         ],
@@ -461,6 +462,9 @@ describe("administration app states", () => {
       await Promise.resolve();
     });
     expect(renderedText(renderer.root)).toContain("service manage");
+    expect(renderedText(renderer.root)).not.toContain(
+      "private operator reason",
+    );
     expect(renderedText(renderer.root)).toContain("Load next page");
     const next = renderer.root
       .findAllByType("button")

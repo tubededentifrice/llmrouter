@@ -68,12 +68,13 @@ def _context(
     )
 
 
-def _insert_event(
+def _insert_event(  # noqa: PLR0913
     connection: psycopg.Connection[tuple[object, ...]],
     identity: uuid.UUID,
     occurred_at: datetime,
     *,
     actor_id: str = "administrator-1",
+    action: str = "service.manage",
     safe_details: dict[str, object] | None = None,
 ) -> None:
     connection.execute(
@@ -84,7 +85,7 @@ def _insert_event(
             safe_details, occurred_at
         ) VALUES (
             %s, 'global_administration', 'administrator', %s,
-            'global_administrator', %s, %s, 'service.manage', 'permitted',
+            'global_administrator', %s, %s, %s, 'permitted',
             %s::jsonb, %s
         )
         """,
@@ -93,6 +94,7 @@ def _insert_event(
             actor_id,
             SERVICE_ID,
             WORKSPACE_ID,
+            action,
             json.dumps(safe_details or {}),
             occurred_at,
         ),
@@ -129,7 +131,8 @@ def test_audit_pages_are_stable_bounded_and_exclude_late_commits(
 
     with psycopg.connect(database_url, autocommit=True) as connection:
         _insert_event(connection, uuid.UUID(int=2_001), NOW - timedelta(seconds=100))
-    second, next_cursor = repository.list_events(
+    restarted_repository = PostgresAuditRepository(database_url, cursor_key=CURSOR_KEY)
+    second, next_cursor = restarted_repository.list_events(
         _context(),
         start=NOW - timedelta(days=1),
         end=NOW + timedelta(days=1),
@@ -258,6 +261,7 @@ def test_audit_discovery_returns_only_closed_redacted_detail(database_url: str) 
             uuid.UUID(int=4_000),
             NOW,
             actor_id="Bearer private-actor-token",
+            action="private.prompt",
             safe_details={
                 "resource_type": "service",
                 "resource_id": SERVICE_ID,
@@ -290,7 +294,7 @@ def test_audit_discovery_returns_only_closed_redacted_detail(database_url: str) 
                     hashlib.sha256,
                 ).hex()[:16]
             ),
-            "action": "service.manage",
+            "action": "unknown",
             "outcome": "permitted",
             "scope": {
                 "authority_class": "global_administrator",
@@ -308,3 +312,34 @@ def test_audit_discovery_returns_only_closed_redacted_detail(database_url: str) 
     assert "private" not in serialized
     assert "prompt" not in serialized
     assert "provider_error" not in serialized
+
+
+def test_audit_discovery_records_each_permitted_read(database_url: str) -> None:
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        migrate(connection)
+
+    repository = PostgresAuditRepository(database_url, cursor_key=CURSOR_KEY)
+    items, cursor = repository.list_events(
+        _context(), start=NOW - timedelta(seconds=1), end=NOW + timedelta(seconds=1)
+    )
+
+    assert items == ()
+    assert cursor is None
+    with psycopg.connect(database_url) as connection:
+        audit = connection.execute(
+            """
+            SELECT actor_kind, actor_id, authority_class, action,
+                   permission_result, safe_details, occurred_at
+            FROM router.audit_events
+            WHERE action = 'audit.read'
+            """
+        ).fetchone()
+    assert audit == (
+        "administrator",
+        "administrator-1",
+        "global_administrator",
+        "audit.read",
+        "permitted",
+        {},
+        NOW,
+    )

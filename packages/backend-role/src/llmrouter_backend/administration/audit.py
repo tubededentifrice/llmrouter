@@ -17,6 +17,7 @@ from psycopg.rows import dict_row
 
 from llmrouter_backend.admin_auth import AdministratorAuthError
 from llmrouter_backend.authority import (
+    ADMINISTRATOR_OPERATIONS,
     AuthorityClass,
     AuthorityPath,
     PrincipalKind,
@@ -34,7 +35,57 @@ _MAX_UNSIGNED = (1 << 64) - 1
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 _ACTOR_PSEUDONYM_DOMAIN = b"llmrouter-audit-actor-v1\0"
 _SAFE_NAME = re.compile(r"^[a-z][a-z0-9_.:-]{0,99}$")
-_SAFE_ACTION = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
+_SAFE_ACTIONS = ADMINISTRATOR_OPERATIONS | frozenset(
+    {
+        "administrator.grant.create",
+        "administrator.grant.list",
+        "administrator.grant.revoke",
+        "administrator.session.complete",
+        "administrator.session.invalidate",
+        "administrator.session.logout",
+        "administrator.session.start",
+        "administrator.trusted_grant.create",
+        "administrator.trusted_grant.failure",
+        "administrator.trusted_grant.redeem",
+        "administrator.trusted_grant.success",
+        "budget_ceiling.write",
+        "capture_policy.write",
+        "captured_content.discover",
+        "captured_content.read",
+        "configuration.publish",
+        "configuration.rollback",
+        "credential.create",
+        "credential.disable",
+        "credential.retire",
+        "credential.revoke",
+        "credential.rotate",
+        "credential.tls_identity",
+        "credential.tls_policy",
+        "credential.tls_revoke",
+        "credential.wrapping_key.rotate",
+        "diagnostic.grant.create",
+        "diagnostic.route.use",
+        "embed_session.bootstrap",
+        "embed_session.create",
+        "embed_session.revoke",
+        "export.location.issue",
+        "export.location.redeem",
+        "export.status.read",
+        "price.publish",
+        "price.synchronize",
+        "retention_limits.write",
+        "service.create",
+        "service.disable",
+        "service.metadata",
+        "service.parent",
+        "service.restore",
+        "service.retire",
+        "workspace.create",
+        "workspace.disable",
+        "workspace.restore",
+        "workspace.retire",
+    }
+)
 _SAFE_RESOURCE_TYPES = frozenset(
     {
         "budget_limit",
@@ -131,6 +182,7 @@ class PostgresAuditRepository:
             else _decode_cursor(self._cursor_key, cursor, start, end)
         )
         with psycopg.connect(self._database_url, row_factory=dict_row) as connection:
+            _record_read(connection, context)
             if parsed is None:
                 snapshot = connection.execute(
                     "SELECT pg_current_snapshot()::text AS value"
@@ -424,7 +476,28 @@ def _safe_name(value: str, fallback: str) -> str:
 
 
 def _safe_action(value: str) -> str:
-    return value if len(value) <= 100 and _SAFE_ACTION.fullmatch(value) else "unknown"
+    return value if value in _SAFE_ACTIONS else "unknown"
+
+
+def _record_read(connection: psycopg.Connection[Any], context: RequestContext) -> None:
+    """Append the permitted global audit read before its stable snapshot."""
+    connection.execute(
+        """
+        INSERT INTO router.audit_events (
+            event_id, audit_class, actor_kind, actor_id, authority_class,
+            action, permission_result, safe_details, occurred_at
+        ) VALUES (
+            %s, 'global_administration', %s, %s, 'global_administrator',
+            'audit.read', 'permitted', '{}'::jsonb, %s
+        )
+        """,
+        (
+            uuid.uuid4(),
+            context.actor_kind.value,
+            context.actor_id,
+            context.authorized_at,
+        ),
+    )
 
 
 def _canonical_uuid(value: str) -> bool:

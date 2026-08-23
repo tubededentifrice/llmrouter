@@ -2343,7 +2343,11 @@ function auditLabel(value: string): string {
 }
 
 function AuditEventCard({ value }: { readonly value: AuditEvent }) {
-  const details = Object.entries(value.safe_detail ?? {});
+  const details = [
+    ["Resource type", value.safe_detail?.resource_type],
+    ["Resource ID", value.safe_detail?.resource_id],
+    ["Safe error code", value.safe_detail?.safe_error_code],
+  ] as const;
   return (
     <li className="audit-event-card">
       <div className="audit-event-heading">
@@ -2376,12 +2380,14 @@ function AuditEventCard({ value }: { readonly value: AuditEvent }) {
           <dt>Event ID</dt>
           <dd>{value.event_id}</dd>
         </div>
-        {details.map(([name, detail]) => (
-          <div key={name}>
-            <dt>{auditLabel(name)}</dt>
-            <dd>{detail}</dd>
-          </div>
-        ))}
+        {details.map(([name, detail]) =>
+          detail === undefined ? null : (
+            <div key={name}>
+              <dt>{name}</dt>
+              <dd>{detail}</dd>
+            </div>
+          ),
+        )}
       </dl>
     </li>
   );
