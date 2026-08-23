@@ -122,13 +122,21 @@ export type RequestAccounting = { readonly estimated: NonNegativeDecimal; readon
 
 export type Money = { readonly amount: NonNegativeDecimal; readonly currency: string; };
 
+export type SignedMoney = { readonly amount: Decimal; readonly currency: string; };
+
 export type PutBudgetCeiling = { readonly amount: NonNegativeDecimal; readonly currency: string; readonly expected_revision: OpaqueId | null; readonly reason: string; };
 
 export type BudgetCeiling = { readonly service_id: OpaqueId; readonly workspace_id: OpaqueId; readonly amount: NonNegativeDecimal; readonly currency: string; readonly revision: OpaqueId; readonly effective_at: Timestamp; readonly operation_id: OpaqueId; };
 
-export type PutBudgetLimit = { readonly scope: "service" | "workspace" | "assignment"; readonly workspace_id?: OpaqueId; readonly assignment?: AssignmentName; readonly hard_limit: Money; readonly warning_threshold: Money; readonly reset_period: "none" | "daily" | "monthly"; readonly expected_revision: OpaqueId; };
+export type PutBudgetLimit = { readonly scope: "service" | "workspace" | "assignment"; readonly workspace_id?: OpaqueId; readonly assignment?: AssignmentName; readonly hard_limit: Money; readonly warning_threshold: Money; readonly reset_period: "none" | "daily" | "monthly"; readonly expected_revision: BudgetRevision; };
 
-export type BudgetSummary = { readonly scope: string; readonly limit: Money; readonly host_ceiling?: Money; readonly reserved: Money; readonly used: Money; readonly corrected: Money; readonly remaining: Money; readonly enforcement_state: "available" | "warning" | "exhausted" | "allowance_unavailable"; readonly revision: OpaqueId; };
+export type PutSelectedBudgetLimit = { readonly hard_limit: NonNegativeDecimal; readonly currency: string; readonly warning_threshold?: NonNegativeDecimal | null; readonly reset_period: "none" | "daily" | "monthly"; readonly expected_revision: BudgetRevision; };
+
+export type BudgetRevision = string;
+
+export type BudgetSummary = { readonly scope: "service" | "workspace" | "assignment"; readonly limit: Money; readonly warning_threshold?: Money | null; readonly host_ceiling?: Money; readonly reserved: Money; readonly used: Money; readonly corrected: SignedMoney; readonly remaining: Money; readonly enforcement_state: "available" | "warning" | "exhausted" | "allowance_unavailable"; readonly reset_period: "none" | "daily" | "monthly"; readonly revision: BudgetRevision; };
+
+export type BudgetLimitWriteResult = { readonly scope: "service" | "workspace"; readonly limit: Money; readonly warning_threshold: Money | null; readonly reset_period: "none" | "daily" | "monthly"; readonly revision: BudgetRevision; readonly effective_at: Timestamp; };
 
 export type PutAssignment = { readonly expected_revision: OpaqueId; readonly state: "active" | "disabled" | "retired"; readonly candidates: ReadonlyArray<{ readonly provider_model_route_id: OpaqueId; readonly attempt_timeout_ms?: number; }>; };
 
@@ -181,6 +189,10 @@ export type PriceSynchronization = { readonly operation_id: OpaqueId; readonly s
 export type RevisionWrite = { readonly expected_active_revision: OpaqueId; readonly reason: string; };
 
 export type ConfigurationDocument = { readonly stable_id: OpaqueId; readonly display_name: string; readonly state: "active" | "disabled" | "retired"; readonly expected_revision: OpaqueId | null; readonly settings: RegisteredDocument; };
+
+export type CatalogEntry = { readonly stable_id: OpaqueId; readonly kind: "provider" | "model"; readonly display_name: string; readonly capabilities: ReadonlyArray<string>; readonly state: "active" | "disabled" | "retired"; readonly settings: RegisteredDocument | null; readonly active_revision: OpaqueId; };
+
+export type CatalogPage = { readonly items: ReadonlyArray<CatalogEntry>; readonly next_cursor: string | null; readonly configuration_revision: OpaqueId | null; };
 
 export type ConfigurationWriteResult = { readonly resource_id: OpaqueId; readonly active_revision: OpaqueId; readonly distribution_state: "distributing" | "current" | "degraded"; readonly operation_id: OpaqueId; };
 
@@ -1897,11 +1909,63 @@ export const contractSchemas = {
     ],
     "type": "object"
   },
+  "BudgetLimitWriteResult": {
+    "additionalProperties": false,
+    "properties": {
+      "effective_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "limit": {
+        "$ref": "#/components/schemas/Money"
+      },
+      "reset_period": {
+        "enum": [
+          "none",
+          "daily",
+          "monthly"
+        ],
+        "type": "string"
+      },
+      "revision": {
+        "$ref": "#/components/schemas/BudgetRevision"
+      },
+      "scope": {
+        "enum": [
+          "service",
+          "workspace"
+        ],
+        "type": "string"
+      },
+      "warning_threshold": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/Money"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "scope",
+      "limit",
+      "warning_threshold",
+      "reset_period",
+      "revision",
+      "effective_at"
+    ],
+    "type": "object"
+  },
+  "BudgetRevision": {
+    "pattern": "^(0|[1-9][0-9]*)$",
+    "type": "string"
+  },
   "BudgetSummary": {
     "additionalProperties": false,
     "properties": {
       "corrected": {
-        "$ref": "#/components/schemas/Money"
+        "$ref": "#/components/schemas/SignedMoney"
       },
       "enforcement_state": {
         "enum": [
@@ -1924,14 +1988,37 @@ export const contractSchemas = {
       "reserved": {
         "$ref": "#/components/schemas/Money"
       },
+      "reset_period": {
+        "enum": [
+          "none",
+          "daily",
+          "monthly"
+        ],
+        "type": "string"
+      },
       "revision": {
-        "$ref": "#/components/schemas/OpaqueId"
+        "$ref": "#/components/schemas/BudgetRevision"
       },
       "scope": {
+        "enum": [
+          "service",
+          "workspace",
+          "assignment"
+        ],
         "type": "string"
       },
       "used": {
         "$ref": "#/components/schemas/Money"
+      },
+      "warning_threshold": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/Money"
+          },
+          {
+            "type": "null"
+          }
+        ]
       }
     },
     "required": [
@@ -1942,6 +2029,7 @@ export const contractSchemas = {
       "corrected",
       "remaining",
       "enforcement_state",
+      "reset_period",
       "revision"
     ],
     "type": "object"
@@ -2339,6 +2427,99 @@ export const contractSchemas = {
     },
     "required": [
       "items"
+    ],
+    "type": "object"
+  },
+  "CatalogEntry": {
+    "additionalProperties": false,
+    "properties": {
+      "active_revision": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "capabilities": {
+        "items": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 32,
+        "type": "array"
+      },
+      "display_name": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      },
+      "kind": {
+        "enum": [
+          "provider",
+          "model"
+        ],
+        "type": "string"
+      },
+      "settings": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/RegisteredDocument"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "stable_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "state": {
+        "enum": [
+          "active",
+          "disabled",
+          "retired"
+        ],
+        "type": "string"
+      }
+    },
+    "required": [
+      "stable_id",
+      "kind",
+      "display_name",
+      "capabilities",
+      "state",
+      "settings",
+      "active_revision"
+    ],
+    "type": "object"
+  },
+  "CatalogPage": {
+    "additionalProperties": false,
+    "properties": {
+      "configuration_revision": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "items": {
+        "items": {
+          "$ref": "#/components/schemas/CatalogEntry"
+        },
+        "type": "array"
+      },
+      "next_cursor": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "items",
+      "next_cursor",
+      "configuration_revision"
     ],
     "type": "object"
   },
@@ -5883,7 +6064,7 @@ export const contractSchemas = {
         "$ref": "#/components/schemas/AssignmentName"
       },
       "expected_revision": {
-        "$ref": "#/components/schemas/OpaqueId"
+        "$ref": "#/components/schemas/BudgetRevision"
       },
       "hard_limit": {
         "$ref": "#/components/schemas/Money"
@@ -6173,6 +6354,46 @@ export const contractSchemas = {
       "expected_revision",
       "values",
       "confirmed_preview_id"
+    ],
+    "type": "object"
+  },
+  "PutSelectedBudgetLimit": {
+    "additionalProperties": false,
+    "properties": {
+      "currency": {
+        "pattern": "^[A-Z]{3}$",
+        "type": "string"
+      },
+      "expected_revision": {
+        "$ref": "#/components/schemas/BudgetRevision"
+      },
+      "hard_limit": {
+        "$ref": "#/components/schemas/NonNegativeDecimal"
+      },
+      "reset_period": {
+        "enum": [
+          "none",
+          "daily",
+          "monthly"
+        ],
+        "type": "string"
+      },
+      "warning_threshold": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/NonNegativeDecimal"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "hard_limit",
+      "currency",
+      "reset_period",
+      "expected_revision"
     ],
     "type": "object"
   },
@@ -7135,6 +7356,23 @@ export const contractSchemas = {
       "tool",
       "input",
       "limits"
+    ],
+    "type": "object"
+  },
+  "SignedMoney": {
+    "additionalProperties": false,
+    "properties": {
+      "amount": {
+        "$ref": "#/components/schemas/Decimal"
+      },
+      "currency": {
+        "pattern": "^[A-Z]{3}$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "amount",
+      "currency"
     ],
     "type": "object"
   },

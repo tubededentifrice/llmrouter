@@ -24,6 +24,7 @@ from llmrouter_backend.budgets.model import (
     ReservationResult,
     ReservationState,
     ResetPeriod,
+    SignedMoney,
 )
 from llmrouter_backend.budgets.repository import PostgresBudgetRepository
 
@@ -50,5 +51,6 @@ __all__ = [
     "ReservationResult",
     "ReservationState",
     "ResetPeriod",
+    "SignedMoney",
     "SqliteAllowanceWallet",
 ]

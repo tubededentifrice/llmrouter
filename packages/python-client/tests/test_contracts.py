@@ -9,7 +9,7 @@ from llmrouter_client import ContractValidationError, validate_contract
 from llmrouter_client.generated_models import CONTRACT_SCHEMA_NAMES
 
 ROOT = Path(__file__).parents[3]
-EXPECTED_SCHEMA_COUNT = 146
+EXPECTED_SCHEMA_COUNT = 154
 FIXTURES = {
     "ContractManifest": "contract-manifest.json",
     "ServiceToken": "service-token.json",
@@ -65,6 +65,29 @@ def test_validator_enforces_numeric_and_string_constraints() -> None:
     tool_call["deadline"] = "not-a-time"
     with pytest.raises(ContractValidationError, match="date-time"):
         validate_contract("BusinessToolCall", tool_call)
+
+
+def test_budget_writes_use_one_numeric_revision_contract() -> None:
+    """Both budget write contracts reject opaque nonnumeric revisions."""
+    common = {
+        "hard_limit": {"amount": "100", "currency": "USD"},
+        "warning_threshold": {"amount": "80", "currency": "USD"},
+        "reset_period": "monthly",
+        "expected_revision": "revision-one",
+    }
+    with pytest.raises(ContractValidationError, match="does not match"):
+        validate_contract("PutBudgetLimit", {"scope": "service", **common})
+    with pytest.raises(ContractValidationError, match="does not match"):
+        validate_contract(
+            "PutSelectedBudgetLimit",
+            {
+                "hard_limit": "100",
+                "currency": "USD",
+                "warning_threshold": "80",
+                "reset_period": "monthly",
+                "expected_revision": "revision-one",
+            },
+        )
 
 
 def test_generated_schema_catalog_is_complete() -> None:

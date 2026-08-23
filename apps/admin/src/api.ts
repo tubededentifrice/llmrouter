@@ -68,6 +68,44 @@ export interface RegisteredDocument {
   readonly document: Record<string, unknown>;
 }
 
+export interface CatalogEntry {
+  readonly stable_id: string;
+  readonly kind: "provider" | "model";
+  readonly display_name: string;
+  readonly capabilities: readonly string[];
+  readonly state: "active" | "disabled" | "retired";
+  readonly settings: RegisteredDocument | null;
+  readonly active_revision: string;
+}
+
+export interface Money {
+  readonly amount: string;
+  readonly currency: string;
+}
+
+export interface BudgetSummary {
+  readonly scope: "service" | "workspace";
+  readonly limit: Money;
+  readonly warning_threshold: Money | null;
+  readonly reserved: Money;
+  readonly used: Money;
+  readonly corrected: Money;
+  readonly remaining: Money;
+  readonly enforcement_state:
+    "available" | "warning" | "exhausted" | "allowance_unavailable";
+  readonly reset_period: "none" | "daily" | "monthly";
+  readonly revision: string;
+}
+
+export interface BudgetLimitWriteResult {
+  readonly scope: "service" | "workspace";
+  readonly limit: Money;
+  readonly warning_threshold: Money | null;
+  readonly reset_period: "none" | "daily" | "monthly";
+  readonly revision: string;
+  readonly effective_at: string;
+}
+
 export interface ProviderInstance {
   readonly provider_instance_id: string;
   readonly owner_scope: string;
@@ -163,6 +201,7 @@ export interface AdministrationSnapshot {
   readonly assignments: readonly Assignment[];
   readonly requests: readonly RequestStatus[];
   readonly accounting: AccountingSummary | null;
+  readonly budget: BudgetSummary | null;
   readonly configuration_revision: string | null;
   readonly failures: Readonly<
     Partial<
@@ -173,7 +212,8 @@ export interface AdministrationSnapshot {
         | "routes"
         | "assignments"
         | "requests"
-        | "accounting",
+        | "accounting"
+        | "budget",
         string
       >
     >
@@ -253,6 +293,10 @@ export class AdministrationApiError extends Error {
 export interface AdministrationClient {
   listServices(signal?: AbortSignal): Promise<readonly ServiceSummary[]>;
   listCredentials(signal?: AbortSignal): Promise<readonly Credential[]>;
+  listCatalog(
+    kind: "providers" | "models",
+    signal?: AbortSignal,
+  ): Promise<readonly CatalogEntry[]>;
   createService(input: {
     readonly displayName: string;
     readonly parentServiceId: string | null;
@@ -305,6 +349,16 @@ export interface AdministrationClient {
     name: string,
     input: Record<string, unknown>,
   ): Promise<ConfigurationWriteResult>;
+  putBudget(
+    scope: ScopeSelection,
+    input: {
+      readonly hardLimit: string;
+      readonly currency: string;
+      readonly warningThreshold: string | null;
+      readonly resetPeriod: "none" | "daily" | "monthly";
+      readonly expectedRevision: string;
+    },
+  ): Promise<BudgetLimitWriteResult>;
 }
 
 export interface FetchAdministrationClientOptions {
@@ -712,6 +766,12 @@ export function createFetchAdministrationClient({
       );
     },
 
+    listCatalog(kind, signal) {
+      return allPages<CatalogEntry>(`/v1/admin/catalog/${kind}`, signal).then(
+        (result) => result.items,
+      );
+    },
+
     createService(input) {
       return request<ServiceCreated>(
         "/v1/admin/services",
@@ -772,6 +832,7 @@ export function createFetchAdministrationClient({
         accountingQuery.set("workspace_id", scope.workspaceId);
       }
       const serviceBase = `/v1/admin/services/${encodeURIComponent(scope.serviceId)}`;
+      const budgetPath = servicePath(scope, "budgets", true);
       const results = await Promise.allSettled([
         request<ScopedState>(
           servicePath(scope, "state", true),
@@ -797,6 +858,15 @@ export function createFetchAdministrationClient({
           `${serviceBase}/accounting/summary?${accountingQuery.toString()}`,
           signal === undefined ? {} : { signal },
         ),
+        request<BudgetSummary>(
+          budgetPath,
+          signal === undefined ? {} : { signal },
+        ).catch((error: unknown) => {
+          if (error instanceof AdministrationApiError && error.status === 404) {
+            return null;
+          }
+          throw error;
+        }),
       ] as const);
       const names = [
         "state",
@@ -806,6 +876,7 @@ export function createFetchAdministrationClient({
         "assignments",
         "requests",
         "accounting",
+        "budget",
       ] as const;
       const failures: Partial<Record<(typeof names)[number], string>> = {};
       for (const [index, settled] of results.entries()) {
@@ -841,6 +912,16 @@ export function createFetchAdministrationClient({
         results[5].status === "fulfilled" ? results[5].value.items : [];
       const accounting =
         results[6].status === "fulfilled" ? results[6].value : null;
+      const budget =
+        results[7].status === "fulfilled" ? results[7].value : null;
+      if (
+        state === null &&
+        results[7].status === "fulfilled" &&
+        results[7].value === null
+      ) {
+        failures.budget =
+          "The budget scope is not available because the exact service or workspace did not load.";
+      }
       const configurationRevisions = [
         results[2],
         results[3],
@@ -870,6 +951,7 @@ export function createFetchAdministrationClient({
         assignments,
         requests,
         accounting,
+        budget,
         configuration_revision: configurationRevision,
         failures,
       };
@@ -928,6 +1010,23 @@ export function createFetchAdministrationClient({
       return request<ConfigurationWriteResult>(
         configurationPath(scope, "assignments", name, true),
         { method: "PUT", body: JSON.stringify(input) },
+        true,
+      );
+    },
+
+    putBudget(scope, input) {
+      return request<BudgetLimitWriteResult>(
+        servicePath(scope, "budgets", true),
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            hard_limit: input.hardLimit,
+            currency: input.currency,
+            warning_threshold: input.warningThreshold,
+            reset_period: input.resetPeriod,
+            expected_revision: input.expectedRevision,
+          }),
+        },
         true,
       );
     },

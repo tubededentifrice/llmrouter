@@ -233,9 +233,12 @@ describe("administration API client", () => {
     });
     const result = await client.load(scope);
     expect(result.state?.workspace_id).toBe("workspace-one");
-    expect(paths).toHaveLength(6);
+    expect(paths).toHaveLength(7);
     expect(paths.every((path) => !path.includes("/credentials"))).toBe(true);
     expect(paths.every((path) => path.includes("/v1/admin/"))).toBe(true);
+    expect(paths).toContain(
+      "/v1/admin/services/service-one/budgets?workspace_id=workspace-one",
+    );
     expect(
       paths
         .filter(
@@ -452,6 +455,137 @@ describe("administration API client", () => {
     ]);
   });
 
+  it("loads every named catalog page without exposing a catalog ID control", async () => {
+    const paths: string[] = [];
+    const client = createFetchAdministrationClient({
+      fetcher: vi.fn((input: string | URL | Request) => {
+        const path = requestUrl(input);
+        paths.push(path);
+        return Promise.resolve(
+          json({
+            items: path.includes("cursor=model-one")
+              ? [
+                  {
+                    stable_id: "model-two",
+                    kind: "model",
+                    display_name: "Model two",
+                    capabilities: ["chat.complete"],
+                    state: "active",
+                    settings: null,
+                    active_revision: "revision-1",
+                  },
+                ]
+              : [
+                  {
+                    stable_id: "model-one",
+                    kind: "model",
+                    display_name: "Model one",
+                    capabilities: ["chat.complete"],
+                    state: "active",
+                    settings: null,
+                    active_revision: "revision-1",
+                  },
+                ],
+            next_cursor: path.includes("cursor=model-one") ? null : "model-one",
+            configuration_revision: "revision-1",
+          }),
+        );
+      }),
+    });
+
+    await expect(client.listCatalog("models")).resolves.toHaveLength(2);
+    expect(paths).toEqual([
+      "/v1/admin/catalog/models",
+      "/v1/admin/catalog/models?cursor=model-one",
+    ]);
+  });
+
+  it("rejects catalog pages from different configuration revisions", async () => {
+    const client = createFetchAdministrationClient({
+      fetcher: vi.fn((input: string | URL | Request) => {
+        const path = requestUrl(input);
+        return Promise.resolve(
+          json({
+            items: [],
+            next_cursor: path.includes("cursor=model-one") ? null : "model-one",
+            configuration_revision: path.includes("cursor=model-one")
+              ? "revision-2"
+              : "revision-1",
+          }),
+        );
+      }),
+    });
+
+    await expect(client.listCatalog("models")).rejects.toMatchObject({
+      code: "configuration_revision_conflict",
+      staleRevision: true,
+    });
+  });
+
+  it("treats a missing exact-scope limit as unconfigured", async () => {
+    const client = createFetchAdministrationClient({
+      fetcher: vi.fn((input: string | URL | Request) => {
+        const path = requestUrl(input);
+        if (path.includes("/budgets")) {
+          return Promise.resolve(
+            json({ error: { code: "not_found", message: "Not found." } }, 404),
+          );
+        }
+        if (path.includes("/state")) {
+          return Promise.resolve(
+            json({
+              kind: "service",
+              service_id: "service-one",
+              display_name: "Service one",
+              state: "active",
+              revision: "state-revision-1",
+            }),
+          );
+        }
+        if (path.includes("/accounting/summary")) {
+          return Promise.resolve(json({}, 400));
+        }
+        return Promise.resolve(json({ items: [], next_cursor: null }));
+      }),
+    });
+
+    const result = await client.load({
+      mode: "global",
+      serviceId: "service-one",
+      workspaceId: "",
+    });
+    expect(result.budget).toBeNull();
+    expect(result.failures.budget).toBeUndefined();
+  });
+
+  it("does not treat a missing budget as unconfigured when scope state fails", async () => {
+    const client = createFetchAdministrationClient({
+      fetcher: vi.fn((input: string | URL | Request) => {
+        const path = requestUrl(input);
+        if (path.includes("/budgets")) {
+          return Promise.resolve(
+            json({ error: { code: "not_found", message: "Not found." } }, 404),
+          );
+        }
+        if (path.includes("/state")) {
+          return Promise.resolve(
+            json({ error: { code: "insufficient_scope" } }, 403),
+          );
+        }
+        if (path.includes("/accounting/summary")) {
+          return Promise.resolve(json({}, 400));
+        }
+        return Promise.resolve(json({ items: [], next_cursor: null }));
+      }),
+    });
+
+    const result = await client.load(scope);
+    expect(result.state).toBeNull();
+    expect(result.budget).toBeNull();
+    expect(result.failures.state).toBeDefined();
+    expect(result.failures.budget).toContain("exact service or workspace");
+  });
+
   it("sends protected mutation headers and does not expect a secret response", async () => {
     let received: RequestInit | undefined;
     const fetcher = vi.fn(
@@ -631,8 +765,18 @@ describe("administration API client", () => {
     await client.putProvider(scope, null, {});
     await client.putRoute(scope, null, {});
     await client.putAssignment(scope, "general", {});
+    await client.putBudget(scope, {
+      hardLimit: "25",
+      currency: "USD",
+      warningThreshold: "20",
+      resetPeriod: "monthly",
+      expectedRevision: "3",
+    });
     expect(paths[0]).not.toContain("workspace_id=");
     expect(paths[1]).not.toContain("workspace_id=");
     expect(paths[2]).toContain("workspace_id=workspace-one");
+    expect(paths[3]).toBe(
+      "/v1/admin/services/service-one/budgets?workspace_id=workspace-one",
+    );
   });
 });

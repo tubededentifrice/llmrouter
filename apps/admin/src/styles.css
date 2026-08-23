@@ -395,6 +395,32 @@ td small {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 15px;
 }
+
+.budget-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: var(--od-space-md);
+  margin: 0;
+}
+
+.budget-summary > div {
+  min-width: 0;
+  padding: var(--od-space-md);
+  border: 1px solid var(--od-color-border);
+  border-radius: var(--od-radius-md);
+  background: var(--od-color-surface);
+}
+
+.budget-summary dt {
+  color: var(--od-color-muted);
+  font-size: 0.875rem;
+}
+
+.budget-summary dd {
+  margin: var(--od-space-xs) 0 0;
+  overflow-wrap: anywhere;
+  font-weight: 650;
+}
 .setup-steps {
   display: grid;
   gap: 10px;

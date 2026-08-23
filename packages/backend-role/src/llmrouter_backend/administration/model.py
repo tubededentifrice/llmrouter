@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from llmrouter_backend.accounting import UsageUnit
 from llmrouter_backend.authority import Audience
+from llmrouter_backend.budgets import ResetPeriod
 from llmrouter_backend.configuration import ConfigurationState, PriceAuthorityMode
 from llmrouter_backend.machine_identity import WorkspaceLimit
 
@@ -134,6 +135,18 @@ class AssignmentInput(ClosedAdministrationModel):
         Field(default_factory=list, max_length=32)
     )
     reason: Reason
+
+
+class BudgetLimitInput(ClosedAdministrationModel):
+    """One exact selected-scope budget replacement."""
+
+    hard_limit: Annotated[str, Field(pattern=r"^(0|[1-9][0-9]*)(\.[0-9]+)?$")]
+    currency: Annotated[str, Field(pattern=r"^[A-Z]{3}$")]
+    warning_threshold: (
+        Annotated[str, Field(pattern=r"^(0|[1-9][0-9]*)(\.[0-9]+)?$")] | None
+    ) = None
+    reset_period: ResetPeriod
+    expected_revision: Annotated[str, Field(pattern=r"^(0|[1-9][0-9]*)$")]
 
 
 class ServiceStateDocument(ClosedAdministrationModel):

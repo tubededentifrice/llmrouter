@@ -25,9 +25,20 @@ from llmrouter_backend.authority import (
     RequestContext,
     Scope,
 )
+from llmrouter_backend.budgets import (
+    BudgetLimit,
+    BudgetScopeKind,
+    BudgetTarget,
+    EnforcementSummary,
+    Money,
+    ResetPeriod,
+    SignedMoney,
+)
 from llmrouter_backend.configuration import (
     Assignment,
     AssignmentCandidate,
+    CatalogEntry,
+    CatalogKind,
     ConfigurationScope,
     ConfigurationWriteResult,
     EffectiveConfiguration,
@@ -62,6 +73,7 @@ from llmrouter_backend.machine_identity import (
 
 from .model import (
     AssignmentInput,
+    BudgetLimitInput,
     CredentialChangeInput,
     CredentialCreateInput,
     ProviderInstanceInput,
@@ -236,6 +248,28 @@ class AccountingStore(Protocol):
     ) -> AccountingSummary: ...
 
 
+class BudgetStore(Protocol):
+    """Read and change exact hierarchical budgets."""
+
+    def summary(
+        self, context: RequestContext, target: BudgetTarget, *, now: datetime
+    ) -> EnforcementSummary: ...
+
+    def put_limit(
+        self,
+        context: RequestContext,
+        target: BudgetTarget,
+        *,
+        hard_limit: Decimal,
+        currency: str,
+        warning_threshold: Decimal | None,
+        reset_period: ResetPeriod,
+        expected_revision: str,
+        idempotency_key: str,
+        now: datetime,
+    ) -> BudgetLimit: ...
+
+
 class AdministrationService:
     """Provide the small protected administration workflow for the MVP."""
 
@@ -248,6 +282,7 @@ class AdministrationService:
         lifecycle: LifecycleStore,
         requests: RequestStatusStore,
         accounting: AccountingStore,
+        budgets: BudgetStore | None = None,
         machine: MachineCredentialRepository | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
         identity_factory: Callable[[], uuid.UUID] = uuid.uuid4,
@@ -258,6 +293,7 @@ class AdministrationService:
         self._lifecycle = lifecycle
         self._requests = requests
         self._accounting = accounting
+        self._budgets = budgets
         self._machine = machine
         self._now = now
         self._identity_factory = identity_factory
@@ -527,6 +563,106 @@ class AdministrationService:
             "items": [_credential_document(item) for item in page],
             "next_cursor": next_cursor,
         }
+
+    def list_catalog(
+        self,
+        session_token: str,
+        kind: CatalogKind,
+        *,
+        request_id: str,
+        cursor: str | None,
+        limit: int,
+    ) -> dict[str, object]:
+        """List one bounded named global catalog."""
+        _page_limit(limit)
+        context = self._context(
+            session_token,
+            request_id=request_id,
+            operation="catalog.manage",
+            scope=Scope(),
+        )
+        layer = self._configuration.owned(context, ConfigurationScope())
+        values = (
+            ()
+            if layer is None
+            else tuple(item for item in layer.content.catalog if item.kind is kind)
+        )
+        page, next_cursor = _page(
+            values,
+            cursor=cursor,
+            limit=limit,
+            identity=lambda item: item.stable_id,
+        )
+        return {
+            "items": [_catalog_document(item, layer.revision_id) for item in page],
+            "next_cursor": next_cursor,
+            "configuration_revision": None if layer is None else layer.revision_id,
+        }
+
+    def budget_summary(
+        self,
+        session_token: str,
+        service_id: str,
+        *,
+        request_id: str,
+        workspace_id: str | None,
+    ) -> dict[str, object]:
+        """Read one exact service or workspace budget."""
+        store = self._budget_store()
+        target = _budget_target(service_id, workspace_id)
+        context = self._context(
+            session_token,
+            request_id=request_id,
+            operation="budget.read",
+            scope=Scope(service_id, workspace_id),
+        )
+        return _budget_document(store.summary(context, target, now=self._now()))
+
+    def put_budget(
+        self,
+        session_token: str,
+        csrf_token: str,
+        origin: str,
+        idempotency_key: str,
+        service_id: str,
+        value: BudgetLimitInput,
+        *,
+        request_id: str,
+        workspace_id: str | None,
+    ) -> dict[str, object]:
+        """Replace one exact service or workspace budget."""
+        store = self._budget_store()
+        target = _budget_target(service_id, workspace_id)
+        write_context = self._context(
+            session_token,
+            request_id=request_id,
+            operation="budget.write",
+            scope=Scope(service_id, workspace_id),
+            mutation=True,
+            csrf_token=csrf_token,
+            origin=origin,
+        )
+        result = store.put_limit(
+            write_context,
+            target,
+            hard_limit=Decimal(value.hard_limit),
+            currency=value.currency,
+            warning_threshold=(
+                None
+                if value.warning_threshold is None
+                else Decimal(value.warning_threshold)
+            ),
+            reset_period=value.reset_period,
+            expected_revision=value.expected_revision,
+            idempotency_key=idempotency_key,
+            now=self._now(),
+        )
+        return _budget_limit_document(result)
+
+    def _budget_store(self) -> BudgetStore:
+        if self._budgets is None:
+            raise RuntimeError("The budget repository is unavailable.")
+        return self._budgets
 
     def change_credential(
         self,
@@ -1201,6 +1337,68 @@ def _credential_document(value: CredentialMetadata) -> dict[str, object]:
         "revision": value.revision,
         "created_at": value.created_at.isoformat(),
         "fingerprint": value.fingerprint,
+    }
+
+
+def _catalog_document(value: CatalogEntry, revision: str) -> dict[str, object]:
+    return {
+        "stable_id": value.stable_id,
+        "kind": value.kind.value,
+        "display_name": value.display_name,
+        "capabilities": sorted(value.capabilities),
+        "state": value.state.value,
+        "settings": (
+            None if value.settings is None else _registered_document(value.settings)
+        ),
+        "active_revision": revision,
+    }
+
+
+def _budget_target(service_id: str, workspace_id: str | None) -> BudgetTarget:
+    return BudgetTarget(
+        BudgetScopeKind.WORKSPACE
+        if workspace_id is not None
+        else BudgetScopeKind.SERVICE,
+        service_id=service_id,
+        workspace_id=workspace_id,
+    )
+
+
+def _money_document(value: Money | SignedMoney) -> dict[str, str]:
+    return {"amount": format(value.amount, "f"), "currency": value.currency}
+
+
+def _budget_document(value: EnforcementSummary) -> dict[str, object]:
+    return {
+        "scope": value.scope_kind.value,
+        "limit": _money_document(value.limit),
+        "warning_threshold": (
+            None
+            if value.warning_threshold is None
+            else _money_document(value.warning_threshold)
+        ),
+        "reserved": _money_document(value.reserved),
+        "used": _money_document(value.used),
+        "corrected": _money_document(value.corrected),
+        "remaining": _money_document(value.remaining),
+        "enforcement_state": value.state.value,
+        "reset_period": value.reset_period.value,
+        "revision": value.revision,
+    }
+
+
+def _budget_limit_document(value: BudgetLimit) -> dict[str, object]:
+    return {
+        "scope": value.target.kind.value,
+        "limit": _money_document(value.hard_limit),
+        "warning_threshold": (
+            None
+            if value.warning_threshold is None
+            else _money_document(value.warning_threshold)
+        ),
+        "reset_period": value.reset_period.value,
+        "revision": value.revision,
+        "effective_at": value.effective_at.isoformat(),
     }
 
 

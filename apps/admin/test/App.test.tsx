@@ -2,6 +2,13 @@
 
 import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
+// React Test Renderer supplies a reducer interaction test without a browser DOM.
+import {
+  act,
+  create,
+  type ReactTestInstance,
+  type ReactTestRenderer,
+} from "react-test-renderer";
 import { describe, expect, it, vi } from "vitest";
 import {
   AdministrationDashboard,
@@ -26,6 +33,9 @@ import {
   type ServiceSummary,
 } from "../src/api.js";
 
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
+  true;
+
 const globalScope: ScopeSelection = {
   mode: "global",
   serviceId: "0198a080-0000-7000-8000-000000000001",
@@ -47,6 +57,17 @@ const registeredService: ServiceSummary = {
     operations: ["model.create"],
   },
 };
+const catalogModels = [
+  {
+    stable_id: "deepseek-v4-flash",
+    kind: "model" as const,
+    display_name: "DeepSeek V4 Flash",
+    capabilities: ["chat.complete", "chat.stream"],
+    state: "active" as const,
+    settings: null,
+    active_revision: "catalog-revision-1",
+  },
+];
 const styles = readFileSync(
   new URL("../src/styles.css", import.meta.url),
   "utf8",
@@ -156,6 +177,18 @@ const snapshot: AdministrationSnapshot = {
     cost: "0.0001",
     corrections: "0",
   },
+  budget: {
+    scope: "workspace",
+    limit: { amount: "25", currency: "USD" },
+    warning_threshold: { amount: "20", currency: "USD" },
+    reserved: { amount: "1", currency: "USD" },
+    used: { amount: "4", currency: "USD" },
+    corrected: { amount: "-0.5", currency: "USD" },
+    remaining: { amount: "20.5", currency: "USD" },
+    enforcement_state: "available",
+    reset_period: "monthly",
+    revision: "3",
+  },
   configuration_revision: null,
   failures: {},
 };
@@ -163,6 +196,7 @@ const snapshot: AdministrationSnapshot = {
 const client: AdministrationClient = {
   listServices: vi.fn(),
   listCredentials: vi.fn(),
+  listCatalog: vi.fn(),
   createService: vi.fn(),
   putService: vi.fn(),
   changeService: vi.fn(),
@@ -172,6 +206,7 @@ const client: AdministrationClient = {
   putProvider: vi.fn(),
   putRoute: vi.fn(),
   putAssignment: vi.fn(),
+  putBudget: vi.fn(),
 };
 
 function dashboard(
@@ -183,6 +218,7 @@ function dashboard(
     | "configuration"
     | "assignments"
     | "requests"
+    | "budgets"
     | "accounting",
   scope = serviceLevelScope,
 ): string {
@@ -195,6 +231,7 @@ function dashboard(
       onReload={vi.fn()}
       scope={scope}
       services={[registeredService]}
+      catalogModels={catalogModels}
       snapshot={snapshot}
     />,
   );
@@ -553,20 +590,71 @@ describe("protected administration dashboard", () => {
     expect(assignmentHtml).toContain("Override for this service");
   });
 
-  it("requires a canonical UUID and explicit prices before route publication", () => {
+  it("uses a named supported model and explicit prices before route publication", () => {
     const html = dashboard("configuration");
-    expect(html).toContain("Canonical model UUID");
-    expect(html).toContain(
-      'pattern="[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"',
-    );
-    expect(html).toContain('value="deepseek/deepseek-v4-flash"');
-    expect(html).not.toContain('value="deepseek-v4-flash"');
+    expect(html).toContain("Supported model");
+    expect(html).toContain("DeepSeek V4 Flash");
+    expect(html).not.toContain("Canonical model UUID");
+    expect(html).toContain("Provider model name");
+    expect(html).toContain("deepseek/deepseek-v4-flash");
     expect(
       html.match(/placeholder="Explicit USD price" value=""/g),
     ).toHaveLength(2);
     expect(html).toContain(
       'disabled="" class="od-button od-button-primary" type="submit">Publish route',
     );
+  });
+
+  it("blocks model-route writes when catalog discovery fails", () => {
+    const html = renderToStaticMarkup(
+      <AdministrationDashboard
+        client={client}
+        initialSection="configuration"
+        notice={null}
+        onNotice={vi.fn()}
+        onReload={vi.fn()}
+        scope={serviceLevelScope}
+        services={[registeredService]}
+        catalogModels={catalogModels}
+        globalFailures={{ catalog: "The catalog read failed." }}
+        snapshot={snapshot}
+      />,
+    );
+    expect(html).toContain("Supported models are not available");
+    expect(html).toContain("The catalog read failed.");
+    expect(html).not.toContain("Publish route");
+  });
+
+  it("distinguishes loading and empty supported-model catalogs", () => {
+    const loadingHtml = renderToStaticMarkup(
+      <AdministrationDashboard
+        client={client}
+        initialSection="configuration"
+        notice={null}
+        onNotice={vi.fn()}
+        onReload={vi.fn()}
+        scope={serviceLevelScope}
+        services={[registeredService]}
+        catalogLoading
+        snapshot={snapshot}
+      />,
+    );
+    const emptyHtml = renderToStaticMarkup(
+      <AdministrationDashboard
+        client={client}
+        initialSection="configuration"
+        notice={null}
+        onNotice={vi.fn()}
+        onReload={vi.fn()}
+        scope={serviceLevelScope}
+        services={[registeredService]}
+        snapshot={snapshot}
+      />,
+    );
+    expect(loadingHtml).toContain("Supported models are loading");
+    expect(loadingHtml).not.toContain("Publish route");
+    expect(emptyHtml).toContain("No active supported model is available");
+    expect(emptyHtml).not.toContain("Publish route");
   });
 
   it("uses semantic keyboard controls and a table alternative", () => {
@@ -596,6 +684,153 @@ describe("protected administration dashboard", () => {
     expect(accountingHtml).toContain("Bounded accounting");
     expect(accountingHtml).toContain("0.0001 USD");
     expect(accountingHtml).toContain("input_token");
+  });
+
+  it("shows all exact budget totals and the current revision", () => {
+    const html = dashboard("budgets");
+    expect(html).toContain("Budget summary");
+    expect(html).toContain("Hard limit");
+    expect(html).toContain("25 USD");
+    expect(html).toContain("Warning threshold");
+    expect(html).toContain("Reserved");
+    expect(html).toContain("Used");
+    expect(html).toContain("Corrected");
+    expect(html).toContain("-0.5 USD");
+    expect(html).toContain("Remaining");
+    expect(html).toContain("Enforcement");
+    expect(html).toContain("Reset period");
+    expect(html).toContain("monthly");
+    expect(html).toContain("Revision");
+  });
+
+  /* eslint-disable @typescript-eslint/no-deprecated -- The Director requires this renderer for the reducer interaction regression. */
+  it("resets budget form state when the exact scope changes at one revision", () => {
+    const serviceSnapshot: AdministrationSnapshot = {
+      ...snapshot,
+      state: {
+        kind: "service",
+        service_id: serviceLevelScope.serviceId,
+        display_name: "Test service",
+        state: "active",
+        revision: "service-state-revision",
+      },
+      budget: {
+        scope: "service",
+        limit: { amount: "100", currency: "USD" },
+        warning_threshold: { amount: "80", currency: "USD" },
+        reserved: { amount: "1", currency: "USD" },
+        used: { amount: "4", currency: "USD" },
+        corrected: { amount: "0", currency: "USD" },
+        remaining: { amount: "95", currency: "USD" },
+        enforcement_state: "available",
+        reset_period: "monthly",
+        revision: "7",
+      },
+    };
+    const workspaceSnapshot: AdministrationSnapshot = {
+      ...snapshot,
+      budget: {
+        scope: "workspace",
+        limit: { amount: "20", currency: "EUR" },
+        warning_threshold: { amount: "15", currency: "EUR" },
+        reserved: { amount: "2", currency: "EUR" },
+        used: { amount: "3", currency: "EUR" },
+        corrected: { amount: "0", currency: "EUR" },
+        remaining: { amount: "15", currency: "EUR" },
+        enforcement_state: "available",
+        reset_period: "daily",
+        revision: "7",
+      },
+    };
+    const dashboardProps = {
+      client,
+      initialSection: "budgets" as const,
+      notice: null,
+      onNotice: vi.fn(),
+      onReload: vi.fn(),
+      services: [registeredService],
+    };
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        <AdministrationDashboard
+          {...dashboardProps}
+          scope={serviceLevelScope}
+          snapshot={serviceSnapshot}
+        />,
+      );
+    });
+    const labeledControl = (
+      label: string,
+      elementType: "input" | "select",
+    ): ReactTestInstance => {
+      const labelElement = renderer.root.findAllByType("label").find(
+        (item) =>
+          item.children.some(
+            (child) => typeof child === "string" && child.includes(label),
+          ),
+      );
+      const control = labelElement?.findByType(elementType);
+      if (control === undefined) {
+        throw new Error(`The ${label} control did not render.`);
+      }
+      return control;
+    };
+    const hardLimit = labeledControl("Hard limit", "input");
+    if (hardLimit.props.value !== "100")
+      throw new Error("The service hard limit input did not render.");
+    const changeHardLimit = hardLimit.props.onChange as (event: {
+      readonly currentTarget: { readonly value: string };
+    }) => void;
+    act(() => {
+      changeHardLimit({ currentTarget: { value: "999" } });
+    });
+    expect(labeledControl("Hard limit", "input").props.value).toBe("999");
+
+    act(() => {
+      renderer.update(
+        <AdministrationDashboard
+          {...dashboardProps}
+          scope={globalScope}
+          snapshot={workspaceSnapshot}
+        />,
+      );
+    });
+    expect(labeledControl("Hard limit", "input").props.value).toBe("20");
+    expect(labeledControl("Currency", "input").props.value).toBe("EUR");
+    expect(labeledControl("Warning threshold", "input").props.value).toBe(
+      "15",
+    );
+    expect(labeledControl("Reset period", "select").props.value).toBe("daily");
+    act(() => {
+      renderer.unmount();
+    });
+  });
+  /* eslint-enable @typescript-eslint/no-deprecated */
+
+  it("blocks a budget write when the exact scope state failed", () => {
+    const failedScope = {
+      ...snapshot,
+      state: null,
+      budget: null,
+      failures: { state: "The workspace is not available." },
+    };
+    const html = renderToStaticMarkup(
+      <AdministrationDashboard
+        client={client}
+        initialSection="budgets"
+        notice={null}
+        onNotice={vi.fn()}
+        onReload={vi.fn()}
+        scope={globalScope}
+        services={[registeredService]}
+        catalogModels={catalogModels}
+        snapshot={failedScope}
+      />,
+    );
+    expect(html).toContain("Budget scope is not available");
+    expect(html).toContain("The workspace is not available");
+    expect(html).not.toContain("Save budget");
   });
 
   it("keeps provider secret custody out of the service view", () => {

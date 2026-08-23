@@ -1091,6 +1091,47 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/RequestStatus'}
         '404': {$ref: '#/components/responses/NotFound'}
+  /v1/admin/services/{service_id}/budgets:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+    get:
+      tags: [Administration, Budgets]
+      operationId: getSelectedAdministrationBudget
+      summary: Get one exact service or workspace budget summary.
+      security: [{administratorSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceIdQuery'
+      responses:
+        '200':
+          description: Current selected-scope budget.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BudgetSummary'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        default: {$ref: '#/components/responses/Error'}
+    put:
+      tags: [Administration, Budgets]
+      operationId: putSelectedAdministrationBudget
+      summary: Create or replace one exact service or workspace budget.
+      security: [{administratorSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceIdQuery'
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/Origin'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PutSelectedBudgetLimit'}
+      responses:
+        '200':
+          description: Budget limit changed. Read the current summary after this response.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BudgetLimitWriteResult'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
   /v1/services/{service_id}/retention:
     parameters:
       - $ref: '#/components/parameters/ServiceId'
@@ -1470,8 +1511,15 @@ paths:
       operationId: listCatalog
       summary: List provider adapter or canonical model catalog entries.
       security: [{administratorSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
       responses:
-        '200': {$ref: '#/components/responses/ConfigurationPage'}
+        '200':
+          description: Bounded named catalog page.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CatalogPage'}
         default: {$ref: '#/components/responses/Error'}
     post:
       tags: [Administration]
@@ -3045,6 +3093,13 @@ components:
       properties:
         amount: {$ref: '#/components/schemas/NonNegativeDecimal'}
         currency: {type: string, pattern: '^[A-Z]{3}$'}
+    SignedMoney:
+      type: object
+      additionalProperties: false
+      required: [amount, currency]
+      properties:
+        amount: {$ref: '#/components/schemas/Decimal'}
+        currency: {type: string, pattern: '^[A-Z]{3}$'}
     PutBudgetCeiling:
       type: object
       additionalProperties: false
@@ -3077,21 +3132,50 @@ components:
         hard_limit: {$ref: '#/components/schemas/Money'}
         warning_threshold: {$ref: '#/components/schemas/Money'}
         reset_period: {type: string, enum: [none, daily, monthly]}
-        expected_revision: {$ref: '#/components/schemas/OpaqueId'}
+        expected_revision: {$ref: '#/components/schemas/BudgetRevision'}
+    PutSelectedBudgetLimit:
+      type: object
+      additionalProperties: false
+      required: [hard_limit, currency, reset_period, expected_revision]
+      properties:
+        hard_limit: {$ref: '#/components/schemas/NonNegativeDecimal'}
+        currency: {type: string, pattern: '^[A-Z]{3}$'}
+        warning_threshold:
+          oneOf: [{$ref: '#/components/schemas/NonNegativeDecimal'}, {type: 'null'}]
+        reset_period: {type: string, enum: [none, daily, monthly]}
+        expected_revision: {$ref: '#/components/schemas/BudgetRevision'}
+    BudgetRevision:
+      type: string
+      pattern: '^(0|[1-9][0-9]*)$'
     BudgetSummary:
       type: object
       additionalProperties: false
-      required: [scope, limit, reserved, used, corrected, remaining, enforcement_state, revision]
+      required: [scope, limit, reserved, used, corrected, remaining, enforcement_state, reset_period, revision]
       properties:
-        scope: {type: string}
+        scope: {type: string, enum: [service, workspace, assignment]}
         limit: {$ref: '#/components/schemas/Money'}
+        warning_threshold:
+          oneOf: [{$ref: '#/components/schemas/Money'}, {type: 'null'}]
         host_ceiling: {$ref: '#/components/schemas/Money'}
         reserved: {$ref: '#/components/schemas/Money'}
         used: {$ref: '#/components/schemas/Money'}
-        corrected: {$ref: '#/components/schemas/Money'}
+        corrected: {$ref: '#/components/schemas/SignedMoney'}
         remaining: {$ref: '#/components/schemas/Money'}
         enforcement_state: {type: string, enum: [available, warning, exhausted, allowance_unavailable]}
-        revision: {$ref: '#/components/schemas/OpaqueId'}
+        reset_period: {type: string, enum: [none, daily, monthly]}
+        revision: {$ref: '#/components/schemas/BudgetRevision'}
+    BudgetLimitWriteResult:
+      type: object
+      additionalProperties: false
+      required: [scope, limit, warning_threshold, reset_period, revision, effective_at]
+      properties:
+        scope: {type: string, enum: [service, workspace]}
+        limit: {$ref: '#/components/schemas/Money'}
+        warning_threshold:
+          oneOf: [{$ref: '#/components/schemas/Money'}, {type: 'null'}]
+        reset_period: {type: string, enum: [none, daily, monthly]}
+        revision: {$ref: '#/components/schemas/BudgetRevision'}
+        effective_at: {$ref: '#/components/schemas/Timestamp'}
     PutAssignment:
       type: object
       additionalProperties: false
@@ -3545,6 +3629,31 @@ components:
         state: {type: string, enum: [active, disabled, retired]}
         expected_revision: {oneOf: [{$ref: '#/components/schemas/OpaqueId'}, {type: 'null'}]}
         settings: {$ref: '#/components/schemas/RegisteredDocument'}
+    CatalogEntry:
+      type: object
+      additionalProperties: false
+      required: [stable_id, kind, display_name, capabilities, state, settings, active_revision]
+      properties:
+        stable_id: {$ref: '#/components/schemas/OpaqueId'}
+        kind: {type: string, enum: [provider, model]}
+        display_name: {type: string, minLength: 1, maxLength: 200}
+        capabilities:
+          type: array
+          maxItems: 32
+          items: {type: string, minLength: 1, maxLength: 100}
+        state: {type: string, enum: [active, disabled, retired]}
+        settings:
+          oneOf: [{$ref: '#/components/schemas/RegisteredDocument'}, {type: 'null'}]
+        active_revision: {$ref: '#/components/schemas/OpaqueId'}
+    CatalogPage:
+      type: object
+      additionalProperties: false
+      required: [items, next_cursor, configuration_revision]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/CatalogEntry'}}
+        next_cursor: {type: [string, 'null']}
+        configuration_revision:
+          oneOf: [{$ref: '#/components/schemas/OpaqueId'}, {type: 'null'}]
     ConfigurationWriteResult:
       type: object
       additionalProperties: false

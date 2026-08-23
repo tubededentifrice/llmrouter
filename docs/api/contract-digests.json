@@ -26,7 +26,7 @@
     },
     {
       "path": "docs/api/openapi.yaml",
-      "sha256": "88142b071871b5c95d964efd24462c5e4ae7b4eada6a5637c404df45d428b9ea"
+      "sha256": "de43bff5230f42aea2579084602af2b12524611a90e09d1ed9d09b1126fe783a"
     },
     {
       "path": "docs/api/request-fingerprint.md",
@@ -72,7 +72,9 @@
     "AuditScope": "9e7efc0936fe66117766c0f2504b738d813fef0b3096598b03bf70704443b69d",
     "BootstrapScope": "dafd7cb74d110d291ca3a9de590f48793d6a6f2ce0daab00ea4e82dd14300518",
     "BudgetCeiling": "166e65fab993d1356a12273a4a50613e28e8dc14f5405fc7b9be5e65b4538c0f",
-    "BudgetSummary": "6fa596ce11202aa7285cc8ec18ecf0b4a42ab9c4fff74caca3ac310a1813f485",
+    "BudgetLimitWriteResult": "ebfd5d17e30f3ea250cf8c7821c21c955917f289315167dd27bb74266ce23af5",
+    "BudgetRevision": "a3c78cde1f4185716b90ffc51b7fc085c194481e8a1c9d272b7a09aa674eb091",
+    "BudgetSummary": "288cf01e2fefdb7dced3250cd5612e28f1bdb3f0cd802c4d00e842d349374478",
     "BusinessToolCall": "ca253e796b5cc5a16dd50360cd9278939a3941e9dc7e5897c3470d5052a70740",
     "BusinessToolGateway": "ec1b6e2b7c719faf3b66fdba9b0bf682e3b1e3dceafb70d91e4e0ac95070cdcf",
     "BusinessToolGatewayApproval": "78d4268f98b6aa40285793839375c174faaeed41cc4e2ca64365abef3e2d71c9",
@@ -83,6 +85,8 @@
     "CapturedContent": "e6d0ca9b22038617e8f18504ac0ffb5f126677bcc695abfe666133f8491e90f0",
     "CapturedContentMetadata": "5d793e0b38001e4accfde72b0a8d0556d7b0246c3328715f7b577523cc77e93f",
     "CapturedContentMetadataPage": "b17e32b50d6d6c69c95b8a7e61fb77d5c0e3c259aa9ba152eafc1f075d7b841d",
+    "CatalogEntry": "8cc6e35c27900a965682a82d29cf1a74e96233fc55a63607de786d70a0446e37",
+    "CatalogPage": "ca1ef3c939011e2983f24f1176eb9dc0e01bbfad5fb5cedc48a85a613de2a132",
     "CompatibilityResponseFormat": "57b8aa2da1413fd5bb4f3579fd027ab1c94828f795ba3ac1087c615ac415342c",
     "CompatibilityToolChoice": "e794190ac898e0b69129c2250ca258c0892401349c08f4259bab01f6c28de5d5",
     "CompatibilityUsage": "057fca0ae2536019b41155976e701e7e374c6ecaa010223ddbd7ceee5697c96a",
@@ -155,11 +159,12 @@
     "PutAdministratorGrant": "c46e511a7794057eac7fdb0f7d04429ee12f52be0663783b9c2a75427cb57657",
     "PutAssignment": "e65936c53137da58688344455c8b121d1982d325722663d4a9f6a90cf0723414",
     "PutBudgetCeiling": "417a805986b7f041a2620da2d8c0669d52f77dbb13fc2a428fe82f88e55eabb5",
-    "PutBudgetLimit": "482011b8229684352b802a3819d897a6496311b695fe6cad249b88e8edfb5b9c",
+    "PutBudgetLimit": "468750040f531900d1e19bc315ea48aedb57fd2c115e34233e03dafcfcb87493",
     "PutBusinessToolGateway": "2169e0a375f680b95b559ae68c720131ceace0f8895a96735d3e5a4557da3f60",
     "PutProviderInstance": "087edc1dbd9e7f26c74bd7c70542728a9119f527dbace9ba0f1338cddebf6913",
     "PutProviderModelRoute": "e77c33637f819ce3c6a8bb11e0074f64b03ed08e7dacf66a0b2047abc5dbf50a",
     "PutRetentionConfiguration": "faddb9cc88484ac2096a14633c3d05169c0202eb702aee0c868686b5920147df",
+    "PutSelectedBudgetLimit": "31e6d38368095e666198a08fe668051aeaf792ed04577f14741ff60e33108f8b",
     "RedeemExport": "ad029e382999a74d060916818500a1ec50cc9ce0882b939d0fd88751cc7bed86",
     "RegisteredDocument": "ed5cd615b410d048692a50a35ca7aef83e5fc0f3a1e520bd26ee53cd3a6e5334",
     "RequestAccounting": "c1a0c26383d921f9cfa5b554106dc338a351637fe03958de473cf64c64b410fa",
@@ -181,6 +186,7 @@
     "ServiceTokenExchange": "5e3414b4bef1881d27cfb24aaf5ad53c6d489e109bb961fa2707506209695ca4",
     "ServiceUpdate": "9d6fefc7401c434ed7d1651cf01a0e3599f7db0ee6a33be43d04e8e4ffa66048",
     "SharedToolRequest": "e10559a5fae543faeb40464824916c19662baf1522b8fd08dfcb0d4f0dbeddcb",
+    "SignedMoney": "388fad13c79e4cde0e7262d5c8c9aba5a0e0d353a7491fdaa374be643352a537",
     "TerminalError": "4465e9245c7858219f67a4e6f8481c2870cec578dedc0fc58025c153e6b69a1b",
     "Timestamp": "4f410cd74c87d8ddd21f20e835e06ed7445481c3aeae3c12085e82c54ea2fb7d",
     "ToolCallStatus": "8043f38aa60bcf9e4f33c978d1207255623ab45cea808e93330e84b494a15dd1",
@@ -193,6 +199,6 @@
   },
   "contract_set": "llmrouter-v1",
   "generator_version": 1,
-  "source_sha256": "88142b071871b5c95d964efd24462c5e4ae7b4eada6a5637c404df45d428b9ea",
+  "source_sha256": "de43bff5230f42aea2579084602af2b12524611a90e09d1ed9d09b1126fe783a",
   "version": "1.0.0"
 }

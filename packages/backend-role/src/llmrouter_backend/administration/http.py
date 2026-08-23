@@ -16,7 +16,8 @@ from pydantic import BaseModel, ValidationError
 
 from llmrouter_backend.accounting import AccountingError
 from llmrouter_backend.admin_auth import AdministratorAuthError
-from llmrouter_backend.configuration import ConfigurationError
+from llmrouter_backend.budgets import BudgetError
+from llmrouter_backend.configuration import CatalogKind, ConfigurationError
 from llmrouter_backend.credential_store import (
     CredentialAction,
     CredentialStoreError,
@@ -26,6 +27,7 @@ from llmrouter_backend.lifecycle import LifecycleError, ServiceAction
 
 from .model import (
     AssignmentInput,
+    BudgetLimitInput,
     CredentialChangeInput,
     CredentialCreateInput,
     ProviderInstanceInput,
@@ -57,6 +59,28 @@ def install_administration_service(
     if state is None:
         raise TypeError("The application does not have state storage.")
     state.administration_service = service
+
+
+@router.get("/admin/catalog/{catalog_kind}", response_model=None)
+async def list_catalog(request: Request, catalog_kind: str) -> Response:
+    """List one bounded named global catalog."""
+    request_id = _request_id()
+    try:
+        kind = _catalog_kind(catalog_kind)
+        result = await _run(
+            request,
+            lambda service: service.list_catalog(
+                _session(request, request_id),
+                kind,
+                request_id=request_id,
+                cursor=_optional_query(request, "cursor"),
+                limit=_limit(request),
+            ),
+            request_id,
+        )
+        return _json(result)
+    except Exception as error:
+        return _error_response(error, request_id)
 
 
 @router.get("/admin/services", response_model=None)
@@ -446,6 +470,51 @@ async def get_accounting_summary(request: Request, service_id: str) -> Response:
         return _error_response(error, request_id)
 
 
+@router.get("/admin/services/{service_id}/budgets", response_model=None)
+async def get_budget_summary(request: Request, service_id: str) -> Response:
+    """Read one exact selected-scope budget."""
+    request_id = _request_id()
+    try:
+        result = await _run(
+            request,
+            lambda service: service.budget_summary(
+                _session(request, request_id),
+                service_id,
+                request_id=request_id,
+                workspace_id=_optional_query(request, "workspace_id"),
+            ),
+            request_id,
+        )
+        return _json(result)
+    except Exception as error:
+        return _error_response(error, request_id)
+
+
+@router.put("/admin/services/{service_id}/budgets", response_model=None)
+async def put_budget(request: Request, service_id: str) -> Response:
+    """Replace one exact selected-scope budget."""
+    request_id = _request_id()
+    try:
+        value = await _document(request, BudgetLimitInput, request_id)
+        result = await _run(
+            request,
+            lambda service: service.put_budget(
+                _session(request, request_id),
+                _header(request, "x-csrf-token", request_id),
+                _header(request, "origin", request_id),
+                _idempotency_key(request, request_id),
+                service_id,
+                value,
+                request_id=request_id,
+                workspace_id=_optional_query(request, "workspace_id"),
+            ),
+            request_id,
+        )
+        return _json(result)
+    except Exception as error:
+        return _error_response(error, request_id)
+
+
 async def _provider_instance_write(
     request: Request, service_id: str, provider_instance_id: str | None
 ) -> Response:
@@ -607,6 +676,14 @@ def _valid_secret(value: str) -> bool:
         and value.isascii()
         and all(character.isalnum() or character in "_-" for character in value)
     )
+
+
+def _catalog_kind(value: str) -> CatalogKind:
+    if value == "providers":
+        return CatalogKind.PROVIDER
+    if value == "models":
+        return CatalogKind.MODEL
+    raise ValueError("The catalog kind is invalid.")
 
 
 def _validate_credential_action(
@@ -774,6 +851,13 @@ def _safe_error(
             for issue in error.issues[:100]
         ]
         return code, 422 if error.issues else _status(code), False, fields
+    if isinstance(error, BudgetError):
+        code = (
+            "invalid_request"
+            if error.code.value == "currency_mismatch"
+            else error.code.value
+        )
+        return code, _status(code), False, []
     if isinstance(error, LifecycleError):
         code = error.code.value
         return code, _status(code), False, []

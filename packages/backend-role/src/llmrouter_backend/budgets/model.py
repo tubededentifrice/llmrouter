@@ -70,6 +70,18 @@ class Money:
 
 
 @dataclass(frozen=True, slots=True)
+class SignedMoney:
+    """One exact signed currency amount."""
+
+    amount: Decimal
+    currency: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "amount", exact_decimal(self.amount, signed=True))
+        object.__setattr__(self, "currency", currency_code(self.currency))
+
+
+@dataclass(frozen=True, slots=True)
 class BudgetTarget:
     """One global, service, workspace, or assignment limit target."""
 
@@ -152,10 +164,12 @@ class EnforcementSummary:
     limit: Money
     reserved: Money
     used: Money
-    corrected: Money
+    corrected: SignedMoney
     remaining: Money
     state: EnforcementState
     revision: str
+    warning_threshold: Money | None
+    reset_period: ResetPeriod
 
 
 @dataclass(frozen=True, slots=True)

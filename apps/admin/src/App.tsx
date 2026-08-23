@@ -46,6 +46,8 @@ import {
   type AdministrationClient,
   type AdministrationSnapshot,
   type Assignment,
+  type BudgetSummary,
+  type CatalogEntry,
   type Credential,
   type ProviderInstance,
   type ProviderModelRoute,
@@ -68,7 +70,8 @@ type Section =
   | "configuration"
   | "assignments"
   | "requests"
-  | "accounting";
+  | "accounting"
+  | "budgets";
 type SessionAction =
   "idle" | "sign_in_pending" | "sign_out_pending" | "recent_pending" | "error";
 export interface Notice {
@@ -114,14 +117,16 @@ const serviceSections: readonly SectionItem[] = [
   { id: "setup", label: "Setup", icon: "health" },
   { id: "assignments", label: "Assignments", icon: "layers" },
   { id: "requests", label: "Requests", icon: "list" },
+  { id: "budgets", label: "Budgets", icon: "shield" },
   { id: "accounting", label: "Usage & cost", icon: "activity" },
 ];
 
 const sections = [...globalSections, ...serviceSections];
 const emptyServices: readonly ServiceSummary[] = [];
 const emptyCredentials: readonly Credential[] = [];
+const emptyCatalogEntries: readonly CatalogEntry[] = [];
 type GlobalFailures = Readonly<
-  Partial<Record<"services" | "credentials", string>>
+  Partial<Record<"services" | "credentials" | "catalog", string>>
 >;
 const emptyGlobalFailures: GlobalFailures = {};
 
@@ -758,20 +763,18 @@ interface RouteFormState {
 const initialRouteForm: RouteFormState = {
   providerId: "",
   canonicalModelId: "",
-  wireModel: "deepseek/deepseek-v4-flash",
+  wireModel: "",
   inputPrice: "",
   outputPrice: "",
 };
 
-const canonicalUuidPattern =
-  "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
-const canonicalUuid = new RegExp(`^${canonicalUuidPattern}$`);
 const nonNegativeDecimal = /^(0|[1-9][0-9]*)(\.[0-9]+)?$/;
 
 function RouteForm({
   client,
   scope,
   providers,
+  models,
   expectedRevision,
   onChanged,
   onNotice,
@@ -779,6 +782,7 @@ function RouteForm({
   readonly client: AdministrationClient;
   readonly scope: ScopeSelection;
   readonly providers: readonly ProviderInstance[];
+  readonly models: readonly CatalogEntry[];
   readonly expectedRevision: string | null;
   readonly onChanged: () => Promise<void>;
   readonly onNotice: (notice: Notice) => void;
@@ -793,7 +797,11 @@ function RouteForm({
   const [submitting, setSubmitting] = useState(false);
   const routeReady =
     form.providerId !== "" &&
-    canonicalUuid.test(form.canonicalModelId) &&
+    models.some(
+      (model) =>
+        model.stable_id === form.canonicalModelId && model.state === "active",
+    ) &&
+    form.wireModel.trim() !== "" &&
     nonNegativeDecimal.test(form.inputPrice) &&
     nonNegativeDecimal.test(form.outputPrice);
   async function submit(event: SubmitEvent<HTMLFormElement>) {
@@ -863,6 +871,16 @@ function RouteForm({
     }
     return options;
   }, []);
+  const modelOptions = models.reduce<ReactNode[]>((options, model) => {
+    if (model.state === "active") {
+      options.push(
+        <option key={model.stable_id} value={model.stable_id}>
+          {model.display_name}
+        </option>,
+      );
+    }
+    return options;
+  }, []);
   return (
     <form
       className="configuration-form"
@@ -872,8 +890,8 @@ function RouteForm({
     >
       <h3>Add provider-model route</h3>
       <p>
-        DeepSeek V4 Flash is the default live-test route. Prices are USD per one
-        million tokens.
+        Select the named canonical model, then enter the provider model name.
+        Prices are USD per one million tokens.
       </p>
       <div className="form-grid form-grid-three">
         <label>
@@ -890,21 +908,23 @@ function RouteForm({
           </select>
         </label>
         <label>
-          Canonical model UUID
-          <input
+          Supported model
+          <select
             required
-            pattern={canonicalUuidPattern}
-            placeholder="Canonical model UUID"
             value={form.canonicalModelId}
             onChange={(event) => {
               updateForm({ canonicalModelId: event.target.value });
             }}
-          />
+          >
+            <option value="">Select a named model</option>
+            {modelOptions}
+          </select>
         </label>
         <label>
-          OpenRouter model
+          Provider model name
           <input
             required
+            placeholder="For example, deepseek/deepseek-v4-flash"
             value={form.wireModel}
             onChange={(event) => {
               updateForm({ wireModel: event.target.value });
@@ -1094,6 +1114,9 @@ function ConfigurationView(props: {
   readonly scope: ScopeSelection;
   readonly snapshot: AdministrationSnapshot;
   readonly services: readonly ServiceSummary[];
+  readonly models: readonly CatalogEntry[];
+  readonly catalogFailure?: string;
+  readonly catalogLoading: boolean;
   readonly onChanged: () => Promise<void>;
   readonly onNotice: (notice: Notice) => void;
 }) {
@@ -1208,14 +1231,29 @@ function ConfigurationView(props: {
             title="Add a model route"
             description="Connect a model name to one provider connection."
           />
-          <RouteForm
-            client={client}
-            scope={scope}
-            providers={snapshot.providers}
-            expectedRevision={expectedRevision}
-            onChanged={onChanged}
-            onNotice={onNotice}
-          />
+          {props.catalogLoading ? (
+            <p role="status">Supported models are loading.</p>
+          ) : props.catalogFailure !== undefined ? (
+            <ScopedReadFailure
+              title="Supported models are not available"
+              message={props.catalogFailure}
+            />
+          ) : props.models.length === 0 ? (
+            <p>
+              No active supported model is available. Add a model to the global
+              catalog first.
+            </p>
+          ) : (
+            <RouteForm
+              client={client}
+              scope={scope}
+              providers={snapshot.providers}
+              models={props.models}
+              expectedRevision={expectedRevision}
+              onChanged={onChanged}
+              onNotice={onNotice}
+            />
+          )}
         </Panel>
       ) : null}
     </div>
@@ -1709,6 +1747,222 @@ function AccountingView({ summary }: { readonly summary: AccountingSummary }) {
   );
 }
 
+function decimalLessThan(left: string, right: string): boolean {
+  const [leftWhole = "0", leftFraction = ""] = left.split(".");
+  const [rightWhole = "0", rightFraction = ""] = right.split(".");
+  const leftNormalized = leftWhole.replace(/^0+(?=\d)/, "");
+  const rightNormalized = rightWhole.replace(/^0+(?=\d)/, "");
+  if (leftNormalized.length !== rightNormalized.length) {
+    return leftNormalized.length < rightNormalized.length;
+  }
+  if (leftNormalized !== rightNormalized)
+    return leftNormalized < rightNormalized;
+  const width = Math.max(leftFraction.length, rightFraction.length);
+  return leftFraction.padEnd(width, "0") < rightFraction.padEnd(width, "0");
+}
+
+function moneyText(value: {
+  readonly amount: string;
+  readonly currency: string;
+}) {
+  return `${value.amount} ${value.currency}`;
+}
+
+interface BudgetFormState {
+  readonly hardLimit: string;
+  readonly currency: string;
+  readonly warning: string;
+  readonly resetPeriod: "none" | "daily" | "monthly";
+}
+
+function BudgetView({
+  client,
+  scope,
+  summary,
+  onChanged,
+  onNotice,
+}: {
+  readonly client: AdministrationClient;
+  readonly scope: ScopeSelection;
+  readonly summary: BudgetSummary | null;
+  readonly onChanged: () => Promise<void>;
+  readonly onNotice: (notice: Notice) => void;
+}) {
+  const [form, updateForm] = useReducer(
+    (state: BudgetFormState, update: Partial<BudgetFormState>) => ({
+      ...state,
+      ...update,
+    }),
+    {
+      hardLimit: summary?.limit.amount ?? "",
+      currency: summary?.limit.currency ?? "USD",
+      warning: summary?.warning_threshold?.amount ?? "",
+      resetPeriod: summary?.reset_period ?? "none",
+    },
+  );
+  const [submitting, setSubmitting] = useState(false);
+  const valid =
+    nonNegativeDecimal.test(form.hardLimit) &&
+    /^[A-Z]{3}$/.test(form.currency) &&
+    (form.warning === "" ||
+      (nonNegativeDecimal.test(form.warning) &&
+        !decimalLessThan(form.hardLimit, form.warning)));
+  async function submit(event: SubmitEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!valid) return;
+    setSubmitting(true);
+    try {
+      const result = await client.putBudget(scope, {
+        hardLimit: form.hardLimit,
+        currency: form.currency,
+        warningThreshold: form.warning === "" ? null : form.warning,
+        resetPeriod: form.resetPeriod,
+        expectedRevision: summary?.revision ?? "0",
+      });
+      await refreshAfterCommit(
+        `Budget revision ${revisionLabel(result.revision)} is active.`,
+        onChanged,
+        onNotice,
+      );
+    } catch (error) {
+      await recoverAfterMutationFailure(error, onChanged, onNotice);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+  const values =
+    summary === null
+      ? []
+      : [
+          ["Hard limit", moneyText(summary.limit)],
+          [
+            "Warning threshold",
+            summary.warning_threshold === null
+              ? "Not configured"
+              : moneyText(summary.warning_threshold),
+          ],
+          ["Reserved", moneyText(summary.reserved)],
+          ["Used", moneyText(summary.used)],
+          ["Corrected", moneyText(summary.corrected)],
+          ["Remaining", moneyText(summary.remaining)],
+          ["Enforcement", summary.enforcement_state],
+          ["Reset period", summary.reset_period],
+          ["Revision", summary.revision],
+        ];
+  return (
+    <div className="panel-stack">
+      <PageHeading
+        eyebrow={
+          scope.workspaceId === "" ? "Selected service" : "Selected workspace"
+        }
+        title="Budget"
+        description="Set one hard limit in one exact currency. Router does not convert currencies."
+      />
+      <Panel>
+        <PanelHeader
+          kicker="Current enforcement"
+          title={
+            summary === null
+              ? "No limit is configured at this scope"
+              : "Budget summary"
+          }
+          description={
+            summary === null
+              ? "A parent, global, or host ceiling can still enforce a limit. Create a local limit for this exact scope."
+              : "Reservations, use, corrections, and remaining cost use the current budget revision."
+          }
+        />
+        {summary === null ? null : (
+          <dl className="budget-summary" data-state={summary.enforcement_state}>
+            {values.map(([label, value]) => (
+              <div key={label}>
+                <dt>{label}</dt>
+                <dd>{value}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
+      </Panel>
+      <Panel>
+        <PanelHeader
+          kicker="Exact selected scope"
+          title={summary === null ? "Create budget" : "Replace budget limit"}
+          description="This change uses the current revision and takes effect immediately."
+        />
+        <form
+          className="configuration-form"
+          onSubmit={(event) => void submit(event)}
+        >
+          <div className="form-grid form-grid-three">
+            <label>
+              Hard limit
+              <input
+                required
+                inputMode="decimal"
+                pattern="(0|[1-9][0-9]*)(\.[0-9]+)?"
+                value={form.hardLimit}
+                onChange={(event) => {
+                  updateForm({ hardLimit: event.currentTarget.value });
+                }}
+              />
+            </label>
+            <label>
+              Currency
+              <input
+                required
+                pattern="[A-Z]{3}"
+                maxLength={3}
+                value={form.currency}
+                onChange={(event) => {
+                  updateForm({
+                    currency: event.currentTarget.value.toUpperCase(),
+                  });
+                }}
+              />
+            </label>
+            <label>
+              Warning threshold (optional)
+              <input
+                inputMode="decimal"
+                pattern="(0|[1-9][0-9]*)(\.[0-9]+)?"
+                value={form.warning}
+                onChange={(event) => {
+                  updateForm({ warning: event.currentTarget.value });
+                }}
+              />
+            </label>
+            <label>
+              Reset period
+              <select
+                value={form.resetPeriod}
+                onChange={(event) => {
+                  updateForm({
+                    resetPeriod: event.currentTarget.value as
+                      "none" | "daily" | "monthly",
+                  });
+                }}
+              >
+                <option value="none">No reset</option>
+                <option value="daily">Daily</option>
+                <option value="monthly">Monthly</option>
+              </select>
+            </label>
+          </div>
+          {form.warning !== "" &&
+          decimalLessThan(form.hardLimit, form.warning) ? (
+            <p role="alert">
+              The warning threshold must not exceed the hard limit.
+            </p>
+          ) : null}
+          <Button type="submit" disabled={!valid || submitting}>
+            {submitting ? "Saving…" : "Save budget"}
+          </Button>
+        </form>
+      </Panel>
+    </div>
+  );
+}
+
 export function StaleRevisionBanner() {
   return (
     <div className="stale-banner" role="alert">
@@ -2154,6 +2408,8 @@ export interface AdministrationDashboardProps {
   readonly accountActions?: ReactNode;
   readonly credentials?: readonly Credential[];
   readonly services?: readonly ServiceSummary[];
+  readonly catalogModels?: readonly CatalogEntry[];
+  readonly catalogLoading?: boolean;
   readonly globalFailures?: GlobalFailures;
 }
 
@@ -2234,6 +2490,54 @@ function AdministratorSidebar({
   );
 }
 
+function SelectedBudgetSection({
+  client,
+  scope,
+  snapshot,
+  onReload,
+  onNotice,
+}: {
+  readonly client: AdministrationClient;
+  readonly scope: ScopeSelection;
+  readonly snapshot: AdministrationSnapshot;
+  readonly onReload: () => Promise<void>;
+  readonly onNotice: (notice: Notice) => void;
+}) {
+  if (snapshot.failures.state !== undefined || snapshot.state === null) {
+    return (
+      <ScopedReadFailure
+        title="Budget scope is not available"
+        message={
+          snapshot.failures.state ??
+          "The exact service or workspace scope is not available."
+        }
+      />
+    );
+  }
+  if (snapshot.failures.budget !== undefined) {
+    return (
+      <ScopedReadFailure
+        title="Budget is not available"
+        message={snapshot.failures.budget}
+      />
+    );
+  }
+  return (
+    <BudgetView
+      key={JSON.stringify([
+        scope.serviceId,
+        scope.workspaceId,
+        snapshot.budget?.revision ?? null,
+      ])}
+      client={client}
+      scope={scope}
+      summary={snapshot.budget}
+      onChanged={onReload}
+      onNotice={onNotice}
+    />
+  );
+}
+
 export function AdministrationDashboard({
   client,
   scope,
@@ -2249,6 +2553,8 @@ export function AdministrationDashboard({
   accountActions,
   credentials = emptyCredentials,
   services = emptyServices,
+  catalogModels = emptyCatalogEntries,
+  catalogLoading = false,
   globalFailures = emptyGlobalFailures,
 }: AdministrationDashboardProps) {
   const [section, setSection] = useReducer(
@@ -2449,6 +2755,11 @@ export function AdministrationDashboard({
           scope={scope}
           snapshot={snapshot}
           services={services}
+          models={catalogModels}
+          catalogLoading={catalogLoading}
+          {...(globalFailures.catalog === undefined
+            ? {}
+            : { catalogFailure: globalFailures.catalog })}
           onChanged={onReload}
           onNotice={onNotice}
         />
@@ -2492,6 +2803,15 @@ export function AdministrationDashboard({
         ) : (
           <AccountingView summary={snapshot.accounting} />
         )
+      ) : null}
+      {section === "budgets" && snapshot !== null ? (
+        <SelectedBudgetSection
+          client={client}
+          scope={scope}
+          snapshot={snapshot}
+          onReload={onReload}
+          onNotice={onNotice}
+        />
       ) : null}
       {serviceSections.some((item) => item.id === section) ? (
         <SelectedServiceState
@@ -2537,6 +2857,8 @@ export function AdministrationStateView({
   onScopeChange,
   accountActions,
   services = emptyServices,
+  catalogModels = emptyCatalogEntries,
+  catalogLoading = false,
   globalFailures,
 }: {
   readonly client: AdministrationClient;
@@ -2552,8 +2874,10 @@ export function AdministrationStateView({
   readonly onScopeChange?: ((scope: ScopeSelection) => void) | undefined;
   readonly accountActions?: ReactNode;
   readonly services?: readonly ServiceSummary[];
+  readonly catalogModels?: readonly CatalogEntry[];
+  readonly catalogLoading?: boolean;
   readonly globalFailures?: Readonly<
-    Partial<Record<"services" | "credentials", string>>
+    Partial<Record<"services" | "credentials" | "catalog", string>>
   >;
 }) {
   return (
@@ -2572,6 +2896,8 @@ export function AdministrationStateView({
         onScopeChange={onScopeChange}
         accountActions={accountActions}
         services={services}
+        catalogModels={catalogModels}
+        catalogLoading={catalogLoading}
         {...(globalFailures === undefined ? {} : { globalFailures })}
       />
       <PersistentNotice
@@ -2593,6 +2919,7 @@ export interface AppProps {
 interface GlobalAdministrationData {
   readonly services: readonly ServiceSummary[];
   readonly credentials: readonly Credential[];
+  readonly catalogModels: readonly CatalogEntry[];
 }
 
 interface GlobalAdministrationState {
@@ -2894,10 +3221,14 @@ export function App({
   );
   const [scope, setScope] = useState(startingScope ?? initialScope);
   const [globalState, setGlobalState] = useState<GlobalAdministrationState>({
-    data: { services: emptyServices, credentials: emptyCredentials },
+    data: {
+      services: emptyServices,
+      credentials: emptyCredentials,
+      catalogModels: [],
+    },
     failures: emptyGlobalFailures,
   });
-  const { services, credentials } = globalState.data;
+  const { services, credentials, catalogModels } = globalState.data;
   const { failures: globalFailures } = globalState;
   const [snapshot, setSnapshot] = useState<AdministrationSnapshot | null>(null);
   const [loading, setLoading] = useState(scope.serviceId !== "");
@@ -2908,6 +3239,10 @@ export function App({
   const [notice, setNotice] = useReducer(
     (_current: Notice | null, next: Notice | null) => next,
     null,
+  );
+  const [catalogLoading, setCatalogLoading] = useReducer(
+    (_current: boolean, next: boolean) => next,
+    true,
   );
   const loadGeneration = useRef(0);
   const load = useCallback(
@@ -2957,16 +3292,28 @@ export function App({
   const reloadGlobalData = useCallback(
     async (signal?: AbortSignal) => {
       if (signal?.aborted) return false;
+      setCatalogLoading(true);
       const results = await Promise.allSettled([
         client.listServices(signal),
         client.listCredentials(signal),
+        client.listCatalog("providers", signal),
+        client.listCatalog("models", signal),
       ] as const);
-      const failures: Partial<Record<"services" | "credentials", string>> = {};
+      const failures: Partial<
+        Record<"services" | "credentials" | "catalog", string>
+      > = {};
       if (results[0].status === "rejected") {
         failures.services = errorMessage(results[0].reason);
       }
       if (results[1].status === "rejected") {
         failures.credentials = errorMessage(results[1].reason);
+      }
+      if (
+        results[2].status === "rejected" ||
+        results[3].status === "rejected"
+      ) {
+        failures.catalog =
+          "The supported provider and model catalog is not available.";
       }
       if (!signal?.aborted) {
         setGlobalState((current) => ({
@@ -2980,8 +3327,13 @@ export function App({
               results[1].status === "fulfilled"
                 ? results[1].value
                 : current.data.credentials,
+            catalogModels:
+              results[3].status === "fulfilled"
+                ? results[3].value
+                : current.data.catalogModels,
           },
         }));
+        setCatalogLoading(false);
       }
       return !signal?.aborted && Object.keys(failures).length === 0;
     },
@@ -3031,6 +3383,8 @@ export function App({
       <AdministrationStateView
         client={client}
         credentials={credentials}
+        catalogModels={catalogModels}
+        catalogLoading={catalogLoading}
         failure={failure}
         loading={loading}
         notice={notice}

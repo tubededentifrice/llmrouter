@@ -25,7 +25,20 @@ from llmrouter_backend.authority import (
     RequestContext,
     Scope,
 )
+from llmrouter_backend.budgets import (
+    BudgetError,
+    BudgetErrorCode,
+    BudgetLimit,
+    BudgetTarget,
+    EnforcementState,
+    EnforcementSummary,
+    Money,
+    ResetPeriod,
+    SignedMoney,
+)
 from llmrouter_backend.configuration import (
+    CatalogEntry,
+    CatalogKind,
     ConfigurationScope,
     ConfigurationWriteResult,
     DistributionState,
@@ -403,6 +416,68 @@ class FakeAccounting:
         return AccountingSummary("USD", 1, 1, (), Decimal("0.01"), Decimal(0))
 
 
+class FakeBudgets:
+    def __init__(self) -> None:
+        self.revisions: dict[tuple[str, str | None], int] = {
+            (SERVICE_ID, None): 2,
+            (SERVICE_ID, str(uuid.UUID(int=2))): 3,
+        }
+        self.contexts: list[RequestContext] = []
+
+    def summary(
+        self, context: RequestContext, target: BudgetTarget, *, now: datetime
+    ) -> EnforcementSummary:
+        assert now == NOW
+        self.contexts.append(context)
+        key = (target.service_id or "", target.workspace_id)
+        revision = self.revisions.get(key)
+        if revision is None:
+            raise BudgetError(BudgetErrorCode.NOT_FOUND, context.request_id)
+        return EnforcementSummary(
+            target.kind,
+            Money(Decimal(25), "USD"),
+            Money(Decimal(1), "USD"),
+            Money(Decimal(4), "USD"),
+            SignedMoney(Decimal("-0.5"), "USD"),
+            Money(Decimal("20.5"), "USD"),
+            EnforcementState.AVAILABLE,
+            str(revision),
+            Money(Decimal(20), "USD"),
+            ResetPeriod.MONTHLY,
+        )
+
+    def put_limit(
+        self,
+        context: RequestContext,
+        target: BudgetTarget,
+        *,
+        hard_limit: Decimal,
+        currency: str,
+        warning_threshold: Decimal | None,
+        reset_period: ResetPeriod,
+        expected_revision: str,
+        idempotency_key: str,
+        now: datetime,
+    ) -> BudgetLimit:
+        assert idempotency_key and now == NOW
+        self.contexts.append(context)
+        key = (target.service_id or "", target.workspace_id)
+        current = self.revisions.get(key, 0)
+        if int(expected_revision) != current:
+            raise BudgetError(BudgetErrorCode.CONFLICT, context.request_id)
+        revision = current + 1
+        self.revisions[key] = revision
+        return BudgetLimit(
+            str(uuid.UUID(int=90)),
+            target,
+            Money(hard_limit, currency),
+            None if warning_threshold is None else Money(warning_threshold, currency),
+            reset_period,
+            str(revision),
+            now,
+        )
+
+
 class FakeMachine:
     pass
 
@@ -425,6 +500,7 @@ def administration(
         lifecycle=lifecycle,
         requests=FakeRequests(),
         accounting=FakeAccounting(),
+        budgets=FakeBudgets(),
         now=lambda: NOW,
         identity_factory=lambda: uuid.UUID(int=40),
         machine=FakeMachine(),  # type: ignore[arg-type]
@@ -720,6 +796,119 @@ def test_provider_route_listing_returns_safe_eligibility_metadata(
     assert listing.status_code == 200
     assert listing.json()["configuration_revision"] == created.json()["active_revision"]
     assert listing.json()["items"][0]["eligible_service_ids"] == eligible
+
+
+def test_named_catalog_discovery_separates_kinds_and_pages() -> None:
+    configuration = FakeConfiguration()
+    revision = str(uuid.UUID(int=81))
+    configuration.layer = RevisionLayer(
+        ConfigurationScope(),
+        revision,
+        ScopeConfiguration(
+            catalog=(
+                CatalogEntry(
+                    CatalogKind.PROVIDER,
+                    "openai_compatible.v1",
+                    "OpenRouter",
+                    frozenset({"chat.complete"}),
+                ),
+                CatalogEntry(
+                    CatalogKind.PROVIDER,
+                    "provider.second",
+                    "Second provider",
+                    frozenset({"chat.complete"}),
+                ),
+                CatalogEntry(
+                    CatalogKind.MODEL,
+                    str(uuid.UUID(int=82)),
+                    "DeepSeek V4 Flash",
+                    frozenset({"chat.complete"}),
+                ),
+            )
+        ),
+    )
+    service = AdministrationService(
+        authority=FakeAuthority(),
+        configuration=configuration,
+        credentials=FakeCredentials(),
+        lifecycle=FakeLifecycle(),
+        requests=FakeRequests(),
+        accounting=FakeAccounting(),
+        budgets=FakeBudgets(),
+        now=lambda: NOW,
+    )
+    app = FastAPI()
+    app.include_router(router)
+    install_administration_service(app, service)
+    client = TestClient(app)
+
+    first = client.get("/v1/admin/catalog/providers?limit=1", headers=_headers()).json()
+    second = client.get(
+        f"/v1/admin/catalog/providers?limit=1&cursor={first['next_cursor']}",
+        headers=_headers(),
+    ).json()
+    models = client.get("/v1/admin/catalog/models", headers=_headers()).json()
+    invalid = client.get("/v1/admin/catalog/secrets", headers=_headers())
+
+    assert first["items"][0]["display_name"] == "OpenRouter"
+    assert first["items"][0]["active_revision"] == revision
+    assert first["configuration_revision"] == revision
+    assert second["items"][0]["display_name"] == "Second provider"
+    assert second["configuration_revision"] == revision
+    assert models["items"][0]["display_name"] == "DeepSeek V4 Flash"
+    assert models["configuration_revision"] == revision
+    assert all(item["kind"] == "model" for item in models["items"])
+    assert invalid.status_code == 400
+
+
+def test_budget_routes_keep_exact_scope_revision_and_signed_correction(
+    administration: tuple[TestClient, FakeAuthority, FakeCredentials],
+) -> None:
+    client, authority, _credentials = administration
+    workspace_id = str(uuid.UUID(int=2))
+    service = client.get(f"/v1/admin/services/{SERVICE_ID}/budgets", headers=_headers())
+    workspace = client.get(
+        f"/v1/admin/services/{SERVICE_ID}/budgets?workspace_id={workspace_id}",
+        headers=_headers(),
+    )
+    changed = client.put(
+        f"/v1/admin/services/{SERVICE_ID}/budgets?workspace_id={workspace_id}",
+        headers=_headers(mutation=True),
+        json={
+            "hard_limit": "30",
+            "currency": "USD",
+            "warning_threshold": "24",
+            "reset_period": "monthly",
+            "expected_revision": "3",
+        },
+    )
+    stale = client.put(
+        f"/v1/admin/services/{SERVICE_ID}/budgets?workspace_id={workspace_id}",
+        headers=_headers(mutation=True),
+        json={
+            "hard_limit": "31",
+            "currency": "USD",
+            "warning_threshold": None,
+            "reset_period": "none",
+            "expected_revision": "3",
+        },
+    )
+    missing = client.get(
+        f"/v1/admin/services/{SERVICE_ID}/budgets?workspace_id={uuid.UUID(int=3)}",
+        headers=_headers(),
+    )
+
+    assert service.status_code == 200
+    assert service.json()["scope"] == "service"
+    assert workspace.status_code == 200
+    assert workspace.json()["scope"] == "workspace"
+    assert workspace.json()["corrected"] == {"amount": "-0.5", "currency": "USD"}
+    assert changed.status_code == 200
+    assert changed.json()["revision"] == "4"
+    assert stale.status_code == 409
+    assert stale.json()["error"]["code"] == "state_revision_conflict"
+    assert missing.status_code == 404
+    assert authority.policies[-1].operation == "budget.read"
 
 
 def test_provider_instance_disable_and_restore_use_expected_revisions(

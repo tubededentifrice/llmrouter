@@ -695,6 +695,11 @@ Money = TypedDict('Money', {
     'currency': 'str',
 })
 
+SignedMoney = TypedDict('SignedMoney', {
+    'amount': 'Decimal',
+    'currency': 'str',
+})
+
 PutBudgetCeiling = TypedDict('PutBudgetCeiling', {
     'amount': 'NonNegativeDecimal',
     'currency': 'str',
@@ -719,19 +724,40 @@ PutBudgetLimit = TypedDict('PutBudgetLimit', {
     'hard_limit': 'Money',
     'warning_threshold': 'Money',
     'reset_period': 'Literal["none", "daily", "monthly"]',
-    'expected_revision': 'OpaqueId',
+    'expected_revision': 'BudgetRevision',
 })
 
+PutSelectedBudgetLimit = TypedDict('PutSelectedBudgetLimit', {
+    'hard_limit': 'NonNegativeDecimal',
+    'currency': 'str',
+    'warning_threshold': 'NotRequired[NonNegativeDecimal | None]',
+    'reset_period': 'Literal["none", "daily", "monthly"]',
+    'expected_revision': 'BudgetRevision',
+})
+
+BudgetRevision: TypeAlias = str
+
 BudgetSummary = TypedDict('BudgetSummary', {
-    'scope': 'str',
+    'scope': 'Literal["service", "workspace", "assignment"]',
     'limit': 'Money',
+    'warning_threshold': 'NotRequired[Money | None]',
     'host_ceiling': 'NotRequired[Money]',
     'reserved': 'Money',
     'used': 'Money',
-    'corrected': 'Money',
+    'corrected': 'SignedMoney',
     'remaining': 'Money',
     'enforcement_state': 'Literal["available", "warning", "exhausted", "allowance_unavailable"]',
-    'revision': 'OpaqueId',
+    'reset_period': 'Literal["none", "daily", "monthly"]',
+    'revision': 'BudgetRevision',
+})
+
+BudgetLimitWriteResult = TypedDict('BudgetLimitWriteResult', {
+    'scope': 'Literal["service", "workspace"]',
+    'limit': 'Money',
+    'warning_threshold': 'Money | None',
+    'reset_period': 'Literal["none", "daily", "monthly"]',
+    'revision': 'BudgetRevision',
+    'effective_at': 'Timestamp',
 })
 
 PutAssignment = TypedDict('PutAssignment', {
@@ -983,6 +1009,22 @@ ConfigurationDocument = TypedDict('ConfigurationDocument', {
     'state': 'Literal["active", "disabled", "retired"]',
     'expected_revision': 'OpaqueId | None',
     'settings': 'RegisteredDocument',
+})
+
+CatalogEntry = TypedDict('CatalogEntry', {
+    'stable_id': 'OpaqueId',
+    'kind': 'Literal["provider", "model"]',
+    'display_name': 'str',
+    'capabilities': 'list[str]',
+    'state': 'Literal["active", "disabled", "retired"]',
+    'settings': 'RegisteredDocument | None',
+    'active_revision': 'OpaqueId',
+})
+
+CatalogPage = TypedDict('CatalogPage', {
+    'items': 'list[CatalogEntry]',
+    'next_cursor': 'str | None',
+    'configuration_revision': 'OpaqueId | None',
 })
 
 ConfigurationWriteResult = TypedDict('ConfigurationWriteResult', {
@@ -3061,11 +3103,63 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
     ],
     "type": "object"
   },
+  "BudgetLimitWriteResult": {
+    "additionalProperties": false,
+    "properties": {
+      "effective_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "limit": {
+        "$ref": "#/components/schemas/Money"
+      },
+      "reset_period": {
+        "enum": [
+          "none",
+          "daily",
+          "monthly"
+        ],
+        "type": "string"
+      },
+      "revision": {
+        "$ref": "#/components/schemas/BudgetRevision"
+      },
+      "scope": {
+        "enum": [
+          "service",
+          "workspace"
+        ],
+        "type": "string"
+      },
+      "warning_threshold": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/Money"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "scope",
+      "limit",
+      "warning_threshold",
+      "reset_period",
+      "revision",
+      "effective_at"
+    ],
+    "type": "object"
+  },
+  "BudgetRevision": {
+    "pattern": "^(0|[1-9][0-9]*)$",
+    "type": "string"
+  },
   "BudgetSummary": {
     "additionalProperties": false,
     "properties": {
       "corrected": {
-        "$ref": "#/components/schemas/Money"
+        "$ref": "#/components/schemas/SignedMoney"
       },
       "enforcement_state": {
         "enum": [
@@ -3088,14 +3182,37 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
       "reserved": {
         "$ref": "#/components/schemas/Money"
       },
+      "reset_period": {
+        "enum": [
+          "none",
+          "daily",
+          "monthly"
+        ],
+        "type": "string"
+      },
       "revision": {
-        "$ref": "#/components/schemas/OpaqueId"
+        "$ref": "#/components/schemas/BudgetRevision"
       },
       "scope": {
+        "enum": [
+          "service",
+          "workspace",
+          "assignment"
+        ],
         "type": "string"
       },
       "used": {
         "$ref": "#/components/schemas/Money"
+      },
+      "warning_threshold": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/Money"
+          },
+          {
+            "type": "null"
+          }
+        ]
       }
     },
     "required": [
@@ -3106,6 +3223,7 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
       "corrected",
       "remaining",
       "enforcement_state",
+      "reset_period",
       "revision"
     ],
     "type": "object"
@@ -3503,6 +3621,99 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
     },
     "required": [
       "items"
+    ],
+    "type": "object"
+  },
+  "CatalogEntry": {
+    "additionalProperties": false,
+    "properties": {
+      "active_revision": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "capabilities": {
+        "items": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 32,
+        "type": "array"
+      },
+      "display_name": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      },
+      "kind": {
+        "enum": [
+          "provider",
+          "model"
+        ],
+        "type": "string"
+      },
+      "settings": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/RegisteredDocument"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "stable_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "state": {
+        "enum": [
+          "active",
+          "disabled",
+          "retired"
+        ],
+        "type": "string"
+      }
+    },
+    "required": [
+      "stable_id",
+      "kind",
+      "display_name",
+      "capabilities",
+      "state",
+      "settings",
+      "active_revision"
+    ],
+    "type": "object"
+  },
+  "CatalogPage": {
+    "additionalProperties": false,
+    "properties": {
+      "configuration_revision": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "items": {
+        "items": {
+          "$ref": "#/components/schemas/CatalogEntry"
+        },
+        "type": "array"
+      },
+      "next_cursor": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "items",
+      "next_cursor",
+      "configuration_revision"
     ],
     "type": "object"
   },
@@ -7047,7 +7258,7 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
         "$ref": "#/components/schemas/AssignmentName"
       },
       "expected_revision": {
-        "$ref": "#/components/schemas/OpaqueId"
+        "$ref": "#/components/schemas/BudgetRevision"
       },
       "hard_limit": {
         "$ref": "#/components/schemas/Money"
@@ -7337,6 +7548,46 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
       "expected_revision",
       "values",
       "confirmed_preview_id"
+    ],
+    "type": "object"
+  },
+  "PutSelectedBudgetLimit": {
+    "additionalProperties": false,
+    "properties": {
+      "currency": {
+        "pattern": "^[A-Z]{3}$",
+        "type": "string"
+      },
+      "expected_revision": {
+        "$ref": "#/components/schemas/BudgetRevision"
+      },
+      "hard_limit": {
+        "$ref": "#/components/schemas/NonNegativeDecimal"
+      },
+      "reset_period": {
+        "enum": [
+          "none",
+          "daily",
+          "monthly"
+        ],
+        "type": "string"
+      },
+      "warning_threshold": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/NonNegativeDecimal"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "hard_limit",
+      "currency",
+      "reset_period",
+      "expected_revision"
     ],
     "type": "object"
   },
@@ -8299,6 +8550,23 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
       "tool",
       "input",
       "limits"
+    ],
+    "type": "object"
+  },
+  "SignedMoney": {
+    "additionalProperties": false,
+    "properties": {
+      "amount": {
+        "$ref": "#/components/schemas/Decimal"
+      },
+      "currency": {
+        "pattern": "^[A-Z]{3}$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "amount",
+      "currency"
     ],
     "type": "object"
   },

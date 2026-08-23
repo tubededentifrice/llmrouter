@@ -30,7 +30,7 @@ function loadFixture(filename: string): Record<string, unknown> {
 
 describe("generated contract models", () => {
   it("contains every accepted component schema", () => {
-    expect(Object.keys(contractSchemas)).toHaveLength(148);
+    expect(Object.keys(contractSchemas)).toHaveLength(154);
     expect(contractSchemas).toHaveProperty("EmbedBootstrap");
     expect(contractSchemas).toHaveProperty("EmbedBootstrapRequest");
     expect(contractSchemas).toHaveProperty("EmbedAdministrationSnapshot");
@@ -76,6 +76,27 @@ describe("generated contract models", () => {
     expect(() => validateContract("BusinessToolCall", toolCall)).toThrow(
       "format",
     );
+  });
+
+  it("uses one numeric revision contract for both budget writes", () => {
+    expect(() =>
+      validateContract("PutBudgetLimit", {
+        scope: "service",
+        hard_limit: { amount: "100", currency: "USD" },
+        warning_threshold: { amount: "80", currency: "USD" },
+        reset_period: "monthly",
+        expected_revision: "revision-one",
+      }),
+    ).toThrow("pattern");
+    expect(() =>
+      validateContract("PutSelectedBudgetLimit", {
+        hard_limit: "100",
+        currency: "USD",
+        warning_threshold: "80",
+        reset_period: "monthly",
+        expected_revision: "revision-one",
+      }),
+    ).toThrow("pattern");
   });
 
   it("forbids retained result content in embedded request status", () => {

@@ -520,6 +520,7 @@ def install_local_runtime(
     execution = PostgresExecutionRepository(database_url)
     views = PostgresModelRequestViews(database_url)
     accounting = PostgresAccountingRepository(database_url)
+    budget_repository = PostgresBudgetRepository(database_url)
     replay = LocalReplayProtector(replay_path, replay_key)
     local_authority = LocalAdministratorAuthority(admin_session, admin_csrf)
     authority = (
@@ -538,6 +539,7 @@ def install_local_runtime(
             lifecycle=lifecycle,
             requests=views,
             accounting=accounting,
+            budgets=budget_repository,
             machine=machine,
         ),
     )
@@ -551,7 +553,6 @@ def install_local_runtime(
         database_url, admission_repository, distribution, signer
     )
     routing_repository = PostgresRoutingRepository(database_url)
-    budget_repository = PostgresBudgetRepository(database_url)
     budget = LocalBudgetGate(database_url, budget_repository)
     inputs = TransientModelInputRegistry(execution)
 

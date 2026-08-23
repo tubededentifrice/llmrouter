@@ -411,12 +411,58 @@ def _prove_global_administration() -> None:
         assert not browser.evaluate(
             f"document.body.innerText.includes({json.dumps(admin_secret)})"
         )
+        browser.select_labeled_option("Provider instance", "Local OpenRouter")
+        browser.select_labeled_option("Supported model", "DeepSeek V4 Flash")
+        browser.fill_labeled_input("Provider model name", "browser/named-catalog-proof")
+        browser.fill_labeled_input("Input price", "0.11")
+        browser.fill_labeled_input("Output price", "0.22")
+        browser.click_button("Publish route")
+        browser.wait_for_text("Model route published at")
+        browser.wait_for_text("browser/named-catalog-proof")
+        browser.click_button("Budgets")
+        browser.wait_for_text("Budget summary")
+        budget_text = browser.body_text()
+        for label in (
+            "Hard limit",
+            "Warning threshold",
+            "Reserved",
+            "Used",
+            "Corrected",
+            "Remaining",
+            "Enforcement",
+            "Reset period",
+            "Revision",
+        ):
+            assert label in budget_text
+        assert _displayed_usd(browser.definition_value("Hard limit")) == Decimal(5)
+        old_budget_revision = browser.definition_value("Revision")
+        assert old_budget_revision.isdecimal()
+        browser.fill_labeled_input("Hard limit", "6")
+        browser.fill_labeled_input("Warning threshold", "4.5")
+        browser.click_button("Save budget")
+        browser.wait_for_text("Budget revision")
+        browser.wait_until(
+            lambda: (
+                _displayed_usd(browser.definition_value("Hard limit")) == Decimal(6)
+                and _displayed_usd(browser.definition_value("Warning threshold"))
+                == Decimal("4.5")
+                and browser.definition_value("Revision") != old_budget_revision
+            ),
+            "The committed budget did not refresh with its new revision.",
+        )
         browser.click_button("Assignments")
         browser.wait_for_text("general")
         assignment_text = browser.body_text()
         assert "general" in assignment_text
         assert "Primary" in assignment_text and "Fallback 1" in assignment_text
         assert "active" in assignment_text
+        browser.click_button("Budgets")
+        browser.wait_for_text("Budget summary")
+        assert _displayed_usd(browser.definition_value("Hard limit")) == Decimal(6)
+        assert _displayed_usd(browser.definition_value("Warning threshold")) == Decimal(
+            "4.5"
+        )
+        assert browser.definition_value("Revision") != old_budget_revision
         browser.click_button("Provider credentials")
         browser.wait_for_text("Store OpenRouter credential")
         credential_count = browser.evaluate(
@@ -465,6 +511,13 @@ def _prove_global_administration() -> None:
         browser.wait_for_text("The credential was retired.")
         browser.click_button("Sign out")
         browser.wait_for_text("Activate administrator session")
+
+
+def _displayed_usd(value: str) -> Decimal:
+    """Parse one displayed USD value without depending on decimal scale."""
+    if not value.endswith(" USD"):
+        raise AssertionError("The displayed budget currency is not USD.")
+    return Decimal(value.removesuffix(" USD"))
 
 
 class _CdpBrowser:
@@ -645,6 +698,40 @@ class _CdpBrowser:
             }})()"""
         )
         assert filled is True
+
+    def select_labeled_option(self, label: str, visible_text: str) -> None:
+        """Select one option by its displayed name and send a React change event."""
+        selected = self.evaluate(
+            f"""(() => {{
+              const control = [...document.querySelectorAll("label")]
+                .find((item) => item.textContent?.includes({json.dumps(label)}))
+                ?.querySelector("select");
+              if (!(control instanceof HTMLSelectElement)) return false;
+              const option = [...control.options].find(
+                (item) => item.textContent?.trim() === {json.dumps(visible_text)}
+              );
+              if (option === undefined) return false;
+              const setter = Object.getOwnPropertyDescriptor(
+                HTMLSelectElement.prototype, "value"
+              )?.set;
+              setter?.call(control, option.value);
+              control.dispatchEvent(new Event("change", {{ bubbles: true }}));
+              return true;
+            }})()"""
+        )
+        assert selected is True
+
+    def definition_value(self, label: str) -> str:
+        """Read one value from the visible definition list."""
+        value = self.evaluate(
+            f"""(() => {{
+              const term = [...document.querySelectorAll("dt")]
+                .find((item) => item.textContent?.trim() === {json.dumps(label)});
+              const description = term?.parentElement?.querySelector("dd");
+              return description?.textContent?.trim() ?? "";
+            }})()"""
+        )
+        return value if isinstance(value, str) else ""
 
     def change_credential(
         self,

@@ -37,6 +37,7 @@ from llmrouter_backend.budgets.model import (
     ReservationResult,
     ReservationState,
     ResetPeriod,
+    SignedMoney,
 )
 
 if TYPE_CHECKING:
@@ -1291,10 +1292,12 @@ def _summary(
         Money(scope.limit, scope.currency),
         Money(reserved, scope.currency),
         Money(balance.used, scope.currency),
-        Money(effective_used, scope.currency),
+        SignedMoney(balance.corrected, scope.currency),
         Money(remaining, scope.currency),
         state,
         scope.revision,
+        None if scope.warning is None else Money(scope.warning, scope.currency),
+        scope.reset_period,
     )
 
 
