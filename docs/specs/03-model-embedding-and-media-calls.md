@@ -30,6 +30,12 @@ One assignment call MUST have one ordered list of provider-model candidates.
 The Router MUST try each eligible candidate no more than once. It MUST NOT
 apply a per-candidate retry count, retry delay, or retry backoff.
 
+An assignment model call MAY exclude 0 through 16 unique provider-model API
+names. The Router MUST skip a matching candidate before eligibility checks and
+provider work. A name that is not in the current assignment chain MUST have no
+effect. A skipped candidate MUST NOT count as an attempt or provider failure.
+An exact provider-model call MUST NOT contain an exclusion list.
+
 Before visible model output, a provider authentication, rate, timeout,
 transport, availability, refusal, incompatibility, or invalid-response failure
 MUST move the call to the next eligible candidate. A service, workspace,

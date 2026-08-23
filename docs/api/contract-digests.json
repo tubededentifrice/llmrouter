@@ -10,7 +10,7 @@
     },
     {
       "path": "docs/api/openapi.yaml",
-      "sha256": "0ae8a4652f449a4d86fa9f2e440953dadafce98af382bed4acf8cb802b76396a"
+      "sha256": "ecfc50cb2429e7ff2c32fe791d1ab7d3ce6097a916e2606470fc11773c363adb"
     },
     {
       "path": "docs/api/stream-protocol.md",
@@ -62,7 +62,7 @@
     "MediaJobState": "497b521c8c0f0195a8798e361e1e20f8a132f7e91a29d6f2508d58243f175827",
     "MediaKind": "a8282119b65ce61770f51f4116d1060bed2e4c4ccd5b0004f88acbba0c689a5a",
     "Model": "910bcac92e836085b411dc649b785817968feb4ecdc9871c34c691b10d75882a",
-    "ModelCallRequest": "b65ec8d8a0831778131d7300a6020de8c29c62e58ffb2fa3f2863fea8e667115",
+    "ModelCallRequest": "f610f8fc9830710885c0c4482d911899e3ed9957f8eb7d43ca299b6bdb159a7a",
     "ModelCallResult": "029646e5d93e0c3c112a28661407e1345e12024f7f8d9393aa372317cc0d26b9",
     "ModelCapability": "b3ac3d69a2cecc7252fbd1bf9f19fd34b1a0306b5ee1d56dd383c79df0b08993",
     "ModelConstraints": "11503050380eaab651f010f9f05eea3a6150b02efb5b35cf9c2f751220e266b0",
@@ -138,6 +138,6 @@
   },
   "contract_set": "llmrouter-v1",
   "generator_version": 2,
-  "source_sha256": "0ae8a4652f449a4d86fa9f2e440953dadafce98af382bed4acf8cb802b76396a",
+  "source_sha256": "ecfc50cb2429e7ff2c32fe791d1ab7d3ce6097a916e2606470fc11773c363adb",
   "version": "1.0.0"
 }

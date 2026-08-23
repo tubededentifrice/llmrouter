@@ -2002,11 +2002,26 @@ components:
       required: [workspace_api_name, selector, messages]
       x-max-json-bytes: 2097152
       x-max-image-bytes: 52428800
+      oneOf:
+        - properties:
+            selector:
+              $ref: "#/components/schemas/AssignmentSelector"
+        - properties:
+            selector:
+              $ref: "#/components/schemas/ExactProviderModelSelector"
+          not:
+            required: [excluded_provider_model_api_names]
       properties:
         workspace_api_name:
           $ref: "#/components/schemas/ApiName"
         selector:
           $ref: "#/components/schemas/ModelSelector"
+        excluded_provider_model_api_names:
+          type: array
+          maxItems: 16
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/ApiName"
         messages:
           type: array
           minItems: 1

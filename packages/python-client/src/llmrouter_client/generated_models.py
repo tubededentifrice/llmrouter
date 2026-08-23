@@ -30,6 +30,14 @@ OutputFormatOption2 = TypedDict('OutputFormatOption2', {
     'type': 'NotRequired[Literal["json_schema"]]',
 })
 
+ModelCallRequestOption1 = TypedDict('ModelCallRequestOption1', {
+    'selector': 'NotRequired[AssignmentSelector]',
+})
+
+ModelCallRequestOption2 = TypedDict('ModelCallRequestOption2', {
+    'selector': 'NotRequired[ExactProviderModelSelector]',
+})
+
 MediaJobRequestOption1 = TypedDict('MediaJobRequestOption1', {
     'kind': 'NotRequired[Literal["image", "video"]]',
 })
@@ -209,6 +217,7 @@ OutputFormat = TypedDict('OutputFormat', {
 ModelCallRequest = TypedDict('ModelCallRequest', {
     'workspace_api_name': 'ApiName',
     'selector': 'ModelSelector',
+    'excluded_provider_model_api_names': 'NotRequired[list[ApiName]]',
     'messages': 'list[ModelMessage]',
     'tools': 'NotRequired[list[ToolDefinition]]',
     'output_format': 'NotRequired[OutputFormat]',
@@ -1697,7 +1706,36 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
   },
   "ModelCallRequest": {
     "additionalProperties": false,
+    "oneOf": [
+      {
+        "properties": {
+          "selector": {
+            "$ref": "#/components/schemas/AssignmentSelector"
+          }
+        }
+      },
+      {
+        "not": {
+          "required": [
+            "excluded_provider_model_api_names"
+          ]
+        },
+        "properties": {
+          "selector": {
+            "$ref": "#/components/schemas/ExactProviderModelSelector"
+          }
+        }
+      }
+    ],
     "properties": {
+      "excluded_provider_model_api_names": {
+        "items": {
+          "$ref": "#/components/schemas/ApiName"
+        },
+        "maxItems": 16,
+        "type": "array",
+        "uniqueItems": true
+      },
       "messages": {
         "items": {
           "$ref": "#/components/schemas/ModelMessage"

@@ -275,6 +275,82 @@ def check_reset_boundaries(spec: dict[str, Any]) -> None:
         if not {"workspace_api_name", "selector"}.issubset(required):
             raise ContractError(f"{name} does not require a workspace and selector")
 
+    model_call = schemas["ModelCallRequest"]
+    exclusions = model_call.get("properties", {}).get(
+        "excluded_provider_model_api_names", {}
+    )
+    if (
+        exclusions.get("type") != "array"
+        or exclusions.get("maxItems") != 16
+        or exclusions.get("uniqueItems") is not True
+        or exclusions.get("items", {}).get("$ref")
+        != "#/components/schemas/ApiName"
+    ):
+        raise ContractError(
+            "Model-call provider-model exclusions are not bounded and unique"
+        )
+    resolver = RefResolver.from_schema(spec)
+    model_call_validator = Draft202012Validator(model_call, resolver=resolver)
+    base_call = {
+        "workspace_api_name": "workspace",
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "Run the workflow."}],
+            }
+        ],
+    }
+    valid_calls = (
+        {
+            **base_call,
+            "selector": {"assignment_api_name": "workflow"},
+            "excluded_provider_model_api_names": [],
+        },
+        {
+            **base_call,
+            "selector": {"assignment_api_name": "workflow"},
+            "excluded_provider_model_api_names": ["route-a"],
+        },
+        {
+            **base_call,
+            "selector": {"provider_model_api_name": "route-a"},
+        },
+    )
+    valid_errors = [
+        list(model_call_validator.iter_errors(call)) for call in valid_calls
+    ]
+    if any(valid_errors):
+        detail = "; ".join(error.message for errors in valid_errors for error in errors)
+        raise ContractError(
+            f"A valid model-call exclusion form does not validate: {detail}"
+        )
+    invalid_calls = (
+        {
+            **base_call,
+            "selector": {"provider_model_api_name": "route-a"},
+            "excluded_provider_model_api_names": ["route-b"],
+        },
+        {
+            **base_call,
+            "selector": {"assignment_api_name": "workflow"},
+            "excluded_provider_model_api_names": ["route-a", "route-a"],
+        },
+        {
+            **base_call,
+            "selector": {"assignment_api_name": "workflow"},
+            "excluded_provider_model_api_names": [
+                f"route-{index}" for index in range(17)
+            ],
+        },
+        {
+            **base_call,
+            "selector": {"assignment_api_name": "workflow"},
+            "excluded_provider_model_api_names": "route-a",
+        },
+    )
+    if any(not list(model_call_validator.iter_errors(call)) for call in invalid_calls):
+        raise ContractError("An invalid model-call exclusion form validates")
+
     effective_chain = schemas.get("EffectiveAssignmentChain", {})
     if effective_chain.get("minItems") != 0:
         raise ContractError("The effective assignment chain cannot represent empty default")

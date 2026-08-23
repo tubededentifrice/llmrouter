@@ -86,7 +86,7 @@ export type ToolDefinition = { readonly name: string; readonly description: stri
 
 export type OutputFormat = { readonly type: "text"; } | { readonly type: "json_schema"; readonly schema_json: string; };
 
-export type ModelCallRequest = { readonly workspace_api_name: ApiName; readonly selector: ModelSelector; readonly messages: ReadonlyArray<ModelMessage>; readonly tools?: ReadonlyArray<ToolDefinition>; readonly output_format?: OutputFormat; readonly output_limit?: number; readonly temperature?: number; readonly tags?: Tags; };
+export type ModelCallRequest = { readonly workspace_api_name: ApiName; readonly selector: AssignmentSelector; readonly excluded_provider_model_api_names?: ReadonlyArray<ApiName>; readonly messages: ReadonlyArray<ModelMessage>; readonly tools?: ReadonlyArray<ToolDefinition>; readonly output_format?: OutputFormat; readonly output_limit?: number; readonly temperature?: number; readonly tags?: Tags; } | { readonly workspace_api_name: ApiName; readonly selector: ExactProviderModelSelector; readonly messages: ReadonlyArray<ModelMessage>; readonly tools?: ReadonlyArray<ToolDefinition>; readonly output_format?: OutputFormat; readonly output_limit?: number; readonly temperature?: number; readonly tags?: Tags; };
 
 export type UsageUnit = "input_token" | "output_token" | "cached_input_token" | "image" | "video_second" | "audio_second" | "request" | "provider_unit";
 
@@ -1259,7 +1259,36 @@ export const contractSchemas = {
   },
   "ModelCallRequest": {
     "additionalProperties": false,
+    "oneOf": [
+      {
+        "properties": {
+          "selector": {
+            "$ref": "#/components/schemas/AssignmentSelector"
+          }
+        }
+      },
+      {
+        "not": {
+          "required": [
+            "excluded_provider_model_api_names"
+          ]
+        },
+        "properties": {
+          "selector": {
+            "$ref": "#/components/schemas/ExactProviderModelSelector"
+          }
+        }
+      }
+    ],
     "properties": {
+      "excluded_provider_model_api_names": {
+        "items": {
+          "$ref": "#/components/schemas/ApiName"
+        },
+        "maxItems": 16,
+        "type": "array",
+        "uniqueItems": true
+      },
       "messages": {
         "items": {
           "$ref": "#/components/schemas/ModelMessage"

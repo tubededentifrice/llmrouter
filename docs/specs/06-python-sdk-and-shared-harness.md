@@ -45,6 +45,10 @@ chain. The failed sticky route MUST NOT run a second time in that harness turn
 if it also occurs in the current chain. The next successful route MUST become
 sticky.
 
+For this assignment call, the SDK MUST put the failed sticky provider-model
+API name in `excluded_provider_model_api_names`. It MUST NOT put this field in
+an exact provider-model call.
+
 A sticky attempt and each fallback attempt MUST be separate Router attempts
 for logging, usage, cost, and errors. The same workspace and caller tags MUST
 apply.
