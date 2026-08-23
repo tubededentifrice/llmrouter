@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -14,12 +15,19 @@ _DEFAULT_ALLOWED_ORIGINS = (
     "http://127.0.0.1:5174",
     "https://llmrouter.opendle.dev",
 )
+_DEFAULT_OBJECT_STORE_REGION = "us-east-1"
 _MINIMUM_SESSION_HOURS = 1
 _MAXIMUM_SESSION_HOURS = 30 * 24
 _MAXIMUM_PORT = 65_535
 _MAXIMUM_URL_LENGTH = 4_096
 _ASCII_SPACE = 0x20
 _ASCII_DELETE = 0x7F
+_MINIMUM_BUCKET_LENGTH = 3
+_MAXIMUM_BUCKET_LENGTH = 63
+_MAXIMUM_OBJECT_STORE_CONNECT_TIMEOUT = 30
+_MAXIMUM_OBJECT_STORE_READ_TIMEOUT = 120
+_DEVELOPMENT_OBJECT_STORE_PORT = 3900
+_BUCKET_NAME = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +44,14 @@ class Settings:
     administrator_encryption_key_file: Path | None = None
     administrator_session_hours: int = 24
     allowed_origins: tuple[str, ...] = _DEFAULT_ALLOWED_ORIGINS
+    object_store_endpoint: str | None = None
+    object_store_bucket: str | None = None
+    object_store_region: str = _DEFAULT_OBJECT_STORE_REGION
+    object_store_access_key_file: Path | None = None
+    object_store_secret_key_file: Path | None = None
+    object_store_ca_file: Path | None = None
+    object_store_connect_timeout_seconds: int = 2
+    object_store_read_timeout_seconds: int = 10
 
     def __post_init__(self) -> None:
         """Reject unsafe session and origin configuration."""
@@ -62,6 +78,7 @@ class Settings:
         if len(set(self.allowed_origins)) != len(self.allowed_origins):
             message = "Administrator origins must be unique."
             raise ValueError(message)
+        _validate_object_store(self)
 
     @classmethod
     def from_environment(cls) -> Settings:
@@ -95,6 +112,24 @@ class Settings:
             ),
             administrator_session_hours=hours,
             allowed_origins=origins,
+            object_store_endpoint=os.environ.get("LLMROUTER_OBJECT_STORE_ENDPOINT"),
+            object_store_bucket=os.environ.get("LLMROUTER_OBJECT_STORE_BUCKET"),
+            object_store_region=os.environ.get(
+                "LLMROUTER_OBJECT_STORE_REGION", _DEFAULT_OBJECT_STORE_REGION
+            ),
+            object_store_access_key_file=_path(
+                "LLMROUTER_OBJECT_STORE_ACCESS_KEY_FILE"
+            ),
+            object_store_secret_key_file=_path(
+                "LLMROUTER_OBJECT_STORE_SECRET_KEY_FILE"
+            ),
+            object_store_ca_file=_path("LLMROUTER_OBJECT_STORE_CA_FILE"),
+            object_store_connect_timeout_seconds=_integer_environment(
+                "LLMROUTER_OBJECT_STORE_CONNECT_TIMEOUT_SECONDS", 2
+            ),
+            object_store_read_timeout_seconds=_integer_environment(
+                "LLMROUTER_OBJECT_STORE_READ_TIMEOUT_SECONDS", 10
+            ),
         )
 
 
@@ -103,8 +138,82 @@ def _path(name: str) -> Path | None:
     return Path(value) if value else None
 
 
+def _integer_environment(name: str, default: int) -> int:
+    value = os.environ.get(name, str(default))
+    try:
+        return int(value)
+    except ValueError:
+        message = f"{name} must be an integer."
+        raise ValueError(message) from None
+
+
+def _validate_object_store(settings: Settings) -> None:
+    values = (
+        settings.object_store_endpoint,
+        settings.object_store_bucket,
+        settings.object_store_access_key_file,
+        settings.object_store_secret_key_file,
+    )
+    if any(value is not None for value in values) and not all(
+        value is not None for value in values
+    ):
+        message = "The object-store configuration must be complete."
+        raise ValueError(message)
+    if settings.object_store_endpoint is not None and not _valid_object_store_url(
+        settings.object_store_endpoint
+    ):
+        message = "The object-store endpoint is not safe."
+        raise ValueError(message)
+    if settings.object_store_bucket is not None and not (
+        _MINIMUM_BUCKET_LENGTH
+        <= len(settings.object_store_bucket)
+        <= _MAXIMUM_BUCKET_LENGTH
+        and all(
+            character.isascii()
+            and (character.islower() or character.isdigit() or character in ".-")
+            for character in settings.object_store_bucket
+        )
+        and _BUCKET_NAME.fullmatch(settings.object_store_bucket) is not None
+        and ".." not in settings.object_store_bucket
+        and ".-" not in settings.object_store_bucket
+        and "-." not in settings.object_store_bucket
+    ):
+        message = "The object-store bucket is not valid."
+        raise ValueError(message)
+    if not (
+        1
+        <= settings.object_store_connect_timeout_seconds
+        <= _MAXIMUM_OBJECT_STORE_CONNECT_TIMEOUT
+    ):
+        message = "The object-store connect timeout must be from 1 to 30 seconds."
+        raise ValueError(message)
+    if not (
+        1
+        <= settings.object_store_read_timeout_seconds
+        <= _MAXIMUM_OBJECT_STORE_READ_TIMEOUT
+    ):
+        message = "The object-store read timeout must be from 1 to 120 seconds."
+        raise ValueError(message)
+
+
 def _valid_origin(origin: str) -> bool:
     return _valid_http_url(origin, expected_path="")
+
+
+def _valid_object_store_url(value: str) -> bool:
+    """Permit HTTPS, or the one isolated development service authority."""
+    parsed = urlsplit(value)
+    if parsed.scheme == "http" and parsed.hostname == "object-storage":
+        return bool(
+            parsed.path == ""
+            and not parsed.query
+            and not parsed.fragment
+            and parsed.username is None
+            and parsed.password is None
+            and parsed.port == _DEVELOPMENT_OBJECT_STORE_PORT
+            and value == "http://object-storage:3900"
+        )
+    return _valid_http_url(value, expected_path="")
 
 
 def _valid_http_url(value: str, *, expected_path: str) -> bool:

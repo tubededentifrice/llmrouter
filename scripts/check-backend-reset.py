@@ -75,9 +75,7 @@ def main() -> None:
         raise SystemExit(f"A backend foundation file is missing: {missing[0]}")
 
     remaining = sorted(
-        path
-        for path in REMOVED_PATHS
-        if _active_files(REPOSITORY_ROOT / path)
+        path for path in REMOVED_PATHS if _active_files(REPOSITORY_ROOT / path)
     )
     if remaining:
         raise SystemExit(f"An obsolete backend path remains: {remaining[0]}")

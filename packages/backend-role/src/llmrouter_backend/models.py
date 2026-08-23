@@ -4,10 +4,21 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 ApiName = str
+UsageUnit = Literal[
+    "input_token",
+    "output_token",
+    "cached_input_token",
+    "image",
+    "video_second",
+    "audio_second",
+    "request",
+    "provider_unit",
+]
 
 
 class ClosedModel(BaseModel):
@@ -141,3 +152,135 @@ class ActivityPage(BaseModel):
 
     items: list[ActivityEvent]
     page: PageInfo
+
+
+class UsageItem(ClosedModel):
+    """One typed provider usage value."""
+
+    unit: UsageUnit
+    quantity: str = Field(pattern=r"^[0-9]+(?:\.[0-9]+)?$")
+
+
+class Usage(ClosedModel):
+    """One complete typed usage and cost value."""
+
+    units: list[UsageItem]
+    cost: str = Field(pattern=r"^[0-9]+(?:\.[0-9]+)?$")
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
+
+
+class UnitPrice(ClosedModel):
+    """One applied typed unit price."""
+
+    unit: UsageUnit
+    amount: str = Field(pattern=r"^[0-9]+(?:\.[0-9]+)?$")
+
+
+class AppliedPrice(ClosedModel):
+    """One provider price snapshot used for an attempt."""
+
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
+    unit_prices: list[UnitPrice] = Field(min_length=1)
+    source: str | None = Field(default=None, max_length=500)
+    synchronized_at: datetime | None = None
+
+
+class SafeErrorDetails(ClosedModel):
+    """Safe corrective details without model or control content."""
+
+    field: str | None = Field(default=None, min_length=1, max_length=200)
+    reason: str | None = Field(default=None, min_length=1, max_length=500)
+
+
+class SafeError(ClosedModel):
+    """One stable provider-neutral error captured for an attempt."""
+
+    code: Literal[
+        "authentication_required",
+        "permission_denied",
+        "invalid_request",
+        "not_found",
+        "conflict",
+        "assignment_cycle",
+        "provider_unavailable",
+        "upstream_failed",
+        "content_unavailable",
+        "rate_limited",
+        "internal_error",
+    ]
+    message: str = Field(min_length=1, max_length=1000)
+    details: SafeErrorDetails | None = None
+
+
+class RequestAttempt(ClosedModel):
+    """One provider attempt in a complete detailed log."""
+
+    provider_model_api_name: str = Field(pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+    outcome: Literal["succeeded", "failed"]
+    started_at: datetime
+    completed_at: datetime | None = None
+    usage: Usage
+    applied_prices: AppliedPrice
+    error: SafeError | None = None
+
+
+class RequestLogSummary(ClosedModel):
+    """Bounded list data for one detailed request log."""
+
+    id: str
+    service_api_name: str
+    workspace_api_name: str
+    assignment_api_name: str | None = None
+    provider_model_api_name: str | None = None
+    kind: Literal["model", "embedding", "media"]
+    outcome: Literal["succeeded", "failed"]
+    tags: list[str] | None = None
+    started_at: datetime
+
+
+class LogMedia(ClosedModel):
+    """One captured media item without an object-store identifier."""
+
+    id: str
+    media_type: str = Field(min_length=1, max_length=200)
+    role: Literal["input", "output"]
+    size_bytes: int = Field(ge=0)
+
+
+class RequestLog(ClosedModel):
+    """One complete best-effort detailed request log."""
+
+    summary: RequestLogSummary
+    request_json: str = Field(max_length=5_000_000)
+    response_json: str | None = Field(default=None, max_length=5_000_000)
+    attempts: list[RequestAttempt] = Field(max_length=16)
+    media: list[LogMedia] | None = Field(default=None, max_length=16)
+
+
+class RequestLogPage(ClosedModel):
+    """One bounded detailed-log page."""
+
+    items: list[RequestLogSummary]
+    page: PageInfo
+
+
+class LogRetentionSettings(ClosedModel):
+    """One global whole-day diagnostic retention duration."""
+
+    duration_days: int = Field(ge=1, le=30)
+
+
+class HealthComponent(ClosedModel):
+    """One small operator health component."""
+
+    name: str = Field(min_length=1, max_length=200)
+    status: Literal["healthy", "degraded", "unavailable"]
+    message: str | None = Field(default=None, max_length=500)
+
+
+class AdministratorHealth(ClosedModel):
+    """Small global administrator health summary."""
+
+    status: Literal["healthy", "degraded", "unavailable"]
+    checked_at: datetime
+    components: list[HealthComponent]

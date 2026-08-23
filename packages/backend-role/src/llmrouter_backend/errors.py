@@ -52,3 +52,12 @@ def invalid_request(field: str | None = None, reason: str | None = None) -> ApiE
         field=field,
         reason=reason,
     )
+
+
+def content_unavailable() -> ApiError:
+    """Report safe early loss or expiry of retained media bytes."""
+    return ApiError(
+        404,
+        "content_unavailable",
+        "The retained content is not available.",
+    )

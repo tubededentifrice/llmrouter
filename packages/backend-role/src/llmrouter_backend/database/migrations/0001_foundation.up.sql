@@ -112,6 +112,15 @@ CREATE TABLE router.activity_events (
 
 CREATE INDEX activity_events_time ON router.activity_events(occurred_at DESC, id DESC);
 
+CREATE TABLE router.global_settings (
+    singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+    log_retention_days integer NOT NULL DEFAULT 7
+        CHECK (log_retention_days BETWEEN 1 AND 30),
+    updated_at timestamptz NOT NULL DEFAULT transaction_timestamp()
+);
+
+INSERT INTO router.global_settings (singleton) VALUES (true);
+
 -- These service and workspace ownership roots make later call, accounting,
 -- log, and media migrations deletion-safe. A late result cannot recreate data
 -- after its service or workspace has been removed because each insert needs the
@@ -128,11 +137,27 @@ CREATE TABLE router.request_logs (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     service_id uuid NOT NULL,
     workspace_id uuid NOT NULL,
-    payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+    assignment_api_name router.assignment_name,
+    provider_model_api_name router.api_name,
+    kind text NOT NULL CHECK (kind IN ('model', 'embedding', 'media')),
+    outcome text NOT NULL CHECK (outcome IN ('succeeded', 'failed')),
+    tags jsonb NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(tags) = 'array'),
+    request_json text NOT NULL CHECK (char_length(request_json) <= 5000000),
+    response_json text CHECK (char_length(response_json) <= 5000000),
+    attempts jsonb NOT NULL DEFAULT '[]'::jsonb
+        CHECK (jsonb_typeof(attempts) = 'array'
+               AND jsonb_array_length(attempts) <= 16),
+    started_at timestamptz NOT NULL,
     created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+    UNIQUE (service_id, workspace_id, id),
     FOREIGN KEY (service_id, workspace_id)
         REFERENCES router.workspaces(service_id, id) ON DELETE CASCADE
 );
+
+CREATE INDEX request_logs_time
+    ON router.request_logs(started_at DESC, id DESC);
+CREATE INDEX request_logs_scope_time
+    ON router.request_logs(service_id, workspace_id, started_at DESC, id DESC);
 
 CREATE TABLE router.raw_accounting (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -193,10 +218,51 @@ CREATE TABLE router.media_objects (
     service_id uuid NOT NULL,
     workspace_id uuid NOT NULL,
     media_job_id uuid,
+    request_log_id uuid,
     object_key text NOT NULL UNIQUE CHECK (octet_length(object_key) BETWEEN 1 AND 1024),
+    media_type text NOT NULL CHECK (char_length(media_type) BETWEEN 1 AND 200),
+    role text NOT NULL CHECK (role IN ('input', 'output')),
+    size_bytes bigint NOT NULL CHECK (size_bytes BETWEEN 0 AND 1073741824),
+    content_sha256 bytea NOT NULL CHECK (octet_length(content_sha256) = 32),
     created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
     FOREIGN KEY (service_id, workspace_id)
         REFERENCES router.workspaces(service_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (service_id, workspace_id, request_log_id)
+        REFERENCES router.request_logs(service_id, workspace_id, id) ON DELETE CASCADE,
     FOREIGN KEY (service_id, workspace_id, media_job_id)
         REFERENCES router.media_jobs(service_id, workspace_id, id) ON DELETE CASCADE
 );
+
+CREATE INDEX media_objects_request_log
+    ON router.media_objects(request_log_id, id);
+CREATE INDEX media_objects_scope_time
+    ON router.media_objects(service_id, workspace_id, created_at, id);
+
+-- Rows remain after public metadata is removed. This lets object deletion
+-- finish after a service, workspace, log, or retention delete commits.
+CREATE TABLE router.object_deletion_queue (
+    object_key text PRIMARY KEY CHECK (octet_length(object_key) BETWEEN 1 AND 1024),
+    queued_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+    last_attempt_at timestamptz,
+    failure_count integer NOT NULL DEFAULT 0 CHECK (failure_count >= 0),
+    failure_class text CHECK (char_length(failure_class) BETWEEN 1 AND 200)
+);
+
+CREATE INDEX object_deletion_queue_age
+    ON router.object_deletion_queue(queued_at, object_key);
+
+CREATE FUNCTION router.queue_media_object_deletion() RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, router
+AS $$
+BEGIN
+    INSERT INTO router.object_deletion_queue (object_key)
+    VALUES (OLD.object_key)
+    ON CONFLICT (object_key) DO NOTHING;
+    RETURN OLD;
+END;
+$$;
+
+CREATE TRIGGER media_objects_queue_deletion
+AFTER DELETE ON router.media_objects
+FOR EACH ROW EXECUTE FUNCTION router.queue_media_object_deletion();

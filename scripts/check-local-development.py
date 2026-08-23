@@ -18,13 +18,21 @@ EXPECTED_PORT_BINDINGS = {
     "127.0.0.1:8010:8000",
     "127.0.0.1:5174:5173",
 }
-EXPECTED_IMAGE_COUNT = 3
+EXPECTED_IMAGE_COUNT = 4
 
 
 def main() -> None:
     """Reject public ports, floating images, and obsolete runtime roles."""
     text = COMPOSE_PATH.read_text(encoding="utf-8")
-    required = {"postgres", "migrate", "backend", "node-dependencies", "admin-dev"}
+    required = {
+        "postgres",
+        "object-storage-init",
+        "object-storage",
+        "migrate",
+        "backend",
+        "node-dependencies",
+        "admin-dev",
+    }
     missing = sorted(name for name in required if f"\n  {name}:\n" not in text)
     if missing:
         raise SystemExit("The local Compose service map is incomplete.")
@@ -80,6 +88,17 @@ def main() -> None:
         or "llmrouter-python-environment:/workspace/.venv" in text
     ):
         raise SystemExit("The container Python environment is not isolated.")
+    required_storage_inputs = {
+        "GARAGE_DEFAULT_BUCKET: llmrouter-local",
+        "LLMROUTER_OBJECT_STORE_ENDPOINT: http://object-storage:3900",
+        "LLMROUTER_OBJECT_STORE_BUCKET: llmrouter-local",
+        "LLMROUTER_OBJECT_STORE_ACCESS_KEY_FILE: /run/secrets/object_store_access_key",
+        "LLMROUTER_OBJECT_STORE_SECRET_KEY_FILE: /run/secrets/object_store_secret_key",
+        "file: .local-development/object-store-access-key",
+        "file: .local-development/object-store-secret-key",
+    }
+    if any(value not in text for value in required_storage_inputs):
+        raise SystemExit("The private object-store deployment inputs are incomplete.")
 
     required_proxy = {
         "networks:\n      - default\n      - traefik-proxy\n    labels:",

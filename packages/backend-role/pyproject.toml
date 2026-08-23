@@ -8,6 +8,7 @@ version = "0.0.0"
 description = "LLM Router web application"
 requires-python = "==3.14.*"
 dependencies = [
+  "boto3==1.40.0",
   "cryptography==49.0.0",
   "fastapi==0.140.13",
   "httpx==0.28.1",

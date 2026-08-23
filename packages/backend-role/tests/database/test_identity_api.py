@@ -543,14 +543,17 @@ def test_workspace_delete_cascades_and_blocks_late_media_results(
             connection.execute(
                 "UPDATE router.media_jobs SET state = 'failed' WHERE id = %s", (job,)
             )
-        for table in ("request_logs", "raw_accounting"):
-            connection.execute(
-                (
-                    f"INSERT INTO router.{table} (service_id, workspace_id) "  # noqa: S608
-                    "VALUES (%s, %s)"
-                ),
-                (service, workspace),
-            )
+        connection.execute(
+            """INSERT INTO router.request_logs
+                   (service_id, workspace_id, kind, outcome, request_json, started_at)
+               VALUES (%s, %s, 'model', 'failed', '{}', statement_timestamp())""",
+            (service, workspace),
+        )
+        connection.execute(
+            """INSERT INTO router.raw_accounting (service_id, workspace_id)
+               VALUES (%s, %s)""",
+            (service, workspace),
+        )
         connection.execute(
             """INSERT INTO router.daily_accounting
                    (service_id, workspace_id, day)
@@ -559,8 +562,10 @@ def test_workspace_delete_cascades_and_blocks_late_media_results(
         )
         connection.execute(
             """INSERT INTO router.media_objects
-                   (service_id, workspace_id, media_job_id, object_key)
-               VALUES (%s, %s, %s, 'object')""",
+                   (service_id, workspace_id, media_job_id, object_key,
+                    media_type, role, size_bytes, content_sha256)
+               VALUES (%s, %s, %s, 'object', 'image/png', 'output', 1,
+                       decode(repeat('00', 32), 'hex'))""",
             (service, workspace, job),
         )
         with (
@@ -569,8 +574,10 @@ def test_workspace_delete_cascades_and_blocks_late_media_results(
         ):
             connection.execute(
                 """INSERT INTO router.media_objects
-                       (service_id, workspace_id, object_key)
-                   VALUES (%s, %s, 'object')""",
+                       (service_id, workspace_id, object_key, media_type, role,
+                        size_bytes, content_sha256)
+                   VALUES (%s, %s, 'object', 'image/png', 'output', 1,
+                           decode(repeat('00', 32), 'hex'))""",
                 (service, workspace),
             )
         connection.execute("DELETE FROM router.workspaces WHERE id = %s", (workspace,))
@@ -590,8 +597,10 @@ def test_workspace_delete_cascades_and_blocks_late_media_results(
         ):
             connection.execute(
                 """INSERT INTO router.media_objects
-                       (service_id, workspace_id, object_key)
-                   VALUES (%s, %s, 'late')""",
+                           (service_id, workspace_id, object_key, media_type, role,
+                            size_bytes, content_sha256)
+                       VALUES (%s, %s, 'late', 'video/mp4', 'output', 1,
+                               decode(repeat('00', 32), 'hex'))""",
                 (service, workspace),
             )
         connection.execute(

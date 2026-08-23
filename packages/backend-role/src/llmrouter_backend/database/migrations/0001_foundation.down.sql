@@ -1,3 +1,5 @@
+DROP FUNCTION router.queue_media_object_deletion() CASCADE;
+DROP TABLE router.object_deletion_queue;
 DROP TABLE router.media_objects;
 DROP TABLE router.media_jobs;
 DROP FUNCTION router.enforce_media_job_state_transition();
@@ -5,6 +7,7 @@ DROP TABLE router.daily_accounting;
 DROP TABLE router.raw_accounting;
 DROP TABLE router.request_logs;
 DROP TABLE router.assignment_definitions;
+DROP TABLE router.global_settings;
 DROP TABLE router.activity_events;
 DROP TABLE router.administrator_sessions;
 DROP TABLE router.administrator_oidc_flows;

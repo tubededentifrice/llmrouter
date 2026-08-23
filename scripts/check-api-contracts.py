@@ -153,7 +153,9 @@ def parameter_references(operation: dict[str, Any]) -> set[str]:
 
 
 def check_operations(
-    spec: dict[str, Any], spec_operations: dict[str, dict[str, Any]], policy: dict[str, Any]
+    spec: dict[str, Any],
+    spec_operations: dict[str, dict[str, Any]],
+    policy: dict[str, Any],
 ) -> None:
     """Check operation access, errors, and browser write controls."""
     policy_operations = policy.get("operations", {})
@@ -244,7 +246,9 @@ def check_reset_boundaries(spec: dict[str, Any]) -> None:
         )
     callback = spec.get("paths", {}).get("/v1/admin/oidc/callback", {})
     if "get" not in callback or "post" in callback:
-        raise ContractError("The OpenID Connect callback is not a browser GET operation")
+        raise ContractError(
+            "The OpenID Connect callback is not a browser GET operation"
+        )
     for path in paths:
         for forbidden in FORBIDDEN_PATH_PARTS:
             if forbidden in path:
@@ -269,7 +273,9 @@ def check_reset_boundaries(spec: dict[str, Any]) -> None:
         "#/components/schemas/ExactProviderModelSelector",
     }
     if refs != expected_refs:
-        raise ContractError("ModelSelector must select one assignment or exact provider-model")
+        raise ContractError(
+            "ModelSelector must select one assignment or exact provider-model"
+        )
     for name in ("ModelCallRequest", "EmbeddingRequest", "MediaJobRequest"):
         required = set(schemas[name].get("required", []))
         if not {"workspace_api_name", "selector"}.issubset(required):
@@ -283,8 +289,7 @@ def check_reset_boundaries(spec: dict[str, Any]) -> None:
         exclusions.get("type") != "array"
         or exclusions.get("maxItems") != 16
         or exclusions.get("uniqueItems") is not True
-        or exclusions.get("items", {}).get("$ref")
-        != "#/components/schemas/ApiName"
+        or exclusions.get("items", {}).get("$ref") != "#/components/schemas/ApiName"
     ):
         raise ContractError(
             "Model-call provider-model exclusions are not bounded and unique"
@@ -353,7 +358,9 @@ def check_reset_boundaries(spec: dict[str, Any]) -> None:
 
     effective_chain = schemas.get("EffectiveAssignmentChain", {})
     if effective_chain.get("minItems") != 0:
-        raise ContractError("The effective assignment chain cannot represent empty default")
+        raise ContractError(
+            "The effective assignment chain cannot represent empty default"
+        )
     assignment_fields = set(schemas.get("Assignment", {}).get("properties", {}))
     if "observed_requirements" not in assignment_fields:
         raise ContractError("Assignments do not expose observed call requirements")
@@ -399,8 +406,10 @@ def check_reset_boundaries(spec: dict[str, Any]) -> None:
     if model_result_refs != expected_result_refs:
         raise ContractError("Model-call results are not discriminated by output form")
 
-    retention = schemas.get("LogRetentionSettings", {}).get("properties", {}).get(
-        "duration_days", {}
+    retention = (
+        schemas.get("LogRetentionSettings", {})
+        .get("properties", {})
+        .get("duration_days", {})
     )
     if retention.get("minimum") != 1 or retention.get("maximum") != 30:
         raise ContractError("Log retention is not bounded from 1 through 30 days")
@@ -438,7 +447,9 @@ def check_reset_boundaries(spec: dict[str, Any]) -> None:
 
     service_key = spec["components"]["securitySchemes"].get("serviceKey", {})
     if service_key.get("type") != "http" or service_key.get("scheme") != "bearer":
-        raise ContractError("Service authentication is not direct bearer service-key authentication")
+        raise ContractError(
+            "Service authentication is not direct bearer service-key authentication"
+        )
 
 
 def check_error_drift(spec: dict[str, Any], errors_path: Path) -> None:
@@ -480,7 +491,9 @@ def check_fixtures(root: Path, spec: dict[str, Any], policy: dict[str, Any]) -> 
         )
     for relative_path, schema_name in declared.items():
         fixture_path = root / "docs/api" / relative_path
-        instance = strict_json(fixture_path.read_text(encoding="utf-8"), str(fixture_path))
+        instance = strict_json(
+            fixture_path.read_text(encoding="utf-8"), str(fixture_path)
+        )
         schema = spec["components"]["schemas"].get(schema_name)
         if schema is None:
             raise ContractError(f"{relative_path} names unknown schema {schema_name}")
@@ -490,7 +503,9 @@ def check_fixtures(root: Path, spec: dict[str, Any], policy: dict[str, Any]) -> 
         )
         if errors:
             detail = "; ".join(error.message for error in errors[:5])
-            raise ContractError(f"{relative_path} does not match {schema_name}: {detail}")
+            raise ContractError(
+                f"{relative_path} does not match {schema_name}: {detail}"
+            )
 
 
 def check_artifact_digests(root: Path) -> None:

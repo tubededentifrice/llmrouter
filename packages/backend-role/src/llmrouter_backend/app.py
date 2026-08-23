@@ -3,13 +3,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import os
 import uuid
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal, cast
 
 import httpx
 import psycopg
@@ -23,6 +25,15 @@ from starlette.middleware.base import RequestResponseEndpoint
 
 from llmrouter_backend.config import Settings
 from llmrouter_backend.database import migration_plan
+from llmrouter_backend.diagnostics import (
+    apply_retention_and_cleanup,
+    cleanup_health,
+    get_log_retention,
+    get_request_log,
+    get_request_log_media,
+    list_request_logs,
+    put_log_retention,
+)
 from llmrouter_backend.errors import (
     ApiError,
     authentication_required,
@@ -33,9 +44,15 @@ from llmrouter_backend.errors import (
 from llmrouter_backend.models import (
     ActivityEvent,
     ActivityPage,
+    AdministratorHealth,
     AdministratorSession,
     AdministratorSessionStart,
+    HealthComponent,
+    LogRetentionSettings,
     PageInfo,
+    RequestLog,
+    RequestLogPage,
+    RequestLogSummary,
     Service,
     ServiceCreate,
     ServiceKey,
@@ -48,6 +65,7 @@ from llmrouter_backend.models import (
     WorkspaceCreate,
     WorkspacePage,
 )
+from llmrouter_backend.object_store import ObjectStore, ObjectStoreError
 from llmrouter_backend.security import (
     AdministratorSecrets,
     ControlKeys,
@@ -95,12 +113,29 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
     database_url: str | None = None,
     settings: Settings | None = None,
     oidc_transport: httpx.BaseTransport | None = None,
+    object_store: ObjectStore | None = None,
 ) -> FastAPI:
     """Create one application with optional fixed runtime dependencies."""
-    application = FastAPI(title="LLM Router", version="1.0.0")
+    settings_value = settings or Settings.from_environment()
+    object_store_value = object_store or ObjectStore.from_settings(settings_value)
+
+    @asynccontextmanager
+    async def lifespan(_application: FastAPI) -> AsyncIterator[None]:
+        cleanup_task = asyncio.create_task(
+            _retention_cleanup_loop(database_url, object_store_value)
+        )
+        try:
+            yield
+        finally:
+            cleanup_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await cleanup_task
+
+    application = FastAPI(title="LLM Router", version="1.0.0", lifespan=lifespan)
     application.state.database_url = database_url
-    application.state.settings = settings or Settings.from_environment()
+    application.state.settings = settings_value
     application.state.oidc_transport = oidc_transport
+    application.state.object_store = object_store_value
     _install_error_handlers(application)
 
     @application.middleware("http")
@@ -133,6 +168,9 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
 
     def control_keys(request: Request) -> ControlKeys:
         return ControlKeys.load(request.app.state.settings)
+
+    def retained_objects(request: Request) -> ObjectStore | None:
+        return cast("ObjectStore | None", request.app.state.object_store)
 
     def service_actor(
         request: Request,
@@ -263,6 +301,7 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
         workspace_api_name: ApiNamePath,
         actor: ServiceActor = Depends(service_actor),
         database: psycopg.Connection[Any] = Depends(connection),
+        objects: ObjectStore | None = Depends(retained_objects),
     ) -> Response:
         delete_workspace(
             database,
@@ -270,6 +309,7 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
             api_name=workspace_api_name,
             actor_subject=actor.activity_subject,
         )
+        _commit_public_delete_and_cleanup(database, objects)
         return Response(status_code=HTTPStatus.NO_CONTENT)
 
     @application.get(
@@ -570,9 +610,11 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
         actor: AdministratorActor = Depends(administrator_actor),
         database: psycopg.Connection[Any] = Depends(connection),
         controls: ControlKeys = Depends(control_keys),
+        objects: ObjectStore | None = Depends(retained_objects),
     ) -> Response:
         _require_browser_write(request, actor, controls)
         delete_service(database, api_name=service_api_name, actor=actor)
+        _commit_public_delete_and_cleanup(database, objects)
         return Response(status_code=HTTPStatus.NO_CONTENT)
 
     @application.get(
@@ -648,6 +690,7 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
         actor: AdministratorActor = Depends(administrator_actor),
         database: psycopg.Connection[Any] = Depends(connection),
         controls: ControlKeys = Depends(control_keys),
+        objects: ObjectStore | None = Depends(retained_objects),
     ) -> Response:
         _require_browser_write(request, actor, controls)
         delete_workspace(
@@ -656,6 +699,7 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
             api_name=workspace_api_name,
             actor_subject=actor.activity_subject,
         )
+        _commit_public_delete_and_cleanup(database, objects)
         return Response(status_code=HTTPStatus.NO_CONTENT)
 
     @application.get(
@@ -738,7 +782,9 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
         cursor: Annotated[str | None, Query(min_length=1, max_length=500)] = None,
         _actor: AdministratorActor = Depends(administrator_actor),
         database: psycopg.Connection[Any] = Depends(connection),
+        objects: ObjectStore | None = Depends(retained_objects),
     ) -> ActivityPage:
+        apply_retention_and_cleanup(database, objects)
         items, next_cursor = list_activity(
             database,
             from_time=from_time,
@@ -749,6 +795,139 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
         return ActivityPage(
             items=[ActivityEvent.model_validate(item) for item in items],
             page=PageInfo(has_more=next_cursor is not None, next_cursor=next_cursor),
+        )
+
+    @application.get(
+        "/v1/admin/request-logs",
+        response_model=RequestLogPage,
+        response_model_exclude_none=True,
+    )
+    def admin_list_request_logs(
+        from_time: Annotated[datetime, Query(alias="from")],
+        to_time: Annotated[datetime, Query(alias="to")],
+        limit: Annotated[int, Query(ge=1, le=200)] = 50,
+        cursor: Annotated[str | None, Query(min_length=1, max_length=500)] = None,
+        _actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+        objects: ObjectStore | None = Depends(retained_objects),
+    ) -> RequestLogPage:
+        apply_retention_and_cleanup(database, objects)
+        items, next_cursor = list_request_logs(
+            database,
+            from_time=from_time,
+            to_time=to_time,
+            limit=limit,
+            cursor=cursor,
+        )
+        return RequestLogPage(
+            items=[RequestLogSummary.model_validate(item) for item in items],
+            page=PageInfo(has_more=next_cursor is not None, next_cursor=next_cursor),
+        )
+
+    @application.get(
+        "/v1/admin/request-logs/{request_log_id}",
+        response_model=RequestLog,
+        response_model_exclude_none=True,
+    )
+    def admin_get_request_log(
+        request_log_id: str,
+        _actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+        objects: ObjectStore | None = Depends(retained_objects),
+    ) -> dict[str, Any]:
+        apply_retention_and_cleanup(database, objects)
+        return get_request_log(database, _opaque_uuid(request_log_id, "request_log_id"))
+
+    @application.get(
+        "/v1/admin/request-logs/{request_log_id}/media/{media_id}/content",
+        response_model=None,
+    )
+    def admin_get_request_log_media(
+        request_log_id: str,
+        media_id: str,
+        _actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+        objects: ObjectStore | None = Depends(retained_objects),
+    ) -> Response:
+        apply_retention_and_cleanup(database, objects)
+        stored = get_request_log_media(
+            database,
+            objects,
+            request_log_id=_opaque_uuid(request_log_id, "request_log_id"),
+            media_id=_opaque_uuid(media_id, "media_id"),
+        )
+        return Response(
+            stored.body,
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": 'attachment; filename="retained-media"',
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    @application.get(
+        "/v1/admin/settings/log-retention",
+        response_model=LogRetentionSettings,
+    )
+    def admin_get_log_retention(
+        _actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+        objects: ObjectStore | None = Depends(retained_objects),
+    ) -> LogRetentionSettings:
+        apply_retention_and_cleanup(database, objects)
+        return LogRetentionSettings(duration_days=get_log_retention(database))
+
+    @application.put(
+        "/v1/admin/settings/log-retention",
+        response_model=LogRetentionSettings,
+    )
+    def admin_put_log_retention(
+        body: LogRetentionSettings,
+        request: Request,
+        actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+        controls: ControlKeys = Depends(control_keys),
+        objects: ObjectStore | None = Depends(retained_objects),
+    ) -> LogRetentionSettings:
+        _require_browser_write(request, actor, controls)
+        duration = put_log_retention(
+            database, duration_days=body.duration_days, actor=actor
+        )
+        apply_retention_and_cleanup(database, objects)
+        return LogRetentionSettings(duration_days=duration)
+
+    @application.get(
+        "/v1/admin/health",
+        response_model=AdministratorHealth,
+        response_model_exclude_none=True,
+    )
+    def admin_health(
+        _actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+        objects: ObjectStore | None = Depends(retained_objects),
+    ) -> AdministratorHealth:
+        apply_retention_and_cleanup(database, objects)
+        object_status: Literal["healthy", "degraded", "unavailable"] = (
+            "healthy" if objects is not None and objects.healthy() else "unavailable"
+        )
+        retention_status = cleanup_health(database)
+        components = [
+            HealthComponent(name="web_application", status="healthy"),
+            HealthComponent(name="postgresql", status="healthy"),
+            HealthComponent(name="object_storage", status=object_status),
+            HealthComponent(name="price_synchronization", status="healthy"),
+            HealthComponent(name="log_retention", status=retention_status),
+            HealthComponent(name="accounting_rollup", status="healthy"),
+        ]
+        overall: Literal["healthy", "degraded", "unavailable"] = (
+            "unavailable"
+            if any(component.status == "unavailable" for component in components)
+            else "degraded"
+            if any(component.status == "degraded" for component in components)
+            else "healthy"
+        )
+        return AdministratorHealth(
+            status=overall, checked_at=datetime.now(tz=UTC), components=components
         )
 
     return application
@@ -824,6 +1003,52 @@ def _key_id(value: str) -> uuid.UUID:
         raise invalid_request(
             "key_id", "The service key identifier is invalid."
         ) from None
+
+
+def _opaque_uuid(value: str, field: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(value)
+    except ValueError:
+        raise invalid_request(field, "The identifier is invalid.") from None
+
+
+def _commit_public_delete_and_cleanup(
+    database: psycopg.Connection[Any], object_store: ObjectStore | None
+) -> None:
+    """Make a scope absent before best-effort physical object cleanup."""
+    database.commit()
+    try:
+        apply_retention_and_cleanup(database, object_store)
+    except ObjectStoreError, psycopg.Error:
+        database.rollback()
+
+
+async def _retention_cleanup_loop(
+    fixed_database_url: str | None, object_store: ObjectStore | None
+) -> None:
+    """Retry bounded retention and physical deletion work each minute."""
+    while True:
+        await asyncio.to_thread(
+            _run_scheduled_cleanup, fixed_database_url, object_store
+        )
+        await asyncio.sleep(60)
+
+
+def _run_scheduled_cleanup(
+    fixed_database_url: str | None, object_store: ObjectStore | None
+) -> None:
+    database_url = fixed_database_url or os.environ.get("LLMROUTER_DATABASE_URL")
+    if database_url is None:
+        return
+    try:
+        with psycopg.connect(
+            database_url,
+            connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
+            row_factory=dict_row,
+        ) as database:
+            apply_retention_and_cleanup(database, object_store)
+    except OSError, UnicodeError, RuntimeError, psycopg.Error:
+        return
 
 
 def _install_error_handlers(application: FastAPI) -> None:

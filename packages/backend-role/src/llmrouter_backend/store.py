@@ -523,7 +523,11 @@ def list_activity(
     cursor_time: datetime | None = None
     if cursor_id is not None:
         cursor_row = connection.execute(
-            "SELECT occurred_at FROM router.activity_events WHERE id = %s",
+            """SELECT occurred_at
+               FROM router.activity_events, router.global_settings
+               WHERE activity_events.id = %s
+                 AND activity_events.occurred_at >= statement_timestamp()
+                     - make_interval(days => global_settings.log_retention_days)""",
             (cursor_id,),
         ).fetchone()
         if cursor_row is None:
@@ -533,7 +537,10 @@ def list_activity(
         """SELECT id, actor_subject, action, resource_type, service_api_name,
                   resource_api_name, resource_id, result, occurred_at
            FROM router.activity_events
+           CROSS JOIN router.global_settings
            WHERE occurred_at >= %s AND occurred_at < %s
+             AND occurred_at >= statement_timestamp()
+                 - make_interval(days => global_settings.log_retention_days)
              AND (
                  %s::timestamptz IS NULL
                  OR (occurred_at, id) < (%s, %s)

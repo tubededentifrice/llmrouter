@@ -86,6 +86,7 @@ def test_local_wrapper_preserves_identity_inputs_and_resets_database() -> None:
     identity_check = script[script.index("  for target in") : script.index("  done")]
     assert "pocket-id-administrator-subjects" in identity_check
     assert 'if [[ "${configured}" == "3" ]]' in script
+    assert script.index("prepare_secrets") < script.index('case "${action}" in')
 
 
 def test_pocket_id_callback_matches_the_registered_exact_redirect() -> None:
@@ -116,8 +117,8 @@ def test_local_start_reruns_migrations_before_the_application() -> None:
         encoding="utf-8"
     )
     migration_command = (
-        "compose up --detach --remove-orphans --force-recreate "
-        "migrate node-dependencies"
+        "compose up --detach --remove-orphans --force-recreate \\\n"
+        "        object-storage migrate node-dependencies"
     )
     stop = script.index("compose stop admin-dev backend")
     migration = script.index(migration_command, stop)

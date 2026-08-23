@@ -45,6 +45,78 @@ services:
       start_period: 10s
       retries: 30
 
+  object-storage-init:
+    <<: *python-service
+    restart: "no"
+    working_dir: /tmp
+    environment:
+      UV_CACHE_DIR: /tmp/uv-cache
+      UV_PYTHON_DOWNLOADS: never
+    command:
+      - uv
+      - run
+      - --no-project
+      - --python
+      - /usr/local/bin/python
+      - python
+      - -c
+      - |
+        import os
+        root = "/var/lib/garage"
+        os.chown(root, 1000, 1000, follow_symlinks=False)
+        for directory, names, files in os.walk(root):
+            for name in (*names, *files):
+                os.chown(
+                    os.path.join(directory, name),
+                    1000,
+                    1000,
+                    follow_symlinks=False,
+                )
+    volumes:
+      - llmrouter-object-storage-data:/var/lib/garage
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+
+  object-storage:
+    image: dxflrs/garage:v2.3.0@sha256:dac0c92add4f1a0b41035e94b41036a270ffbe88a37c7ac9c3f19e6dc5bdccf2
+    platform: linux/amd64
+    user: "1000:1000"
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      GARAGE_CONFIG_FILE: /etc/garage.toml
+      GARAGE_RPC_SECRET: ${LLMROUTER_OBJECT_STORE_RPC_SECRET:?Run scripts/local-development.sh}
+      GARAGE_DEFAULT_ACCESS_KEY: ${LLMROUTER_OBJECT_STORE_ACCESS_KEY:?Run scripts/local-development.sh}
+      GARAGE_DEFAULT_SECRET_KEY: ${LLMROUTER_OBJECT_STORE_SECRET_KEY:?Run scripts/local-development.sh}
+      GARAGE_DEFAULT_BUCKET: llmrouter-local
+      RUST_LOG: warn
+    command: ["/garage", "server", "--single-node", "--default-bucket"]
+    depends_on:
+      object-storage-init:
+        condition: service_completed_successfully
+    volumes:
+      - llmrouter-object-storage-data:/var/lib/garage
+      - ./scripts/local-development-object-storage.toml:/etc/garage.toml:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m,uid=1000,gid=1000,mode=1770
+    healthcheck:
+      test: ["CMD", "/garage", "status"]
+      interval: 3s
+      timeout: 3s
+      start_period: 10s
+      retries: 30
+
   migrate:
     <<: *python-service
     restart: "no"
@@ -67,6 +139,8 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      object-storage:
+        condition: service_healthy
     environment:
       LLMROUTER_PUBLIC_ADMIN_AUTH: ${LLMROUTER_PUBLIC_ADMIN_AUTH:-0}
       LLMROUTER_OIDC_ISSUER: https://auth.opendle.dev
@@ -78,6 +152,11 @@ services:
       LLMROUTER_ADMINISTRATOR_SUBJECTS_FILE: /run/secrets/administrator_subjects
       LLMROUTER_ADMIN_DIGEST_KEY_FILE: /run/secrets/administrator_digest_key
       LLMROUTER_ADMIN_ENCRYPTION_KEY_FILE: /run/secrets/administrator_encryption_key
+      LLMROUTER_OBJECT_STORE_ENDPOINT: http://object-storage:3900
+      LLMROUTER_OBJECT_STORE_BUCKET: llmrouter-local
+      LLMROUTER_OBJECT_STORE_REGION: garage
+      LLMROUTER_OBJECT_STORE_ACCESS_KEY_FILE: /run/secrets/object_store_access_key
+      LLMROUTER_OBJECT_STORE_SECRET_KEY_FILE: /run/secrets/object_store_secret_key
     secrets:
       - postgres_password
       - oidc_client_id
@@ -85,6 +164,8 @@ services:
       - administrator_subjects
       - administrator_digest_key
       - administrator_encryption_key
+      - object_store_access_key
+      - object_store_secret_key
     command:
       - /bin/sh
       - -euc
@@ -161,6 +242,10 @@ secrets:
     file: .local-development/administrator-digest-key
   administrator_encryption_key:
     file: .local-development/administrator-encryption-key
+  object_store_access_key:
+    file: .local-development/object-store-access-key
+  object_store_secret_key:
+    file: .local-development/object-store-secret-key
 
 networks:
   traefik-proxy:
@@ -170,5 +255,6 @@ volumes:
   llmrouter-admin-node-modules:
   llmrouter-node-modules:
   llmrouter-postgres-data:
+  llmrouter-object-storage-data:
   llmrouter-python-environment:
   llmrouter-uv-cache:

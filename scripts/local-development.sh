@@ -62,6 +62,50 @@ install_secret() {
   validate_secret "${target}" "${mode}"
 }
 
+install_hex_secret() {
+  local target="$1"
+  if [[ -e "${target}" ]]; then
+    validate_secret "${target}"
+    return
+  fi
+  local temporary
+  temporary="$(mktemp "${state_directory}/.secret.XXXXXX")"
+  if ! uv run python -c "import secrets; print(secrets.token_hex(32))" >"${temporary}"; then
+    rm -f "${temporary}"
+    fail "A local secret could not be created."
+  fi
+  chmod 600 "${temporary}"
+  if ! ln "${temporary}" "${target}" 2>/dev/null; then
+    rm -f "${temporary}"
+    validate_secret "${target}"
+    return
+  fi
+  rm -f "${temporary}"
+  validate_secret "${target}"
+}
+
+install_object_store_access_key() {
+  local target="$1"
+  if [[ -e "${target}" ]]; then
+    validate_secret "${target}"
+    return
+  fi
+  local temporary
+  temporary="$(mktemp "${state_directory}/.secret.XXXXXX")"
+  if ! uv run python -c "import secrets; print('GK' + secrets.token_hex(12))" >"${temporary}"; then
+    rm -f "${temporary}"
+    fail "A local object-store control could not be created."
+  fi
+  chmod 600 "${temporary}"
+  if ! ln "${temporary}" "${target}" 2>/dev/null; then
+    rm -f "${temporary}"
+    validate_secret "${target}"
+    return
+  fi
+  rm -f "${temporary}"
+  validate_secret "${target}"
+}
+
 prepare_state_directory() {
   umask 077
   mkdir -p "${state_directory}"
@@ -77,6 +121,9 @@ prepare_secrets() {
   install_secret "${state_directory}/pocket-id-client-id" 0 400
   install_secret "${state_directory}/pocket-id-client-secret" 0 400
   install_secret "${state_directory}/pocket-id-administrator-subjects" 0 400
+  install_object_store_access_key "${state_directory}/object-store-access-key"
+  install_secret "${state_directory}/object-store-secret-key" 48
+  install_hex_secret "${state_directory}/object-store-rpc-secret"
 }
 
 compose() {
@@ -96,8 +143,12 @@ compose() {
   elif [[ "${configured}" != "0" ]]; then
     fail "The Pocket ID client configuration is incomplete."
   fi
-  env LLMROUTER_PUBLIC_ADMIN_AUTH="${public_admin_auth}" docker compose \
-    --project-directory "${repository_root}" -f "${compose_file}" "$@"
+  env LLMROUTER_PUBLIC_ADMIN_AUTH="${public_admin_auth}" \
+    LLMROUTER_OBJECT_STORE_ACCESS_KEY="$(<"${state_directory}/object-store-access-key")" \
+    LLMROUTER_OBJECT_STORE_SECRET_KEY="$(<"${state_directory}/object-store-secret-key")" \
+    LLMROUTER_OBJECT_STORE_RPC_SECRET="$(<"${state_directory}/object-store-rpc-secret")" \
+    docker compose --project-directory "${repository_root}" \
+    -f "${compose_file}" "$@"
 }
 
 cleanup_failed_start() {
@@ -137,16 +188,17 @@ main() {
   validate_environment
   require_tools
   prepare_state_directory
+  prepare_secrets
   case "${action}" in
     start)
       lock_operation
       trap cleanup_failed_start EXIT
-      prepare_secrets
       if [[ -z "$(compose ps --quiet)" ]]; then
         cleanup_new_deployment=1
       fi
       compose stop admin-dev backend >/dev/null
-      compose up --detach --remove-orphans --force-recreate migrate node-dependencies
+      compose up --detach --remove-orphans --force-recreate \
+        object-storage migrate node-dependencies
       compose wait migrate node-dependencies >/dev/null
       compose up --detach --remove-orphans --no-deps backend admin-dev
       wait_until_ready
