@@ -44,8 +44,6 @@ reference_paths=(
   scripts/check-python.sh
   scripts/check-repository.sh
   scripts/generate-contract-digests.py
-  scripts/local-development-bootstrap.py
-  scripts/local-development-live-openrouter.py
   scripts/local-development.sh
   scripts/tests/test_local_development.py
   tsconfig.json

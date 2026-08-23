@@ -66,6 +66,18 @@ Use `http://127.0.0.1:5174` for administration browser tests. Use local
 addresses for all agent checks. The protected
 [external site](https://llmrouter.opendle.dev) is for the user.
 
+The simplification reset uses a clean database. The reset command deletes the
+local PostgreSQL volume. It keeps the ignored Pocket ID client files,
+administrator subject allowlist, and administrator encryption keys.
+
+```bash
+./scripts/local-development.sh reset
+./scripts/local-development.sh start
+./scripts/local-development.sh status
+./scripts/local-development.sh logs
+./scripts/local-development.sh stop
+```
+
 Repository checks use:
 
 ```bash

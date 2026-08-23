@@ -1,4 +1,4 @@
-"""Isolated PostgreSQL databases for migration integration tests."""
+"""Create isolated PostgreSQL databases for migration tests."""
 
 from __future__ import annotations
 
@@ -28,12 +28,11 @@ def database_url() -> Iterator[str]:
             sql.SQL("CREATE DATABASE {}").format(sql.Identifier(database_name))
         )
 
-    connection_values = conninfo_to_dict(administrator_url)
-    connection_values["dbname"] = database_name
-    clean_connection_values = {
-        key: str(value) for key, value in connection_values.items() if value is not None
-    }
-    test_url = make_conninfo(**clean_connection_values)
+    values = conninfo_to_dict(administrator_url)
+    values["dbname"] = database_name
+    test_url = make_conninfo(
+        **{key: str(value) for key, value in values.items() if value is not None}
+    )
     try:
         yield test_url
     finally:

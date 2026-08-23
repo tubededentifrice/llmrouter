@@ -1,4 +1,4 @@
-# Localhost-only LLM Router MVP development deployment.
+# Localhost-only LLM Router development deployment.
 # Start and stop this file through scripts/local-development.sh.
 
 name: llmrouter-development
@@ -14,9 +14,6 @@ x-python-service: &python-service
     - .:/workspace:ro
     - llmrouter-python-environment:/python-environment
     - llmrouter-uv-cache:/root/.cache/uv
-  secrets:
-    - postgres_password
-    - machine_digest_key
 
 x-node-service: &node-service
   image: node:24.17.0-alpine@sha256:156b55f92e98ccd5ef49578a8cea0df4679826564bad1c9d4ef04462b9f0ded6
@@ -61,41 +58,8 @@ services:
         export LLMROUTER_DATABASE_URL="postgresql://llmrouter:$$(cat /run/secrets/postgres_password)@postgres:5432/llmrouter"
         uv sync --frozen --all-packages --python /usr/local/bin/python
         /python-environment/.venv/bin/python scripts/local-development-migrate.py
-    volumes:
-      - .:/workspace:ro
-      - llmrouter-python-environment:/python-environment
-      - llmrouter-uv-cache:/root/.cache/uv
-
-  token-worker:
-    <<: *python-service
-    restart: unless-stopped
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-    command:
-      - /bin/sh
-      - -euc
-      - |
-        export LLMROUTER_DATABASE_URL="postgresql://llmrouter:$$(cat /run/secrets/postgres_password)@postgres:5432/llmrouter"
-        while true; do
-          /python-environment/.venv/bin/python scripts/local-development-bootstrap.py
-          sleep 240
-        done
-    volumes:
-      - .:/workspace:ro
-      - ./.local-development:/local-state
-      - llmrouter-python-environment:/python-environment
-      - llmrouter-uv-cache:/root/.cache/uv
-    healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - "import os,time; path='/local-state/data-plane-token'; assert os.path.getsize(path) > 0 and time.time() - os.path.getmtime(path) < 270"
-      interval: 2s
-      timeout: 2s
-      start_period: 5s
-      retries: 30
+    secrets:
+      - postgres_password
 
   backend:
     <<: *python-service
@@ -104,48 +68,23 @@ services:
       migrate:
         condition: service_completed_successfully
     environment:
-      LLMROUTER_FRAME_ORIGIN: http://127.0.0.1:5175
-      LLMROUTER_LOCAL_RUNTIME: "1"
-      LLMROUTER_LOCAL_OPENROUTER_LIVE: ${LLMROUTER_LOCAL_OPENROUTER_LIVE:-0}
-      LLMROUTER_MACHINE_DIGEST_KEY_FILE: /run/secrets/machine_digest_key
-      LLMROUTER_WRAPPING_KEY_FILE: /run/secrets/credential_wrapping_key
-      LLMROUTER_IDEMPOTENCY_KEY_FILE: /run/secrets/idempotency_digest_key
-      LLMROUTER_DISTRIBUTION_KEY_FILE: /run/secrets/distribution_key
-      LLMROUTER_REPLAY_KEY_FILE: /run/secrets/canonical_replay_key
-      LLMROUTER_ADMIN_SESSION_FILE: /run/secrets/administrator_session
-      LLMROUTER_ADMIN_CSRF_FILE: /run/secrets/administrator_csrf
       LLMROUTER_PUBLIC_ADMIN_AUTH: ${LLMROUTER_PUBLIC_ADMIN_AUTH:-0}
       LLMROUTER_OIDC_CLIENT_ID_FILE: /run/secrets/oidc_client_id
       LLMROUTER_OIDC_CLIENT_SECRET_FILE: /run/secrets/oidc_client_secret
+      LLMROUTER_ADMINISTRATOR_SUBJECTS_FILE: /run/secrets/administrator_subjects
       LLMROUTER_ADMIN_DIGEST_KEY_FILE: /run/secrets/administrator_digest_key
       LLMROUTER_ADMIN_ENCRYPTION_KEY_FILE: /run/secrets/administrator_encryption_key
-      UV_LINK_MODE: copy
-      UV_PROJECT_ENVIRONMENT: /python-environment/.venv
-      UV_PYTHON_DOWNLOADS: never
     secrets:
       - postgres_password
-      - machine_digest_key
-      - credential_wrapping_key
-      - idempotency_digest_key
-      - distribution_key
-      - canonical_replay_key
-      - administrator_session
-      - administrator_csrf
       - oidc_client_id
       - oidc_client_secret
+      - administrator_subjects
       - administrator_digest_key
       - administrator_encryption_key
-    volumes:
-      - .:/workspace:ro
-      - ./.local-development:/local-state
-      - llmrouter-python-environment:/python-environment
-      - llmrouter-uv-cache:/root/.cache/uv
     command:
       - /bin/sh
       - -euc
       - |
-        mkdir -p /local-state/backend-replay
-        chmod 700 /local-state/backend-replay
         export LLMROUTER_DATABASE_URL="postgresql://llmrouter:$$(cat /run/secrets/postgres_password)@postgres:5432/llmrouter"
         exec /python-environment/.venv/bin/uvicorn llmrouter_backend.app:app --host 0.0.0.0 --port 8000 --no-access-log
     ports:
@@ -208,24 +147,12 @@ services:
 secrets:
   postgres_password:
     file: .local-development/postgres-password
-  machine_digest_key:
-    file: .local-development/machine-digest-key
-  credential_wrapping_key:
-    file: .local-development/credential-wrapping-key
-  idempotency_digest_key:
-    file: .local-development/idempotency-digest-key
-  distribution_key:
-    file: .local-development/distribution-key
-  canonical_replay_key:
-    file: .local-development/canonical-replay-key
-  administrator_session:
-    file: .local-development/administrator-session
-  administrator_csrf:
-    file: .local-development/administrator-csrf
   oidc_client_id:
     file: .local-development/pocket-id-client-id
   oidc_client_secret:
     file: .local-development/pocket-id-client-secret
+  administrator_subjects:
+    file: .local-development/pocket-id-administrator-subjects
   administrator_digest_key:
     file: .local-development/administrator-digest-key
   administrator_encryption_key:

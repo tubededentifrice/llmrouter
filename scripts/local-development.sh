@@ -48,11 +48,9 @@ install_secret() {
   temporary="$(mktemp "${state_directory}/.secret.XXXXXX")"
   if [[ "${length}" == "0" ]]; then
     : >"${temporary}"
-  else
-    if ! uv run python -c "import secrets; print(secrets.token_urlsafe(${length}))" >"${temporary}"; then
-      rm -f "${temporary}"
-      fail "A local secret could not be created."
-    fi
+  elif ! uv run python -c "import secrets; print(secrets.token_urlsafe(${length}))" >"${temporary}"; then
+    rm -f "${temporary}"
+    fail "A local secret could not be created."
   fi
   chmod "${mode}" "${temporary}"
   if ! ln "${temporary}" "${target}" 2>/dev/null; then
@@ -74,18 +72,11 @@ prepare_state_directory() {
 
 prepare_secrets() {
   install_secret "${state_directory}/postgres-password" 32
-  install_secret "${state_directory}/machine-digest-key" 32
-  install_secret "${state_directory}/credential-wrapping-key" 32
-  install_secret "${state_directory}/idempotency-digest-key" 32
-  install_secret "${state_directory}/distribution-key" 32
-  install_secret "${state_directory}/canonical-replay-key" 32
-  install_secret "${state_directory}/administrator-session" 32
-  install_secret "${state_directory}/administrator-csrf" 32
   install_secret "${state_directory}/administrator-digest-key" 32
   install_secret "${state_directory}/administrator-encryption-key" 32
   install_secret "${state_directory}/pocket-id-client-id" 0 400
   install_secret "${state_directory}/pocket-id-client-secret" 0 400
-  install_secret "${state_directory}/data-plane-token" 0
+  install_secret "${state_directory}/pocket-id-administrator-subjects" 0 400
 }
 
 compose() {
@@ -102,7 +93,7 @@ compose() {
   elif [[ "${configured}" != "0" ]]; then
     fail "The Pocket ID client configuration is incomplete."
   fi
-  env -u OPENROUTER_API_KEY LLMROUTER_PUBLIC_ADMIN_AUTH="${public_admin_auth}" docker compose \
+  env LLMROUTER_PUBLIC_ADMIN_AUTH="${public_admin_auth}" docker compose \
     --project-directory "${repository_root}" -f "${compose_file}" "$@"
 }
 
@@ -126,9 +117,9 @@ wait_until_ready() {
       http://127.0.0.1:8010/ready >/dev/null 2>&1 &&
       curl --fail --silent --show-error --max-time 2 \
         http://127.0.0.1:5174/ >/dev/null 2>&1; then
-      echo "The LLM Router localhost foundation is available."
+      echo "The LLM Router localhost application is available."
       echo "Administration: http://127.0.0.1:5174"
-      echo "Runtime components: http://127.0.0.1:8010/ready"
+      echo "Application readiness: http://127.0.0.1:8010/ready"
       return
     fi
     sleep 2
@@ -151,6 +142,7 @@ main() {
       if [[ -z "$(compose ps --quiet)" ]]; then
         cleanup_new_deployment=1
       fi
+      compose up --detach --remove-orphans --force-recreate migrate node-dependencies
       compose up --detach --remove-orphans
       compose restart admin-dev backend >/dev/null
       wait_until_ready
@@ -164,12 +156,6 @@ main() {
     reset)
       lock_operation
       compose down --volumes --remove-orphans
-      if [[ -d "${state_directory}/backend-replay" ]]; then
-        compose run --rm --no-deps backend /bin/sh -euc \
-          'find /local-state/backend-replay -maxdepth 1 -type f \( -name "accounting-replay.bin" -o -name "accounting-replay.bin.lock" -o -name "accounting-replay.bin.owner" -o -name "accounting-replay.bin.state" -o -name ".accounting-replay.bin.*.tmp" \) -delete; rmdir /local-state/backend-replay' \
-          >/dev/null
-        compose down --volumes --remove-orphans >/dev/null
-      fi
       ;;
     status)
       compose ps
@@ -177,31 +163,8 @@ main() {
     logs)
       compose logs --follow --tail 100
       ;;
-    live-openrouter|live-openrouter-mimo|live-openrouter-granite|live-openrouter-granite-stream)
-      if [[ ! -v OPENROUTER_API_KEY ]]; then
-        fail "OPENROUTER_API_KEY is required through an inherited secret environment input."
-      fi
-      model_arguments=()
-      if [[ "$1" == "live-openrouter-mimo" ]]; then
-        model_arguments=(--model mimo)
-      elif [[ "$1" == "live-openrouter-granite" ]]; then
-        model_arguments=(--model granite)
-      elif [[ "$1" == "live-openrouter-granite-stream" ]]; then
-        model_arguments=(--model granite --stream-only)
-      fi
-      trap 'env -u OPENROUTER_API_KEY "${repository_root}/scripts/local-development.sh" reset >/dev/null 2>&1 || true' EXIT
-      env -u OPENROUTER_API_KEY \
-        "${repository_root}/scripts/local-development.sh" reset
-      env -u OPENROUTER_API_KEY LLMROUTER_LOCAL_OPENROUTER_LIVE=1 \
-        "${repository_root}/scripts/local-development.sh" start
-      uv run --package llmrouter-backend python \
-        scripts/local-development-live-openrouter.py "${model_arguments[@]}"
-      env -u OPENROUTER_API_KEY \
-        "${repository_root}/scripts/local-development.sh" reset
-      trap - EXIT
-      ;;
     *)
-      fail "Usage: ./scripts/local-development.sh {start|stop|reset|status|logs|live-openrouter|live-openrouter-mimo|live-openrouter-granite|live-openrouter-granite-stream}"
+      fail "Usage: ./scripts/local-development.sh {start|stop|reset|status|logs}"
       ;;
   esac
 }

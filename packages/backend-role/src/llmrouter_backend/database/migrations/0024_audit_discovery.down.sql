@@ -1,1 +1,0 @@
-DROP INDEX router.audit_events_global_discovery_idx;

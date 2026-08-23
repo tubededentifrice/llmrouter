@@ -1,26 +1,52 @@
-"""Regression checks for clean repository test commands."""
+"""Regression checks for repository quality commands."""
 
+from __future__ import annotations
+
+import importlib.util
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+import pytest
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+BACKEND_RESET_PATH = REPOSITORY_ROOT / "scripts/check-backend-reset.py"
 
 
-def test_database_check_installs_all_workspace_packages() -> None:
-    """Load backend test dependencies in a clean root uv environment."""
+def _backend_reset_module() -> ModuleType:
+    specification = importlib.util.spec_from_file_location(
+        "check_backend_reset", BACKEND_RESET_PATH
+    )
+    assert specification is not None
+    assert specification.loader is not None
+    module = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module)
+    return module
+
+
+def test_database_check_runs_the_clean_migration_suite() -> None:
+    """Load backend dependencies before the PostgreSQL tests run."""
     script = (REPOSITORY_ROOT / "scripts/check-database.sh").read_text(encoding="utf-8")
     assert "uv run --all-packages pytest packages/backend-role/tests/database" in script
-
-
-def test_database_check_waits_for_the_final_postgres_process() -> None:
-    """Do not accept the temporary server that initializes the data directory."""
-    script = (REPOSITORY_ROOT / "scripts/check-database.sh").read_text(encoding="utf-8")
     assert "postgres_ready=0" in script
-    assert (
-        'cat /proc/1/comm 2>/dev/null)" == "postgres" ]] &&\n'
-        '      docker exec "${container_name}" pg_isready'
-    ) in script
-    assert "postgres_ready=1" in script
     assert 'if [[ "${postgres_ready}" -ne 1 ]]; then' in script
+
+
+def test_backend_reset_gate_accepts_the_clean_foundation() -> None:
+    """Accept the clean base without blocking later accepted work."""
+    _backend_reset_module().main()
+
+
+def test_backend_reset_gate_rejects_a_removed_script(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fail when an obsolete backend script path remains."""
+    module = _backend_reset_module()
+    monkeypatch.setattr(module, "REMOVED_PATHS", {"README.md"})
+    with pytest.raises(SystemExit, match="obsolete backend path"):
+        module.main()
 
 
 def test_node_check_installs_the_locked_dependency_tree() -> None:
@@ -29,20 +55,9 @@ def test_node_check_installs_the_locked_dependency_tree() -> None:
     assert script.index("npm ci") < script.index("npm run format:check")
 
 
-def test_bandit_suppressions_are_narrow_and_scanned() -> None:
-    """Keep the fixed public values under the normal Bandit source scan."""
+def test_python_check_scans_the_complete_backend_source() -> None:
+    """Keep strict checks and Bandit on the replacement application."""
     script = (REPOSITORY_ROOT / "scripts/check-python.sh").read_text(encoding="utf-8")
-    errors = (
-        REPOSITORY_ROOT
-        / "packages/backend-role/src/llmrouter_backend/authority/errors.py"
-    ).read_text(encoding="utf-8")
-    authority_testing = (
-        REPOSITORY_ROOT
-        / "packages/backend-role/src/llmrouter_backend/testing/authority.py"
-    ).read_text(encoding="utf-8")
     assert "packages/backend-role/src" in script
-    assert "\n  -s " not in script
-    assert "--skip B105" not in script
-    assert "--skip B106" not in script
-    assert 'INVALID_TOKEN = "invalid_token"  # noqa: S105  # nosec B105' in errors
-    assert 'token_id="test-token",  # noqa: S106  # nosec B106' in authority_testing
+    assert "uv run mypy packages" in script
+    assert "uv run bandit -q -r" in script

@@ -1,4 +1,4 @@
-"""Ordered, checksum-verified PostgreSQL migrations."""
+"""Ordered and checksum-verified PostgreSQL migrations."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ class Migration:
 
 
 def migration_plan() -> tuple[Migration, ...]:
-    """Load all migration pairs in version order."""
+    """Load all migration pairs in contiguous version order."""
     directory = files(__package__)
     result: list[Migration] = []
     for item in directory.iterdir():
@@ -63,27 +63,23 @@ def migration_plan() -> tuple[Migration, ...]:
 
 def _ensure_history(connection: Connection[Any]) -> None:
     connection.execute(
-        """
-        CREATE TABLE IF NOT EXISTS public.router_schema_migrations (
-            version integer PRIMARY KEY CHECK (version > 0),
-            name text NOT NULL UNIQUE,
-            checksum char(64) NOT NULL CHECK (checksum ~ '^[0-9a-f]{64}$'),
-            applied_at timestamptz NOT NULL DEFAULT transaction_timestamp()
-        )
-        """
+        """CREATE TABLE IF NOT EXISTS public.router_schema_migrations (
+               version integer PRIMARY KEY CHECK (version > 0),
+               name text NOT NULL UNIQUE,
+               checksum char(64) NOT NULL CHECK (checksum ~ '^[0-9a-f]{64}$'),
+               applied_at timestamptz NOT NULL DEFAULT transaction_timestamp()
+           )"""
     )
 
 
 def applied_versions(connection: Connection[Any]) -> tuple[int, ...]:
-    """Return applied migration versions after checksum validation."""
+    """Return applied versions after checksum validation."""
     plan = {migration.version: migration for migration in migration_plan()}
     _ensure_history(connection)
     rows = connection.execute(
-        """
-        SELECT version, name, checksum
-        FROM public.router_schema_migrations
-        ORDER BY version
-        """
+        """SELECT version, name, checksum
+           FROM public.router_schema_migrations
+           ORDER BY version"""
     ).fetchall()
     versions: list[int] = []
     for version, name, checksum in rows:
@@ -113,7 +109,7 @@ def _pending(
 
 
 def migrate(connection: Connection[Any], target: int | None = None) -> None:
-    """Move the schema to the selected version in transactional steps."""
+    """Move the schema to the selected version in one transaction."""
     plan = migration_plan()
     maximum = plan[-1].version
     selected_target = maximum if target is None else target
@@ -143,9 +139,8 @@ def migrate(connection: Connection[Any], target: int | None = None) -> None:
         for migration in _pending(plan, current, selected_target):
             connection.execute(migration.up_sql)
             connection.execute(
-                """
-                INSERT INTO public.router_schema_migrations (version, name, checksum)
-                VALUES (%s, %s, %s)
-                """,
+                """INSERT INTO public.router_schema_migrations (
+                       version, name, checksum
+                   ) VALUES (%s, %s, %s)""",
                 (migration.version, migration.name, migration.checksum),
             )
