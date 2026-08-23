@@ -4,551 +4,270 @@
 export type JsonScalar = string | number | boolean | null;
 export type JsonValue = JsonScalar | ReadonlyArray<JsonValue> | { readonly [key: string]: JsonValue };
 
-export type OpaqueId = string;
-
-export type UuidV7 = string;
-
-export type Timestamp = string;
-
-export type Decimal = string;
-
-export type NonNegativeDecimal = string;
-
-export type PositiveDecimal = string;
-
-export type ContractManifest = { readonly contract_set: "llmrouter-v1"; readonly version: string; readonly generated_at: Timestamp; readonly capabilities: ReadonlyArray<"model_requests" | "embedding_requests_v1" | "agent_runs" | "shared_tools" | "attachments" | "request_status" | "request_discovery" | "cancellation" | "sse_stream_v1" | "workspace_lifecycle" | "host_budget_ceiling" | "effective_configuration" | "assignment_configuration" | "provider_instance_configuration" | "provider_model_route_configuration" | "price_synchronization" | "budget_management" | "retention_management" | "configuration_revisions" | "business_tool_gateway" | "diagnostic_routing" | "administration_authentication" | "service_administration" | "catalog_administration" | "credential_administration" | "administrator_grants" | "operational_administration" | "audit_discovery" | "captured_content" | "protected_exports" | "accounting_summary" | "detailed_health" | "openai_chat_completions" | "openai_responses">; readonly artifacts: ReadonlyArray<ContractArtifact>; };
-
-export type ContractArtifact = { readonly name: "openapi" | "stream_protocol" | "error_catalog" | "service_management" | "embed_protocol" | "embedding_protocol" | "business_tool_gateway" | "request_fingerprint" | "cross_service_conformance"; readonly version: string; readonly major_version: number; readonly sha256: string; };
-
-export type ServiceTokenExchange = { readonly service_id: OpaqueId; readonly bootstrap_secret: string; readonly audience: "data_plane" | "service_management" | "host_backend" | "accounting" | "configuration" | "budget_authority"; readonly workspace_ids?: ReadonlyArray<OpaqueId>; readonly operations: ReadonlyArray<"model.create" | "model.read" | "model.cancel" | "embedding.create" | "embedding.read" | "run.create" | "run.read" | "run.cancel" | "tool.create" | "tool.read" | "tool.cancel" | "attachment.create" | "attachment.read" | "workspace.create" | "workspace.read" | "workspace.disable" | "workspace.restore" | "workspace.retire" | "admin_embed.create" | "accounting.read" | "configuration.read" | "configuration.write" | "diagnostic.grant.create" | "retention.read" | "retention.preview" | "retention.write" | "budget.read" | "budget.write" | "budget_ceiling.read" | "budget_ceiling.write">; };
-
-export type ServiceToken = { readonly access_token: string; readonly token_type: "Bearer"; readonly expires_in: 300; readonly service_id: OpaqueId; readonly workspace_ids?: ReadonlyArray<OpaqueId>; readonly audience: string; readonly operations: ReadonlyArray<string>; readonly credential_generation: number; };
-
-export type CreateWorkspace = { readonly caller_reference: string; readonly display_name: string; };
-
-export type WorkspaceStateChange = { readonly expected_state_revision: OpaqueId; readonly reason: string; };
-
-export type Workspace = { readonly workspace_id: OpaqueId; readonly caller_reference: string; readonly display_name: string; readonly state: "active" | "disabled" | "retired"; readonly state_revision: OpaqueId; readonly operation_id: OpaqueId; };
-
-export type CreateAttachment = { readonly workspace_id?: OpaqueId; readonly media_type: "text/plain" | "text/markdown" | "application/json" | "application/pdf" | "image/jpeg" | "image/png" | "image/webp" | "audio/mpeg" | "audio/wav"; readonly byte_length: number; readonly sha256: string; };
-
-export type Attachment = { readonly attachment_id: OpaqueId; readonly service_id: OpaqueId; readonly workspace_id?: OpaqueId; readonly media_type: string; readonly byte_length: number; readonly sha256: string; readonly state: "awaiting_content" | "ready" | "expired"; readonly expires_at: Timestamp; };
-
-export type DataProfile = "service-data";
+export type ApiName = string;
 
 export type AssignmentName = string;
 
-export type Message = { readonly role: "system" | "user" | "assistant" | "tool"; readonly content: string | ReadonlyArray<ContentPart>; };
+export type OpaqueId = string;
 
-export type ContentPart = { readonly type: "text"; readonly text: string; } | { readonly type: "image"; readonly attachment_id: OpaqueId; readonly sha256: string; readonly media_type: "image/jpeg" | "image/png" | "image/webp"; } | { readonly type: "audio"; readonly attachment_id: OpaqueId; readonly sha256: string; readonly media_type: "audio/mpeg" | "audio/wav"; } | { readonly type: "file"; readonly attachment_id: OpaqueId; readonly sha256: string; readonly media_type: "text/plain" | "text/markdown" | "application/json" | "application/pdf"; };
+export type Timestamp = string;
 
-export type ToolDefinition = { readonly name: string; readonly description: string; readonly input_schema_name: string; readonly input_schema_major_version: number; };
+export type Tag = string;
 
-export type RequestLimits = { readonly attempt_timeout_ms: number; readonly max_output_units: number; readonly max_cost?: Money; readonly logical_timeout_ms?: 900000; };
+export type Tags = ReadonlyArray<Tag>;
 
-export type OutputControls = { readonly format?: "text" | "json"; readonly json_schema_name?: string; readonly json_schema_major_version?: number; readonly temperature?: number; };
+export type PageInfo = { readonly has_more: boolean; readonly next_cursor?: string; };
 
-export type ModelRequest = { readonly api_version: "1"; readonly data_profile: DataProfile; readonly workspace_id?: OpaqueId; readonly assignment: AssignmentName; readonly messages: ReadonlyArray<Message>; readonly tools?: ReadonlyArray<ToolDefinition>; readonly tool_allow_list?: ReadonlyArray<string>; readonly limits: RequestLimits; readonly output: OutputControls; readonly trace_context?: TraceContext; } | { readonly api_version: "1"; readonly data_profile: DataProfile; readonly workspace_id?: OpaqueId; readonly exact_route: OpaqueId; readonly exact_route_grant: string; readonly messages: ReadonlyArray<Message>; readonly tools?: ReadonlyArray<ToolDefinition>; readonly tool_allow_list?: ReadonlyArray<string>; readonly limits: RequestLimits; readonly output: OutputControls; readonly trace_context?: TraceContext; };
+export type ErrorCode = "authentication_required" | "permission_denied" | "invalid_request" | "not_found" | "conflict" | "assignment_cycle" | "provider_unavailable" | "upstream_failed" | "content_unavailable" | "rate_limited" | "internal_error";
 
-export type EmbeddingRequest = { readonly api_version: "1"; readonly data_profile: "service-data"; readonly assignment: AssignmentName; readonly input_policy_id: OpaqueId; readonly model_space_id: OpaqueId; readonly dimensions: number; readonly inputs: ReadonlyArray<EmbeddingInput>; readonly timeout_ms: 120000; readonly max_cost?: Money; readonly trace_context?: TraceContext; };
+export type ErrorDetails = { readonly field?: string; readonly reason?: string; };
 
-export type EmbeddingInput = { readonly input_id: OpaqueId; readonly sha256: string; readonly text: string; };
+export type Error = { readonly code: ErrorCode; readonly message: string; readonly details?: ErrorDetails; };
 
-export type AgentRunRequest = { readonly api_version: "1"; readonly data_profile: DataProfile; readonly workspace_id?: OpaqueId; readonly assignment: AssignmentName; readonly messages: ReadonlyArray<Message>; readonly tools?: ReadonlyArray<ToolDefinition>; readonly tool_allow_list?: ReadonlyArray<string>; readonly limits: RequestLimits; readonly output: OutputControls; readonly agent: { readonly max_steps: number; readonly max_tool_concurrency: number; readonly business_tool_names?: ReadonlyArray<string>; }; readonly trace_context?: TraceContext; } | { readonly api_version: "1"; readonly data_profile: DataProfile; readonly workspace_id?: OpaqueId; readonly exact_route: OpaqueId; readonly exact_route_grant: string; readonly messages: ReadonlyArray<Message>; readonly tools?: ReadonlyArray<ToolDefinition>; readonly tool_allow_list?: ReadonlyArray<string>; readonly limits: RequestLimits; readonly output: OutputControls; readonly agent: { readonly max_steps: number; readonly max_tool_concurrency: number; readonly business_tool_names?: ReadonlyArray<string>; }; readonly trace_context?: TraceContext; };
+export type ErrorEnvelope = { readonly error: Error; };
 
-export type SharedToolRequest = { readonly api_version: "1"; readonly data_profile: DataProfile; readonly workspace_id?: OpaqueId; readonly assignment: AssignmentName; readonly tool: "search" | "extract" | "scrape" | "screenshot"; readonly input: RegisteredDocument; readonly limits: RequestLimits; readonly trace_context?: TraceContext; };
+export type HealthStatus = "healthy" | "degraded" | "unavailable";
 
-export type CompatibleChatRequest = { readonly model: AssignmentName; readonly messages: ReadonlyArray<Message>; readonly tools?: ReadonlyArray<ToolDefinition>; readonly tool_choice?: CompatibilityToolChoice; readonly response_format?: CompatibilityResponseFormat; readonly temperature?: number; readonly max_completion_tokens?: number; readonly stream?: boolean; readonly metadata?: MetadataEntries; readonly user?: string; readonly x_llmrouter_workspace_id?: OpaqueId; readonly x_llmrouter_data_profile?: DataProfile; readonly x_llmrouter_max_cost?: Money; } | { readonly model: AssignmentName; readonly messages: ReadonlyArray<Message>; readonly tools?: ReadonlyArray<ToolDefinition>; readonly tool_choice?: CompatibilityToolChoice; readonly response_format?: CompatibilityResponseFormat; readonly temperature?: number; readonly max_completion_tokens?: number; readonly stream?: boolean; readonly metadata?: MetadataEntries; readonly user?: string; readonly x_llmrouter_workspace_id?: OpaqueId; readonly x_llmrouter_data_profile?: DataProfile; readonly x_llmrouter_max_cost?: Money; readonly x_llmrouter_exact_route: OpaqueId; readonly x_llmrouter_exact_route_grant: string; };
+export type HealthSummary = { readonly status: HealthStatus; readonly checked_at: Timestamp; };
 
-export type CompatibleResponsesRequest = { readonly model: AssignmentName; readonly input: string | ReadonlyArray<Message>; readonly instructions?: string; readonly tools?: ReadonlyArray<ToolDefinition>; readonly tool_choice?: CompatibilityToolChoice; readonly text?: CompatibilityResponseFormat; readonly temperature?: number; readonly max_output_tokens?: number; readonly stream?: boolean; readonly metadata?: MetadataEntries; readonly user?: string; readonly x_llmrouter_workspace_id?: OpaqueId; readonly x_llmrouter_data_profile?: DataProfile; readonly x_llmrouter_max_cost?: Money; } | { readonly model: AssignmentName; readonly input: string | ReadonlyArray<Message>; readonly instructions?: string; readonly tools?: ReadonlyArray<ToolDefinition>; readonly tool_choice?: CompatibilityToolChoice; readonly text?: CompatibilityResponseFormat; readonly temperature?: number; readonly max_output_tokens?: number; readonly stream?: boolean; readonly metadata?: MetadataEntries; readonly user?: string; readonly x_llmrouter_workspace_id?: OpaqueId; readonly x_llmrouter_data_profile?: DataProfile; readonly x_llmrouter_max_cost?: Money; readonly x_llmrouter_exact_route: OpaqueId; readonly x_llmrouter_exact_route_grant: string; };
+export type WorkspaceCreate = { readonly api_name: ApiName; readonly display_name: string; };
 
-export type RegisteredDocument = { readonly schema_name: string; readonly major_version: number; readonly document: {  }; };
+export type Workspace = { readonly api_name: ApiName; readonly display_name: string; readonly created_at: Timestamp; };
 
-export type TraceContext = { readonly traceparent?: string; readonly tracestate?: string; };
+export type WorkspacePage = { readonly items: ReadonlyArray<Workspace>; readonly page: PageInfo; };
 
-export type CompatibilityToolChoice = "auto" | "none" | "required" | { readonly type: "function"; readonly name: string; };
+export type ReasoningLevel = "none" | "low" | "medium" | "high";
 
-export type CompatibilityResponseFormat = { readonly type: "text" | "json_object" | "json_schema"; readonly schema_name?: string; readonly schema_major_version?: number; };
+export type ProviderModelCandidate = { readonly provider_model_api_name: ApiName; };
 
-export type MetadataEntries = ReadonlyArray<{ readonly key: string; readonly value: string; }>;
+export type AssignmentChain = ReadonlyArray<ProviderModelCandidate>;
 
-export type PutBusinessToolGateway = { readonly origin: string; readonly contract_major_versions: ReadonlyArray<1>; readonly tool_kinds: ReadonlyArray<string>; readonly network_policy_id: OpaqueId; readonly expected_revision: OpaqueId | null; };
+export type EffectiveAssignmentChain = ReadonlyArray<ProviderModelCandidate>;
 
-export type BusinessToolCall = { readonly contract_version: 1; readonly operation_id: OpaqueId; readonly service_id: OpaqueId; readonly workspace_id?: OpaqueId; readonly run_id: UuidV7; readonly owner_epoch: number; readonly tool_name: string; readonly permitted_operation: string; readonly input: RegisteredDocument; readonly deadline: Timestamp; readonly tool_grant: string; };
+export type ObservedRequirement = "text_input" | "image_input" | "text_output" | "structured_json_output" | "tool_calling" | "streaming" | "reasoning" | "embedding_output" | "image_output" | "video_output" | "audio_output";
 
-export type BusinessToolResult = { readonly contract_version: 1; readonly operation_id: OpaqueId; readonly state: "succeeded" | "failed" | "uncertain"; readonly effect_state: "none" | "committed" | "unknown"; readonly result: RegisteredDocument; } | { readonly contract_version: 1; readonly operation_id: OpaqueId; readonly state: "succeeded" | "failed" | "uncertain"; readonly effect_state: "none" | "committed" | "unknown"; readonly safe_error: TerminalError; };
+export type AssignmentDefinitionKind = "implicit" | "inherited_assignment" | "direct_chain";
 
-export type BusinessToolReconciliationRequest = { readonly contract_version: 1; readonly operation_id: OpaqueId; readonly service_id: OpaqueId; readonly workspace_id?: OpaqueId; readonly run_id: UuidV7; readonly owner_epoch: number; readonly reconciliation_grant: string; };
+export type AssignmentWrite = { readonly display_name?: string; readonly inherits_assignment_api_name: AssignmentName; readonly reasoning_level?: ReasoningLevel; } | { readonly display_name?: string; readonly direct_chain: AssignmentChain; readonly reasoning_level?: ReasoningLevel; };
 
-export type BusinessToolReconciliationResult = { readonly contract_version: 1; readonly operation_id: OpaqueId; readonly effect_state: "not_started" | "committed" | "failed" | "unknown"; readonly evidence: RegisteredDocument; };
+export type Assignment = { readonly api_name: AssignmentName; readonly display_name: string; readonly definition_kind: "implicit"; readonly defined_by_service_api_name?: ApiName; readonly effective_chain: EffectiveAssignmentChain; readonly reasoning_level?: ReasoningLevel; readonly observed_requirements: ReadonlyArray<ObservedRequirement>; readonly last_used_at?: Timestamp; readonly created_at?: Timestamp; } | { readonly api_name: AssignmentName; readonly display_name: string; readonly definition_kind: "inherited_assignment"; readonly defined_by_service_api_name?: ApiName; readonly inherits_assignment_api_name: AssignmentName; readonly effective_chain: EffectiveAssignmentChain; readonly reasoning_level?: ReasoningLevel; readonly observed_requirements: ReadonlyArray<ObservedRequirement>; readonly last_used_at?: Timestamp; readonly created_at?: Timestamp; } | { readonly api_name: AssignmentName; readonly display_name: string; readonly definition_kind: "direct_chain"; readonly defined_by_service_api_name?: ApiName; readonly direct_chain: AssignmentChain; readonly effective_chain: EffectiveAssignmentChain; readonly reasoning_level?: ReasoningLevel; readonly observed_requirements: ReadonlyArray<ObservedRequirement>; readonly last_used_at?: Timestamp; readonly created_at?: Timestamp; };
 
-export type BusinessToolGatewayApproval = { readonly gateway_revision: OpaqueId; readonly decision: "approved" | "denied"; readonly reason: string; };
+export type AssignmentPage = { readonly items: ReadonlyArray<Assignment>; readonly page: PageInfo; };
 
-export type BusinessToolGateway = { readonly service_id: OpaqueId; readonly origin: string; readonly contract_major_versions: ReadonlyArray<1>; readonly tool_kinds: ReadonlyArray<string>; readonly network_policy_id: OpaqueId; readonly revision: OpaqueId; readonly approval_state: "pending" | "approved" | "denied"; readonly approved_revision?: OpaqueId; };
+export type AssignmentSelector = { readonly assignment_api_name: AssignmentName; };
 
-export type CompatibleResponse = { readonly id: OpaqueId; readonly object: string; readonly created?: number; readonly model?: AssignmentName; readonly choices?: ReadonlyArray<{ readonly index: number; readonly message: Message; readonly finish_reason: string | null; }>; readonly output?: ReadonlyArray<ContentPart>; readonly usage?: CompatibilityUsage; readonly x_llmrouter_request_id: UuidV7; readonly x_llmrouter_state: RequestState; readonly x_llmrouter_status_url: string; };
+export type ExactProviderModelSelector = { readonly provider_model_api_name: ApiName; };
 
-export type CompatibilityUsage = { readonly input_tokens: number; readonly output_tokens: number; readonly total_tokens: number; };
+export type ModelSelector = AssignmentSelector | ExactProviderModelSelector;
 
-export type RequestState = "admitted" | "running" | "waiting_for_tool" | "cancel_requested" | "succeeded" | "failed" | "interrupted" | "cancelled" | "uncertain";
+export type TextInputPart = { readonly type: "text"; readonly text: string; };
 
-export type AdmissionReceipt = { readonly request_id: UuidV7; readonly run_id?: OpaqueId; readonly admitted_at: Timestamp; readonly state: RequestState; readonly state_revision: number; readonly status_url: string; readonly cancel_url: string; readonly events_url?: string; readonly fingerprint_version: "rfc8785-sha256-v1"; readonly capture_enabled: boolean; readonly capture_reason: "configured" | "spool_pressure"; };
+export type ImageInputPart = { readonly type: "image"; readonly media_type: "image/jpeg" | "image/png" | "image/webp"; readonly data_base64: string; };
 
-export type CancelRequest = { readonly reason: string; };
+export type ToolResultPart = { readonly type: "tool_result"; readonly tool_call_id: OpaqueId; readonly result_json: string; };
 
-export type RequestStatus = { readonly request_id: UuidV7; readonly run_id?: OpaqueId; readonly state: RequestState; readonly state_revision: number; readonly admitted_at: Timestamp; readonly last_transition_at: Timestamp; readonly terminal_at?: Timestamp; readonly partial_output: boolean; readonly committed_effects: boolean; readonly configuration_revision: OpaqueId; readonly assignment: AssignmentName; readonly admission: AdmissionReceipt; readonly owner_epoch?: number; readonly attempts: ReadonlyArray<AttemptStatus>; readonly tool_calls: ReadonlyArray<ToolCallStatus>; readonly result?: OutputResult; readonly error?: TerminalError; readonly accounting: RequestAccounting; } | { readonly request_id: UuidV7; readonly run_id?: OpaqueId; readonly state: RequestState; readonly state_revision: number; readonly admitted_at: Timestamp; readonly last_transition_at: Timestamp; readonly terminal_at?: Timestamp; readonly partial_output: boolean; readonly committed_effects: boolean; readonly configuration_revision: OpaqueId; readonly exact_route: OpaqueId; readonly admission: AdmissionReceipt; readonly owner_epoch?: number; readonly attempts: ReadonlyArray<AttemptStatus>; readonly tool_calls: ReadonlyArray<ToolCallStatus>; readonly result?: OutputResult; readonly error?: TerminalError; readonly accounting: RequestAccounting; };
+export type UserContentPart = TextInputPart | ImageInputPart | ToolResultPart;
 
-export type AttemptStatus = { readonly attempt_id: OpaqueId; readonly provider_model_route_id: OpaqueId; readonly state: "running" | "succeeded" | "failed" | "cancelled" | "uncertain"; readonly started_at: Timestamp; readonly ended_at?: Timestamp; readonly assignment_revision: OpaqueId; readonly decision?: "next_candidate" | "stop_request" | "commit_boundary" | "cancelled" | "succeeded"; readonly error?: TerminalError; readonly usage?: ReadonlyArray<UsageComponent>; readonly price_version?: OpaqueId; };
+export type TextOutputPart = { readonly type: "text"; readonly text: string; };
 
-export type ToolCallStatus = { readonly tool_call_id: OpaqueId; readonly tool_name: string; readonly tool_kind: "shared" | "business"; readonly state: "pending" | "running" | "succeeded" | "failed" | "cancelled" | "uncertain"; readonly committed_effect?: boolean; readonly error?: TerminalError; };
+export type ToolCallPart = { readonly type: "tool_call"; readonly id: OpaqueId; readonly name: string; readonly arguments_json: string; };
 
-export type OutputResult = { readonly outputs: ReadonlyArray<{ readonly type: "text"; readonly text: string; } | { readonly type: "json" | "tool_result"; readonly document: RegisteredDocument; } | { readonly type: "image" | "audio"; readonly attachment_id: OpaqueId; }>; };
+export type AssistantContentPart = TextOutputPart | ToolCallPart;
 
-export type RequestStatusPage = { readonly items: ReadonlyArray<RequestStatus>; readonly next_cursor?: string | null; };
+export type SystemMessage = { readonly role: "system"; readonly content: string; };
 
-export type AdministrationRequestStatus = { readonly request_id: UuidV7; readonly run_id?: OpaqueId; readonly state: RequestState; readonly state_revision: number; readonly admitted_at: Timestamp; readonly last_transition_at: Timestamp; readonly terminal_at?: Timestamp; readonly partial_output: boolean; readonly committed_effects: boolean; readonly configuration_revision: OpaqueId; readonly assignment: AssignmentName; readonly admission: AdmissionReceipt; readonly owner_epoch?: number; readonly attempts: ReadonlyArray<AttemptStatus>; readonly tool_calls: ReadonlyArray<ToolCallStatus>; readonly error?: TerminalError; readonly accounting: RequestAccounting; } | { readonly request_id: UuidV7; readonly run_id?: OpaqueId; readonly state: RequestState; readonly state_revision: number; readonly admitted_at: Timestamp; readonly last_transition_at: Timestamp; readonly terminal_at?: Timestamp; readonly partial_output: boolean; readonly committed_effects: boolean; readonly configuration_revision: OpaqueId; readonly exact_route: OpaqueId; readonly admission: AdmissionReceipt; readonly owner_epoch?: number; readonly attempts: ReadonlyArray<AttemptStatus>; readonly tool_calls: ReadonlyArray<ToolCallStatus>; readonly error?: TerminalError; readonly accounting: RequestAccounting; };
+export type UserMessage = { readonly role: "user"; readonly content: ReadonlyArray<UserContentPart>; };
 
-export type AdministrationRequestStatusPage = { readonly items: ReadonlyArray<AdministrationRequestStatus>; readonly next_cursor?: string | null; };
+export type AssistantMessage = { readonly role: "assistant"; readonly content: ReadonlyArray<AssistantContentPart>; };
 
-export type AdministrationDiagnosticRunRequest = { readonly request_id: UuidV7; readonly exact_route: OpaqueId; readonly reason: string; };
+export type ModelMessage = SystemMessage | UserMessage | AssistantMessage;
 
-export type AdministrationDiagnosticPhase = { readonly name: "authorization" | "route_eligibility" | "admission" | "provider" | "accounting"; readonly state: "pending" | "active" | "succeeded" | "failed"; readonly failure_class?: "authentication" | "policy" | "budget" | "rate_limit" | "timeout" | "transport" | "provider_unavailable" | "invalid_provider_response" | "incompatible_request" | "cancelled" | "uncertain_effect" | "router_internal"; };
+export type ToolDefinition = { readonly name: string; readonly description: string; readonly input_schema_json: string; };
 
-export type AdministrationDiagnosticRun = { readonly request_id: UuidV7; readonly service_id: OpaqueId; readonly workspace_id: OpaqueId | null; readonly exact_route: OpaqueId; readonly route_configuration_revision: OpaqueId; readonly authorization_expires_at: Timestamp; readonly state: "active" | "succeeded" | "failed" | "expired"; readonly phases: ReadonlyArray<AdministrationDiagnosticPhase>; readonly failure_class?: "authentication" | "policy" | "budget" | "rate_limit" | "timeout" | "transport" | "provider_unavailable" | "invalid_provider_response" | "incompatible_request" | "cancelled" | "uncertain_effect" | "router_internal"; readonly status_url: string; };
+export type OutputFormat = { readonly type: "text"; } | { readonly type: "json_schema"; readonly schema_json: string; };
 
-export type EmbeddingRequestState = "admitted" | "running" | "succeeded" | "failed";
+export type ModelCallRequest = { readonly workspace_api_name: ApiName; readonly selector: ModelSelector; readonly messages: ReadonlyArray<ModelMessage>; readonly tools?: ReadonlyArray<ToolDefinition>; readonly output_format?: OutputFormat; readonly output_limit?: number; readonly temperature?: number; readonly tags?: Tags; };
 
-export type EmbeddingAdmissionReceipt = { readonly request_id: UuidV7; readonly admitted_at: Timestamp; readonly state: EmbeddingRequestState; readonly state_revision: number; readonly status_url: string; readonly fingerprint_version: "rfc8785-sha256-v1"; readonly capture_enabled: boolean; readonly capture_reason: "configured" | "spool_pressure"; readonly capture_expires_at: Timestamp; };
+export type UsageUnit = "input_token" | "output_token" | "cached_input_token" | "image" | "video_second" | "audio_second" | "request" | "provider_unit";
 
-export type EmbeddingRequestStatus = { readonly request_id: UuidV7; readonly service_id: OpaqueId; readonly workspace_id: OpaqueId; readonly state: "succeeded"; readonly state_revision: number; readonly admitted_at: Timestamp; readonly last_transition_at: Timestamp; readonly terminal_at: Timestamp; readonly assignment: AssignmentName; readonly input_policy_id: OpaqueId; readonly model_space_id: OpaqueId; readonly dimensions: number; readonly admission: EmbeddingAdmissionReceipt; readonly result: ReadonlyArray<EmbeddingVector>; readonly accounting: EmbeddingAccounting; } | { readonly request_id: UuidV7; readonly service_id: OpaqueId; readonly workspace_id: OpaqueId; readonly state: "failed"; readonly state_revision: number; readonly admitted_at: Timestamp; readonly last_transition_at: Timestamp; readonly terminal_at: Timestamp; readonly assignment: AssignmentName; readonly input_policy_id: OpaqueId; readonly model_space_id: OpaqueId; readonly dimensions: number; readonly admission: EmbeddingAdmissionReceipt; readonly error: TerminalError; readonly accounting: EmbeddingAccounting; } | { readonly request_id: UuidV7; readonly service_id: OpaqueId; readonly workspace_id: OpaqueId; readonly state: "admitted" | "running"; readonly state_revision: number; readonly admitted_at: Timestamp; readonly last_transition_at: Timestamp; readonly assignment: AssignmentName; readonly input_policy_id: OpaqueId; readonly model_space_id: OpaqueId; readonly dimensions: number; readonly admission: EmbeddingAdmissionReceipt; readonly accounting: EmbeddingAccounting; };
+export type UsageItem = { readonly unit: UsageUnit; readonly quantity: string; };
 
-export type EmbeddingVector = { readonly input_id: OpaqueId; readonly vector: ReadonlyArray<number>; };
+export type Usage = { readonly units: ReadonlyArray<UsageItem>; readonly cost: string; readonly currency: string; };
 
-export type EmbeddingAccounting = { readonly input_count: number; readonly input_utf8_bytes: number; readonly provider_attempts: number; readonly usage: ReadonlyArray<UsageComponent>; readonly cost: RequestAccounting; };
+export type StandardModelCallResult = { readonly output_type: "standard"; readonly provider_model_api_name: ApiName; readonly content: ReadonlyArray<AssistantContentPart>; readonly usage: Usage; };
 
-export type TerminalError = { readonly class: "authentication" | "policy" | "budget" | "rate_limit" | "timeout" | "transport" | "provider_unavailable" | "invalid_provider_response" | "incompatible_request" | "cancelled" | "uncertain_effect" | "router_internal"; readonly affected_scope: "attempt" | "provider_model_route" | "provider_instance" | "credential" | "assignment_candidate" | "logical_request"; readonly message: string; readonly safe_provider_code?: string; };
+export type StructuredModelCallResult = { readonly output_type: "structured_json"; readonly provider_model_api_name: ApiName; readonly structured_output_json: string; readonly usage: Usage; };
 
-export type RequestAccounting = { readonly estimated: NonNegativeDecimal; readonly reserved: NonNegativeDecimal; readonly used: NonNegativeDecimal; readonly corrected: NonNegativeDecimal; readonly currency: string; };
+export type ModelCallResult = StandardModelCallResult | StructuredModelCallResult;
 
-export type Money = { readonly amount: NonNegativeDecimal; readonly currency: string; };
+export type StreamStart = { readonly provider_model_api_name: ApiName; };
 
-export type SignedMoney = { readonly amount: Decimal; readonly currency: string; };
+export type StreamTextDelta = { readonly delta: string; };
 
-export type PutBudgetCeiling = { readonly amount: NonNegativeDecimal; readonly currency: string; readonly expected_revision: OpaqueId | null; readonly reason: string; };
+export type StreamToolCall = { readonly tool_call: ToolCallPart; };
 
-export type BudgetCeiling = { readonly service_id: OpaqueId; readonly workspace_id: OpaqueId; readonly amount: NonNegativeDecimal; readonly currency: string; readonly revision: OpaqueId; readonly effective_at: Timestamp; readonly operation_id: OpaqueId; };
+export type StreamCompleted = { readonly provider_model_api_name: ApiName; readonly usage: Usage; };
 
-export type PutBudgetLimit = { readonly scope: "service" | "workspace" | "assignment"; readonly workspace_id?: OpaqueId; readonly assignment?: AssignmentName; readonly hard_limit: Money; readonly warning_threshold: Money; readonly reset_period: "none" | "daily" | "monthly"; readonly expected_revision: BudgetRevision; };
+export type EmbeddingRequest = { readonly workspace_api_name: ApiName; readonly selector: ModelSelector; readonly inputs: ReadonlyArray<string>; readonly tags?: Tags; };
 
-export type PutSelectedBudgetLimit = { readonly hard_limit: NonNegativeDecimal; readonly currency: string; readonly warning_threshold?: NonNegativeDecimal | null; readonly reset_period: "none" | "daily" | "monthly"; readonly expected_revision: BudgetRevision; };
+export type EmbeddingVector = { readonly index: number; readonly values: ReadonlyArray<number>; };
 
-export type BudgetRevision = string;
+export type EmbeddingResult = { readonly provider_model_api_name: ApiName; readonly embeddings: ReadonlyArray<EmbeddingVector>; readonly usage: Usage; };
 
-export type BudgetSummary = { readonly scope: "service" | "workspace" | "assignment"; readonly limit: Money; readonly warning_threshold?: Money | null; readonly host_ceiling?: Money; readonly reserved: Money; readonly used: Money; readonly corrected: SignedMoney; readonly remaining: Money; readonly enforcement_state: "available" | "warning" | "exhausted" | "allowance_unavailable"; readonly reset_period: "none" | "daily" | "monthly"; readonly revision: BudgetRevision; };
+export type MediaKind = "image" | "video" | "audio";
 
-export type BudgetLimitWriteResult = { readonly scope: "service" | "workspace"; readonly limit: Money; readonly warning_threshold: Money | null; readonly reset_period: "none" | "daily" | "monthly"; readonly revision: BudgetRevision; readonly effective_at: Timestamp; };
+export type MediaJobState = "pending" | "running" | "succeeded" | "failed";
 
-export type PutAssignment = { readonly expected_revision: OpaqueId; readonly state: "active" | "disabled" | "retired"; readonly candidates: ReadonlyArray<{ readonly provider_model_route_id: OpaqueId; readonly attempt_timeout_ms?: number; }>; };
+export type MediaJobRequest = { readonly workspace_api_name: ApiName; readonly selector: ModelSelector; readonly kind: "image" | "video"; readonly prompt: string; readonly input_images?: ReadonlyArray<ImageInputPart>; readonly tags?: Tags; } | { readonly workspace_api_name: ApiName; readonly selector: ModelSelector; readonly kind: "audio"; readonly prompt: string; readonly tags?: Tags; };
 
-export type Assignment = { readonly name: AssignmentName; readonly owner_scope: "global" | "service" | "workspace"; readonly source_layer: OpaqueId; readonly state: "active" | "disabled" | "retired"; readonly inherited: boolean; readonly active_revision: OpaqueId; readonly candidates: ReadonlyArray<{ readonly provider_model_route_id: OpaqueId; readonly attempt_timeout_ms?: number; }>; };
+export type MediaContent = { readonly media_type: string; readonly size_bytes: number; };
 
-export type AssignmentPage = { readonly items: ReadonlyArray<Assignment>; readonly next_cursor?: string | null; };
+export type MediaJob = { readonly id: OpaqueId; readonly workspace_api_name: ApiName; readonly provider_model_api_name: ApiName; readonly kind: MediaKind; readonly state: MediaJobState; readonly content?: MediaContent; readonly error?: Error; readonly created_at: Timestamp; readonly completed_at?: Timestamp; };
 
-export type AdministrationPutAssignment = { readonly expected_revision: OpaqueId | null; readonly state: "active" | "disabled" | "retired"; readonly candidates: ReadonlyArray<{ readonly provider_model_route_id: OpaqueId; readonly attempt_timeout_ms?: number; }>; readonly required_capabilities?: ReadonlyArray<string>; readonly reason: string; };
+export type Outcome = "succeeded" | "failed";
 
-export type AdministrationAssignment = { readonly name: AssignmentName; readonly owner_scope: "global" | "service" | "workspace"; readonly source_layer: OpaqueId; readonly state: "active" | "disabled" | "retired"; readonly inherited: boolean; readonly active_revision: OpaqueId; readonly candidates: ReadonlyArray<{ readonly provider_model_route_id: OpaqueId; readonly attempt_timeout_ms?: number; }>; readonly required_capabilities?: ReadonlyArray<string>; };
+export type StatisticsDimension = "date" | "service" | "workspace" | "assignment" | "provider_model" | "outcome" | "tag";
 
-export type AdministrationAssignmentPage = { readonly items: ReadonlyArray<AdministrationAssignment>; readonly next_cursor?: string | null; readonly configuration_revision: OpaqueId | null; };
+export type StatisticsBucket = { readonly dimensions: ReadonlyArray<string>; readonly calls: number; readonly attempts: number; readonly units: ReadonlyArray<UsageItem>; readonly cost: string; readonly currency: string; };
 
-export type CreateDiagnosticGrant = { readonly workspace_id?: OpaqueId; readonly exact_route: OpaqueId; readonly reason: string; };
+export type StatisticsResult = { readonly from: Timestamp; readonly to: Timestamp; readonly group_by: ReadonlyArray<StatisticsDimension>; readonly buckets: ReadonlyArray<StatisticsBucket>; };
 
-export type DiagnosticGrant = { readonly grant_id: OpaqueId; readonly grant: string; readonly service_id: OpaqueId; readonly workspace_id?: OpaqueId; readonly exact_route: OpaqueId; readonly expires_at: Timestamp; };
+export type AdministratorSessionStart = { readonly return_to: string; };
 
-export type PutProviderInstance = { readonly provider_catalog_id: OpaqueId; readonly display_name: string; readonly endpoint: string; readonly credential_id: OpaqueId; readonly state: "active" | "disabled" | "retired"; readonly settings?: RegisteredDocument; readonly expected_revision: OpaqueId | null; };
+export type AdministratorSessionRedirect = { readonly authorization_url: string; };
 
-export type ProviderInstance = { readonly provider_instance_id: OpaqueId; readonly owner_scope: OpaqueId; readonly provider_catalog_id: OpaqueId; readonly display_name: string; readonly endpoint: string; readonly credential_id: OpaqueId; readonly state: "active" | "disabled" | "retired"; readonly active_revision: OpaqueId; readonly inherited: boolean; readonly settings?: RegisteredDocument; };
+export type AdministratorSession = { readonly subject: string; readonly display_name: string; readonly expires_at: Timestamp; readonly csrf_token: string; };
 
-export type ProviderInstancePage = { readonly items: ReadonlyArray<ProviderInstance>; readonly next_cursor?: string | null; };
+export type ServiceCreate = { readonly api_name: ApiName; readonly display_name: string; readonly parent_service_api_name?: ApiName; };
 
-export type PutProviderModelRoute = { readonly provider_instance_id: OpaqueId; readonly canonical_model_id: OpaqueId; readonly wire_model: string; readonly capabilities: ReadonlyArray<string>; readonly embedding_model_space_id?: OpaqueId; readonly embedding_dimensions?: number; readonly price_authority: PriceAuthority; readonly prices: ReadonlyArray<PriceComponent>; readonly synchronization_schedule: string; readonly stale_after_seconds: number; readonly state: "active" | "disabled" | "retired"; readonly expected_revision: OpaqueId | null; };
+export type ServiceUpdate = { readonly display_name: string; readonly parent_service_api_name?: ApiName; };
 
-export type ProviderModelRoute = { readonly provider_model_route_id: OpaqueId; readonly owner_scope: OpaqueId; readonly provider_instance_id: OpaqueId; readonly canonical_model_id: OpaqueId; readonly wire_model: string; readonly capabilities: ReadonlyArray<string>; readonly embedding_model_space_id?: OpaqueId; readonly embedding_dimensions?: number; readonly price_authority: PriceAuthority; readonly prices: ReadonlyArray<PriceComponent>; readonly synchronization_schedule: string; readonly stale_after_seconds: number; readonly price_version: OpaqueId | null; readonly synchronization_state: "manual" | "current" | "stale" | "missing" | "failed"; readonly state: "active" | "disabled" | "retired"; readonly active_revision: OpaqueId; readonly inherited: boolean; };
+export type Service = { readonly api_name: ApiName; readonly display_name: string; readonly parent_service_api_name?: ApiName; readonly created_at: Timestamp; };
 
-export type ProviderModelRoutePage = { readonly items: ReadonlyArray<ProviderModelRoute>; readonly next_cursor?: string | null; };
+export type ServicePage = { readonly items: ReadonlyArray<Service>; readonly page: PageInfo; };
 
-export type AdministrationPutProviderInstance = { readonly provider_catalog_id: OpaqueId; readonly display_name: string; readonly endpoint: string; readonly credential_id: OpaqueId; readonly state: "active" | "disabled" | "retired"; readonly settings: RegisteredDocument; readonly expected_revision: OpaqueId | null; readonly eligible_service_ids?: ReadonlyArray<OpaqueId>; readonly reason: string; };
+export type ServiceKeyCreate = { readonly name: string; };
 
-export type AdministrationProviderInstance = { readonly provider_instance_id: OpaqueId; readonly owner_scope: OpaqueId; readonly source_layer: OpaqueId; readonly provider_catalog_id: OpaqueId; readonly display_name: string; readonly endpoint: string; readonly credential_id: OpaqueId; readonly eligible_service_ids: ReadonlyArray<OpaqueId>; readonly state: "active" | "disabled" | "retired"; readonly active_revision: OpaqueId; readonly inherited: boolean; readonly settings?: RegisteredDocument; };
+export type ServiceKey = { readonly id: OpaqueId; readonly name: string; readonly created_at: Timestamp; readonly last_used_at?: Timestamp; };
 
-export type AdministrationProviderInstancePage = { readonly items: ReadonlyArray<AdministrationProviderInstance>; readonly next_cursor?: string | null; readonly configuration_revision: OpaqueId | null; };
+export type ServiceKeyCreated = { readonly key: ServiceKey; readonly secret: string; };
 
-export type AdministrationPutProviderModelRoute = { readonly provider_instance_id: OpaqueId; readonly canonical_model_id: OpaqueId; readonly wire_model: string; readonly capabilities: ReadonlyArray<string>; readonly settings: RegisteredDocument; readonly embedding_model_space_id?: OpaqueId; readonly embedding_dimensions?: number; readonly price_authority: PriceAuthority; readonly prices: ReadonlyArray<PriceComponent>; readonly synchronization_schedule: string; readonly stale_after_seconds: number; readonly state: "active" | "disabled" | "retired"; readonly expected_revision: OpaqueId | null; readonly eligible_service_ids?: ReadonlyArray<OpaqueId>; readonly reason: string; };
+export type ServiceKeyPage = { readonly items: ReadonlyArray<ServiceKey>; readonly page: PageInfo; };
 
-export type AdministrationProviderModelRoute = { readonly provider_model_route_id: OpaqueId; readonly owner_scope: OpaqueId; readonly source_layer: OpaqueId; readonly provider_instance_id: OpaqueId; readonly canonical_model_id: OpaqueId; readonly wire_model: string; readonly capabilities: ReadonlyArray<string>; readonly eligible_service_ids: ReadonlyArray<OpaqueId>; readonly settings: RegisteredDocument; readonly embedding_model_space_id?: OpaqueId; readonly embedding_dimensions?: number; readonly price_authority: PriceAuthority; readonly prices: ReadonlyArray<PriceComponent>; readonly synchronization_schedule: string; readonly stale_after_seconds: number; readonly price_version: OpaqueId | null; readonly synchronization_state: "manual" | "current" | "stale" | "missing" | "failed"; readonly state: "active" | "disabled" | "retired"; readonly active_revision: OpaqueId; readonly inherited: boolean; };
+export type ProviderAdapter = "openai" | "openai_compatible" | "openrouter" | "custom" | "wavespeed" | "ollama" | "local_embeddings" | "fake";
 
-export type AdministrationProviderModelRoutePage = { readonly items: ReadonlyArray<AdministrationProviderModelRoute>; readonly next_cursor?: string | null; readonly configuration_revision: OpaqueId | null; };
+export type ProviderWrite = { readonly api_name: ApiName; readonly display_name: string; readonly adapter: ProviderAdapter; readonly endpoint?: string; readonly credential_api_name?: ApiName; readonly enabled: boolean; };
 
-export type PriceComponent = { readonly unit: "input_token" | "output_token" | "cached_token" | "request" | "image" | "audio_second" | "search" | "tool_unit" | "other"; readonly price: NonNegativeDecimal; readonly currency: string; readonly raw_source_value: string; readonly unit_quantity: PositiveDecimal; };
+export type Provider = { readonly api_name: ApiName; readonly display_name: string; readonly adapter: ProviderAdapter; readonly endpoint?: string; readonly credential_api_name?: ApiName; readonly enabled: boolean; readonly created_at: Timestamp; };
 
-export type PriceAuthority = { readonly mode: "manual"; } | { readonly mode: "source"; readonly source_name: string; readonly lookup_identifier: string; };
+export type ProviderPage = { readonly items: ReadonlyArray<Provider>; readonly page: PageInfo; };
 
-export type PriceSynchronizationRequest = { readonly dry_run: boolean; readonly provider_model_route_ids?: ReadonlyArray<OpaqueId>; };
+export type InputModality = "text" | "image";
 
-export type PriceSynchronization = { readonly operation_id: OpaqueId; readonly state: "previewed" | "queued" | "running" | "completed" | "failed"; readonly dry_run: boolean; readonly resulting_configuration_revision?: OpaqueId; readonly resulting_configuration_revisions?: ReadonlyArray<OpaqueId>; readonly source_snapshot: { readonly source_name: string; readonly fetched_at: Timestamp; readonly source_revision?: string; readonly content_sha256: string; readonly http_validator?: string; }; readonly results: ReadonlyArray<{ readonly provider_model_route_id: OpaqueId; readonly source_name: string; readonly lookup_identifier: string; readonly old_prices: ReadonlyArray<PriceComponent>; readonly new_prices: ReadonlyArray<PriceComponent>; readonly status: "updated" | "unchanged" | "skipped" | "missing" | "failed"; readonly synchronization_state: "manual" | "current" | "stale" | "missing" | "failed"; readonly price_version?: OpaqueId; readonly error_class?: "source_unavailable" | "missing_row" | "invalid_value" | "unsupported_unit" | "currency_mismatch"; readonly safe_error?: string; readonly synchronized_at: Timestamp; }>; };
+export type OutputModality = "text" | "structured_json" | "embedding" | "image" | "video" | "audio";
 
-export type RevisionWrite = { readonly expected_active_revision: OpaqueId; readonly reason: string; };
+export type ModelCapability = "tool_calling" | "streaming" | "reasoning";
 
-export type ConfigurationDocument = { readonly stable_id: OpaqueId; readonly display_name: string; readonly state: "active" | "disabled" | "retired"; readonly expected_revision: OpaqueId | null; readonly settings: RegisteredDocument; };
+export type ModelConstraints = { readonly embedding_dimensions?: ReadonlyArray<number>; readonly max_input_images?: number; readonly max_input_image_bytes?: number; readonly max_output_duration_seconds?: number; };
 
-export type CatalogEntry = { readonly stable_id: OpaqueId; readonly kind: "provider" | "model"; readonly display_name: string; readonly capabilities: ReadonlyArray<string>; readonly state: "active" | "disabled" | "retired"; readonly settings: RegisteredDocument | null; readonly active_revision: OpaqueId; };
+export type ReasoningMapping = { readonly level: ReasoningLevel; readonly provider_value: string; };
 
-export type CatalogPage = { readonly items: ReadonlyArray<CatalogEntry>; readonly next_cursor: string | null; readonly configuration_revision: OpaqueId | null; };
+export type ModelWrite = { readonly api_name: ApiName; readonly display_name: string; readonly input_modalities: ReadonlyArray<InputModality>; readonly output_modalities: ReadonlyArray<OutputModality>; readonly capabilities: ReadonlyArray<ModelCapability>; readonly constraints?: ModelConstraints; readonly price_source?: string; readonly price_lookup_key?: string; readonly manual_price?: Price; };
 
-export type ConfigurationWriteResult = { readonly resource_id: OpaqueId; readonly active_revision: OpaqueId; readonly distribution_state: "distributing" | "current" | "degraded"; readonly operation_id: OpaqueId; };
+export type Model = { readonly api_name: ApiName; readonly display_name: string; readonly input_modalities: ReadonlyArray<InputModality>; readonly output_modalities: ReadonlyArray<OutputModality>; readonly capabilities: ReadonlyArray<ModelCapability>; readonly constraints?: ModelConstraints; readonly price_source?: string; readonly price_lookup_key?: string; readonly current_price?: Price; readonly created_at: Timestamp; };
 
-export type ConfigurationPage = { readonly items: ReadonlyArray<ConfigurationDocument>; readonly next_cursor?: string | null; };
+export type ModelPage = { readonly items: ReadonlyArray<Model>; readonly page: PageInfo; };
 
-export type EffectiveConfiguration = { readonly service_id: OpaqueId; readonly workspace_id?: OpaqueId; readonly active_revision: OpaqueId; readonly distribution_state: "distributing" | "current" | "degraded"; readonly catalog: ReadonlyArray<EffectiveItem>; readonly assignments: ReadonlyArray<EffectiveItem>; readonly provider_instances: ReadonlyArray<EffectiveItem>; readonly provider_model_routes: ReadonlyArray<EffectiveItem>; };
+export type ProviderModelWrite = { readonly api_name: ApiName; readonly provider_api_name: ApiName; readonly model_api_name: ApiName; readonly provider_model_name: string; readonly enabled: boolean; readonly input_modalities?: ReadonlyArray<InputModality>; readonly output_modalities?: ReadonlyArray<OutputModality>; readonly capabilities?: ReadonlyArray<ModelCapability>; readonly constraints?: ModelConstraints; readonly reasoning_mappings?: ReadonlyArray<ReasoningMapping>; readonly price_source?: string; readonly price_lookup_key?: string; readonly manual_price?: Price; };
 
-export type EffectiveItem = { readonly stable_id: OpaqueId; readonly owner_scope: "global" | "service" | "workspace"; readonly source_layer: OpaqueId; readonly state: "active" | "disabled" | "retired"; readonly inherited: boolean; readonly active_revision: OpaqueId; readonly settings?: RegisteredDocument; };
+export type Cooldown = { readonly until: Timestamp; readonly reason: string; };
 
-export type AccountingSummary = { readonly from: Timestamp; readonly to: Timestamp; readonly currency: string; readonly logical_requests: number; readonly attempts: number; readonly usage: ReadonlyArray<UsageComponent>; readonly cost: NonNegativeDecimal; readonly corrections: Decimal; };
+export type ProviderModel = { readonly api_name: ApiName; readonly provider_api_name: ApiName; readonly model_api_name: ApiName; readonly provider_model_name: string; readonly enabled: boolean; readonly input_modalities: ReadonlyArray<InputModality>; readonly output_modalities: ReadonlyArray<OutputModality>; readonly capabilities: ReadonlyArray<ModelCapability>; readonly constraints?: ModelConstraints; readonly reasoning_mappings: ReadonlyArray<ReasoningMapping>; readonly price_source?: string; readonly price_lookup_key?: string; readonly effective_price: Price; readonly cooldown?: Cooldown; readonly created_at: Timestamp; };
 
-export type UsageComponent = { readonly unit: string; readonly quantity: NonNegativeDecimal; };
+export type ProviderModelPage = { readonly items: ReadonlyArray<ProviderModel>; readonly page: PageInfo; };
 
-export type EmbedSessionRequest = { readonly host_user_subject: string; readonly workspace_id?: OpaqueId; readonly allowed_origin: string; readonly permissions: ReadonlyArray<"configuration.read" | "configuration.write" | "budget.read" | "budget.write" | "accounting.read" | "request_status.read" | "health.read" | "diagnostic.run">; readonly recent_auth_at?: Timestamp; readonly theme: { readonly mode: "light" | "dark" | "system"; readonly density: "comfortable" | "compact"; readonly corner_style: "square" | "rounded"; }; };
+export type AvailableProviderModel = { readonly api_name: ApiName; readonly display_name: string; readonly input_modalities: ReadonlyArray<InputModality>; readonly output_modalities: ReadonlyArray<OutputModality>; readonly capabilities: ReadonlyArray<ModelCapability>; readonly constraints?: ModelConstraints; readonly effective_price: Price; };
 
-export type EmbedSession = { readonly session_id: OpaqueId; readonly bootstrap_token: string; readonly frame_url: string; readonly expires_at: Timestamp; readonly message_version: "1"; };
+export type AvailableProviderModelPage = { readonly items: ReadonlyArray<AvailableProviderModel>; readonly page: PageInfo; };
 
-export type EmbedBootstrapRequest = { readonly bootstrap_token: string; readonly frame_nonce: string; readonly host_origin: string; };
+export type CredentialWrite = { readonly api_name: ApiName; readonly secret: string; };
 
-export type EmbedBootstrap = { readonly expires_at: Timestamp; readonly service_id: OpaqueId; readonly workspace_id?: OpaqueId; readonly permissions: ReadonlyArray<"configuration.read" | "configuration.write" | "budget.read" | "budget.write" | "accounting.read" | "request_status.read" | "health.read" | "diagnostic.run">; readonly theme: { readonly mode: "light" | "dark" | "system"; readonly density: "comfortable" | "compact"; readonly corner_style: "square" | "rounded"; }; };
+export type Credential = { readonly api_name: ApiName; readonly created_at: Timestamp; readonly updated_at: Timestamp; };
 
-export type EmbedAdministrationState = { readonly kind: "service" | "workspace"; readonly service_id: OpaqueId; readonly workspace_id: OpaqueId | null; readonly display_name: string; readonly state: "active" | "disabled" | "retired"; readonly revision: OpaqueId; readonly parent_service_id: OpaqueId | null; };
+export type CredentialPage = { readonly items: ReadonlyArray<Credential>; readonly page: PageInfo; };
 
-export type EmbedProviderInstance = { readonly provider_instance_id: OpaqueId; readonly owner_scope: OpaqueId; readonly source_layer: OpaqueId; readonly provider_catalog_id: OpaqueId; readonly display_name: string; readonly endpoint: string; readonly state: "active" | "disabled" | "retired"; readonly active_revision: OpaqueId; readonly inherited: boolean; readonly settings: RegisteredDocument; };
+export type Price = { readonly currency: string; readonly unit_prices: ReadonlyArray<UnitPrice>; readonly source?: string; readonly synchronized_at?: Timestamp; };
 
-export type EmbedProviderModelRoute = { readonly provider_model_route_id: OpaqueId; readonly owner_scope: OpaqueId; readonly source_layer: OpaqueId; readonly provider_instance_id: OpaqueId; readonly canonical_model_id: OpaqueId; readonly wire_model: string; readonly capabilities: ReadonlyArray<string>; readonly settings: RegisteredDocument; readonly embedding_model_space_id?: OpaqueId; readonly embedding_dimensions?: number; readonly price_authority: PriceAuthority; readonly prices: ReadonlyArray<PriceComponent>; readonly synchronization_schedule: string; readonly stale_after_seconds: number; readonly price_version: OpaqueId | null; readonly synchronization_state: "manual" | "current" | "stale" | "missing" | "failed" | null; readonly state: "active" | "disabled" | "retired"; readonly active_revision: OpaqueId; readonly inherited: boolean; };
+export type UnitPrice = { readonly unit: UsageUnit; readonly amount: string; };
 
-export type EmbedAdministrationConfiguration = { readonly providers: ReadonlyArray<EmbedProviderInstance>; readonly routes: ReadonlyArray<EmbedProviderModelRoute>; readonly assignments: ReadonlyArray<AdministrationAssignment>; };
+export type PriceSyncRequest = { readonly provider_model_api_names?: ReadonlyArray<ApiName>; };
 
-export type EmbedRequestStatus = AdministrationRequestStatus;
+export type PriceSyncItem = { readonly provider_model_api_name: ApiName; readonly outcome: "updated" | "unchanged" | "missing" | "failed"; readonly price?: Price; readonly message?: string; };
 
-export type EmbedAdministrationSnapshot = { readonly service_id: OpaqueId; readonly workspace_id: OpaqueId | null; readonly permissions: ReadonlyArray<"configuration.read" | "accounting.read" | "request_status.read" | "health.read">; readonly expires_at: Timestamp; readonly state?: EmbedAdministrationState; readonly configuration?: EmbedAdministrationConfiguration; readonly requests?: ReadonlyArray<EmbedRequestStatus>; readonly accounting?: AccountingSummary; };
+export type PriceSyncResult = { readonly attempted_at: Timestamp; readonly items: ReadonlyArray<PriceSyncItem>; };
 
-export type AdministratorSessionStart = { readonly purpose: "login" | "recent_authentication"; readonly return_path: string; readonly trusted_grant_token?: string; };
+export type ModelImportPreviewRequest = { readonly provider_api_name: ApiName; };
 
-export type AdministratorAuthorization = { readonly authorization_url: string; readonly expires_at: Timestamp; };
+export type ModelImportCandidate = { readonly catalog_key: string; readonly display_name: string; readonly provider_model_name: string; readonly input_modalities: ReadonlyArray<InputModality>; readonly output_modalities: ReadonlyArray<OutputModality>; readonly capabilities: ReadonlyArray<ModelCapability>; readonly constraints?: ModelConstraints; };
 
-export type AdministratorSession = { readonly issuer: string; readonly subject: OpaqueId; readonly grants: ReadonlyArray<string>; readonly authenticated_at: Timestamp; readonly account_state_checked_at: Timestamp; readonly recent_authentication_at: Timestamp | null; readonly idle_expires_at: Timestamp; readonly absolute_expires_at: Timestamp; readonly csrf_token: string; readonly identity_account_url: string; readonly authentication_mode: "local" | "oidc"; };
+export type ModelImportPreview = { readonly provider_api_name: ApiName; readonly candidates: ReadonlyArray<ModelImportCandidate>; };
 
-export type AdministratorOperation = "service.manage" | "service_parent.manage" | "catalog.manage" | "provider_instance.manage" | "provider_route.manage" | "business_tool_gateway.approve" | "credential.manage" | "assignment.manage" | "budget.read" | "budget.write" | "accounting.read" | "request_status.read" | "retention.manage" | "grant.manage" | "audit.read" | "content.read" | "export.create" | "health.read" | "node.drain" | "circuit.probe" | "circuit.reset" | "high_availability.promote" | "high_availability.failback" | "backup.start" | "restore.validate" | "disaster_recovery.test";
+export type ModelImportSelection = { readonly catalog_key: string; readonly model_api_name: ApiName; readonly provider_model_api_name: ApiName; };
 
-export type PutAdministratorGrant = { readonly issuer: string; readonly subject: OpaqueId; readonly authority_class: "global" | "service"; readonly service_id?: OpaqueId; readonly workspace_ids?: ReadonlyArray<OpaqueId>; readonly operations: ReadonlyArray<AdministratorOperation>; readonly expires_at?: Timestamp | null; readonly expected_revision: OpaqueId | null; readonly reason: string; };
+export type ModelImportRequest = { readonly provider_api_name: ApiName; readonly selections: ReadonlyArray<ModelImportSelection>; };
 
-export type AdministratorGrant = { readonly grant_id: OpaqueId; readonly issuer: string; readonly subject: OpaqueId; readonly authority_class: "global" | "service"; readonly service_id?: OpaqueId; readonly workspace_ids?: ReadonlyArray<OpaqueId>; readonly operations: ReadonlyArray<AdministratorOperation>; readonly state: "active" | "revoked" | "expired"; readonly revision: OpaqueId; readonly created_at: Timestamp; readonly expires_at?: Timestamp | null; };
+export type ModelImportResult = { readonly models: ReadonlyArray<Model>; readonly provider_models: ReadonlyArray<ProviderModel>; };
 
-export type AdministratorGrantPage = { readonly items: ReadonlyArray<AdministratorGrant>; readonly next_cursor?: string | null; };
+export type RequestLogSummary = { readonly id: OpaqueId; readonly service_api_name: ApiName; readonly workspace_api_name: ApiName; readonly assignment_api_name?: AssignmentName; readonly provider_model_api_name?: ApiName; readonly kind: "model" | "embedding" | "media"; readonly outcome: Outcome; readonly tags?: Tags; readonly started_at: Timestamp; };
 
-export type OperationalItem = { readonly kind: "topology" | "node" | "provider_circuit" | "replication" | "spool" | "backup" | "restore_test" | "disaster_recovery_test"; readonly resource_id: OpaqueId; readonly state: string; readonly revision: OpaqueId; readonly observed_at: Timestamp; readonly safe_detail?: RegisteredDocument; };
+export type RequestLog = { readonly summary: RequestLogSummary; readonly request_json: string; readonly response_json?: string; readonly attempts: ReadonlyArray<RequestAttempt>; readonly media?: ReadonlyArray<LogMedia>; };
 
-export type OperationalState = { readonly observed_at: Timestamp; readonly items: ReadonlyArray<OperationalItem>; };
+export type RequestAttempt = { readonly provider_model_api_name: ApiName; readonly outcome: Outcome; readonly started_at: Timestamp; readonly completed_at?: Timestamp; readonly usage: Usage; readonly applied_prices: Price; readonly error?: Error; };
 
-export type CreateOperationalAction = { readonly action: "node_drain" | "circuit_probe" | "circuit_reset" | "promote" | "failback" | "backup_start" | "restore_validate" | "disaster_recovery_test_start"; readonly target_id?: OpaqueId; readonly expected_revision: OpaqueId; readonly drain_timeout_seconds?: number; readonly recovery_target_time?: Timestamp; readonly reason: string; };
+export type LogMedia = { readonly id: OpaqueId; readonly media_type: string; readonly role: "input" | "output"; readonly size_bytes: number; };
 
-export type OperationalAction = { readonly operation_id: OpaqueId; readonly action: "node_drain" | "circuit_probe" | "circuit_reset" | "promote" | "failback" | "backup_start" | "restore_validate" | "disaster_recovery_test_start"; readonly state: "queued" | "running" | "succeeded" | "failed" | "uncertain"; readonly target_id?: OpaqueId; readonly created_at: Timestamp; readonly completed_at?: Timestamp; readonly revision: OpaqueId; readonly safe_result?: RegisteredDocument; readonly safe_error?: string; };
+export type RequestLogPage = { readonly items: ReadonlyArray<RequestLogSummary>; readonly page: PageInfo; };
 
-export type CreateService = { readonly display_name: string; readonly parent_service_id: OpaqueId | null; readonly bootstrap_scope: BootstrapScope; };
+export type ActivityEvent = { readonly id: OpaqueId; readonly actor_subject: string; readonly action: string; readonly resource_type: string; readonly resource_api_name?: ApiName; readonly result: "succeeded" | "failed"; readonly occurred_at: Timestamp; };
 
-export type BootstrapScope = { readonly audiences: ReadonlyArray<"data_plane" | "service_management" | "host_backend" | "accounting" | "configuration" | "budget_authority">; readonly operations: ReadonlyArray<string>; readonly workspace_limit?: "all_service_workspaces" | "explicit_only"; };
+export type ActivityPage = { readonly items: ReadonlyArray<ActivityEvent>; readonly page: PageInfo; };
 
-export type ServiceCreated = { readonly service_id: OpaqueId; readonly state: "active"; readonly state_revision: OpaqueId; readonly bootstrap_secret?: string; readonly bootstrap_secret_available: boolean; readonly credential_generation: 1; };
+export type LogRetentionSettings = { readonly duration_days: number; };
 
-export type AdministrationChange = { readonly expected_revision: OpaqueId; readonly reason: string; readonly display_name?: string; readonly overlap_seconds?: number; readonly new_parent_service_id?: OpaqueId | null; };
+export type HealthComponent = { readonly name: string; readonly status: HealthStatus; readonly message?: string; };
 
-export type ServiceUpdate = { readonly expected_revision: OpaqueId; readonly reason: string; readonly display_name: string; readonly new_parent_service_id: OpaqueId | null; };
-
-export type ServiceAction = { readonly expected_revision: OpaqueId; readonly reason: string; };
-
-export type AdministrationResult = { readonly resource_id: OpaqueId; readonly state: string; readonly revision: OpaqueId; readonly operation_id: OpaqueId; readonly bootstrap_secret?: string; readonly prior_generation_expires_at?: Timestamp; };
-
-export type ServiceAdministrationRecord = { readonly service_id: OpaqueId; readonly display_name: string; readonly parent_service_id?: OpaqueId | null; readonly state: "active" | "disabled" | "retired"; readonly revision: OpaqueId; readonly bootstrap_state: "ready" | "revoked" | "missing"; readonly credential_generation: number | null; readonly prior_generation_expires_at?: Timestamp; readonly bootstrap_scope: BootstrapScope | null; };
-
-export type ServiceAdministrationPage = { readonly items: ReadonlyArray<ServiceAdministrationRecord>; readonly next_cursor?: string | null; };
-
-export type ScopedAdministrationState = { readonly kind: "service" | "workspace"; readonly service_id: OpaqueId; readonly workspace_id?: OpaqueId; readonly display_name: string; readonly state: "active" | "disabled" | "retired"; readonly revision: OpaqueId; readonly parent_service_id?: OpaqueId; };
-
-export type RetentionValue = { readonly data_class: "configuration_revisions"; readonly days: number; readonly minimum_days: number; readonly maximum_days: number; readonly minimum_count: number; readonly allowed_minimum_count: number; readonly allowed_maximum_count: number; } | { readonly data_class: "diagnostic_logs" | "captured_content" | "raw_accounting" | "agent_tool_audit" | "daily_accounting" | "security_audit"; readonly days: number; readonly minimum_days: number; readonly maximum_days: number; };
-
-export type RetentionConfiguration = { readonly revision: OpaqueId; readonly scope?: "global" | "service" | "workspace"; readonly service_id?: OpaqueId; readonly workspace_id?: OpaqueId; readonly source_layer?: OpaqueId; readonly values: ReadonlyArray<RetentionValue>; readonly revision_retention_evidence: { readonly oldest_retained_revision: OpaqueId; readonly retained_by: "minimum_count" | "minimum_age" | "both"; readonly minimum_count_boundary?: OpaqueId; readonly minimum_age_boundary?: Timestamp; }; };
-
-export type RetentionSelection = { readonly data_class: "configuration_revisions"; readonly days: number; readonly minimum_count: number; } | { readonly data_class: "diagnostic_logs" | "captured_content" | "raw_accounting" | "agent_tool_audit" | "daily_accounting" | "security_audit"; readonly days: number; };
-
-export type PutRetentionConfiguration = { readonly expected_revision: OpaqueId; readonly values: ReadonlyArray<RetentionSelection>; readonly confirmed_preview_id: OpaqueId; };
-
-export type PreviewRetentionConfiguration = { readonly expected_revision: OpaqueId; readonly values: ReadonlyArray<RetentionSelection>; };
-
-export type RetentionPreview = { readonly preview_id: OpaqueId; readonly revision: OpaqueId; readonly expires_at: Timestamp; readonly effects: ReadonlyArray<{ readonly data_class: string; readonly direction: "delete_sooner" | "retain_longer" | "no_change"; readonly estimated_records: number; readonly estimated_bytes: number; }>; };
-
-export type CreateExport = { readonly data_class: "accounting" | "audit" | "configuration" | "captured_content"; readonly service_id?: OpaqueId; readonly workspace_id?: OpaqueId; readonly from: Timestamp; readonly to: Timestamp; readonly format: "jsonl" | "csv"; };
-
-export type ExportOperation = { readonly operation_id: OpaqueId; readonly state: "queued" | "running" | "completed" | "failed" | "expired"; readonly created_at: Timestamp; readonly expires_at: Timestamp; readonly redemption_path?: string; readonly redemption_token?: string; readonly redemption_expires_at?: Timestamp; readonly sha256?: string; readonly safe_error?: string; };
-
-export type RedeemExport = { readonly redemption_token: string; };
-
-export type CreateCredential = { readonly owner_scope: OpaqueId; readonly provider_catalog_id: OpaqueId; readonly secret: string; readonly safe_label?: string; };
-
-export type CredentialChange = { readonly expected_revision: OpaqueId; readonly reason: string; readonly replacement_secret?: string; };
-
-export type CredentialMetadata = { readonly credential_id: OpaqueId; readonly owner_scope: OpaqueId; readonly provider_catalog_id: OpaqueId; readonly state: "active" | "disabled" | "retired"; readonly revision: OpaqueId; readonly created_at: Timestamp; readonly fingerprint: string; };
-
-export type CredentialPage = { readonly items: ReadonlyArray<CredentialMetadata>; readonly next_cursor?: string | null; };
-
-export type AuditPage = { readonly items: ReadonlyArray<{ readonly event_id: OpaqueId; readonly occurred_at: Timestamp; readonly actor: string; readonly action: string; readonly outcome: string; readonly scope: AuditScope; readonly safe_detail?: AuditSafeDetail; }>; readonly next_cursor?: string | null; };
-
-export type AuditScope = { readonly authority_class: "service" | "global_administrator" | "system"; readonly service_id?: OpaqueId; readonly workspace_id?: OpaqueId; };
-
-export type AuditSafeDetail = { readonly resource_type?: string; readonly resource_id?: OpaqueId; readonly reason?: string; readonly safe_error_code?: string; };
-
-export type CapturedContentMetadata = { readonly content_id: OpaqueId; readonly service_id: OpaqueId; readonly workspace_id?: OpaqueId; readonly request_id: UuidV7; readonly capture_policy: "complete" | "metadata_only" | "disabled"; readonly expires_at: Timestamp; readonly content_type: string; };
-
-export type CapturedContentMetadataPage = { readonly items: ReadonlyArray<CapturedContentMetadata>; readonly next_cursor?: string | null; };
-
-export type CapturedContent = { readonly content_id: OpaqueId; readonly service_id: OpaqueId; readonly workspace_id?: OpaqueId; readonly request_id: UuidV7; readonly capture_policy: "complete" | "metadata_only" | "disabled"; readonly expires_at: Timestamp; readonly content_type: string; readonly value: RegisteredDocument; };
-
-export type Health = { readonly status: "ready" | "degraded" | "not_ready"; readonly role: "combined" | "control-plane" | "data-plane" | "worker"; readonly contract_set: "llmrouter-v1"; readonly active_configuration_revision: OpaqueId; readonly configuration_age_seconds: number; readonly configuration_state: "current" | "stale" | "unavailable"; readonly circuits: ReadonlyArray<{ readonly provider_instance_id: OpaqueId; readonly state: "closed" | "open" | "half_open"; readonly sample_period_seconds: number; readonly reason: string; readonly next_probe_at?: Timestamp; readonly changed_at: Timestamp; }>; readonly spool: { readonly state: "normal" | "warning" | "shedding" | "stopped" | "emergency"; readonly used_bytes: number; readonly capacity_bytes: number; }; readonly replication: { readonly control_plane_state: "primary" | "standby" | "unavailable"; readonly promotion_state: "stable" | "promoting" | "promoted" | "fenced" | "degraded"; readonly possible_data_loss_seconds: number; }; readonly recovery: { readonly newest_backup_at: Timestamp; readonly recovery_log_continuous: boolean; readonly point_in_time_window_days: number; readonly last_restore_test_at?: Timestamp; readonly last_restore_test_state: "passed" | "failed" | "overdue"; readonly disaster_recovery_state: "not_run" | "passed" | "failed" | "overdue"; }; };
-
-export type FieldError = { readonly path: string; readonly code: string; readonly message: string; };
-
-export type ErrorEnvelope = { readonly error: { readonly code: "invalid_request" | "unsupported_contract" | "unsupported_capability" | "invalid_token" | "recent_auth_required" | "insufficient_scope" | "service_scope_mismatch" | "workspace_scope_mismatch" | "policy_denied" | "diagnostic_permission_required" | "not_found" | "request_not_found" | "workspace_not_found" | "attachment_not_found" | "idempotency_conflict" | "state_revision_conflict" | "configuration_revision_conflict" | "request_identity_conflict" | "stream_replay_unavailable" | "terminal_state" | "budget_ceiling_conflict" | "attachment_already_complete" | "request_identity_expired" | "workspace_retired" | "assignment_unavailable" | "workspace_unavailable" | "capability_mismatch" | "embedding_space_mismatch" | "budget_exhausted" | "secret_detected" | "attachment_invalid" | "rate_limited" | "temporarily_unavailable" | "stale_configuration" | "spool_capacity_exhausted" | "allowance_unavailable" | "internal_error"; readonly message: string; readonly retryable: boolean; readonly request_id: OpaqueId; readonly retry_after_ms?: number | null; readonly field_errors?: ReadonlyArray<FieldError>; }; };
+export type AdministratorHealth = { readonly status: HealthStatus; readonly checked_at: Timestamp; readonly components: ReadonlyArray<HealthComponent>; };
 
 export const contractSchemas = {
-  "AccountingSummary": {
+  "ActivityEvent": {
     "additionalProperties": false,
     "properties": {
-      "attempts": {
-        "minimum": 0,
-        "type": "integer"
-      },
-      "corrections": {
-        "$ref": "#/components/schemas/Decimal"
-      },
-      "cost": {
-        "$ref": "#/components/schemas/NonNegativeDecimal"
-      },
-      "currency": {
-        "pattern": "^[A-Z]{3}$",
-        "type": "string"
-      },
-      "from": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "logical_requests": {
-        "minimum": 0,
-        "type": "integer"
-      },
-      "to": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "usage": {
-        "items": {
-          "$ref": "#/components/schemas/UsageComponent"
-        },
-        "type": "array"
-      }
-    },
-    "required": [
-      "from",
-      "to",
-      "currency",
-      "logical_requests",
-      "attempts",
-      "usage",
-      "cost",
-      "corrections"
-    ],
-    "type": "object"
-  },
-  "AdministrationAssignment": {
-    "additionalProperties": false,
-    "properties": {
-      "active_revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "candidates": {
-        "items": {
-          "additionalProperties": false,
-          "properties": {
-            "attempt_timeout_ms": {
-              "maximum": 120000,
-              "minimum": 100,
-              "type": "integer"
-            },
-            "provider_model_route_id": {
-              "$ref": "#/components/schemas/OpaqueId"
-            }
-          },
-          "required": [
-            "provider_model_route_id"
-          ],
-          "type": "object"
-        },
-        "maxItems": 8,
-        "minItems": 1,
-        "type": "array"
-      },
-      "inherited": {
-        "type": "boolean"
-      },
-      "name": {
-        "$ref": "#/components/schemas/AssignmentName"
-      },
-      "owner_scope": {
-        "enum": [
-          "global",
-          "service",
-          "workspace"
-        ],
-        "type": "string"
-      },
-      "required_capabilities": {
-        "items": {
-          "maxLength": 100,
-          "minLength": 1,
-          "type": "string"
-        },
-        "maxItems": 32,
-        "type": "array",
-        "uniqueItems": true
-      },
-      "source_layer": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "state": {
-        "enum": [
-          "active",
-          "disabled",
-          "retired"
-        ],
-        "type": "string"
-      }
-    },
-    "required": [
-      "name",
-      "owner_scope",
-      "source_layer",
-      "state",
-      "inherited",
-      "active_revision",
-      "candidates"
-    ],
-    "type": "object"
-  },
-  "AdministrationAssignmentPage": {
-    "additionalProperties": false,
-    "properties": {
-      "configuration_revision": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/OpaqueId"
-          },
-          {
-            "type": "null"
-          }
-        ]
-      },
-      "items": {
-        "items": {
-          "$ref": "#/components/schemas/AdministrationAssignment"
-        },
-        "type": "array"
-      },
-      "next_cursor": {
-        "type": [
-          "string",
-          "null"
-        ]
-      }
-    },
-    "required": [
-      "items",
-      "configuration_revision"
-    ],
-    "type": "object"
-  },
-  "AdministrationChange": {
-    "additionalProperties": false,
-    "properties": {
-      "display_name": {
+      "action": {
         "maxLength": 200,
         "minLength": 1,
         "type": "string"
       },
-      "expected_revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "new_parent_service_id": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/OpaqueId"
-          },
-          {
-            "type": "null"
-          }
-        ]
-      },
-      "overlap_seconds": {
-        "default": 86400,
-        "maximum": 86400,
-        "minimum": 0,
-        "type": "integer"
-      },
-      "reason": {
+      "actor_subject": {
         "maxLength": 500,
         "minLength": 1,
         "type": "string"
-      }
-    },
-    "required": [
-      "expected_revision",
-      "reason"
-    ],
-    "type": "object"
-  },
-  "AdministrationDiagnosticPhase": {
-    "additionalProperties": false,
-    "properties": {
-      "failure_class": {
-        "enum": [
-          "authentication",
-          "policy",
-          "budget",
-          "rate_limit",
-          "timeout",
-          "transport",
-          "provider_unavailable",
-          "invalid_provider_response",
-          "incompatible_request",
-          "cancelled",
-          "uncertain_effect",
-          "router_internal"
-        ],
+      },
+      "id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "occurred_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "resource_api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      },
+      "resource_type": {
+        "maxLength": 200,
+        "minLength": 1,
         "type": "string"
       },
-      "name": {
+      "result": {
         "enum": [
-          "authorization",
-          "route_eligibility",
-          "admission",
-          "provider",
-          "accounting"
-        ],
-        "type": "string"
-      },
-      "state": {
-        "enum": [
-          "pending",
-          "active",
           "succeeded",
           "failed"
         ],
@@ -556,1360 +275,260 @@ export const contractSchemas = {
       }
     },
     "required": [
-      "name",
-      "state"
+      "id",
+      "actor_subject",
+      "action",
+      "resource_type",
+      "result",
+      "occurred_at"
     ],
     "type": "object"
   },
-  "AdministrationDiagnosticRun": {
+  "ActivityPage": {
     "additionalProperties": false,
-    "description": "Content-free state for one exact-route administrator diagnostic.",
     "properties": {
-      "authorization_expires_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "exact_route": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "failure_class": {
-        "enum": [
-          "authentication",
-          "policy",
-          "budget",
-          "rate_limit",
-          "timeout",
-          "transport",
-          "provider_unavailable",
-          "invalid_provider_response",
-          "incompatible_request",
-          "cancelled",
-          "uncertain_effect",
-          "router_internal"
-        ],
-        "type": "string"
-      },
-      "phases": {
+      "items": {
         "items": {
-          "$ref": "#/components/schemas/AdministrationDiagnosticPhase"
+          "$ref": "#/components/schemas/ActivityEvent"
         },
-        "maxItems": 5,
-        "minItems": 5,
         "type": "array"
       },
-      "request_id": {
-        "$ref": "#/components/schemas/UuidV7"
-      },
-      "route_configuration_revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "service_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "state": {
-        "enum": [
-          "active",
-          "succeeded",
-          "failed",
-          "expired"
-        ],
-        "type": "string"
-      },
-      "status_url": {
-        "format": "uri-reference",
-        "type": "string"
-      },
-      "workspace_id": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/OpaqueId"
-          },
-          {
-            "type": "null"
-          }
-        ]
+      "page": {
+        "$ref": "#/components/schemas/PageInfo"
       }
     },
     "required": [
-      "request_id",
-      "service_id",
-      "workspace_id",
-      "exact_route",
-      "route_configuration_revision",
-      "authorization_expires_at",
-      "state",
-      "phases",
-      "status_url"
+      "items",
+      "page"
     ],
     "type": "object"
   },
-  "AdministrationDiagnosticRunRequest": {
+  "AdministratorHealth": {
     "additionalProperties": false,
     "properties": {
-      "exact_route": {
-        "$ref": "#/components/schemas/OpaqueId"
+      "checked_at": {
+        "$ref": "#/components/schemas/Timestamp"
       },
-      "reason": {
+      "components": {
+        "items": {
+          "$ref": "#/components/schemas/HealthComponent"
+        },
+        "type": "array"
+      },
+      "status": {
+        "$ref": "#/components/schemas/HealthStatus"
+      }
+    },
+    "required": [
+      "status",
+      "checked_at",
+      "components"
+    ],
+    "type": "object"
+  },
+  "AdministratorSession": {
+    "additionalProperties": false,
+    "properties": {
+      "csrf_token": {
         "maxLength": 500,
-        "minLength": 1,
+        "minLength": 16,
         "type": "string"
-      },
-      "request_id": {
-        "$ref": "#/components/schemas/UuidV7"
-      }
-    },
-    "required": [
-      "request_id",
-      "exact_route",
-      "reason"
-    ],
-    "type": "object"
-  },
-  "AdministrationProviderInstance": {
-    "additionalProperties": false,
-    "properties": {
-      "active_revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "credential_id": {
-        "$ref": "#/components/schemas/OpaqueId"
       },
       "display_name": {
         "maxLength": 200,
         "minLength": 1,
         "type": "string"
       },
-      "eligible_service_ids": {
-        "items": {
-          "$ref": "#/components/schemas/OpaqueId"
-        },
-        "maxItems": 1000,
-        "type": "array",
-        "uniqueItems": true
+      "expires_at": {
+        "$ref": "#/components/schemas/Timestamp"
       },
-      "endpoint": {
-        "format": "uri",
-        "type": "string"
-      },
-      "inherited": {
-        "type": "boolean"
-      },
-      "owner_scope": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "provider_catalog_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "provider_instance_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "settings": {
-        "$ref": "#/components/schemas/RegisteredDocument"
-      },
-      "source_layer": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "state": {
-        "enum": [
-          "active",
-          "disabled",
-          "retired"
-        ],
+      "subject": {
+        "maxLength": 500,
+        "minLength": 1,
         "type": "string"
       }
     },
     "required": [
-      "provider_instance_id",
-      "owner_scope",
-      "source_layer",
-      "provider_catalog_id",
+      "subject",
       "display_name",
-      "endpoint",
-      "credential_id",
-      "eligible_service_ids",
-      "state",
-      "active_revision",
-      "inherited"
+      "expires_at",
+      "csrf_token"
     ],
     "type": "object"
   },
-  "AdministrationProviderInstancePage": {
-    "additionalProperties": false,
-    "properties": {
-      "configuration_revision": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/OpaqueId"
-          },
-          {
-            "type": "null"
-          }
-        ]
-      },
-      "items": {
-        "items": {
-          "$ref": "#/components/schemas/AdministrationProviderInstance"
-        },
-        "type": "array"
-      },
-      "next_cursor": {
-        "type": [
-          "string",
-          "null"
-        ]
-      }
-    },
-    "required": [
-      "items",
-      "configuration_revision"
-    ],
-    "type": "object"
-  },
-  "AdministrationProviderModelRoute": {
-    "additionalProperties": false,
-    "allOf": [
-      {
-        "if": {
-          "properties": {
-            "capabilities": {
-              "contains": {
-                "const": "embedding"
-              }
-            }
-          },
-          "required": [
-            "capabilities"
-          ]
-        },
-        "then": {
-          "required": [
-            "embedding_model_space_id",
-            "embedding_dimensions"
-          ]
-        }
-      }
-    ],
-    "properties": {
-      "active_revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "canonical_model_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "capabilities": {
-        "items": {
-          "type": "string"
-        },
-        "type": "array",
-        "uniqueItems": true
-      },
-      "eligible_service_ids": {
-        "items": {
-          "$ref": "#/components/schemas/OpaqueId"
-        },
-        "maxItems": 1000,
-        "type": "array",
-        "uniqueItems": true
-      },
-      "embedding_dimensions": {
-        "maximum": 4096,
-        "minimum": 1,
-        "type": "integer"
-      },
-      "embedding_model_space_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "inherited": {
-        "type": "boolean"
-      },
-      "owner_scope": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "price_authority": {
-        "$ref": "#/components/schemas/PriceAuthority"
-      },
-      "price_version": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/OpaqueId"
-          },
-          {
-            "type": "null"
-          }
-        ]
-      },
-      "prices": {
-        "items": {
-          "$ref": "#/components/schemas/PriceComponent"
-        },
-        "maxItems": 32,
-        "type": "array"
-      },
-      "provider_instance_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "provider_model_route_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "settings": {
-        "$ref": "#/components/schemas/RegisteredDocument"
-      },
-      "source_layer": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "stale_after_seconds": {
-        "maximum": 31536000,
-        "minimum": 1,
-        "type": "integer"
-      },
-      "state": {
-        "enum": [
-          "active",
-          "disabled",
-          "retired"
-        ],
-        "type": "string"
-      },
-      "synchronization_schedule": {
-        "maxLength": 100,
-        "minLength": 9,
-        "type": "string"
-      },
-      "synchronization_state": {
-        "enum": [
-          "manual",
-          "current",
-          "stale",
-          "missing",
-          "failed"
-        ],
-        "type": "string"
-      },
-      "wire_model": {
-        "maxLength": 500,
-        "minLength": 1,
-        "type": "string"
-      }
-    },
-    "required": [
-      "provider_model_route_id",
-      "owner_scope",
-      "source_layer",
-      "provider_instance_id",
-      "canonical_model_id",
-      "wire_model",
-      "capabilities",
-      "eligible_service_ids",
-      "settings",
-      "price_authority",
-      "prices",
-      "synchronization_schedule",
-      "stale_after_seconds",
-      "price_version",
-      "synchronization_state",
-      "state",
-      "active_revision",
-      "inherited"
-    ],
-    "type": "object"
-  },
-  "AdministrationProviderModelRoutePage": {
-    "additionalProperties": false,
-    "properties": {
-      "configuration_revision": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/OpaqueId"
-          },
-          {
-            "type": "null"
-          }
-        ]
-      },
-      "items": {
-        "items": {
-          "$ref": "#/components/schemas/AdministrationProviderModelRoute"
-        },
-        "type": "array"
-      },
-      "next_cursor": {
-        "type": [
-          "string",
-          "null"
-        ]
-      }
-    },
-    "required": [
-      "items",
-      "configuration_revision"
-    ],
-    "type": "object"
-  },
-  "AdministrationPutAssignment": {
-    "additionalProperties": false,
-    "properties": {
-      "candidates": {
-        "items": {
-          "additionalProperties": false,
-          "properties": {
-            "attempt_timeout_ms": {
-              "maximum": 120000,
-              "minimum": 100,
-              "type": "integer"
-            },
-            "provider_model_route_id": {
-              "$ref": "#/components/schemas/OpaqueId"
-            }
-          },
-          "required": [
-            "provider_model_route_id"
-          ],
-          "type": "object"
-        },
-        "maxItems": 8,
-        "minItems": 1,
-        "type": "array"
-      },
-      "expected_revision": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/OpaqueId"
-          },
-          {
-            "type": "null"
-          }
-        ]
-      },
-      "reason": {
-        "maxLength": 500,
-        "minLength": 1,
-        "type": "string"
-      },
-      "required_capabilities": {
-        "items": {
-          "maxLength": 100,
-          "minLength": 1,
-          "type": "string"
-        },
-        "maxItems": 32,
-        "type": "array",
-        "uniqueItems": true
-      },
-      "state": {
-        "enum": [
-          "active",
-          "disabled",
-          "retired"
-        ],
-        "type": "string"
-      }
-    },
-    "required": [
-      "expected_revision",
-      "candidates",
-      "state",
-      "reason"
-    ],
-    "type": "object"
-  },
-  "AdministrationPutProviderInstance": {
-    "additionalProperties": false,
-    "properties": {
-      "credential_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "display_name": {
-        "maxLength": 200,
-        "minLength": 1,
-        "type": "string"
-      },
-      "eligible_service_ids": {
-        "items": {
-          "$ref": "#/components/schemas/OpaqueId"
-        },
-        "maxItems": 1000,
-        "type": "array",
-        "uniqueItems": true
-      },
-      "endpoint": {
-        "format": "uri",
-        "type": "string"
-      },
-      "expected_revision": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/OpaqueId"
-          },
-          {
-            "type": "null"
-          }
-        ]
-      },
-      "provider_catalog_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "reason": {
-        "maxLength": 500,
-        "minLength": 1,
-        "type": "string"
-      },
-      "settings": {
-        "$ref": "#/components/schemas/RegisteredDocument"
-      },
-      "state": {
-        "enum": [
-          "active",
-          "disabled",
-          "retired"
-        ],
-        "type": "string"
-      }
-    },
-    "required": [
-      "provider_catalog_id",
-      "display_name",
-      "endpoint",
-      "credential_id",
-      "state",
-      "expected_revision",
-      "settings",
-      "reason"
-    ],
-    "type": "object"
-  },
-  "AdministrationPutProviderModelRoute": {
-    "additionalProperties": false,
-    "allOf": [
-      {
-        "if": {
-          "properties": {
-            "capabilities": {
-              "contains": {
-                "const": "embedding"
-              }
-            }
-          },
-          "required": [
-            "capabilities"
-          ]
-        },
-        "then": {
-          "required": [
-            "embedding_model_space_id",
-            "embedding_dimensions"
-          ]
-        }
-      },
-      {
-        "if": {
-          "properties": {
-            "price_authority": {
-              "properties": {
-                "mode": {
-                  "const": "manual"
-                }
-              },
-              "required": [
-                "mode"
-              ]
-            }
-          },
-          "required": [
-            "price_authority"
-          ]
-        },
-        "then": {
-          "properties": {
-            "prices": {
-              "minItems": 1
-            }
-          }
-        }
-      }
-    ],
-    "properties": {
-      "canonical_model_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "capabilities": {
-        "items": {
-          "type": "string"
-        },
-        "type": "array",
-        "uniqueItems": true
-      },
-      "eligible_service_ids": {
-        "items": {
-          "$ref": "#/components/schemas/OpaqueId"
-        },
-        "maxItems": 1000,
-        "type": "array",
-        "uniqueItems": true
-      },
-      "embedding_dimensions": {
-        "maximum": 4096,
-        "minimum": 1,
-        "type": "integer"
-      },
-      "embedding_model_space_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "expected_revision": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/OpaqueId"
-          },
-          {
-            "type": "null"
-          }
-        ]
-      },
-      "price_authority": {
-        "$ref": "#/components/schemas/PriceAuthority"
-      },
-      "prices": {
-        "description": "A source-owned route can be empty until its first successful synchronization.",
-        "items": {
-          "$ref": "#/components/schemas/PriceComponent"
-        },
-        "maxItems": 32,
-        "type": "array"
-      },
-      "provider_instance_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "reason": {
-        "maxLength": 500,
-        "minLength": 1,
-        "type": "string"
-      },
-      "settings": {
-        "$ref": "#/components/schemas/RegisteredDocument"
-      },
-      "stale_after_seconds": {
-        "description": "A price becomes stale after this age. The initial value is 1209600 seconds.",
-        "maximum": 31536000,
-        "minimum": 1,
-        "type": "integer"
-      },
-      "state": {
-        "enum": [
-          "active",
-          "disabled",
-          "retired"
-        ],
-        "type": "string"
-      },
-      "synchronization_schedule": {
-        "description": "Five-field UTC cron schedule. The initial value is 0 0 * * 0.",
-        "maxLength": 100,
-        "minLength": 9,
-        "type": "string"
-      },
-      "wire_model": {
-        "maxLength": 500,
-        "minLength": 1,
-        "type": "string"
-      }
-    },
-    "required": [
-      "provider_instance_id",
-      "canonical_model_id",
-      "wire_model",
-      "capabilities",
-      "settings",
-      "price_authority",
-      "prices",
-      "synchronization_schedule",
-      "stale_after_seconds",
-      "state",
-      "expected_revision",
-      "reason"
-    ],
-    "type": "object"
-  },
-  "AdministrationRequestStatus": {
-    "additionalProperties": false,
-    "description": "Content-free logical request status for administrator and embed reads.",
-    "oneOf": [
-      {
-        "not": {
-          "required": [
-            "exact_route"
-          ]
-        },
-        "properties": {
-          "assignment": {},
-          "exact_route": {}
-        },
-        "required": [
-          "assignment"
-        ]
-      },
-      {
-        "not": {
-          "required": [
-            "assignment"
-          ]
-        },
-        "properties": {
-          "assignment": {},
-          "exact_route": {}
-        },
-        "required": [
-          "exact_route"
-        ]
-      }
-    ],
-    "properties": {
-      "accounting": {
-        "$ref": "#/components/schemas/RequestAccounting"
-      },
-      "admission": {
-        "$ref": "#/components/schemas/AdmissionReceipt"
-      },
-      "admitted_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "assignment": {
-        "$ref": "#/components/schemas/AssignmentName"
-      },
-      "attempts": {
-        "items": {
-          "$ref": "#/components/schemas/AttemptStatus"
-        },
-        "maxItems": 1000,
-        "type": "array"
-      },
-      "committed_effects": {
-        "type": "boolean"
-      },
-      "configuration_revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "error": {
-        "$ref": "#/components/schemas/TerminalError"
-      },
-      "exact_route": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "last_transition_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "owner_epoch": {
-        "minimum": 1,
-        "type": "integer"
-      },
-      "partial_output": {
-        "type": "boolean"
-      },
-      "request_id": {
-        "$ref": "#/components/schemas/UuidV7"
-      },
-      "run_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "state": {
-        "$ref": "#/components/schemas/RequestState"
-      },
-      "state_revision": {
-        "minimum": 1,
-        "type": "integer"
-      },
-      "terminal_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "tool_calls": {
-        "items": {
-          "$ref": "#/components/schemas/ToolCallStatus"
-        },
-        "maxItems": 100,
-        "type": "array"
-      }
-    },
-    "required": [
-      "request_id",
-      "state",
-      "state_revision",
-      "admitted_at",
-      "last_transition_at",
-      "partial_output",
-      "committed_effects",
-      "configuration_revision",
-      "admission",
-      "attempts",
-      "tool_calls",
-      "accounting"
-    ],
-    "type": "object"
-  },
-  "AdministrationRequestStatusPage": {
-    "additionalProperties": false,
-    "properties": {
-      "items": {
-        "items": {
-          "$ref": "#/components/schemas/AdministrationRequestStatus"
-        },
-        "maxItems": 100,
-        "type": "array"
-      },
-      "next_cursor": {
-        "type": [
-          "string",
-          "null"
-        ]
-      }
-    },
-    "required": [
-      "items"
-    ],
-    "type": "object"
-  },
-  "AdministrationResult": {
-    "additionalProperties": false,
-    "properties": {
-      "bootstrap_secret": {
-        "type": "string",
-        "writeOnly": true
-      },
-      "operation_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "prior_generation_expires_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "resource_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "state": {
-        "type": "string"
-      }
-    },
-    "required": [
-      "resource_id",
-      "state",
-      "revision",
-      "operation_id"
-    ],
-    "type": "object"
-  },
-  "AdministratorAuthorization": {
+  "AdministratorSessionRedirect": {
     "additionalProperties": false,
     "properties": {
       "authorization_url": {
         "format": "uri",
         "type": "string"
-      },
-      "expires_at": {
-        "$ref": "#/components/schemas/Timestamp"
       }
     },
     "required": [
-      "authorization_url",
-      "expires_at"
-    ],
-    "type": "object"
-  },
-  "AdministratorGrant": {
-    "additionalProperties": false,
-    "properties": {
-      "authority_class": {
-        "enum": [
-          "global",
-          "service"
-        ],
-        "type": "string"
-      },
-      "created_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "expires_at": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/Timestamp"
-          },
-          {
-            "type": "null"
-          }
-        ]
-      },
-      "grant_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "issuer": {
-        "format": "uri",
-        "type": "string"
-      },
-      "operations": {
-        "items": {
-          "$ref": "#/components/schemas/AdministratorOperation"
-        },
-        "type": "array",
-        "uniqueItems": true
-      },
-      "revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "service_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "state": {
-        "enum": [
-          "active",
-          "revoked",
-          "expired"
-        ],
-        "type": "string"
-      },
-      "subject": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "workspace_ids": {
-        "items": {
-          "$ref": "#/components/schemas/OpaqueId"
-        },
-        "type": "array"
-      }
-    },
-    "required": [
-      "grant_id",
-      "issuer",
-      "subject",
-      "authority_class",
-      "operations",
-      "state",
-      "revision",
-      "created_at"
-    ],
-    "type": "object"
-  },
-  "AdministratorGrantPage": {
-    "additionalProperties": false,
-    "properties": {
-      "items": {
-        "items": {
-          "$ref": "#/components/schemas/AdministratorGrant"
-        },
-        "type": "array"
-      },
-      "next_cursor": {
-        "type": [
-          "string",
-          "null"
-        ]
-      }
-    },
-    "required": [
-      "items"
-    ],
-    "type": "object"
-  },
-  "AdministratorOperation": {
-    "enum": [
-      "service.manage",
-      "service_parent.manage",
-      "catalog.manage",
-      "provider_instance.manage",
-      "provider_route.manage",
-      "business_tool_gateway.approve",
-      "credential.manage",
-      "assignment.manage",
-      "budget.read",
-      "budget.write",
-      "accounting.read",
-      "request_status.read",
-      "retention.manage",
-      "grant.manage",
-      "audit.read",
-      "content.read",
-      "export.create",
-      "health.read",
-      "node.drain",
-      "circuit.probe",
-      "circuit.reset",
-      "high_availability.promote",
-      "high_availability.failback",
-      "backup.start",
-      "restore.validate",
-      "disaster_recovery.test"
-    ],
-    "type": "string"
-  },
-  "AdministratorSession": {
-    "additionalProperties": false,
-    "properties": {
-      "absolute_expires_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "account_state_checked_at": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/Timestamp"
-          }
-        ],
-        "description": "Time of the latest successful OIDC refresh and introspection check. The field name is retained for version 1 compatibility."
-      },
-      "authenticated_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "authentication_mode": {
-        "enum": [
-          "local",
-          "oidc"
-        ],
-        "type": "string"
-      },
-      "csrf_token": {
-        "maxLength": 200,
-        "minLength": 32,
-        "pattern": "^[A-Za-z0-9_-]+$",
-        "type": "string"
-      },
-      "grants": {
-        "items": {
-          "maxLength": 200,
-          "type": "string"
-        },
-        "type": "array",
-        "uniqueItems": true
-      },
-      "identity_account_url": {
-        "format": "uri",
-        "type": "string"
-      },
-      "idle_expires_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "issuer": {
-        "format": "uri",
-        "type": "string"
-      },
-      "recent_authentication_at": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/Timestamp"
-          },
-          {
-            "type": "null"
-          }
-        ]
-      },
-      "subject": {
-        "$ref": "#/components/schemas/OpaqueId"
-      }
-    },
-    "required": [
-      "issuer",
-      "subject",
-      "grants",
-      "authenticated_at",
-      "recent_authentication_at",
-      "account_state_checked_at",
-      "idle_expires_at",
-      "absolute_expires_at",
-      "csrf_token",
-      "identity_account_url",
-      "authentication_mode"
+      "authorization_url"
     ],
     "type": "object"
   },
   "AdministratorSessionStart": {
     "additionalProperties": false,
     "properties": {
-      "purpose": {
-        "enum": [
-          "login",
-          "recent_authentication"
-        ],
-        "type": "string"
-      },
-      "return_path": {
-        "maxLength": 2000,
-        "pattern": "^/[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*$",
-        "type": "string"
-      },
-      "trusted_grant_token": {
-        "description": "One-use trusted-console grant token for initial or recovery login.",
-        "maxLength": 43,
-        "minLength": 43,
-        "pattern": "^[A-Za-z0-9_-]+$",
+      "return_to": {
+        "maxLength": 1000,
+        "minLength": 1,
+        "pattern": "^/(?:[A-Za-z0-9_?&=.-][A-Za-z0-9/_?&=.-]*)?$",
         "type": "string"
       }
     },
     "required": [
-      "purpose",
-      "return_path"
+      "return_to"
     ],
     "type": "object"
   },
-  "AdmissionReceipt": {
-    "additionalProperties": false,
-    "properties": {
-      "admitted_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "cancel_url": {
-        "format": "uri",
-        "type": "string"
-      },
-      "capture_enabled": {
-        "type": "boolean"
-      },
-      "capture_reason": {
-        "enum": [
-          "configured",
-          "spool_pressure"
-        ],
-        "type": "string"
-      },
-      "events_url": {
-        "format": "uri",
-        "type": "string"
-      },
-      "fingerprint_version": {
-        "const": "rfc8785-sha256-v1",
-        "type": "string"
-      },
-      "request_id": {
-        "$ref": "#/components/schemas/UuidV7"
-      },
-      "run_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "state": {
-        "$ref": "#/components/schemas/RequestState"
-      },
-      "state_revision": {
-        "minimum": 1,
-        "type": "integer"
-      },
-      "status_url": {
-        "format": "uri",
-        "type": "string"
-      }
-    },
-    "required": [
-      "request_id",
-      "admitted_at",
-      "state",
-      "state_revision",
-      "status_url",
-      "cancel_url",
-      "fingerprint_version",
-      "capture_enabled",
-      "capture_reason"
-    ],
-    "type": "object"
+  "ApiName": {
+    "maxLength": 63,
+    "minLength": 1,
+    "pattern": "^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$",
+    "type": "string"
   },
-  "AgentRunRequest": {
+  "Assignment": {
     "additionalProperties": false,
-    "description": "A run can reference at most 20 attachments and 104857600 attachment bytes in total.",
     "oneOf": [
       {
         "not": {
           "anyOf": [
             {
               "required": [
-                "exact_route"
+                "inherits_assignment_api_name"
               ]
             },
             {
               "required": [
-                "exact_route_grant"
+                "direct_chain"
               ]
             }
           ]
         },
+        "properties": {
+          "definition_kind": {
+            "const": "implicit"
+          }
+        },
         "required": [
-          "assignment"
+          "definition_kind"
         ]
       },
       {
         "not": {
-          "required": [
-            "assignment"
+          "anyOf": [
+            {
+              "required": [
+                "direct_chain"
+              ]
+            }
           ]
         },
+        "properties": {
+          "definition_kind": {
+            "const": "inherited_assignment"
+          }
+        },
         "required": [
-          "exact_route",
-          "exact_route_grant"
+          "definition_kind",
+          "inherits_assignment_api_name"
+        ]
+      },
+      {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "inherits_assignment_api_name"
+              ]
+            }
+          ]
+        },
+        "properties": {
+          "definition_kind": {
+            "const": "direct_chain"
+          }
+        },
+        "required": [
+          "definition_kind",
+          "direct_chain"
         ]
       }
     ],
     "properties": {
-      "agent": {
-        "additionalProperties": false,
-        "properties": {
-          "business_tool_names": {
-            "items": {
-              "type": "string"
-            },
-            "maxItems": 100,
-            "type": "array",
-            "uniqueItems": true
-          },
-          "max_steps": {
-            "maximum": 100,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "max_tool_concurrency": {
-            "default": 1,
-            "maximum": 8,
-            "minimum": 1,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "max_steps",
-          "max_tool_concurrency"
-        ],
-        "type": "object",
-        "x-router-fingerprint": true
-      },
-      "api_version": {
-        "const": "1",
-        "type": "string",
-        "x-router-fingerprint": true
-      },
-      "assignment": {
-        "$ref": "#/components/schemas/AssignmentName",
-        "x-router-fingerprint": true
-      },
-      "data_profile": {
-        "$ref": "#/components/schemas/DataProfile",
-        "x-router-fingerprint": true
-      },
-      "exact_route": {
-        "$ref": "#/components/schemas/OpaqueId",
-        "x-router-fingerprint": true
-      },
-      "exact_route_grant": {
-        "type": "string",
-        "writeOnly": true,
-        "x-router-fingerprint": false
-      },
-      "limits": {
-        "$ref": "#/components/schemas/RequestLimits",
-        "x-router-fingerprint": true
-      },
-      "messages": {
-        "items": {
-          "$ref": "#/components/schemas/Message"
-        },
-        "maxItems": 1000,
-        "minItems": 1,
-        "type": "array",
-        "x-router-fingerprint": true
-      },
-      "output": {
-        "$ref": "#/components/schemas/OutputControls",
-        "x-router-fingerprint": true
-      },
-      "tool_allow_list": {
-        "items": {
-          "type": "string"
-        },
-        "type": "array",
-        "uniqueItems": true,
-        "x-router-fingerprint": true
-      },
-      "tools": {
-        "items": {
-          "$ref": "#/components/schemas/ToolDefinition"
-        },
-        "maxItems": 100,
-        "type": "array",
-        "x-router-fingerprint": true
-      },
-      "trace_context": {
-        "$ref": "#/components/schemas/TraceContext",
-        "x-router-fingerprint": false
-      },
-      "workspace_id": {
-        "$ref": "#/components/schemas/OpaqueId",
-        "x-router-fingerprint": true
-      }
-    },
-    "required": [
-      "api_version",
-      "data_profile",
-      "messages",
-      "limits",
-      "output",
-      "agent"
-    ],
-    "type": "object"
-  },
-  "Assignment": {
-    "additionalProperties": false,
-    "properties": {
-      "active_revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "candidates": {
-        "items": {
-          "additionalProperties": false,
-          "properties": {
-            "attempt_timeout_ms": {
-              "maximum": 120000,
-              "minimum": 100,
-              "type": "integer"
-            },
-            "provider_model_route_id": {
-              "$ref": "#/components/schemas/OpaqueId"
-            }
-          },
-          "required": [
-            "provider_model_route_id"
-          ],
-          "type": "object"
-        },
-        "maxItems": 8,
-        "minItems": 1,
-        "type": "array"
-      },
-      "inherited": {
-        "type": "boolean"
-      },
-      "name": {
+      "api_name": {
         "$ref": "#/components/schemas/AssignmentName"
       },
-      "owner_scope": {
-        "enum": [
-          "global",
-          "service",
-          "workspace"
-        ],
+      "created_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "defined_by_service_api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      },
+      "definition_kind": {
+        "$ref": "#/components/schemas/AssignmentDefinitionKind"
+      },
+      "direct_chain": {
+        "$ref": "#/components/schemas/AssignmentChain"
+      },
+      "display_name": {
+        "maxLength": 200,
+        "minLength": 1,
         "type": "string"
       },
-      "source_layer": {
-        "$ref": "#/components/schemas/OpaqueId"
+      "effective_chain": {
+        "$ref": "#/components/schemas/EffectiveAssignmentChain"
       },
-      "state": {
-        "enum": [
-          "active",
-          "disabled",
-          "retired"
-        ],
-        "type": "string"
+      "inherits_assignment_api_name": {
+        "$ref": "#/components/schemas/AssignmentName"
+      },
+      "last_used_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "observed_requirements": {
+        "items": {
+          "$ref": "#/components/schemas/ObservedRequirement"
+        },
+        "type": "array",
+        "uniqueItems": true
+      },
+      "reasoning_level": {
+        "$ref": "#/components/schemas/ReasoningLevel"
       }
     },
     "required": [
-      "name",
-      "owner_scope",
-      "source_layer",
-      "state",
-      "inherited",
-      "active_revision",
-      "candidates"
+      "api_name",
+      "display_name",
+      "definition_kind",
+      "effective_chain",
+      "observed_requirements"
     ],
     "type": "object"
   },
+  "AssignmentChain": {
+    "items": {
+      "$ref": "#/components/schemas/ProviderModelCandidate"
+    },
+    "maxItems": 16,
+    "minItems": 1,
+    "type": "array",
+    "uniqueItems": true
+  },
+  "AssignmentDefinitionKind": {
+    "enum": [
+      "implicit",
+      "inherited_assignment",
+      "direct_chain"
+    ],
+    "type": "string"
+  },
   "AssignmentName": {
-    "pattern": "^[a-z][a-z0-9.-]{0,99}$",
+    "maxLength": 127,
+    "minLength": 1,
+    "pattern": "^[a-z0-9][a-z0-9._-]*$",
     "type": "string"
   },
   "AssignmentPage": {
@@ -1921,930 +540,1134 @@ export const contractSchemas = {
         },
         "type": "array"
       },
-      "next_cursor": {
-        "type": [
-          "string",
-          "null"
-        ]
+      "page": {
+        "$ref": "#/components/schemas/PageInfo"
       }
     },
     "required": [
-      "items"
+      "items",
+      "page"
     ],
     "type": "object"
   },
-  "Attachment": {
+  "AssignmentSelector": {
     "additionalProperties": false,
     "properties": {
-      "attachment_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "byte_length": {
-        "maximum": 26214400,
-        "minimum": 1,
-        "type": "integer"
-      },
-      "expires_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "media_type": {
-        "type": "string"
-      },
-      "service_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "sha256": {
-        "pattern": "^[0-9a-f]{64}$",
-        "type": "string"
-      },
-      "state": {
-        "enum": [
-          "awaiting_content",
-          "ready",
-          "expired"
-        ],
-        "type": "string"
-      },
-      "workspace_id": {
-        "$ref": "#/components/schemas/OpaqueId"
+      "assignment_api_name": {
+        "$ref": "#/components/schemas/AssignmentName"
       }
     },
     "required": [
-      "attachment_id",
-      "service_id",
-      "media_type",
-      "byte_length",
-      "sha256",
-      "state",
-      "expires_at"
+      "assignment_api_name"
     ],
     "type": "object"
   },
-  "AttemptStatus": {
-    "additionalProperties": false,
-    "properties": {
-      "assignment_revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "attempt_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "decision": {
-        "description": "The safe Router retry, fallback, or stop decision for a terminal attempt.",
-        "enum": [
-          "next_candidate",
-          "stop_request",
-          "commit_boundary",
-          "cancelled",
-          "succeeded"
-        ],
-        "type": "string"
-      },
-      "ended_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "error": {
-        "$ref": "#/components/schemas/TerminalError"
-      },
-      "price_version": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "provider_model_route_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "started_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "state": {
-        "enum": [
-          "running",
-          "succeeded",
-          "failed",
-          "cancelled",
-          "uncertain"
-        ],
-        "type": "string"
-      },
-      "usage": {
-        "items": {
-          "$ref": "#/components/schemas/UsageComponent"
-        },
-        "type": "array"
-      }
-    },
-    "required": [
-      "attempt_id",
-      "provider_model_route_id",
-      "state",
-      "started_at",
-      "assignment_revision"
-    ],
-    "type": "object"
-  },
-  "AuditPage": {
-    "additionalProperties": false,
-    "properties": {
-      "items": {
-        "items": {
-          "additionalProperties": false,
-          "properties": {
-            "action": {
-              "type": "string"
-            },
-            "actor": {
-              "type": "string"
-            },
-            "event_id": {
-              "$ref": "#/components/schemas/OpaqueId"
-            },
-            "occurred_at": {
-              "$ref": "#/components/schemas/Timestamp"
-            },
-            "outcome": {
-              "type": "string"
-            },
-            "safe_detail": {
-              "$ref": "#/components/schemas/AuditSafeDetail"
-            },
-            "scope": {
-              "$ref": "#/components/schemas/AuditScope"
-            }
-          },
-          "required": [
-            "event_id",
-            "occurred_at",
-            "actor",
-            "action",
-            "outcome",
-            "scope"
-          ],
-          "type": "object"
-        },
-        "type": "array"
-      },
-      "next_cursor": {
-        "type": [
-          "string",
-          "null"
-        ]
-      }
-    },
-    "required": [
-      "items"
-    ],
-    "type": "object"
-  },
-  "AuditSafeDetail": {
-    "additionalProperties": false,
-    "properties": {
-      "reason": {
-        "maxLength": 500,
-        "type": "string"
-      },
-      "resource_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "resource_type": {
-        "maxLength": 100,
-        "type": "string"
-      },
-      "safe_error_code": {
-        "maxLength": 100,
-        "type": "string"
-      }
-    },
-    "type": "object"
-  },
-  "AuditScope": {
-    "additionalProperties": false,
-    "properties": {
-      "authority_class": {
-        "enum": [
-          "service",
-          "global_administrator",
-          "system"
-        ],
-        "type": "string"
-      },
-      "service_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "workspace_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      }
-    },
-    "required": [
-      "authority_class"
-    ],
-    "type": "object"
-  },
-  "BootstrapScope": {
-    "additionalProperties": false,
-    "properties": {
-      "audiences": {
-        "items": {
-          "enum": [
-            "data_plane",
-            "service_management",
-            "host_backend",
-            "accounting",
-            "configuration",
-            "budget_authority"
-          ],
-          "type": "string"
-        },
-        "minItems": 1,
-        "type": "array",
-        "uniqueItems": true
-      },
-      "operations": {
-        "items": {
-          "type": "string"
-        },
-        "minItems": 1,
-        "type": "array",
-        "uniqueItems": true
-      },
-      "workspace_limit": {
-        "enum": [
-          "all_service_workspaces",
-          "explicit_only"
-        ],
-        "type": "string"
-      }
-    },
-    "required": [
-      "audiences",
-      "operations"
-    ],
-    "type": "object"
-  },
-  "BudgetCeiling": {
-    "additionalProperties": false,
-    "properties": {
-      "amount": {
-        "$ref": "#/components/schemas/NonNegativeDecimal"
-      },
-      "currency": {
-        "pattern": "^[A-Z]{3}$",
-        "type": "string"
-      },
-      "effective_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "operation_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "service_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "workspace_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      }
-    },
-    "required": [
-      "service_id",
-      "workspace_id",
-      "amount",
-      "currency",
-      "revision",
-      "effective_at",
-      "operation_id"
-    ],
-    "type": "object"
-  },
-  "BudgetLimitWriteResult": {
-    "additionalProperties": false,
-    "properties": {
-      "effective_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "limit": {
-        "$ref": "#/components/schemas/Money"
-      },
-      "reset_period": {
-        "enum": [
-          "none",
-          "daily",
-          "monthly"
-        ],
-        "type": "string"
-      },
-      "revision": {
-        "$ref": "#/components/schemas/BudgetRevision"
-      },
-      "scope": {
-        "enum": [
-          "service",
-          "workspace"
-        ],
-        "type": "string"
-      },
-      "warning_threshold": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/Money"
-          },
-          {
-            "type": "null"
-          }
-        ]
-      }
-    },
-    "required": [
-      "scope",
-      "limit",
-      "warning_threshold",
-      "reset_period",
-      "revision",
-      "effective_at"
-    ],
-    "type": "object"
-  },
-  "BudgetRevision": {
-    "pattern": "^(0|[1-9][0-9]*)$",
-    "type": "string"
-  },
-  "BudgetSummary": {
-    "additionalProperties": false,
-    "properties": {
-      "corrected": {
-        "$ref": "#/components/schemas/SignedMoney"
-      },
-      "enforcement_state": {
-        "enum": [
-          "available",
-          "warning",
-          "exhausted",
-          "allowance_unavailable"
-        ],
-        "type": "string"
-      },
-      "host_ceiling": {
-        "$ref": "#/components/schemas/Money"
-      },
-      "limit": {
-        "$ref": "#/components/schemas/Money"
-      },
-      "remaining": {
-        "$ref": "#/components/schemas/Money"
-      },
-      "reserved": {
-        "$ref": "#/components/schemas/Money"
-      },
-      "reset_period": {
-        "enum": [
-          "none",
-          "daily",
-          "monthly"
-        ],
-        "type": "string"
-      },
-      "revision": {
-        "$ref": "#/components/schemas/BudgetRevision"
-      },
-      "scope": {
-        "enum": [
-          "service",
-          "workspace",
-          "assignment"
-        ],
-        "type": "string"
-      },
-      "used": {
-        "$ref": "#/components/schemas/Money"
-      },
-      "warning_threshold": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/Money"
-          },
-          {
-            "type": "null"
-          }
-        ]
-      }
-    },
-    "required": [
-      "scope",
-      "limit",
-      "reserved",
-      "used",
-      "corrected",
-      "remaining",
-      "enforcement_state",
-      "reset_period",
-      "revision"
-    ],
-    "type": "object"
-  },
-  "BusinessToolCall": {
-    "additionalProperties": false,
-    "properties": {
-      "contract_version": {
-        "const": 1,
-        "type": "integer"
-      },
-      "deadline": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "input": {
-        "$ref": "#/components/schemas/RegisteredDocument"
-      },
-      "operation_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "owner_epoch": {
-        "minimum": 1,
-        "type": "integer"
-      },
-      "permitted_operation": {
-        "pattern": "^[a-z][a-z0-9._-]{0,99}$",
-        "type": "string"
-      },
-      "run_id": {
-        "$ref": "#/components/schemas/UuidV7"
-      },
-      "service_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "tool_grant": {
-        "maxLength": 200,
-        "minLength": 43,
-        "type": "string",
-        "writeOnly": true
-      },
-      "tool_name": {
-        "pattern": "^[a-z][a-z0-9._-]{0,99}$",
-        "type": "string"
-      },
-      "workspace_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      }
-    },
-    "required": [
-      "contract_version",
-      "operation_id",
-      "service_id",
-      "run_id",
-      "owner_epoch",
-      "tool_name",
-      "permitted_operation",
-      "input",
-      "deadline",
-      "tool_grant"
-    ],
-    "type": "object"
-  },
-  "BusinessToolGateway": {
-    "additionalProperties": false,
-    "properties": {
-      "approval_state": {
-        "enum": [
-          "pending",
-          "approved",
-          "denied"
-        ],
-        "type": "string"
-      },
-      "approved_revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "contract_major_versions": {
-        "items": {
-          "const": 1,
-          "type": "integer"
-        },
-        "type": "array",
-        "uniqueItems": true
-      },
-      "network_policy_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "origin": {
-        "format": "uri",
-        "pattern": "^https://",
-        "type": "string"
-      },
-      "revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "service_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "tool_kinds": {
-        "items": {
-          "pattern": "^[a-z][a-z0-9._-]{0,99}$",
-          "type": "string"
-        },
-        "type": "array",
-        "uniqueItems": true
-      }
-    },
-    "required": [
-      "service_id",
-      "origin",
-      "contract_major_versions",
-      "tool_kinds",
-      "network_policy_id",
-      "revision",
-      "approval_state"
-    ],
-    "type": "object"
-  },
-  "BusinessToolGatewayApproval": {
-    "additionalProperties": false,
-    "properties": {
-      "decision": {
-        "enum": [
-          "approved",
-          "denied"
-        ],
-        "type": "string"
-      },
-      "gateway_revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "reason": {
-        "maxLength": 500,
-        "minLength": 1,
-        "type": "string"
-      }
-    },
-    "required": [
-      "gateway_revision",
-      "decision",
-      "reason"
-    ],
-    "type": "object"
-  },
-  "BusinessToolReconciliationRequest": {
-    "additionalProperties": false,
-    "properties": {
-      "contract_version": {
-        "const": 1,
-        "type": "integer"
-      },
-      "operation_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "owner_epoch": {
-        "minimum": 1,
-        "type": "integer"
-      },
-      "reconciliation_grant": {
-        "maxLength": 200,
-        "minLength": 43,
-        "type": "string",
-        "writeOnly": true
-      },
-      "run_id": {
-        "$ref": "#/components/schemas/UuidV7"
-      },
-      "service_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "workspace_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      }
-    },
-    "required": [
-      "contract_version",
-      "operation_id",
-      "service_id",
-      "run_id",
-      "owner_epoch",
-      "reconciliation_grant"
-    ],
-    "type": "object"
-  },
-  "BusinessToolReconciliationResult": {
-    "additionalProperties": false,
-    "properties": {
-      "contract_version": {
-        "const": 1,
-        "type": "integer"
-      },
-      "effect_state": {
-        "enum": [
-          "not_started",
-          "committed",
-          "failed",
-          "unknown"
-        ],
-        "type": "string"
-      },
-      "evidence": {
-        "$ref": "#/components/schemas/RegisteredDocument"
-      },
-      "operation_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      }
-    },
-    "required": [
-      "contract_version",
-      "operation_id",
-      "effect_state",
-      "evidence"
-    ],
-    "type": "object"
-  },
-  "BusinessToolResult": {
+  "AssignmentWrite": {
     "additionalProperties": false,
     "oneOf": [
       {
         "not": {
           "required": [
-            "safe_error"
+            "direct_chain"
           ]
         },
         "required": [
-          "result"
+          "inherits_assignment_api_name"
         ]
       },
       {
         "not": {
           "required": [
-            "result"
+            "inherits_assignment_api_name"
           ]
         },
         "required": [
-          "safe_error"
+          "direct_chain"
         ]
       }
     ],
     "properties": {
-      "contract_version": {
-        "const": 1,
-        "type": "integer"
-      },
-      "effect_state": {
-        "enum": [
-          "none",
-          "committed",
-          "unknown"
-        ],
-        "type": "string"
-      },
-      "operation_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "result": {
-        "$ref": "#/components/schemas/RegisteredDocument"
-      },
-      "safe_error": {
-        "$ref": "#/components/schemas/TerminalError"
-      },
-      "state": {
-        "enum": [
-          "succeeded",
-          "failed",
-          "uncertain"
-        ],
-        "type": "string"
-      }
-    },
-    "required": [
-      "contract_version",
-      "operation_id",
-      "state",
-      "effect_state"
-    ],
-    "type": "object"
-  },
-  "CancelRequest": {
-    "additionalProperties": false,
-    "properties": {
-      "reason": {
-        "maxLength": 500,
-        "minLength": 1,
-        "type": "string"
-      }
-    },
-    "required": [
-      "reason"
-    ],
-    "type": "object"
-  },
-  "CapturedContent": {
-    "additionalProperties": false,
-    "properties": {
-      "capture_policy": {
-        "enum": [
-          "complete",
-          "metadata_only",
-          "disabled"
-        ],
-        "type": "string"
-      },
-      "content_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "content_type": {
-        "maxLength": 200,
-        "type": "string"
-      },
-      "expires_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "request_id": {
-        "$ref": "#/components/schemas/UuidV7"
-      },
-      "service_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "value": {
-        "$ref": "#/components/schemas/RegisteredDocument"
-      },
-      "workspace_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      }
-    },
-    "required": [
-      "content_id",
-      "service_id",
-      "request_id",
-      "capture_policy",
-      "expires_at",
-      "content_type",
-      "value"
-    ],
-    "type": "object"
-  },
-  "CapturedContentMetadata": {
-    "additionalProperties": false,
-    "properties": {
-      "capture_policy": {
-        "enum": [
-          "complete",
-          "metadata_only",
-          "disabled"
-        ],
-        "type": "string"
-      },
-      "content_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "content_type": {
-        "maxLength": 200,
-        "type": "string"
-      },
-      "expires_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "request_id": {
-        "$ref": "#/components/schemas/UuidV7"
-      },
-      "service_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "workspace_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      }
-    },
-    "required": [
-      "content_id",
-      "service_id",
-      "request_id",
-      "capture_policy",
-      "expires_at",
-      "content_type"
-    ],
-    "type": "object"
-  },
-  "CapturedContentMetadataPage": {
-    "additionalProperties": false,
-    "properties": {
-      "items": {
-        "items": {
-          "$ref": "#/components/schemas/CapturedContentMetadata"
-        },
-        "maxItems": 1000,
-        "type": "array"
-      },
-      "next_cursor": {
-        "type": [
-          "string",
-          "null"
-        ]
-      }
-    },
-    "required": [
-      "items"
-    ],
-    "type": "object"
-  },
-  "CatalogEntry": {
-    "additionalProperties": false,
-    "properties": {
-      "active_revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "capabilities": {
-        "items": {
-          "maxLength": 100,
-          "minLength": 1,
-          "type": "string"
-        },
-        "maxItems": 32,
-        "type": "array"
+      "direct_chain": {
+        "$ref": "#/components/schemas/AssignmentChain"
       },
       "display_name": {
         "maxLength": 200,
         "minLength": 1,
         "type": "string"
       },
-      "kind": {
-        "enum": [
-          "provider",
-          "model"
-        ],
-        "type": "string"
+      "inherits_assignment_api_name": {
+        "$ref": "#/components/schemas/AssignmentName"
       },
-      "settings": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/RegisteredDocument"
-          },
-          {
-            "type": "null"
-          }
-        ]
+      "reasoning_level": {
+        "$ref": "#/components/schemas/ReasoningLevel"
+      }
+    },
+    "type": "object"
+  },
+  "AssistantContentPart": {
+    "oneOf": [
+      {
+        "$ref": "#/components/schemas/TextOutputPart"
       },
-      "stable_id": {
-        "$ref": "#/components/schemas/OpaqueId"
+      {
+        "$ref": "#/components/schemas/ToolCallPart"
+      }
+    ]
+  },
+  "AssistantMessage": {
+    "additionalProperties": false,
+    "properties": {
+      "content": {
+        "items": {
+          "$ref": "#/components/schemas/AssistantContentPart"
+        },
+        "minItems": 1,
+        "type": "array"
       },
-      "state": {
-        "enum": [
-          "active",
-          "disabled",
-          "retired"
-        ],
-        "type": "string"
+      "role": {
+        "const": "assistant"
       }
     },
     "required": [
-      "stable_id",
-      "kind",
-      "display_name",
-      "capabilities",
-      "state",
-      "settings",
-      "active_revision"
+      "role",
+      "content"
     ],
     "type": "object"
   },
-  "CatalogPage": {
+  "AvailableProviderModel": {
     "additionalProperties": false,
     "properties": {
-      "configuration_revision": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/OpaqueId"
-          },
-          {
-            "type": "null"
-          }
-        ]
+      "api_name": {
+        "$ref": "#/components/schemas/ApiName"
       },
-      "items": {
+      "capabilities": {
         "items": {
-          "$ref": "#/components/schemas/CatalogEntry"
+          "$ref": "#/components/schemas/ModelCapability"
         },
         "type": "array"
       },
-      "next_cursor": {
-        "type": [
-          "string",
-          "null"
-        ]
+      "constraints": {
+        "$ref": "#/components/schemas/ModelConstraints"
+      },
+      "display_name": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      },
+      "effective_price": {
+        "$ref": "#/components/schemas/Price"
+      },
+      "input_modalities": {
+        "items": {
+          "$ref": "#/components/schemas/InputModality"
+        },
+        "type": "array"
+      },
+      "output_modalities": {
+        "items": {
+          "$ref": "#/components/schemas/OutputModality"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "api_name",
+      "display_name",
+      "input_modalities",
+      "output_modalities",
+      "capabilities",
+      "effective_price"
+    ],
+    "type": "object"
+  },
+  "AvailableProviderModelPage": {
+    "additionalProperties": false,
+    "properties": {
+      "items": {
+        "items": {
+          "$ref": "#/components/schemas/AvailableProviderModel"
+        },
+        "type": "array"
+      },
+      "page": {
+        "$ref": "#/components/schemas/PageInfo"
       }
     },
     "required": [
       "items",
-      "next_cursor",
-      "configuration_revision"
+      "page"
     ],
     "type": "object"
   },
-  "CompatibilityResponseFormat": {
+  "Cooldown": {
     "additionalProperties": false,
     "properties": {
-      "schema_major_version": {
+      "reason": {
+        "maxLength": 500,
+        "minLength": 1,
+        "type": "string"
+      },
+      "until": {
+        "$ref": "#/components/schemas/Timestamp"
+      }
+    },
+    "required": [
+      "until",
+      "reason"
+    ],
+    "type": "object"
+  },
+  "Credential": {
+    "additionalProperties": false,
+    "properties": {
+      "api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      },
+      "created_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "updated_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      }
+    },
+    "required": [
+      "api_name",
+      "created_at",
+      "updated_at"
+    ],
+    "type": "object"
+  },
+  "CredentialPage": {
+    "additionalProperties": false,
+    "properties": {
+      "items": {
+        "items": {
+          "$ref": "#/components/schemas/Credential"
+        },
+        "type": "array"
+      },
+      "page": {
+        "$ref": "#/components/schemas/PageInfo"
+      }
+    },
+    "required": [
+      "items",
+      "page"
+    ],
+    "type": "object"
+  },
+  "CredentialWrite": {
+    "additionalProperties": false,
+    "properties": {
+      "api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      },
+      "secret": {
+        "maxLength": 10000,
+        "minLength": 1,
+        "type": "string",
+        "writeOnly": true
+      }
+    },
+    "required": [
+      "api_name",
+      "secret"
+    ],
+    "type": "object"
+  },
+  "EffectiveAssignmentChain": {
+    "items": {
+      "$ref": "#/components/schemas/ProviderModelCandidate"
+    },
+    "maxItems": 16,
+    "minItems": 0,
+    "type": "array",
+    "uniqueItems": true
+  },
+  "EmbeddingRequest": {
+    "additionalProperties": false,
+    "properties": {
+      "inputs": {
+        "items": {
+          "maxLength": 32768,
+          "minLength": 1,
+          "type": "string",
+          "x-max-utf8-bytes": 32768
+        },
+        "maxItems": 32,
+        "minItems": 1,
+        "type": "array",
+        "x-max-total-utf8-bytes": 262144
+      },
+      "selector": {
+        "$ref": "#/components/schemas/ModelSelector"
+      },
+      "tags": {
+        "$ref": "#/components/schemas/Tags"
+      },
+      "workspace_api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      }
+    },
+    "required": [
+      "workspace_api_name",
+      "selector",
+      "inputs"
+    ],
+    "type": "object"
+  },
+  "EmbeddingResult": {
+    "additionalProperties": false,
+    "properties": {
+      "embeddings": {
+        "items": {
+          "$ref": "#/components/schemas/EmbeddingVector"
+        },
+        "type": "array"
+      },
+      "provider_model_api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      },
+      "usage": {
+        "$ref": "#/components/schemas/Usage"
+      }
+    },
+    "required": [
+      "provider_model_api_name",
+      "embeddings",
+      "usage"
+    ],
+    "type": "object"
+  },
+  "EmbeddingVector": {
+    "additionalProperties": false,
+    "properties": {
+      "index": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "values": {
+        "items": {
+          "type": "number",
+          "x-finite": true
+        },
+        "maxItems": 65536,
+        "minItems": 1,
+        "type": "array"
+      }
+    },
+    "required": [
+      "index",
+      "values"
+    ],
+    "type": "object"
+  },
+  "Error": {
+    "additionalProperties": false,
+    "properties": {
+      "code": {
+        "$ref": "#/components/schemas/ErrorCode"
+      },
+      "details": {
+        "$ref": "#/components/schemas/ErrorDetails"
+      },
+      "message": {
+        "maxLength": 1000,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "code",
+      "message"
+    ],
+    "type": "object"
+  },
+  "ErrorCode": {
+    "enum": [
+      "authentication_required",
+      "permission_denied",
+      "invalid_request",
+      "not_found",
+      "conflict",
+      "assignment_cycle",
+      "provider_unavailable",
+      "upstream_failed",
+      "content_unavailable",
+      "rate_limited",
+      "internal_error"
+    ],
+    "type": "string"
+  },
+  "ErrorDetails": {
+    "additionalProperties": false,
+    "properties": {
+      "field": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      },
+      "reason": {
+        "maxLength": 500,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "ErrorEnvelope": {
+    "additionalProperties": false,
+    "properties": {
+      "error": {
+        "$ref": "#/components/schemas/Error"
+      }
+    },
+    "required": [
+      "error"
+    ],
+    "type": "object"
+  },
+  "ExactProviderModelSelector": {
+    "additionalProperties": false,
+    "properties": {
+      "provider_model_api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      }
+    },
+    "required": [
+      "provider_model_api_name"
+    ],
+    "type": "object"
+  },
+  "HealthComponent": {
+    "additionalProperties": false,
+    "properties": {
+      "message": {
+        "maxLength": 500,
+        "type": "string"
+      },
+      "name": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      },
+      "status": {
+        "$ref": "#/components/schemas/HealthStatus"
+      }
+    },
+    "required": [
+      "name",
+      "status"
+    ],
+    "type": "object"
+  },
+  "HealthStatus": {
+    "enum": [
+      "healthy",
+      "degraded",
+      "unavailable"
+    ],
+    "type": "string"
+  },
+  "HealthSummary": {
+    "additionalProperties": false,
+    "properties": {
+      "checked_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "status": {
+        "$ref": "#/components/schemas/HealthStatus"
+      }
+    },
+    "required": [
+      "status",
+      "checked_at"
+    ],
+    "type": "object"
+  },
+  "ImageInputPart": {
+    "additionalProperties": false,
+    "properties": {
+      "data_base64": {
+        "format": "byte",
+        "maxLength": 27962028,
+        "minLength": 1,
+        "type": "string",
+        "x-max-decoded-bytes": 20971520
+      },
+      "media_type": {
+        "enum": [
+          "image/jpeg",
+          "image/png",
+          "image/webp"
+        ],
+        "type": "string"
+      },
+      "type": {
+        "const": "image"
+      }
+    },
+    "required": [
+      "type",
+      "media_type",
+      "data_base64"
+    ],
+    "type": "object"
+  },
+  "InputModality": {
+    "enum": [
+      "text",
+      "image"
+    ],
+    "type": "string"
+  },
+  "LogMedia": {
+    "additionalProperties": false,
+    "properties": {
+      "id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "media_type": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      },
+      "role": {
+        "enum": [
+          "input",
+          "output"
+        ],
+        "type": "string"
+      },
+      "size_bytes": {
+        "minimum": 0,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "id",
+      "media_type",
+      "role",
+      "size_bytes"
+    ],
+    "type": "object"
+  },
+  "LogRetentionSettings": {
+    "additionalProperties": false,
+    "properties": {
+      "duration_days": {
+        "maximum": 30,
+        "minimum": 1,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "duration_days"
+    ],
+    "type": "object"
+  },
+  "MediaContent": {
+    "additionalProperties": false,
+    "properties": {
+      "media_type": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      },
+      "size_bytes": {
+        "minimum": 0,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "media_type",
+      "size_bytes"
+    ],
+    "type": "object"
+  },
+  "MediaJob": {
+    "additionalProperties": false,
+    "properties": {
+      "completed_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "content": {
+        "$ref": "#/components/schemas/MediaContent"
+      },
+      "created_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "error": {
+        "$ref": "#/components/schemas/Error"
+      },
+      "id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "kind": {
+        "$ref": "#/components/schemas/MediaKind"
+      },
+      "provider_model_api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      },
+      "state": {
+        "$ref": "#/components/schemas/MediaJobState"
+      },
+      "workspace_api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      }
+    },
+    "required": [
+      "id",
+      "workspace_api_name",
+      "provider_model_api_name",
+      "kind",
+      "state",
+      "created_at"
+    ],
+    "type": "object"
+  },
+  "MediaJobRequest": {
+    "additionalProperties": false,
+    "oneOf": [
+      {
+        "properties": {
+          "kind": {
+            "enum": [
+              "image",
+              "video"
+            ]
+          }
+        }
+      },
+      {
+        "not": {
+          "required": [
+            "input_images"
+          ]
+        },
+        "properties": {
+          "kind": {
+            "const": "audio"
+          }
+        }
+      }
+    ],
+    "properties": {
+      "input_images": {
+        "items": {
+          "$ref": "#/components/schemas/ImageInputPart"
+        },
+        "maxItems": 8,
+        "type": "array",
+        "x-max-total-decoded-bytes": 52428800
+      },
+      "kind": {
+        "$ref": "#/components/schemas/MediaKind"
+      },
+      "prompt": {
+        "maxLength": 1000000,
+        "minLength": 1,
+        "type": "string"
+      },
+      "selector": {
+        "$ref": "#/components/schemas/ModelSelector"
+      },
+      "tags": {
+        "$ref": "#/components/schemas/Tags"
+      },
+      "workspace_api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      }
+    },
+    "required": [
+      "workspace_api_name",
+      "selector",
+      "kind",
+      "prompt"
+    ],
+    "type": "object"
+  },
+  "MediaJobState": {
+    "enum": [
+      "pending",
+      "running",
+      "succeeded",
+      "failed"
+    ],
+    "type": "string"
+  },
+  "MediaKind": {
+    "enum": [
+      "image",
+      "video",
+      "audio"
+    ],
+    "type": "string"
+  },
+  "Model": {
+    "additionalProperties": false,
+    "properties": {
+      "api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      },
+      "capabilities": {
+        "items": {
+          "$ref": "#/components/schemas/ModelCapability"
+        },
+        "type": "array"
+      },
+      "constraints": {
+        "$ref": "#/components/schemas/ModelConstraints"
+      },
+      "created_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "current_price": {
+        "$ref": "#/components/schemas/Price"
+      },
+      "display_name": {
+        "type": "string"
+      },
+      "input_modalities": {
+        "items": {
+          "$ref": "#/components/schemas/InputModality"
+        },
+        "type": "array"
+      },
+      "output_modalities": {
+        "items": {
+          "$ref": "#/components/schemas/OutputModality"
+        },
+        "type": "array"
+      },
+      "price_lookup_key": {
+        "type": "string"
+      },
+      "price_source": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "api_name",
+      "display_name",
+      "input_modalities",
+      "output_modalities",
+      "capabilities",
+      "created_at"
+    ],
+    "type": "object"
+  },
+  "ModelCallRequest": {
+    "additionalProperties": false,
+    "properties": {
+      "messages": {
+        "items": {
+          "$ref": "#/components/schemas/ModelMessage"
+        },
+        "maxItems": 1000,
+        "minItems": 1,
+        "type": "array"
+      },
+      "output_format": {
+        "$ref": "#/components/schemas/OutputFormat"
+      },
+      "output_limit": {
+        "maximum": 1000000,
         "minimum": 1,
         "type": "integer"
       },
-      "schema_name": {
-        "pattern": "^[a-z][a-z0-9._-]{0,99}$",
+      "selector": {
+        "$ref": "#/components/schemas/ModelSelector"
+      },
+      "tags": {
+        "$ref": "#/components/schemas/Tags"
+      },
+      "temperature": {
+        "maximum": 2,
+        "minimum": 0,
+        "type": "number"
+      },
+      "tools": {
+        "items": {
+          "$ref": "#/components/schemas/ToolDefinition"
+        },
+        "maxItems": 128,
+        "type": "array"
+      },
+      "workspace_api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      }
+    },
+    "required": [
+      "workspace_api_name",
+      "selector",
+      "messages"
+    ],
+    "type": "object",
+    "x-max-image-bytes": 52428800,
+    "x-max-json-bytes": 2097152
+  },
+  "ModelCallResult": {
+    "oneOf": [
+      {
+        "$ref": "#/components/schemas/StandardModelCallResult"
+      },
+      {
+        "$ref": "#/components/schemas/StructuredModelCallResult"
+      }
+    ]
+  },
+  "ModelCapability": {
+    "enum": [
+      "tool_calling",
+      "streaming",
+      "reasoning"
+    ],
+    "type": "string"
+  },
+  "ModelConstraints": {
+    "additionalProperties": false,
+    "properties": {
+      "embedding_dimensions": {
+        "items": {
+          "maximum": 65536,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maxItems": 64,
+        "minItems": 1,
+        "type": "array",
+        "uniqueItems": true
+      },
+      "max_input_image_bytes": {
+        "maximum": 20971520,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "max_input_images": {
+        "maximum": 8,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "max_output_duration_seconds": {
+        "maximum": 86400,
+        "minimum": 1,
+        "type": "integer"
+      }
+    },
+    "type": "object"
+  },
+  "ModelImportCandidate": {
+    "additionalProperties": false,
+    "properties": {
+      "capabilities": {
+        "items": {
+          "$ref": "#/components/schemas/ModelCapability"
+        },
+        "type": "array"
+      },
+      "catalog_key": {
+        "maxLength": 500,
+        "minLength": 1,
+        "type": "string"
+      },
+      "constraints": {
+        "$ref": "#/components/schemas/ModelConstraints"
+      },
+      "display_name": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      },
+      "input_modalities": {
+        "items": {
+          "$ref": "#/components/schemas/InputModality"
+        },
+        "type": "array"
+      },
+      "output_modalities": {
+        "items": {
+          "$ref": "#/components/schemas/OutputModality"
+        },
+        "type": "array"
+      },
+      "provider_model_name": {
+        "maxLength": 500,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "catalog_key",
+      "display_name",
+      "provider_model_name",
+      "input_modalities",
+      "output_modalities",
+      "capabilities"
+    ],
+    "type": "object"
+  },
+  "ModelImportPreview": {
+    "additionalProperties": false,
+    "properties": {
+      "candidates": {
+        "items": {
+          "$ref": "#/components/schemas/ModelImportCandidate"
+        },
+        "type": "array"
+      },
+      "provider_api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      }
+    },
+    "required": [
+      "provider_api_name",
+      "candidates"
+    ],
+    "type": "object"
+  },
+  "ModelImportPreviewRequest": {
+    "additionalProperties": false,
+    "properties": {
+      "provider_api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      }
+    },
+    "required": [
+      "provider_api_name"
+    ],
+    "type": "object"
+  },
+  "ModelImportRequest": {
+    "additionalProperties": false,
+    "properties": {
+      "provider_api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      },
+      "selections": {
+        "items": {
+          "$ref": "#/components/schemas/ModelImportSelection"
+        },
+        "maxItems": 1000,
+        "minItems": 1,
+        "type": "array"
+      }
+    },
+    "required": [
+      "provider_api_name",
+      "selections"
+    ],
+    "type": "object"
+  },
+  "ModelImportResult": {
+    "additionalProperties": false,
+    "properties": {
+      "models": {
+        "items": {
+          "$ref": "#/components/schemas/Model"
+        },
+        "type": "array"
+      },
+      "provider_models": {
+        "items": {
+          "$ref": "#/components/schemas/ProviderModel"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "models",
+      "provider_models"
+    ],
+    "type": "object"
+  },
+  "ModelImportSelection": {
+    "additionalProperties": false,
+    "properties": {
+      "catalog_key": {
+        "maxLength": 500,
+        "minLength": 1,
+        "type": "string"
+      },
+      "model_api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      },
+      "provider_model_api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      }
+    },
+    "required": [
+      "catalog_key",
+      "model_api_name",
+      "provider_model_api_name"
+    ],
+    "type": "object"
+  },
+  "ModelMessage": {
+    "oneOf": [
+      {
+        "$ref": "#/components/schemas/SystemMessage"
+      },
+      {
+        "$ref": "#/components/schemas/UserMessage"
+      },
+      {
+        "$ref": "#/components/schemas/AssistantMessage"
+      }
+    ]
+  },
+  "ModelPage": {
+    "additionalProperties": false,
+    "properties": {
+      "items": {
+        "items": {
+          "$ref": "#/components/schemas/Model"
+        },
+        "type": "array"
+      },
+      "page": {
+        "$ref": "#/components/schemas/PageInfo"
+      }
+    },
+    "required": [
+      "items",
+      "page"
+    ],
+    "type": "object"
+  },
+  "ModelSelector": {
+    "oneOf": [
+      {
+        "$ref": "#/components/schemas/AssignmentSelector"
+      },
+      {
+        "$ref": "#/components/schemas/ExactProviderModelSelector"
+      }
+    ]
+  },
+  "ModelWrite": {
+    "additionalProperties": false,
+    "properties": {
+      "api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      },
+      "capabilities": {
+        "items": {
+          "$ref": "#/components/schemas/ModelCapability"
+        },
+        "type": "array",
+        "uniqueItems": true
+      },
+      "constraints": {
+        "$ref": "#/components/schemas/ModelConstraints"
+      },
+      "display_name": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      },
+      "input_modalities": {
+        "items": {
+          "$ref": "#/components/schemas/InputModality"
+        },
+        "minItems": 1,
+        "type": "array",
+        "uniqueItems": true
+      },
+      "manual_price": {
+        "$ref": "#/components/schemas/Price"
+      },
+      "output_modalities": {
+        "items": {
+          "$ref": "#/components/schemas/OutputModality"
+        },
+        "minItems": 1,
+        "type": "array",
+        "uniqueItems": true
+      },
+      "price_lookup_key": {
+        "maxLength": 500,
+        "minLength": 1,
+        "type": "string"
+      },
+      "price_source": {
+        "maxLength": 500,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "api_name",
+      "display_name",
+      "input_modalities",
+      "output_modalities",
+      "capabilities"
+    ],
+    "type": "object"
+  },
+  "ObservedRequirement": {
+    "enum": [
+      "text_input",
+      "image_input",
+      "text_output",
+      "structured_json_output",
+      "tool_calling",
+      "streaming",
+      "reasoning",
+      "embedding_output",
+      "image_output",
+      "video_output",
+      "audio_output"
+    ],
+    "type": "string"
+  },
+  "OpaqueId": {
+    "maxLength": 200,
+    "minLength": 1,
+    "type": "string"
+  },
+  "Outcome": {
+    "enum": [
+      "succeeded",
+      "failed"
+    ],
+    "type": "string"
+  },
+  "OutputFormat": {
+    "additionalProperties": false,
+    "oneOf": [
+      {
+        "not": {
+          "required": [
+            "schema_json"
+          ]
+        },
+        "properties": {
+          "type": {
+            "const": "text"
+          }
+        }
+      },
+      {
+        "properties": {
+          "type": {
+            "const": "json_schema"
+          }
+        },
+        "required": [
+          "schema_json"
+        ]
+      }
+    ],
+    "properties": {
+      "schema_json": {
+        "maxLength": 100000,
+        "minLength": 2,
         "type": "string"
       },
       "type": {
         "enum": [
           "text",
-          "json_object",
           "json_schema"
         ],
         "type": "string"
@@ -2855,4715 +1678,706 @@ export const contractSchemas = {
     ],
     "type": "object"
   },
-  "CompatibilityToolChoice": {
-    "oneOf": [
-      {
-        "enum": [
-          "auto",
-          "none",
-          "required"
-        ],
-        "type": "string"
-      },
-      {
-        "additionalProperties": false,
-        "properties": {
-          "name": {
-            "pattern": "^[a-zA-Z][a-zA-Z0-9_.-]{0,99}$",
-            "type": "string"
-          },
-          "type": {
-            "const": "function",
-            "type": "string"
-          }
-        },
-        "required": [
-          "type",
-          "name"
-        ],
-        "type": "object"
-      }
-    ]
-  },
-  "CompatibilityUsage": {
-    "additionalProperties": false,
-    "properties": {
-      "input_tokens": {
-        "minimum": 0,
-        "type": "integer"
-      },
-      "output_tokens": {
-        "minimum": 0,
-        "type": "integer"
-      },
-      "total_tokens": {
-        "minimum": 0,
-        "type": "integer"
-      }
-    },
-    "required": [
-      "input_tokens",
-      "output_tokens",
-      "total_tokens"
-    ],
-    "type": "object"
-  },
-  "CompatibleChatRequest": {
-    "additionalProperties": false,
-    "oneOf": [
-      {
-        "not": {
-          "anyOf": [
-            {
-              "required": [
-                "x_llmrouter_exact_route"
-              ]
-            },
-            {
-              "required": [
-                "x_llmrouter_exact_route_grant"
-              ]
-            }
-          ]
-        }
-      },
-      {
-        "required": [
-          "x_llmrouter_exact_route",
-          "x_llmrouter_exact_route_grant"
-        ]
-      }
-    ],
-    "properties": {
-      "max_completion_tokens": {
-        "maximum": 1000000,
-        "minimum": 1,
-        "type": "integer",
-        "x-router-fingerprint": true
-      },
-      "messages": {
-        "items": {
-          "$ref": "#/components/schemas/Message"
-        },
-        "maxItems": 1000,
-        "minItems": 1,
-        "type": "array",
-        "x-router-fingerprint": true
-      },
-      "metadata": {
-        "$ref": "#/components/schemas/MetadataEntries",
-        "x-router-fingerprint": true
-      },
-      "model": {
-        "$ref": "#/components/schemas/AssignmentName",
-        "x-router-fingerprint": true
-      },
-      "response_format": {
-        "$ref": "#/components/schemas/CompatibilityResponseFormat",
-        "x-router-fingerprint": true
-      },
-      "stream": {
-        "default": false,
-        "type": "boolean",
-        "x-router-fingerprint": false
-      },
-      "temperature": {
-        "maximum": 2,
-        "minimum": 0,
-        "type": "number",
-        "x-router-fingerprint": true
-      },
-      "tool_choice": {
-        "$ref": "#/components/schemas/CompatibilityToolChoice",
-        "x-router-fingerprint": true
-      },
-      "tools": {
-        "items": {
-          "$ref": "#/components/schemas/ToolDefinition"
-        },
-        "maxItems": 100,
-        "type": "array",
-        "x-router-fingerprint": true
-      },
-      "user": {
-        "maxLength": 200,
-        "type": "string",
-        "x-router-fingerprint": true
-      },
-      "x_llmrouter_data_profile": {
-        "$ref": "#/components/schemas/DataProfile",
-        "x-router-fingerprint": true
-      },
-      "x_llmrouter_exact_route": {
-        "$ref": "#/components/schemas/OpaqueId",
-        "x-router-fingerprint": true
-      },
-      "x_llmrouter_exact_route_grant": {
-        "maxLength": 200,
-        "minLength": 43,
-        "type": "string",
-        "writeOnly": true,
-        "x-router-fingerprint": false
-      },
-      "x_llmrouter_max_cost": {
-        "$ref": "#/components/schemas/Money",
-        "x-router-fingerprint": true
-      },
-      "x_llmrouter_workspace_id": {
-        "$ref": "#/components/schemas/OpaqueId",
-        "x-router-fingerprint": true
-      }
-    },
-    "required": [
-      "model",
-      "messages"
-    ],
-    "type": "object"
-  },
-  "CompatibleResponse": {
-    "additionalProperties": false,
-    "properties": {
-      "choices": {
-        "items": {
-          "additionalProperties": false,
-          "properties": {
-            "finish_reason": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "index": {
-              "minimum": 0,
-              "type": "integer"
-            },
-            "message": {
-              "$ref": "#/components/schemas/Message"
-            }
-          },
-          "required": [
-            "index",
-            "message",
-            "finish_reason"
-          ],
-          "type": "object"
-        },
-        "type": "array"
-      },
-      "created": {
-        "minimum": 0,
-        "type": "integer"
-      },
-      "id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "model": {
-        "$ref": "#/components/schemas/AssignmentName"
-      },
-      "object": {
-        "type": "string"
-      },
-      "output": {
-        "items": {
-          "$ref": "#/components/schemas/ContentPart"
-        },
-        "type": "array"
-      },
-      "usage": {
-        "$ref": "#/components/schemas/CompatibilityUsage"
-      },
-      "x_llmrouter_request_id": {
-        "$ref": "#/components/schemas/UuidV7"
-      },
-      "x_llmrouter_state": {
-        "$ref": "#/components/schemas/RequestState"
-      },
-      "x_llmrouter_status_url": {
-        "format": "uri",
-        "type": "string"
-      }
-    },
-    "required": [
-      "id",
-      "object",
-      "x_llmrouter_request_id",
-      "x_llmrouter_state",
-      "x_llmrouter_status_url"
-    ],
-    "type": "object"
-  },
-  "CompatibleResponsesRequest": {
-    "additionalProperties": false,
-    "oneOf": [
-      {
-        "not": {
-          "anyOf": [
-            {
-              "required": [
-                "x_llmrouter_exact_route"
-              ]
-            },
-            {
-              "required": [
-                "x_llmrouter_exact_route_grant"
-              ]
-            }
-          ]
-        }
-      },
-      {
-        "required": [
-          "x_llmrouter_exact_route",
-          "x_llmrouter_exact_route_grant"
-        ]
-      }
-    ],
-    "properties": {
-      "input": {
-        "oneOf": [
-          {
-            "maxLength": 1048576,
-            "type": "string"
-          },
-          {
-            "items": {
-              "$ref": "#/components/schemas/Message"
-            },
-            "maxItems": 1000,
-            "type": "array"
-          }
-        ],
-        "x-router-fingerprint": true
-      },
-      "instructions": {
-        "maxLength": 1048576,
-        "type": "string",
-        "x-router-fingerprint": true
-      },
-      "max_output_tokens": {
-        "maximum": 1000000,
-        "minimum": 1,
-        "type": "integer",
-        "x-router-fingerprint": true
-      },
-      "metadata": {
-        "$ref": "#/components/schemas/MetadataEntries",
-        "x-router-fingerprint": true
-      },
-      "model": {
-        "$ref": "#/components/schemas/AssignmentName",
-        "x-router-fingerprint": true
-      },
-      "stream": {
-        "default": false,
-        "type": "boolean",
-        "x-router-fingerprint": false
-      },
-      "temperature": {
-        "maximum": 2,
-        "minimum": 0,
-        "type": "number",
-        "x-router-fingerprint": true
-      },
-      "text": {
-        "$ref": "#/components/schemas/CompatibilityResponseFormat",
-        "x-router-fingerprint": true
-      },
-      "tool_choice": {
-        "$ref": "#/components/schemas/CompatibilityToolChoice",
-        "x-router-fingerprint": true
-      },
-      "tools": {
-        "items": {
-          "$ref": "#/components/schemas/ToolDefinition"
-        },
-        "maxItems": 100,
-        "type": "array",
-        "x-router-fingerprint": true
-      },
-      "user": {
-        "maxLength": 200,
-        "type": "string",
-        "x-router-fingerprint": true
-      },
-      "x_llmrouter_data_profile": {
-        "$ref": "#/components/schemas/DataProfile",
-        "x-router-fingerprint": true
-      },
-      "x_llmrouter_exact_route": {
-        "$ref": "#/components/schemas/OpaqueId",
-        "x-router-fingerprint": true
-      },
-      "x_llmrouter_exact_route_grant": {
-        "maxLength": 200,
-        "minLength": 43,
-        "type": "string",
-        "writeOnly": true,
-        "x-router-fingerprint": false
-      },
-      "x_llmrouter_max_cost": {
-        "$ref": "#/components/schemas/Money",
-        "x-router-fingerprint": true
-      },
-      "x_llmrouter_workspace_id": {
-        "$ref": "#/components/schemas/OpaqueId",
-        "x-router-fingerprint": true
-      }
-    },
-    "required": [
-      "model",
-      "input"
-    ],
-    "type": "object"
-  },
-  "ConfigurationDocument": {
-    "additionalProperties": false,
-    "properties": {
-      "display_name": {
-        "maxLength": 200,
-        "minLength": 1,
-        "type": "string"
-      },
-      "expected_revision": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/OpaqueId"
-          },
-          {
-            "type": "null"
-          }
-        ]
-      },
-      "settings": {
-        "$ref": "#/components/schemas/RegisteredDocument"
-      },
-      "stable_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "state": {
-        "enum": [
-          "active",
-          "disabled",
-          "retired"
-        ],
-        "type": "string"
-      }
-    },
-    "required": [
-      "stable_id",
-      "display_name",
-      "state",
-      "expected_revision",
-      "settings"
-    ],
-    "type": "object"
-  },
-  "ConfigurationPage": {
-    "additionalProperties": false,
-    "properties": {
-      "items": {
-        "items": {
-          "$ref": "#/components/schemas/ConfigurationDocument"
-        },
-        "type": "array"
-      },
-      "next_cursor": {
-        "type": [
-          "string",
-          "null"
-        ]
-      }
-    },
-    "required": [
-      "items"
-    ],
-    "type": "object"
-  },
-  "ConfigurationWriteResult": {
-    "additionalProperties": false,
-    "properties": {
-      "active_revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "distribution_state": {
-        "enum": [
-          "distributing",
-          "current",
-          "degraded"
-        ],
-        "type": "string"
-      },
-      "operation_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "resource_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      }
-    },
-    "required": [
-      "resource_id",
-      "active_revision",
-      "distribution_state",
-      "operation_id"
-    ],
-    "type": "object"
-  },
-  "ContentPart": {
-    "oneOf": [
-      {
-        "additionalProperties": false,
-        "properties": {
-          "text": {
-            "maxLength": 1048576,
-            "type": "string"
-          },
-          "type": {
-            "const": "text",
-            "type": "string"
-          }
-        },
-        "required": [
-          "type",
-          "text"
-        ],
-        "type": "object"
-      },
-      {
-        "additionalProperties": false,
-        "properties": {
-          "attachment_id": {
-            "$ref": "#/components/schemas/OpaqueId"
-          },
-          "media_type": {
-            "enum": [
-              "image/jpeg",
-              "image/png",
-              "image/webp"
-            ],
-            "type": "string"
-          },
-          "sha256": {
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "type": {
-            "const": "image",
-            "type": "string"
-          }
-        },
-        "required": [
-          "type",
-          "attachment_id",
-          "sha256",
-          "media_type"
-        ],
-        "type": "object"
-      },
-      {
-        "additionalProperties": false,
-        "properties": {
-          "attachment_id": {
-            "$ref": "#/components/schemas/OpaqueId"
-          },
-          "media_type": {
-            "enum": [
-              "audio/mpeg",
-              "audio/wav"
-            ],
-            "type": "string"
-          },
-          "sha256": {
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "type": {
-            "const": "audio",
-            "type": "string"
-          }
-        },
-        "required": [
-          "type",
-          "attachment_id",
-          "sha256",
-          "media_type"
-        ],
-        "type": "object"
-      },
-      {
-        "additionalProperties": false,
-        "properties": {
-          "attachment_id": {
-            "$ref": "#/components/schemas/OpaqueId"
-          },
-          "media_type": {
-            "enum": [
-              "text/plain",
-              "text/markdown",
-              "application/json",
-              "application/pdf"
-            ],
-            "type": "string"
-          },
-          "sha256": {
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "type": {
-            "const": "file",
-            "type": "string"
-          }
-        },
-        "required": [
-          "type",
-          "attachment_id",
-          "sha256",
-          "media_type"
-        ],
-        "type": "object"
-      }
-    ]
-  },
-  "ContractArtifact": {
-    "additionalProperties": false,
-    "properties": {
-      "major_version": {
-        "minimum": 1,
-        "type": "integer"
-      },
-      "name": {
-        "enum": [
-          "openapi",
-          "stream_protocol",
-          "error_catalog",
-          "service_management",
-          "embed_protocol",
-          "embedding_protocol",
-          "business_tool_gateway",
-          "request_fingerprint",
-          "cross_service_conformance"
-        ],
-        "type": "string"
-      },
-      "sha256": {
-        "pattern": "^[0-9a-f]{64}$",
-        "type": "string"
-      },
-      "version": {
-        "pattern": "^[1-9][0-9]*\\.[0-9]+\\.[0-9]+$",
-        "type": "string"
-      }
-    },
-    "required": [
-      "name",
-      "version",
-      "major_version",
-      "sha256"
-    ],
-    "type": "object"
-  },
-  "ContractManifest": {
-    "additionalProperties": false,
-    "properties": {
-      "artifacts": {
-        "items": {
-          "$ref": "#/components/schemas/ContractArtifact"
-        },
-        "type": "array"
-      },
-      "capabilities": {
-        "items": {
-          "enum": [
-            "model_requests",
-            "embedding_requests_v1",
-            "agent_runs",
-            "shared_tools",
-            "attachments",
-            "request_status",
-            "request_discovery",
-            "cancellation",
-            "sse_stream_v1",
-            "workspace_lifecycle",
-            "host_budget_ceiling",
-            "effective_configuration",
-            "assignment_configuration",
-            "provider_instance_configuration",
-            "provider_model_route_configuration",
-            "price_synchronization",
-            "budget_management",
-            "retention_management",
-            "configuration_revisions",
-            "business_tool_gateway",
-            "diagnostic_routing",
-            "administration_authentication",
-            "service_administration",
-            "catalog_administration",
-            "credential_administration",
-            "administrator_grants",
-            "operational_administration",
-            "audit_discovery",
-            "captured_content",
-            "protected_exports",
-            "accounting_summary",
-            "detailed_health",
-            "openai_chat_completions",
-            "openai_responses"
-          ],
-          "type": "string"
-        },
-        "type": "array",
-        "uniqueItems": true
-      },
-      "contract_set": {
-        "const": "llmrouter-v1",
-        "type": "string"
-      },
-      "generated_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "version": {
-        "pattern": "^[1-9][0-9]*\\.[0-9]+\\.[0-9]+$",
-        "type": "string"
-      }
-    },
-    "required": [
-      "contract_set",
-      "version",
-      "generated_at",
-      "capabilities",
-      "artifacts"
-    ],
-    "type": "object"
-  },
-  "CreateAttachment": {
-    "additionalProperties": false,
-    "properties": {
-      "byte_length": {
-        "maximum": 26214400,
-        "minimum": 1,
-        "type": "integer"
-      },
-      "media_type": {
-        "enum": [
-          "text/plain",
-          "text/markdown",
-          "application/json",
-          "application/pdf",
-          "image/jpeg",
-          "image/png",
-          "image/webp",
-          "audio/mpeg",
-          "audio/wav"
-        ],
-        "type": "string"
-      },
-      "sha256": {
-        "pattern": "^[0-9a-f]{64}$",
-        "type": "string"
-      },
-      "workspace_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      }
-    },
-    "required": [
-      "media_type",
-      "byte_length",
-      "sha256"
-    ],
-    "type": "object"
-  },
-  "CreateCredential": {
-    "additionalProperties": false,
-    "properties": {
-      "owner_scope": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "provider_catalog_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "safe_label": {
-        "maxLength": 200,
-        "type": "string"
-      },
-      "secret": {
-        "maxLength": 65536,
-        "minLength": 1,
-        "type": "string",
-        "writeOnly": true
-      }
-    },
-    "required": [
-      "owner_scope",
-      "provider_catalog_id",
-      "secret"
-    ],
-    "type": "object"
-  },
-  "CreateDiagnosticGrant": {
-    "additionalProperties": false,
-    "properties": {
-      "exact_route": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "reason": {
-        "maxLength": 500,
-        "minLength": 1,
-        "type": "string"
-      },
-      "workspace_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      }
-    },
-    "required": [
-      "exact_route",
-      "reason"
-    ],
-    "type": "object"
-  },
-  "CreateExport": {
-    "additionalProperties": false,
-    "properties": {
-      "data_class": {
-        "enum": [
-          "accounting",
-          "audit",
-          "configuration",
-          "captured_content"
-        ],
-        "type": "string"
-      },
-      "format": {
-        "enum": [
-          "jsonl",
-          "csv"
-        ],
-        "type": "string"
-      },
-      "from": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "service_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "to": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "workspace_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      }
-    },
-    "required": [
-      "data_class",
-      "from",
-      "to",
-      "format"
-    ],
-    "type": "object"
-  },
-  "CreateOperationalAction": {
-    "additionalProperties": false,
-    "properties": {
-      "action": {
-        "enum": [
-          "node_drain",
-          "circuit_probe",
-          "circuit_reset",
-          "promote",
-          "failback",
-          "backup_start",
-          "restore_validate",
-          "disaster_recovery_test_start"
-        ],
-        "type": "string"
-      },
-      "drain_timeout_seconds": {
-        "default": 900,
-        "maximum": 1800,
-        "minimum": 1,
-        "type": "integer"
-      },
-      "expected_revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "reason": {
-        "maxLength": 500,
-        "minLength": 1,
-        "type": "string"
-      },
-      "recovery_target_time": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "target_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      }
-    },
-    "required": [
-      "action",
-      "expected_revision",
-      "reason"
-    ],
-    "type": "object"
-  },
-  "CreateService": {
-    "additionalProperties": false,
-    "properties": {
-      "bootstrap_scope": {
-        "$ref": "#/components/schemas/BootstrapScope"
-      },
-      "display_name": {
-        "maxLength": 200,
-        "minLength": 1,
-        "type": "string"
-      },
-      "parent_service_id": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/OpaqueId"
-          },
-          {
-            "type": "null"
-          }
-        ]
-      }
-    },
-    "required": [
-      "display_name",
-      "parent_service_id",
-      "bootstrap_scope"
-    ],
-    "type": "object"
-  },
-  "CreateWorkspace": {
-    "additionalProperties": false,
-    "properties": {
-      "caller_reference": {
-        "maxLength": 200,
-        "minLength": 1,
-        "type": "string"
-      },
-      "display_name": {
-        "maxLength": 200,
-        "minLength": 1,
-        "type": "string"
-      }
-    },
-    "required": [
-      "caller_reference",
-      "display_name"
-    ],
-    "type": "object"
-  },
-  "CredentialChange": {
-    "additionalProperties": false,
-    "properties": {
-      "expected_revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "reason": {
-        "maxLength": 500,
-        "minLength": 1,
-        "type": "string"
-      },
-      "replacement_secret": {
-        "maxLength": 65536,
-        "minLength": 1,
-        "type": "string",
-        "writeOnly": true
-      }
-    },
-    "required": [
-      "expected_revision",
-      "reason"
-    ],
-    "type": "object"
-  },
-  "CredentialMetadata": {
-    "additionalProperties": false,
-    "properties": {
-      "created_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "credential_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "fingerprint": {
-        "maxLength": 32,
-        "type": "string"
-      },
-      "owner_scope": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "provider_catalog_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "state": {
-        "enum": [
-          "active",
-          "disabled",
-          "retired"
-        ],
-        "type": "string"
-      }
-    },
-    "required": [
-      "credential_id",
-      "owner_scope",
-      "provider_catalog_id",
-      "state",
-      "revision",
-      "created_at",
-      "fingerprint"
-    ],
-    "type": "object"
-  },
-  "CredentialPage": {
-    "additionalProperties": false,
-    "properties": {
-      "items": {
-        "items": {
-          "$ref": "#/components/schemas/CredentialMetadata"
-        },
-        "type": "array"
-      },
-      "next_cursor": {
-        "type": [
-          "string",
-          "null"
-        ]
-      }
-    },
-    "required": [
-      "items"
-    ],
-    "type": "object"
-  },
-  "DataProfile": {
-    "const": "service-data",
-    "type": "string"
-  },
-  "Decimal": {
-    "pattern": "^-?[0-9]+(\\.[0-9]+)?$",
-    "type": "string"
-  },
-  "DiagnosticGrant": {
-    "additionalProperties": false,
-    "properties": {
-      "exact_route": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "expires_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "grant": {
-        "maxLength": 200,
-        "minLength": 43,
-        "pattern": "^[A-Za-z0-9_-]+$",
-        "type": "string",
-        "writeOnly": true
-      },
-      "grant_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "service_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "workspace_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      }
-    },
-    "required": [
-      "grant_id",
-      "grant",
-      "service_id",
-      "exact_route",
-      "expires_at"
-    ],
-    "type": "object"
-  },
-  "EffectiveConfiguration": {
-    "additionalProperties": false,
-    "properties": {
-      "active_revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "assignments": {
-        "items": {
-          "$ref": "#/components/schemas/EffectiveItem"
-        },
-        "type": "array"
-      },
-      "catalog": {
-        "items": {
-          "$ref": "#/components/schemas/EffectiveItem"
-        },
-        "type": "array"
-      },
-      "distribution_state": {
-        "enum": [
-          "distributing",
-          "current",
-          "degraded"
-        ],
-        "type": "string"
-      },
-      "provider_instances": {
-        "items": {
-          "$ref": "#/components/schemas/EffectiveItem"
-        },
-        "type": "array"
-      },
-      "provider_model_routes": {
-        "items": {
-          "$ref": "#/components/schemas/EffectiveItem"
-        },
-        "type": "array"
-      },
-      "service_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "workspace_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      }
-    },
-    "required": [
-      "service_id",
-      "active_revision",
-      "distribution_state",
-      "catalog",
-      "assignments",
-      "provider_instances",
-      "provider_model_routes"
-    ],
-    "type": "object"
-  },
-  "EffectiveItem": {
-    "additionalProperties": false,
-    "properties": {
-      "active_revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "inherited": {
-        "type": "boolean"
-      },
-      "owner_scope": {
-        "enum": [
-          "global",
-          "service",
-          "workspace"
-        ],
-        "type": "string"
-      },
-      "settings": {
-        "$ref": "#/components/schemas/RegisteredDocument"
-      },
-      "source_layer": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "stable_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "state": {
-        "enum": [
-          "active",
-          "disabled",
-          "retired"
-        ],
-        "type": "string"
-      }
-    },
-    "required": [
-      "stable_id",
-      "owner_scope",
-      "source_layer",
-      "state",
-      "inherited",
-      "active_revision"
-    ],
-    "type": "object"
-  },
-  "EmbedAdministrationConfiguration": {
-    "additionalProperties": false,
-    "properties": {
-      "assignments": {
-        "items": {
-          "$ref": "#/components/schemas/AdministrationAssignment"
-        },
-        "maxItems": 10000,
-        "type": "array"
-      },
-      "providers": {
-        "items": {
-          "$ref": "#/components/schemas/EmbedProviderInstance"
-        },
-        "maxItems": 10000,
-        "type": "array"
-      },
-      "routes": {
-        "items": {
-          "$ref": "#/components/schemas/EmbedProviderModelRoute"
-        },
-        "maxItems": 10000,
-        "type": "array"
-      }
-    },
-    "required": [
-      "providers",
-      "routes",
-      "assignments"
-    ],
-    "type": "object"
-  },
-  "EmbedAdministrationSnapshot": {
-    "additionalProperties": false,
-    "properties": {
-      "accounting": {
-        "$ref": "#/components/schemas/AccountingSummary"
-      },
-      "configuration": {
-        "$ref": "#/components/schemas/EmbedAdministrationConfiguration"
-      },
-      "expires_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "permissions": {
-        "items": {
-          "enum": [
-            "configuration.read",
-            "accounting.read",
-            "request_status.read",
-            "health.read"
-          ],
-          "type": "string"
-        },
-        "minItems": 1,
-        "type": "array",
-        "uniqueItems": true
-      },
-      "requests": {
-        "items": {
-          "$ref": "#/components/schemas/EmbedRequestStatus"
-        },
-        "maxItems": 100,
-        "type": "array"
-      },
-      "service_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "state": {
-        "$ref": "#/components/schemas/EmbedAdministrationState"
-      },
-      "workspace_id": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/OpaqueId"
-          },
-          {
-            "type": "null"
-          }
-        ]
-      }
-    },
-    "required": [
-      "service_id",
-      "workspace_id",
-      "permissions",
-      "expires_at"
-    ],
-    "type": "object"
-  },
-  "EmbedAdministrationState": {
-    "additionalProperties": false,
-    "properties": {
-      "display_name": {
-        "maxLength": 200,
-        "minLength": 1,
-        "type": "string"
-      },
-      "kind": {
-        "enum": [
-          "service",
-          "workspace"
-        ],
-        "type": "string"
-      },
-      "parent_service_id": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/OpaqueId"
-          },
-          {
-            "type": "null"
-          }
-        ]
-      },
-      "revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "service_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "state": {
-        "enum": [
-          "active",
-          "disabled",
-          "retired"
-        ],
-        "type": "string"
-      },
-      "workspace_id": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/OpaqueId"
-          },
-          {
-            "type": "null"
-          }
-        ]
-      }
-    },
-    "required": [
-      "kind",
-      "service_id",
-      "workspace_id",
-      "display_name",
-      "state",
-      "revision",
-      "parent_service_id"
-    ],
-    "type": "object"
-  },
-  "EmbedBootstrap": {
-    "additionalProperties": false,
-    "properties": {
-      "expires_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "permissions": {
-        "items": {
-          "enum": [
-            "configuration.read",
-            "configuration.write",
-            "budget.read",
-            "budget.write",
-            "accounting.read",
-            "request_status.read",
-            "health.read",
-            "diagnostic.run"
-          ],
-          "type": "string"
-        },
-        "minItems": 1,
-        "type": "array",
-        "uniqueItems": true
-      },
-      "service_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "theme": {
-        "additionalProperties": false,
-        "properties": {
-          "corner_style": {
-            "enum": [
-              "square",
-              "rounded"
-            ],
-            "type": "string"
-          },
-          "density": {
-            "enum": [
-              "comfortable",
-              "compact"
-            ],
-            "type": "string"
-          },
-          "mode": {
-            "enum": [
-              "light",
-              "dark",
-              "system"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "mode",
-          "density",
-          "corner_style"
-        ],
-        "type": "object"
-      },
-      "workspace_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      }
-    },
-    "required": [
-      "expires_at",
-      "service_id",
-      "permissions",
-      "theme"
-    ],
-    "type": "object"
-  },
-  "EmbedBootstrapRequest": {
-    "additionalProperties": false,
-    "properties": {
-      "bootstrap_token": {
-        "maxLength": 200,
-        "minLength": 43,
-        "type": "string",
-        "writeOnly": true
-      },
-      "frame_nonce": {
-        "maxLength": 200,
-        "minLength": 16,
-        "type": "string"
-      },
-      "host_origin": {
-        "description": "Exact canonical origin that the host sent in the checked handshake.",
-        "format": "uri",
-        "maxLength": 2000,
-        "type": "string"
-      }
-    },
-    "required": [
-      "bootstrap_token",
-      "frame_nonce",
-      "host_origin"
-    ],
-    "type": "object"
-  },
-  "EmbedProviderInstance": {
-    "additionalProperties": false,
-    "properties": {
-      "active_revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "display_name": {
-        "maxLength": 200,
-        "minLength": 1,
-        "type": "string"
-      },
-      "endpoint": {
-        "format": "uri",
-        "type": "string"
-      },
-      "inherited": {
-        "type": "boolean"
-      },
-      "owner_scope": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "provider_catalog_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "provider_instance_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "settings": {
-        "$ref": "#/components/schemas/RegisteredDocument"
-      },
-      "source_layer": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "state": {
-        "enum": [
-          "active",
-          "disabled",
-          "retired"
-        ],
-        "type": "string"
-      }
-    },
-    "required": [
-      "provider_instance_id",
-      "owner_scope",
-      "source_layer",
-      "provider_catalog_id",
-      "display_name",
-      "endpoint",
-      "state",
-      "active_revision",
-      "inherited",
-      "settings"
-    ],
-    "type": "object"
-  },
-  "EmbedProviderModelRoute": {
-    "additionalProperties": false,
-    "allOf": [
-      {
-        "if": {
-          "properties": {
-            "capabilities": {
-              "contains": {
-                "const": "embedding"
-              }
-            }
-          },
-          "required": [
-            "capabilities"
-          ]
-        },
-        "then": {
-          "required": [
-            "embedding_model_space_id",
-            "embedding_dimensions"
-          ]
-        }
-      }
-    ],
-    "properties": {
-      "active_revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "canonical_model_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "capabilities": {
-        "items": {
-          "type": "string"
-        },
-        "type": "array",
-        "uniqueItems": true
-      },
-      "embedding_dimensions": {
-        "maximum": 4096,
-        "minimum": 1,
-        "type": "integer"
-      },
-      "embedding_model_space_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "inherited": {
-        "type": "boolean"
-      },
-      "owner_scope": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "price_authority": {
-        "$ref": "#/components/schemas/PriceAuthority"
-      },
-      "price_version": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/OpaqueId"
-          },
-          {
-            "type": "null"
-          }
-        ]
-      },
-      "prices": {
-        "items": {
-          "$ref": "#/components/schemas/PriceComponent"
-        },
-        "maxItems": 32,
-        "type": "array"
-      },
-      "provider_instance_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "provider_model_route_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "settings": {
-        "$ref": "#/components/schemas/RegisteredDocument"
-      },
-      "source_layer": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "stale_after_seconds": {
-        "maximum": 31536000,
-        "minimum": 1,
-        "type": "integer"
-      },
-      "state": {
-        "enum": [
-          "active",
-          "disabled",
-          "retired"
-        ],
-        "type": "string"
-      },
-      "synchronization_schedule": {
-        "maxLength": 100,
-        "minLength": 9,
-        "type": "string"
-      },
-      "synchronization_state": {
-        "oneOf": [
-          {
-            "enum": [
-              "manual",
-              "current",
-              "stale",
-              "missing",
-              "failed"
-            ],
-            "type": "string"
-          },
-          {
-            "type": "null"
-          }
-        ]
-      },
-      "wire_model": {
-        "maxLength": 500,
-        "minLength": 1,
-        "type": "string"
-      }
-    },
-    "required": [
-      "provider_model_route_id",
-      "owner_scope",
-      "source_layer",
-      "provider_instance_id",
-      "canonical_model_id",
-      "wire_model",
-      "capabilities",
-      "settings",
-      "price_authority",
-      "prices",
-      "synchronization_schedule",
-      "stale_after_seconds",
-      "price_version",
-      "synchronization_state",
-      "state",
-      "active_revision",
-      "inherited"
-    ],
-    "type": "object"
-  },
-  "EmbedRequestStatus": {
-    "$ref": "#/components/schemas/AdministrationRequestStatus",
-    "description": "Bounded request status with retained output content forbidden."
-  },
-  "EmbedSession": {
-    "additionalProperties": false,
-    "properties": {
-      "bootstrap_token": {
-        "type": "string",
-        "writeOnly": true
-      },
-      "expires_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "frame_url": {
-        "format": "uri",
-        "type": "string"
-      },
-      "message_version": {
-        "const": "1",
-        "type": "string"
-      },
-      "session_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      }
-    },
-    "required": [
-      "session_id",
-      "bootstrap_token",
-      "frame_url",
-      "expires_at",
-      "message_version"
-    ],
-    "type": "object"
-  },
-  "EmbedSessionRequest": {
-    "additionalProperties": false,
-    "properties": {
-      "allowed_origin": {
-        "description": "Exact canonical HTTPS origin, or HTTP loopback origin for local development.",
-        "format": "uri",
-        "maxLength": 2000,
-        "type": "string"
-      },
-      "host_user_subject": {
-        "maxLength": 200,
-        "minLength": 1,
-        "type": "string"
-      },
-      "permissions": {
-        "items": {
-          "enum": [
-            "configuration.read",
-            "configuration.write",
-            "budget.read",
-            "budget.write",
-            "accounting.read",
-            "request_status.read",
-            "health.read",
-            "diagnostic.run"
-          ],
-          "type": "string"
-        },
-        "minItems": 1,
-        "type": "array",
-        "uniqueItems": true
-      },
-      "recent_auth_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "theme": {
-        "additionalProperties": false,
-        "properties": {
-          "corner_style": {
-            "enum": [
-              "square",
-              "rounded"
-            ],
-            "type": "string"
-          },
-          "density": {
-            "enum": [
-              "comfortable",
-              "compact"
-            ],
-            "type": "string"
-          },
-          "mode": {
-            "enum": [
-              "light",
-              "dark",
-              "system"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "mode",
-          "density",
-          "corner_style"
-        ],
-        "type": "object"
-      },
-      "workspace_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      }
-    },
-    "required": [
-      "host_user_subject",
-      "allowed_origin",
-      "permissions",
-      "theme"
-    ],
-    "type": "object"
-  },
-  "EmbeddingAccounting": {
-    "additionalProperties": false,
-    "properties": {
-      "cost": {
-        "$ref": "#/components/schemas/RequestAccounting"
-      },
-      "input_count": {
-        "maximum": 32,
-        "minimum": 1,
-        "type": "integer"
-      },
-      "input_utf8_bytes": {
-        "maximum": 262144,
-        "minimum": 1,
-        "type": "integer"
-      },
-      "provider_attempts": {
-        "maximum": 4,
-        "minimum": 0,
-        "type": "integer"
-      },
-      "usage": {
-        "items": {
-          "$ref": "#/components/schemas/UsageComponent"
-        },
-        "type": "array"
-      }
-    },
-    "required": [
-      "input_count",
-      "input_utf8_bytes",
-      "provider_attempts",
-      "usage",
-      "cost"
-    ],
-    "type": "object"
-  },
-  "EmbeddingAdmissionReceipt": {
-    "additionalProperties": false,
-    "properties": {
-      "admitted_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "capture_enabled": {
-        "type": "boolean"
-      },
-      "capture_expires_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "capture_reason": {
-        "enum": [
-          "configured",
-          "spool_pressure"
-        ],
-        "type": "string"
-      },
-      "fingerprint_version": {
-        "const": "rfc8785-sha256-v1",
-        "type": "string"
-      },
-      "request_id": {
-        "$ref": "#/components/schemas/UuidV7"
-      },
-      "state": {
-        "$ref": "#/components/schemas/EmbeddingRequestState"
-      },
-      "state_revision": {
-        "minimum": 1,
-        "type": "integer"
-      },
-      "status_url": {
-        "format": "uri",
-        "type": "string"
-      }
-    },
-    "required": [
-      "request_id",
-      "admitted_at",
-      "state",
-      "state_revision",
-      "status_url",
-      "fingerprint_version",
-      "capture_enabled",
-      "capture_reason",
-      "capture_expires_at"
-    ],
-    "type": "object"
-  },
-  "EmbeddingInput": {
-    "additionalProperties": false,
-    "properties": {
-      "input_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "sha256": {
-        "pattern": "^[0-9a-f]{64}$",
-        "type": "string"
-      },
-      "text": {
-        "maxLength": 32768,
-        "minLength": 1,
-        "type": "string",
-        "x-max-utf8-bytes": 32768
-      }
-    },
-    "required": [
-      "input_id",
-      "sha256",
-      "text"
-    ],
-    "type": "object"
-  },
-  "EmbeddingRequest": {
-    "additionalProperties": false,
-    "description": "The complete batch can contain no more than 262144 UTF-8 input bytes.",
-    "properties": {
-      "api_version": {
-        "const": "1",
-        "type": "string",
-        "x-router-fingerprint": true
-      },
-      "assignment": {
-        "$ref": "#/components/schemas/AssignmentName",
-        "x-router-fingerprint": true
-      },
-      "data_profile": {
-        "const": "service-data",
-        "type": "string",
-        "x-router-fingerprint": true
-      },
-      "dimensions": {
-        "maximum": 4096,
-        "minimum": 1,
-        "type": "integer",
-        "x-router-fingerprint": true
-      },
-      "input_policy_id": {
-        "$ref": "#/components/schemas/OpaqueId",
-        "x-router-fingerprint": true
-      },
-      "inputs": {
-        "items": {
-          "$ref": "#/components/schemas/EmbeddingInput"
-        },
-        "maxItems": 32,
-        "minItems": 1,
-        "type": "array",
-        "x-max-total-utf8-bytes": 262144,
-        "x-router-fingerprint": true,
-        "x-unique-property": "input_id"
-      },
-      "max_cost": {
-        "$ref": "#/components/schemas/Money",
-        "x-router-fingerprint": true
-      },
-      "model_space_id": {
-        "$ref": "#/components/schemas/OpaqueId",
-        "x-router-fingerprint": true
-      },
-      "timeout_ms": {
-        "const": 120000,
-        "type": "integer",
-        "x-router-fingerprint": true
-      },
-      "trace_context": {
-        "$ref": "#/components/schemas/TraceContext",
-        "x-router-fingerprint": false
-      }
-    },
-    "required": [
-      "api_version",
-      "data_profile",
-      "assignment",
-      "input_policy_id",
-      "model_space_id",
-      "dimensions",
-      "inputs",
-      "timeout_ms"
-    ],
-    "type": "object"
-  },
-  "EmbeddingRequestState": {
+  "OutputModality": {
     "enum": [
-      "admitted",
-      "running",
-      "succeeded",
-      "failed"
+      "text",
+      "structured_json",
+      "embedding",
+      "image",
+      "video",
+      "audio"
     ],
     "type": "string"
   },
-  "EmbeddingRequestStatus": {
-    "additionalProperties": false,
-    "description": "The uncompressed JSON response contains no more than 8388608 bytes.",
-    "oneOf": [
-      {
-        "not": {
-          "required": [
-            "error"
-          ]
-        },
-        "properties": {
-          "state": {
-            "const": "succeeded"
-          }
-        },
-        "required": [
-          "terminal_at",
-          "result"
-        ]
-      },
-      {
-        "not": {
-          "required": [
-            "result"
-          ]
-        },
-        "properties": {
-          "state": {
-            "const": "failed"
-          }
-        },
-        "required": [
-          "terminal_at",
-          "error"
-        ]
-      },
-      {
-        "not": {
-          "anyOf": [
-            {
-              "required": [
-                "terminal_at"
-              ]
-            },
-            {
-              "required": [
-                "result"
-              ]
-            },
-            {
-              "required": [
-                "error"
-              ]
-            }
-          ]
-        },
-        "properties": {
-          "state": {
-            "enum": [
-              "admitted",
-              "running"
-            ]
-          }
-        }
-      }
-    ],
-    "properties": {
-      "accounting": {
-        "$ref": "#/components/schemas/EmbeddingAccounting"
-      },
-      "admission": {
-        "$ref": "#/components/schemas/EmbeddingAdmissionReceipt"
-      },
-      "admitted_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "assignment": {
-        "$ref": "#/components/schemas/AssignmentName"
-      },
-      "dimensions": {
-        "maximum": 4096,
-        "minimum": 1,
-        "type": "integer"
-      },
-      "error": {
-        "$ref": "#/components/schemas/TerminalError"
-      },
-      "input_policy_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "last_transition_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "model_space_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "request_id": {
-        "$ref": "#/components/schemas/UuidV7"
-      },
-      "result": {
-        "items": {
-          "$ref": "#/components/schemas/EmbeddingVector"
-        },
-        "maxItems": 32,
-        "minItems": 1,
-        "type": "array"
-      },
-      "service_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "state": {
-        "$ref": "#/components/schemas/EmbeddingRequestState"
-      },
-      "state_revision": {
-        "minimum": 1,
-        "type": "integer"
-      },
-      "terminal_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "workspace_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      }
-    },
-    "required": [
-      "request_id",
-      "service_id",
-      "workspace_id",
-      "state",
-      "state_revision",
-      "admitted_at",
-      "last_transition_at",
-      "assignment",
-      "input_policy_id",
-      "model_space_id",
-      "dimensions",
-      "admission",
-      "accounting"
-    ],
-    "type": "object"
-  },
-  "EmbeddingVector": {
+  "PageInfo": {
     "additionalProperties": false,
     "properties": {
-      "input_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "vector": {
-        "items": {
-          "format": "double",
-          "type": "number",
-          "x-finite": true
-        },
-        "maxItems": 4096,
-        "minItems": 1,
-        "type": "array"
-      }
-    },
-    "required": [
-      "input_id",
-      "vector"
-    ],
-    "type": "object"
-  },
-  "ErrorEnvelope": {
-    "additionalProperties": false,
-    "properties": {
-      "error": {
-        "additionalProperties": false,
-        "properties": {
-          "code": {
-            "enum": [
-              "invalid_request",
-              "unsupported_contract",
-              "unsupported_capability",
-              "invalid_token",
-              "recent_auth_required",
-              "insufficient_scope",
-              "service_scope_mismatch",
-              "workspace_scope_mismatch",
-              "policy_denied",
-              "diagnostic_permission_required",
-              "not_found",
-              "request_not_found",
-              "workspace_not_found",
-              "attachment_not_found",
-              "idempotency_conflict",
-              "state_revision_conflict",
-              "configuration_revision_conflict",
-              "request_identity_conflict",
-              "stream_replay_unavailable",
-              "terminal_state",
-              "budget_ceiling_conflict",
-              "attachment_already_complete",
-              "request_identity_expired",
-              "workspace_retired",
-              "assignment_unavailable",
-              "workspace_unavailable",
-              "capability_mismatch",
-              "embedding_space_mismatch",
-              "budget_exhausted",
-              "secret_detected",
-              "attachment_invalid",
-              "rate_limited",
-              "temporarily_unavailable",
-              "stale_configuration",
-              "spool_capacity_exhausted",
-              "allowance_unavailable",
-              "internal_error"
-            ],
-            "type": "string"
-          },
-          "field_errors": {
-            "items": {
-              "$ref": "#/components/schemas/FieldError"
-            },
-            "maxItems": 100,
-            "type": "array"
-          },
-          "message": {
-            "maxLength": 1000,
-            "type": "string"
-          },
-          "request_id": {
-            "$ref": "#/components/schemas/OpaqueId"
-          },
-          "retry_after_ms": {
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "retryable": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "code",
-          "message",
-          "retryable",
-          "request_id"
-        ],
-        "type": "object"
-      }
-    },
-    "required": [
-      "error"
-    ],
-    "type": "object"
-  },
-  "ExportOperation": {
-    "additionalProperties": false,
-    "properties": {
-      "created_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "expires_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "operation_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "redemption_expires_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "redemption_path": {
-        "description": "Same-origin Router endpoint for protected redemption.",
-        "pattern": "^/v1/admin/exports/[^/]+/redeem$",
-        "type": "string"
-      },
-      "redemption_token": {
-        "description": "One-use token that expires in no more than five minutes and must not be logged.",
-        "maxLength": 200,
-        "minLength": 43,
-        "readOnly": true,
-        "type": "string"
-      },
-      "safe_error": {
-        "type": "string"
-      },
-      "sha256": {
-        "pattern": "^[0-9a-f]{64}$",
-        "type": "string"
-      },
-      "state": {
-        "enum": [
-          "queued",
-          "running",
-          "completed",
-          "failed",
-          "expired"
-        ],
-        "type": "string"
-      }
-    },
-    "required": [
-      "operation_id",
-      "state",
-      "created_at",
-      "expires_at"
-    ],
-    "type": "object"
-  },
-  "FieldError": {
-    "additionalProperties": false,
-    "properties": {
-      "code": {
-        "maxLength": 100,
-        "type": "string"
-      },
-      "message": {
-        "maxLength": 1000,
-        "type": "string"
-      },
-      "path": {
-        "maxLength": 500,
-        "type": "string"
-      }
-    },
-    "required": [
-      "path",
-      "code",
-      "message"
-    ],
-    "type": "object"
-  },
-  "Health": {
-    "additionalProperties": false,
-    "properties": {
-      "active_configuration_revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "circuits": {
-        "items": {
-          "additionalProperties": false,
-          "properties": {
-            "changed_at": {
-              "$ref": "#/components/schemas/Timestamp"
-            },
-            "next_probe_at": {
-              "$ref": "#/components/schemas/Timestamp"
-            },
-            "provider_instance_id": {
-              "$ref": "#/components/schemas/OpaqueId"
-            },
-            "reason": {
-              "maxLength": 200,
-              "type": "string"
-            },
-            "sample_period_seconds": {
-              "minimum": 1,
-              "type": "integer"
-            },
-            "state": {
-              "enum": [
-                "closed",
-                "open",
-                "half_open"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "provider_instance_id",
-            "state",
-            "sample_period_seconds",
-            "reason",
-            "changed_at"
-          ],
-          "type": "object"
-        },
-        "type": "array"
-      },
-      "configuration_age_seconds": {
-        "minimum": 0,
-        "type": "integer"
-      },
-      "configuration_state": {
-        "enum": [
-          "current",
-          "stale",
-          "unavailable"
-        ],
-        "type": "string"
-      },
-      "contract_set": {
-        "const": "llmrouter-v1",
-        "type": "string"
-      },
-      "recovery": {
-        "additionalProperties": false,
-        "properties": {
-          "disaster_recovery_state": {
-            "enum": [
-              "not_run",
-              "passed",
-              "failed",
-              "overdue"
-            ],
-            "type": "string"
-          },
-          "last_restore_test_at": {
-            "$ref": "#/components/schemas/Timestamp"
-          },
-          "last_restore_test_state": {
-            "enum": [
-              "passed",
-              "failed",
-              "overdue"
-            ],
-            "type": "string"
-          },
-          "newest_backup_at": {
-            "$ref": "#/components/schemas/Timestamp"
-          },
-          "point_in_time_window_days": {
-            "minimum": 35,
-            "type": "integer"
-          },
-          "recovery_log_continuous": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "newest_backup_at",
-          "recovery_log_continuous",
-          "point_in_time_window_days",
-          "last_restore_test_state",
-          "disaster_recovery_state"
-        ],
-        "type": "object"
-      },
-      "replication": {
-        "additionalProperties": false,
-        "properties": {
-          "control_plane_state": {
-            "enum": [
-              "primary",
-              "standby",
-              "unavailable"
-            ],
-            "type": "string"
-          },
-          "possible_data_loss_seconds": {
-            "minimum": 0,
-            "type": "integer"
-          },
-          "promotion_state": {
-            "enum": [
-              "stable",
-              "promoting",
-              "promoted",
-              "fenced",
-              "degraded"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "control_plane_state",
-          "promotion_state",
-          "possible_data_loss_seconds"
-        ],
-        "type": "object"
-      },
-      "role": {
-        "enum": [
-          "combined",
-          "control-plane",
-          "data-plane",
-          "worker"
-        ],
-        "type": "string"
-      },
-      "spool": {
-        "additionalProperties": false,
-        "properties": {
-          "capacity_bytes": {
-            "minimum": 1,
-            "type": "integer"
-          },
-          "state": {
-            "enum": [
-              "normal",
-              "warning",
-              "shedding",
-              "stopped",
-              "emergency"
-            ],
-            "type": "string"
-          },
-          "used_bytes": {
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "state",
-          "used_bytes",
-          "capacity_bytes"
-        ],
-        "type": "object"
-      },
-      "status": {
-        "enum": [
-          "ready",
-          "degraded",
-          "not_ready"
-        ],
-        "type": "string"
-      }
-    },
-    "required": [
-      "status",
-      "role",
-      "contract_set",
-      "active_configuration_revision",
-      "configuration_age_seconds",
-      "configuration_state",
-      "circuits",
-      "spool",
-      "replication",
-      "recovery"
-    ],
-    "type": "object"
-  },
-  "Message": {
-    "additionalProperties": false,
-    "properties": {
-      "content": {
-        "oneOf": [
-          {
-            "maxLength": 1048576,
-            "type": "string"
-          },
-          {
-            "items": {
-              "$ref": "#/components/schemas/ContentPart"
-            },
-            "maxItems": 100,
-            "type": "array"
-          }
-        ]
-      },
-      "role": {
-        "enum": [
-          "system",
-          "user",
-          "assistant",
-          "tool"
-        ],
-        "type": "string"
-      }
-    },
-    "required": [
-      "role",
-      "content"
-    ],
-    "type": "object"
-  },
-  "MetadataEntries": {
-    "items": {
-      "additionalProperties": false,
-      "properties": {
-        "key": {
-          "maxLength": 100,
-          "minLength": 1,
-          "type": "string"
-        },
-        "value": {
-          "maxLength": 1000,
-          "type": "string"
-        }
-      },
-      "required": [
-        "key",
-        "value"
-      ],
-      "type": "object"
-    },
-    "maxItems": 100,
-    "type": "array"
-  },
-  "ModelRequest": {
-    "additionalProperties": false,
-    "description": "A request can reference at most 20 attachments and 104857600 attachment bytes in total.",
-    "oneOf": [
-      {
-        "not": {
-          "anyOf": [
-            {
-              "required": [
-                "exact_route"
-              ]
-            },
-            {
-              "required": [
-                "exact_route_grant"
-              ]
-            }
-          ]
-        },
-        "required": [
-          "assignment"
-        ]
-      },
-      {
-        "not": {
-          "required": [
-            "assignment"
-          ]
-        },
-        "required": [
-          "exact_route",
-          "exact_route_grant"
-        ]
-      }
-    ],
-    "properties": {
-      "api_version": {
-        "const": "1",
-        "type": "string",
-        "x-router-fingerprint": true
-      },
-      "assignment": {
-        "$ref": "#/components/schemas/AssignmentName",
-        "x-router-fingerprint": true
-      },
-      "data_profile": {
-        "$ref": "#/components/schemas/DataProfile",
-        "x-router-fingerprint": true
-      },
-      "exact_route": {
-        "$ref": "#/components/schemas/OpaqueId",
-        "x-router-fingerprint": true
-      },
-      "exact_route_grant": {
-        "type": "string",
-        "writeOnly": true,
-        "x-router-fingerprint": false
-      },
-      "limits": {
-        "$ref": "#/components/schemas/RequestLimits",
-        "x-router-fingerprint": true
-      },
-      "messages": {
-        "items": {
-          "$ref": "#/components/schemas/Message"
-        },
-        "maxItems": 1000,
-        "minItems": 1,
-        "type": "array",
-        "x-router-fingerprint": true
-      },
-      "output": {
-        "$ref": "#/components/schemas/OutputControls",
-        "x-router-fingerprint": true
-      },
-      "tool_allow_list": {
-        "items": {
-          "type": "string"
-        },
-        "type": "array",
-        "uniqueItems": true,
-        "x-router-fingerprint": true
-      },
-      "tools": {
-        "items": {
-          "$ref": "#/components/schemas/ToolDefinition"
-        },
-        "maxItems": 100,
-        "type": "array",
-        "x-router-fingerprint": true
-      },
-      "trace_context": {
-        "$ref": "#/components/schemas/TraceContext",
-        "x-router-fingerprint": false
-      },
-      "workspace_id": {
-        "$ref": "#/components/schemas/OpaqueId",
-        "x-router-fingerprint": true
-      }
-    },
-    "required": [
-      "api_version",
-      "data_profile",
-      "messages",
-      "limits",
-      "output"
-    ],
-    "type": "object"
-  },
-  "Money": {
-    "additionalProperties": false,
-    "description": "The currency must equal the one configured currency of the applicable hard-budget scope. The Router does not perform foreign-exchange conversion.",
-    "properties": {
-      "amount": {
-        "$ref": "#/components/schemas/NonNegativeDecimal"
-      },
-      "currency": {
-        "pattern": "^[A-Z]{3}$",
-        "type": "string"
-      }
-    },
-    "required": [
-      "amount",
-      "currency"
-    ],
-    "type": "object"
-  },
-  "NonNegativeDecimal": {
-    "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$",
-    "type": "string"
-  },
-  "OpaqueId": {
-    "maxLength": 200,
-    "minLength": 1,
-    "type": "string"
-  },
-  "OperationalAction": {
-    "additionalProperties": false,
-    "properties": {
-      "action": {
-        "enum": [
-          "node_drain",
-          "circuit_probe",
-          "circuit_reset",
-          "promote",
-          "failback",
-          "backup_start",
-          "restore_validate",
-          "disaster_recovery_test_start"
-        ],
-        "type": "string"
-      },
-      "completed_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "created_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "operation_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "safe_error": {
-        "maxLength": 1000,
-        "type": "string"
-      },
-      "safe_result": {
-        "$ref": "#/components/schemas/RegisteredDocument"
-      },
-      "state": {
-        "enum": [
-          "queued",
-          "running",
-          "succeeded",
-          "failed",
-          "uncertain"
-        ],
-        "type": "string"
-      },
-      "target_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      }
-    },
-    "required": [
-      "operation_id",
-      "action",
-      "state",
-      "created_at",
-      "revision"
-    ],
-    "type": "object"
-  },
-  "OperationalItem": {
-    "additionalProperties": false,
-    "properties": {
-      "kind": {
-        "enum": [
-          "topology",
-          "node",
-          "provider_circuit",
-          "replication",
-          "spool",
-          "backup",
-          "restore_test",
-          "disaster_recovery_test"
-        ],
-        "type": "string"
-      },
-      "observed_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "resource_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "safe_detail": {
-        "$ref": "#/components/schemas/RegisteredDocument"
-      },
-      "state": {
-        "maxLength": 100,
-        "type": "string"
-      }
-    },
-    "required": [
-      "kind",
-      "resource_id",
-      "state",
-      "revision",
-      "observed_at"
-    ],
-    "type": "object"
-  },
-  "OperationalState": {
-    "additionalProperties": false,
-    "properties": {
-      "items": {
-        "items": {
-          "$ref": "#/components/schemas/OperationalItem"
-        },
-        "maxItems": 10000,
-        "type": "array"
-      },
-      "observed_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      }
-    },
-    "required": [
-      "observed_at",
-      "items"
-    ],
-    "type": "object"
-  },
-  "OutputControls": {
-    "additionalProperties": false,
-    "properties": {
-      "format": {
-        "enum": [
-          "text",
-          "json"
-        ],
-        "type": "string"
-      },
-      "json_schema_major_version": {
-        "minimum": 1,
-        "type": "integer"
-      },
-      "json_schema_name": {
-        "pattern": "^[a-z][a-z0-9._-]{0,99}$",
-        "type": "string"
-      },
-      "temperature": {
-        "maximum": 2,
-        "minimum": 0,
-        "type": "number"
-      }
-    },
-    "type": "object"
-  },
-  "OutputResult": {
-    "additionalProperties": false,
-    "properties": {
-      "outputs": {
-        "items": {
-          "oneOf": [
-            {
-              "additionalProperties": false,
-              "properties": {
-                "text": {
-                  "type": "string"
-                },
-                "type": {
-                  "const": "text",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "type",
-                "text"
-              ],
-              "type": "object"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "document": {
-                  "$ref": "#/components/schemas/RegisteredDocument"
-                },
-                "type": {
-                  "enum": [
-                    "json",
-                    "tool_result"
-                  ],
-                  "type": "string"
-                }
-              },
-              "required": [
-                "type",
-                "document"
-              ],
-              "type": "object"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "attachment_id": {
-                  "$ref": "#/components/schemas/OpaqueId"
-                },
-                "type": {
-                  "enum": [
-                    "image",
-                    "audio"
-                  ],
-                  "type": "string"
-                }
-              },
-              "required": [
-                "type",
-                "attachment_id"
-              ],
-              "type": "object"
-            }
-          ]
-        },
-        "maxItems": 100,
-        "type": "array"
-      }
-    },
-    "required": [
-      "outputs"
-    ],
-    "type": "object"
-  },
-  "PositiveDecimal": {
-    "pattern": "^([1-9][0-9]*)(\\.[0-9]+)?$|^0\\.[0-9]*[1-9][0-9]*$",
-    "type": "string"
-  },
-  "PreviewRetentionConfiguration": {
-    "additionalProperties": false,
-    "properties": {
-      "expected_revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "values": {
-        "items": {
-          "$ref": "#/components/schemas/RetentionSelection"
-        },
-        "type": "array"
-      }
-    },
-    "required": [
-      "expected_revision",
-      "values"
-    ],
-    "type": "object"
-  },
-  "PriceAuthority": {
-    "additionalProperties": false,
-    "oneOf": [
-      {
-        "not": {
-          "anyOf": [
-            {
-              "required": [
-                "source_name"
-              ]
-            },
-            {
-              "required": [
-                "lookup_identifier"
-              ]
-            }
-          ]
-        },
-        "properties": {
-          "mode": {
-            "const": "manual"
-          }
-        }
-      },
-      {
-        "properties": {
-          "mode": {
-            "const": "source"
-          }
-        },
-        "required": [
-          "source_name",
-          "lookup_identifier"
-        ]
-      }
-    ],
-    "properties": {
-      "lookup_identifier": {
-        "maxLength": 500,
-        "minLength": 1,
-        "type": "string"
-      },
-      "mode": {
-        "enum": [
-          "manual",
-          "source"
-        ],
-        "type": "string"
-      },
-      "source_name": {
-        "pattern": "^[a-z][a-z0-9._-]{0,99}$",
-        "type": "string"
-      }
-    },
-    "required": [
-      "mode"
-    ],
-    "type": "object"
-  },
-  "PriceComponent": {
-    "additionalProperties": false,
-    "description": "The currency must equal the accounting currency of every hard-budget scope that makes this route eligible.",
-    "properties": {
-      "currency": {
-        "pattern": "^[A-Z]{3}$",
-        "type": "string"
-      },
-      "price": {
-        "$ref": "#/components/schemas/NonNegativeDecimal"
-      },
-      "raw_source_value": {
-        "maxLength": 200,
-        "minLength": 1,
-        "type": "string"
-      },
-      "unit": {
-        "enum": [
-          "input_token",
-          "output_token",
-          "cached_token",
-          "request",
-          "image",
-          "audio_second",
-          "search",
-          "tool_unit",
-          "other"
-        ],
-        "type": "string"
-      },
-      "unit_quantity": {
-        "$ref": "#/components/schemas/PositiveDecimal"
-      }
-    },
-    "required": [
-      "unit",
-      "price",
-      "currency",
-      "raw_source_value",
-      "unit_quantity"
-    ],
-    "type": "object"
-  },
-  "PriceSynchronization": {
-    "additionalProperties": false,
-    "properties": {
-      "dry_run": {
+      "has_more": {
         "type": "boolean"
-      },
-      "operation_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "resulting_configuration_revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "resulting_configuration_revisions": {
-        "items": {
-          "$ref": "#/components/schemas/OpaqueId"
-        },
-        "maxItems": 10000,
-        "type": "array",
-        "uniqueItems": true
-      },
-      "results": {
-        "items": {
-          "additionalProperties": false,
-          "properties": {
-            "error_class": {
-              "enum": [
-                "source_unavailable",
-                "missing_row",
-                "invalid_value",
-                "unsupported_unit",
-                "currency_mismatch"
-              ],
-              "type": "string"
-            },
-            "lookup_identifier": {
-              "type": "string"
-            },
-            "new_prices": {
-              "items": {
-                "$ref": "#/components/schemas/PriceComponent"
-              },
-              "type": "array"
-            },
-            "old_prices": {
-              "items": {
-                "$ref": "#/components/schemas/PriceComponent"
-              },
-              "type": "array"
-            },
-            "price_version": {
-              "$ref": "#/components/schemas/OpaqueId"
-            },
-            "provider_model_route_id": {
-              "$ref": "#/components/schemas/OpaqueId"
-            },
-            "safe_error": {
-              "type": "string"
-            },
-            "source_name": {
-              "type": "string"
-            },
-            "status": {
-              "enum": [
-                "updated",
-                "unchanged",
-                "skipped",
-                "missing",
-                "failed"
-              ],
-              "type": "string"
-            },
-            "synchronization_state": {
-              "enum": [
-                "manual",
-                "current",
-                "stale",
-                "missing",
-                "failed"
-              ],
-              "type": "string"
-            },
-            "synchronized_at": {
-              "$ref": "#/components/schemas/Timestamp"
-            }
-          },
-          "required": [
-            "provider_model_route_id",
-            "source_name",
-            "lookup_identifier",
-            "old_prices",
-            "new_prices",
-            "status",
-            "synchronization_state",
-            "synchronized_at"
-          ],
-          "type": "object"
-        },
-        "type": "array"
-      },
-      "source_snapshot": {
-        "additionalProperties": false,
-        "properties": {
-          "content_sha256": {
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "fetched_at": {
-            "$ref": "#/components/schemas/Timestamp"
-          },
-          "http_validator": {
-            "maxLength": 500,
-            "type": "string"
-          },
-          "source_name": {
-            "pattern": "^[a-z][a-z0-9._-]{0,99}$",
-            "type": "string"
-          },
-          "source_revision": {
-            "maxLength": 500,
-            "type": "string"
-          }
-        },
-        "required": [
-          "source_name",
-          "fetched_at",
-          "content_sha256"
-        ],
-        "type": "object"
-      },
-      "state": {
-        "enum": [
-          "previewed",
-          "queued",
-          "running",
-          "completed",
-          "failed"
-        ],
-        "type": "string"
-      }
-    },
-    "required": [
-      "operation_id",
-      "state",
-      "dry_run",
-      "source_snapshot",
-      "results"
-    ],
-    "type": "object"
-  },
-  "PriceSynchronizationRequest": {
-    "additionalProperties": false,
-    "properties": {
-      "dry_run": {
-        "type": "boolean"
-      },
-      "provider_model_route_ids": {
-        "items": {
-          "$ref": "#/components/schemas/OpaqueId"
-        },
-        "maxItems": 10000,
-        "type": "array",
-        "uniqueItems": true
-      }
-    },
-    "required": [
-      "dry_run"
-    ],
-    "type": "object"
-  },
-  "ProviderInstance": {
-    "additionalProperties": false,
-    "properties": {
-      "active_revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "credential_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "display_name": {
-        "maxLength": 200,
-        "minLength": 1,
-        "type": "string"
-      },
-      "endpoint": {
-        "format": "uri",
-        "type": "string"
-      },
-      "inherited": {
-        "type": "boolean"
-      },
-      "owner_scope": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "provider_catalog_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "provider_instance_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "settings": {
-        "$ref": "#/components/schemas/RegisteredDocument"
-      },
-      "state": {
-        "enum": [
-          "active",
-          "disabled",
-          "retired"
-        ],
-        "type": "string"
-      }
-    },
-    "required": [
-      "provider_instance_id",
-      "owner_scope",
-      "provider_catalog_id",
-      "display_name",
-      "endpoint",
-      "credential_id",
-      "state",
-      "active_revision",
-      "inherited"
-    ],
-    "type": "object"
-  },
-  "ProviderInstancePage": {
-    "additionalProperties": false,
-    "properties": {
-      "items": {
-        "items": {
-          "$ref": "#/components/schemas/ProviderInstance"
-        },
-        "type": "array"
       },
       "next_cursor": {
-        "type": [
-          "string",
-          "null"
-        ]
+        "maxLength": 500,
+        "minLength": 1,
+        "type": "string"
       }
     },
     "required": [
-      "items"
+      "has_more"
     ],
     "type": "object"
   },
-  "ProviderModelRoute": {
+  "Price": {
     "additionalProperties": false,
-    "allOf": [
-      {
-        "if": {
-          "properties": {
-            "capabilities": {
-              "contains": {
-                "const": "embedding"
-              }
-            }
-          },
-          "required": [
-            "capabilities"
-          ]
-        },
-        "then": {
-          "required": [
-            "embedding_model_space_id",
-            "embedding_dimensions"
-          ]
-        }
-      }
-    ],
     "properties": {
-      "active_revision": {
-        "$ref": "#/components/schemas/OpaqueId"
+      "currency": {
+        "pattern": "^[A-Z]{3}$",
+        "type": "string"
       },
-      "canonical_model_id": {
-        "$ref": "#/components/schemas/OpaqueId"
+      "source": {
+        "maxLength": 500,
+        "type": "string"
       },
-      "capabilities": {
+      "synchronized_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "unit_prices": {
         "items": {
-          "type": "string"
+          "$ref": "#/components/schemas/UnitPrice"
         },
+        "minItems": 1,
         "type": "array",
         "uniqueItems": true
-      },
-      "embedding_dimensions": {
-        "maximum": 4096,
-        "minimum": 1,
-        "type": "integer"
-      },
-      "embedding_model_space_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "inherited": {
-        "type": "boolean"
-      },
-      "owner_scope": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "price_authority": {
-        "$ref": "#/components/schemas/PriceAuthority"
-      },
-      "price_version": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/OpaqueId"
-          },
-          {
-            "type": "null"
-          }
-        ]
-      },
-      "prices": {
-        "items": {
-          "$ref": "#/components/schemas/PriceComponent"
-        },
-        "maxItems": 32,
-        "type": "array"
-      },
-      "provider_instance_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "provider_model_route_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "stale_after_seconds": {
-        "maximum": 31536000,
-        "minimum": 1,
-        "type": "integer"
-      },
-      "state": {
-        "enum": [
-          "active",
-          "disabled",
-          "retired"
-        ],
+      }
+    },
+    "required": [
+      "currency",
+      "unit_prices"
+    ],
+    "type": "object"
+  },
+  "PriceSyncItem": {
+    "additionalProperties": false,
+    "properties": {
+      "message": {
+        "maxLength": 500,
         "type": "string"
       },
-      "synchronization_schedule": {
-        "maxLength": 100,
-        "minLength": 9,
-        "type": "string"
-      },
-      "synchronization_state": {
+      "outcome": {
         "enum": [
-          "manual",
-          "current",
-          "stale",
+          "updated",
+          "unchanged",
           "missing",
           "failed"
         ],
         "type": "string"
       },
-      "wire_model": {
-        "maxLength": 500,
-        "minLength": 1,
-        "type": "string"
+      "price": {
+        "$ref": "#/components/schemas/Price"
+      },
+      "provider_model_api_name": {
+        "$ref": "#/components/schemas/ApiName"
       }
     },
     "required": [
-      "provider_model_route_id",
-      "owner_scope",
-      "provider_instance_id",
-      "canonical_model_id",
-      "wire_model",
-      "capabilities",
-      "price_authority",
-      "prices",
-      "synchronization_schedule",
-      "stale_after_seconds",
-      "price_version",
-      "synchronization_state",
-      "state",
-      "active_revision",
-      "inherited"
+      "provider_model_api_name",
+      "outcome"
     ],
     "type": "object"
   },
-  "ProviderModelRoutePage": {
+  "PriceSyncRequest": {
     "additionalProperties": false,
     "properties": {
-      "items": {
+      "provider_model_api_names": {
         "items": {
-          "$ref": "#/components/schemas/ProviderModelRoute"
-        },
-        "type": "array"
-      },
-      "next_cursor": {
-        "type": [
-          "string",
-          "null"
-        ]
-      }
-    },
-    "required": [
-      "items"
-    ],
-    "type": "object"
-  },
-  "PutAdministratorGrant": {
-    "additionalProperties": false,
-    "properties": {
-      "authority_class": {
-        "enum": [
-          "global",
-          "service"
-        ],
-        "type": "string"
-      },
-      "expected_revision": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/OpaqueId"
-          },
-          {
-            "type": "null"
-          }
-        ]
-      },
-      "expires_at": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/Timestamp"
-          },
-          {
-            "type": "null"
-          }
-        ]
-      },
-      "issuer": {
-        "format": "uri",
-        "type": "string"
-      },
-      "operations": {
-        "items": {
-          "$ref": "#/components/schemas/AdministratorOperation"
-        },
-        "minItems": 1,
-        "type": "array",
-        "uniqueItems": true
-      },
-      "reason": {
-        "maxLength": 500,
-        "minLength": 1,
-        "type": "string"
-      },
-      "service_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "subject": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "workspace_ids": {
-        "items": {
-          "$ref": "#/components/schemas/OpaqueId"
+          "$ref": "#/components/schemas/ApiName"
         },
         "maxItems": 1000,
         "type": "array",
         "uniqueItems": true
       }
     },
-    "required": [
-      "issuer",
-      "subject",
-      "authority_class",
-      "operations",
-      "expected_revision",
-      "reason"
-    ],
     "type": "object"
   },
-  "PutAssignment": {
+  "PriceSyncResult": {
     "additionalProperties": false,
     "properties": {
-      "candidates": {
+      "attempted_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "items": {
         "items": {
-          "additionalProperties": false,
-          "properties": {
-            "attempt_timeout_ms": {
-              "maximum": 120000,
-              "minimum": 100,
-              "type": "integer"
-            },
-            "provider_model_route_id": {
-              "$ref": "#/components/schemas/OpaqueId"
-            }
-          },
-          "required": [
-            "provider_model_route_id"
-          ],
-          "type": "object"
+          "$ref": "#/components/schemas/PriceSyncItem"
         },
-        "maxItems": 8,
-        "minItems": 1,
         "type": "array"
-      },
-      "expected_revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "state": {
-        "enum": [
-          "active",
-          "disabled",
-          "retired"
-        ],
-        "type": "string"
       }
     },
     "required": [
-      "expected_revision",
-      "candidates",
-      "state"
+      "attempted_at",
+      "items"
     ],
     "type": "object"
   },
-  "PutBudgetCeiling": {
+  "Provider": {
     "additionalProperties": false,
     "properties": {
-      "amount": {
-        "$ref": "#/components/schemas/NonNegativeDecimal"
+      "adapter": {
+        "$ref": "#/components/schemas/ProviderAdapter"
       },
-      "currency": {
-        "pattern": "^[A-Z]{3}$",
-        "type": "string"
+      "api_name": {
+        "$ref": "#/components/schemas/ApiName"
       },
-      "expected_revision": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/OpaqueId"
-          },
-          {
-            "type": "null"
-          }
-        ]
+      "created_at": {
+        "$ref": "#/components/schemas/Timestamp"
       },
-      "reason": {
-        "maxLength": 500,
-        "minLength": 1,
-        "type": "string"
-      }
-    },
-    "required": [
-      "amount",
-      "currency",
-      "expected_revision",
-      "reason"
-    ],
-    "type": "object"
-  },
-  "PutBudgetLimit": {
-    "additionalProperties": false,
-    "properties": {
-      "assignment": {
-        "$ref": "#/components/schemas/AssignmentName"
-      },
-      "expected_revision": {
-        "$ref": "#/components/schemas/BudgetRevision"
-      },
-      "hard_limit": {
-        "$ref": "#/components/schemas/Money"
-      },
-      "reset_period": {
-        "enum": [
-          "none",
-          "daily",
-          "monthly"
-        ],
-        "type": "string"
-      },
-      "scope": {
-        "enum": [
-          "service",
-          "workspace",
-          "assignment"
-        ],
-        "type": "string"
-      },
-      "warning_threshold": {
-        "$ref": "#/components/schemas/Money"
-      },
-      "workspace_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      }
-    },
-    "required": [
-      "scope",
-      "hard_limit",
-      "warning_threshold",
-      "reset_period",
-      "expected_revision"
-    ],
-    "type": "object"
-  },
-  "PutBusinessToolGateway": {
-    "additionalProperties": false,
-    "properties": {
-      "contract_major_versions": {
-        "items": {
-          "const": 1,
-          "type": "integer"
-        },
-        "minItems": 1,
-        "type": "array",
-        "uniqueItems": true
-      },
-      "expected_revision": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/OpaqueId"
-          },
-          {
-            "type": "null"
-          }
-        ]
-      },
-      "network_policy_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "origin": {
-        "format": "uri",
-        "pattern": "^https://",
-        "type": "string"
-      },
-      "tool_kinds": {
-        "items": {
-          "pattern": "^[a-z][a-z0-9._-]{0,99}$",
-          "type": "string"
-        },
-        "maxItems": 100,
-        "minItems": 1,
-        "type": "array",
-        "uniqueItems": true
-      }
-    },
-    "required": [
-      "origin",
-      "contract_major_versions",
-      "tool_kinds",
-      "network_policy_id",
-      "expected_revision"
-    ],
-    "type": "object"
-  },
-  "PutProviderInstance": {
-    "additionalProperties": false,
-    "properties": {
-      "credential_id": {
-        "$ref": "#/components/schemas/OpaqueId"
+      "credential_api_name": {
+        "$ref": "#/components/schemas/ApiName"
       },
       "display_name": {
-        "maxLength": 200,
-        "minLength": 1,
         "type": "string"
+      },
+      "enabled": {
+        "type": "boolean"
       },
       "endpoint": {
         "format": "uri",
         "type": "string"
-      },
-      "expected_revision": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/OpaqueId"
-          },
-          {
-            "type": "null"
-          }
-        ]
-      },
-      "provider_catalog_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "settings": {
-        "$ref": "#/components/schemas/RegisteredDocument"
-      },
-      "state": {
-        "enum": [
-          "active",
-          "disabled",
-          "retired"
-        ],
-        "type": "string"
       }
     },
     "required": [
-      "provider_catalog_id",
+      "api_name",
       "display_name",
-      "endpoint",
-      "credential_id",
-      "state",
-      "expected_revision"
+      "adapter",
+      "enabled",
+      "created_at"
     ],
     "type": "object"
   },
-  "PutProviderModelRoute": {
-    "additionalProperties": false,
-    "allOf": [
-      {
-        "if": {
-          "properties": {
-            "capabilities": {
-              "contains": {
-                "const": "embedding"
-              }
-            }
-          },
-          "required": [
-            "capabilities"
-          ]
-        },
-        "then": {
-          "required": [
-            "embedding_model_space_id",
-            "embedding_dimensions"
-          ]
-        }
-      },
-      {
-        "if": {
-          "properties": {
-            "price_authority": {
-              "properties": {
-                "mode": {
-                  "const": "manual"
-                }
-              },
-              "required": [
-                "mode"
-              ]
-            }
-          },
-          "required": [
-            "price_authority"
-          ]
-        },
-        "then": {
-          "properties": {
-            "prices": {
-              "minItems": 1
-            }
-          }
-        }
-      }
+  "ProviderAdapter": {
+    "enum": [
+      "openai",
+      "openai_compatible",
+      "openrouter",
+      "custom",
+      "wavespeed",
+      "ollama",
+      "local_embeddings",
+      "fake"
     ],
+    "type": "string"
+  },
+  "ProviderModel": {
+    "additionalProperties": false,
     "properties": {
-      "canonical_model_id": {
-        "$ref": "#/components/schemas/OpaqueId"
+      "api_name": {
+        "$ref": "#/components/schemas/ApiName"
       },
       "capabilities": {
         "items": {
-          "type": "string"
+          "$ref": "#/components/schemas/ModelCapability"
+        },
+        "type": "array"
+      },
+      "constraints": {
+        "$ref": "#/components/schemas/ModelConstraints"
+      },
+      "cooldown": {
+        "$ref": "#/components/schemas/Cooldown"
+      },
+      "created_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "effective_price": {
+        "$ref": "#/components/schemas/Price"
+      },
+      "enabled": {
+        "type": "boolean"
+      },
+      "input_modalities": {
+        "items": {
+          "$ref": "#/components/schemas/InputModality"
+        },
+        "type": "array"
+      },
+      "model_api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      },
+      "output_modalities": {
+        "items": {
+          "$ref": "#/components/schemas/OutputModality"
+        },
+        "type": "array"
+      },
+      "price_lookup_key": {
+        "type": "string"
+      },
+      "price_source": {
+        "type": "string"
+      },
+      "provider_api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      },
+      "provider_model_name": {
+        "type": "string"
+      },
+      "reasoning_mappings": {
+        "items": {
+          "$ref": "#/components/schemas/ReasoningMapping"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "api_name",
+      "provider_api_name",
+      "model_api_name",
+      "provider_model_name",
+      "enabled",
+      "input_modalities",
+      "output_modalities",
+      "capabilities",
+      "reasoning_mappings",
+      "effective_price",
+      "created_at"
+    ],
+    "type": "object"
+  },
+  "ProviderModelCandidate": {
+    "additionalProperties": false,
+    "properties": {
+      "provider_model_api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      }
+    },
+    "required": [
+      "provider_model_api_name"
+    ],
+    "type": "object"
+  },
+  "ProviderModelPage": {
+    "additionalProperties": false,
+    "properties": {
+      "items": {
+        "items": {
+          "$ref": "#/components/schemas/ProviderModel"
+        },
+        "type": "array"
+      },
+      "page": {
+        "$ref": "#/components/schemas/PageInfo"
+      }
+    },
+    "required": [
+      "items",
+      "page"
+    ],
+    "type": "object"
+  },
+  "ProviderModelWrite": {
+    "additionalProperties": false,
+    "properties": {
+      "api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      },
+      "capabilities": {
+        "items": {
+          "$ref": "#/components/schemas/ModelCapability"
         },
         "type": "array",
         "uniqueItems": true
       },
-      "embedding_dimensions": {
-        "maximum": 4096,
-        "minimum": 1,
-        "type": "integer"
+      "constraints": {
+        "$ref": "#/components/schemas/ModelConstraints"
       },
-      "embedding_model_space_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "expected_revision": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/OpaqueId"
-          },
-          {
-            "type": "null"
-          }
-        ]
-      },
-      "price_authority": {
-        "$ref": "#/components/schemas/PriceAuthority"
-      },
-      "prices": {
-        "description": "A source-owned route can be empty until its first successful synchronization.",
-        "items": {
-          "$ref": "#/components/schemas/PriceComponent"
-        },
-        "maxItems": 32,
-        "type": "array"
-      },
-      "provider_instance_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "stale_after_seconds": {
-        "description": "A price becomes stale after this age. The initial value is 1209600 seconds.",
-        "maximum": 31536000,
-        "minimum": 1,
-        "type": "integer"
-      },
-      "state": {
-        "enum": [
-          "active",
-          "disabled",
-          "retired"
-        ],
-        "type": "string"
-      },
-      "synchronization_schedule": {
-        "description": "Five-field UTC cron schedule. The initial value is 0 0 * * 0.",
-        "maxLength": 100,
-        "minLength": 9,
-        "type": "string"
-      },
-      "wire_model": {
-        "maxLength": 500,
-        "minLength": 1,
-        "type": "string"
-      }
-    },
-    "required": [
-      "provider_instance_id",
-      "canonical_model_id",
-      "wire_model",
-      "capabilities",
-      "price_authority",
-      "prices",
-      "synchronization_schedule",
-      "stale_after_seconds",
-      "state",
-      "expected_revision"
-    ],
-    "type": "object"
-  },
-  "PutRetentionConfiguration": {
-    "additionalProperties": false,
-    "properties": {
-      "confirmed_preview_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "expected_revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "values": {
-        "items": {
-          "$ref": "#/components/schemas/RetentionSelection"
-        },
-        "type": "array"
-      }
-    },
-    "required": [
-      "expected_revision",
-      "values",
-      "confirmed_preview_id"
-    ],
-    "type": "object"
-  },
-  "PutSelectedBudgetLimit": {
-    "additionalProperties": false,
-    "properties": {
-      "currency": {
-        "pattern": "^[A-Z]{3}$",
-        "type": "string"
-      },
-      "expected_revision": {
-        "$ref": "#/components/schemas/BudgetRevision"
-      },
-      "hard_limit": {
-        "$ref": "#/components/schemas/NonNegativeDecimal"
-      },
-      "reset_period": {
-        "enum": [
-          "none",
-          "daily",
-          "monthly"
-        ],
-        "type": "string"
-      },
-      "warning_threshold": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/NonNegativeDecimal"
-          },
-          {
-            "type": "null"
-          }
-        ]
-      }
-    },
-    "required": [
-      "hard_limit",
-      "currency",
-      "reset_period",
-      "expected_revision"
-    ],
-    "type": "object"
-  },
-  "RedeemExport": {
-    "additionalProperties": false,
-    "properties": {
-      "redemption_token": {
-        "maxLength": 200,
-        "minLength": 43,
-        "type": "string",
-        "writeOnly": true
-      }
-    },
-    "required": [
-      "redemption_token"
-    ],
-    "type": "object"
-  },
-  "RegisteredDocument": {
-    "additionalProperties": false,
-    "properties": {
-      "document": {
-        "description": "A closed JSON document validated against the named registered schema major version.",
-        "type": "object",
-        "x-registered-schema": true
-      },
-      "major_version": {
-        "minimum": 1,
-        "type": "integer"
-      },
-      "schema_name": {
-        "pattern": "^[a-z][a-z0-9._-]{0,99}$",
-        "type": "string"
-      }
-    },
-    "required": [
-      "schema_name",
-      "major_version",
-      "document"
-    ],
-    "type": "object"
-  },
-  "RequestAccounting": {
-    "additionalProperties": false,
-    "properties": {
-      "corrected": {
-        "$ref": "#/components/schemas/NonNegativeDecimal"
-      },
-      "currency": {
-        "pattern": "^[A-Z]{3}$",
-        "type": "string"
-      },
-      "estimated": {
-        "$ref": "#/components/schemas/NonNegativeDecimal"
-      },
-      "reserved": {
-        "$ref": "#/components/schemas/NonNegativeDecimal"
-      },
-      "used": {
-        "$ref": "#/components/schemas/NonNegativeDecimal"
-      }
-    },
-    "required": [
-      "estimated",
-      "reserved",
-      "used",
-      "corrected",
-      "currency"
-    ],
-    "type": "object"
-  },
-  "RequestLimits": {
-    "additionalProperties": false,
-    "properties": {
-      "attempt_timeout_ms": {
-        "maximum": 120000,
-        "minimum": 100,
-        "type": "integer"
-      },
-      "logical_timeout_ms": {
-        "const": 900000,
-        "type": "integer"
-      },
-      "max_cost": {
-        "$ref": "#/components/schemas/Money"
-      },
-      "max_output_units": {
-        "maximum": 1000000,
-        "minimum": 1,
-        "type": "integer"
-      }
-    },
-    "required": [
-      "attempt_timeout_ms",
-      "max_output_units"
-    ],
-    "type": "object"
-  },
-  "RequestState": {
-    "enum": [
-      "admitted",
-      "running",
-      "waiting_for_tool",
-      "cancel_requested",
-      "succeeded",
-      "failed",
-      "interrupted",
-      "cancelled",
-      "uncertain"
-    ],
-    "type": "string"
-  },
-  "RequestStatus": {
-    "additionalProperties": false,
-    "oneOf": [
-      {
-        "not": {
-          "required": [
-            "exact_route"
-          ]
-        },
-        "properties": {
-          "assignment": {},
-          "exact_route": {}
-        },
-        "required": [
-          "assignment"
-        ]
-      },
-      {
-        "not": {
-          "required": [
-            "assignment"
-          ]
-        },
-        "properties": {
-          "assignment": {},
-          "exact_route": {}
-        },
-        "required": [
-          "exact_route"
-        ]
-      }
-    ],
-    "properties": {
-      "accounting": {
-        "$ref": "#/components/schemas/RequestAccounting"
-      },
-      "admission": {
-        "$ref": "#/components/schemas/AdmissionReceipt"
-      },
-      "admitted_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "assignment": {
-        "$ref": "#/components/schemas/AssignmentName"
-      },
-      "attempts": {
-        "items": {
-          "$ref": "#/components/schemas/AttemptStatus"
-        },
-        "maxItems": 1000,
-        "type": "array"
-      },
-      "committed_effects": {
+      "enabled": {
         "type": "boolean"
       },
-      "configuration_revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "error": {
-        "$ref": "#/components/schemas/TerminalError"
-      },
-      "exact_route": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "last_transition_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "owner_epoch": {
-        "minimum": 1,
-        "type": "integer"
-      },
-      "partial_output": {
-        "type": "boolean"
-      },
-      "request_id": {
-        "$ref": "#/components/schemas/UuidV7"
-      },
-      "result": {
-        "$ref": "#/components/schemas/OutputResult"
-      },
-      "run_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "state": {
-        "$ref": "#/components/schemas/RequestState"
-      },
-      "state_revision": {
-        "minimum": 1,
-        "type": "integer"
-      },
-      "terminal_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "tool_calls": {
+      "input_modalities": {
         "items": {
-          "$ref": "#/components/schemas/ToolCallStatus"
-        },
-        "maxItems": 100,
-        "type": "array"
-      }
-    },
-    "required": [
-      "request_id",
-      "state",
-      "state_revision",
-      "admitted_at",
-      "last_transition_at",
-      "partial_output",
-      "committed_effects",
-      "configuration_revision",
-      "admission",
-      "attempts",
-      "tool_calls",
-      "accounting"
-    ],
-    "type": "object"
-  },
-  "RequestStatusPage": {
-    "additionalProperties": false,
-    "properties": {
-      "items": {
-        "items": {
-          "$ref": "#/components/schemas/RequestStatus"
-        },
-        "maxItems": 1000,
-        "type": "array"
-      },
-      "next_cursor": {
-        "type": [
-          "string",
-          "null"
-        ]
-      }
-    },
-    "required": [
-      "items"
-    ],
-    "type": "object"
-  },
-  "RetentionConfiguration": {
-    "additionalProperties": false,
-    "properties": {
-      "revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "revision_retention_evidence": {
-        "additionalProperties": false,
-        "properties": {
-          "minimum_age_boundary": {
-            "$ref": "#/components/schemas/Timestamp"
-          },
-          "minimum_count_boundary": {
-            "$ref": "#/components/schemas/OpaqueId"
-          },
-          "oldest_retained_revision": {
-            "$ref": "#/components/schemas/OpaqueId"
-          },
-          "retained_by": {
-            "enum": [
-              "minimum_count",
-              "minimum_age",
-              "both"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "oldest_retained_revision",
-          "retained_by"
-        ],
-        "type": "object"
-      },
-      "scope": {
-        "enum": [
-          "global",
-          "service",
-          "workspace"
-        ],
-        "type": "string"
-      },
-      "service_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "source_layer": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "values": {
-        "items": {
-          "$ref": "#/components/schemas/RetentionValue"
-        },
-        "type": "array"
-      },
-      "workspace_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      }
-    },
-    "required": [
-      "revision",
-      "values",
-      "revision_retention_evidence"
-    ],
-    "type": "object"
-  },
-  "RetentionPreview": {
-    "additionalProperties": false,
-    "properties": {
-      "effects": {
-        "items": {
-          "additionalProperties": false,
-          "properties": {
-            "data_class": {
-              "type": "string"
-            },
-            "direction": {
-              "enum": [
-                "delete_sooner",
-                "retain_longer",
-                "no_change"
-              ],
-              "type": "string"
-            },
-            "estimated_bytes": {
-              "minimum": 0,
-              "type": "integer"
-            },
-            "estimated_records": {
-              "minimum": 0,
-              "type": "integer"
-            }
-          },
-          "required": [
-            "data_class",
-            "direction",
-            "estimated_records",
-            "estimated_bytes"
-          ],
-          "type": "object"
-        },
-        "type": "array"
-      },
-      "expires_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "preview_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      }
-    },
-    "required": [
-      "preview_id",
-      "revision",
-      "expires_at",
-      "effects"
-    ],
-    "type": "object"
-  },
-  "RetentionSelection": {
-    "additionalProperties": false,
-    "oneOf": [
-      {
-        "properties": {
-          "data_class": {
-            "const": "configuration_revisions"
-          }
-        },
-        "required": [
-          "minimum_count"
-        ]
-      },
-      {
-        "not": {
-          "required": [
-            "minimum_count"
-          ]
-        },
-        "properties": {
-          "data_class": {
-            "enum": [
-              "diagnostic_logs",
-              "captured_content",
-              "raw_accounting",
-              "agent_tool_audit",
-              "daily_accounting",
-              "security_audit"
-            ]
-          }
-        }
-      }
-    ],
-    "properties": {
-      "data_class": {
-        "enum": [
-          "diagnostic_logs",
-          "captured_content",
-          "raw_accounting",
-          "agent_tool_audit",
-          "daily_accounting",
-          "security_audit",
-          "configuration_revisions"
-        ],
-        "type": "string"
-      },
-      "days": {
-        "maximum": 36500,
-        "minimum": 1,
-        "type": "integer"
-      },
-      "minimum_count": {
-        "maximum": 1000000,
-        "minimum": 1,
-        "type": "integer"
-      }
-    },
-    "required": [
-      "data_class",
-      "days"
-    ],
-    "type": "object"
-  },
-  "RetentionValue": {
-    "additionalProperties": false,
-    "oneOf": [
-      {
-        "properties": {
-          "data_class": {
-            "const": "configuration_revisions"
-          }
-        },
-        "required": [
-          "minimum_count",
-          "allowed_minimum_count",
-          "allowed_maximum_count"
-        ]
-      },
-      {
-        "not": {
-          "anyOf": [
-            {
-              "required": [
-                "minimum_count"
-              ]
-            },
-            {
-              "required": [
-                "allowed_minimum_count"
-              ]
-            },
-            {
-              "required": [
-                "allowed_maximum_count"
-              ]
-            }
-          ]
-        },
-        "properties": {
-          "data_class": {
-            "enum": [
-              "diagnostic_logs",
-              "captured_content",
-              "raw_accounting",
-              "agent_tool_audit",
-              "daily_accounting",
-              "security_audit"
-            ]
-          }
-        }
-      }
-    ],
-    "properties": {
-      "allowed_maximum_count": {
-        "minimum": 1,
-        "type": "integer"
-      },
-      "allowed_minimum_count": {
-        "minimum": 1,
-        "type": "integer"
-      },
-      "data_class": {
-        "enum": [
-          "diagnostic_logs",
-          "captured_content",
-          "raw_accounting",
-          "agent_tool_audit",
-          "daily_accounting",
-          "security_audit",
-          "configuration_revisions"
-        ],
-        "type": "string"
-      },
-      "days": {
-        "maximum": 36500,
-        "minimum": 1,
-        "type": "integer"
-      },
-      "maximum_days": {
-        "maximum": 36500,
-        "minimum": 1,
-        "type": "integer"
-      },
-      "minimum_count": {
-        "description": "Required for configuration_revisions and invalid for other data classes.",
-        "minimum": 1,
-        "type": "integer"
-      },
-      "minimum_days": {
-        "maximum": 36500,
-        "minimum": 1,
-        "type": "integer"
-      }
-    },
-    "required": [
-      "data_class",
-      "days",
-      "minimum_days",
-      "maximum_days"
-    ],
-    "type": "object"
-  },
-  "RevisionWrite": {
-    "additionalProperties": false,
-    "properties": {
-      "expected_active_revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "reason": {
-        "maxLength": 500,
-        "minLength": 1,
-        "type": "string"
-      }
-    },
-    "required": [
-      "expected_active_revision",
-      "reason"
-    ],
-    "type": "object"
-  },
-  "ScopedAdministrationState": {
-    "additionalProperties": false,
-    "properties": {
-      "display_name": {
-        "maxLength": 200,
-        "minLength": 1,
-        "type": "string"
-      },
-      "kind": {
-        "enum": [
-          "service",
-          "workspace"
-        ],
-        "type": "string"
-      },
-      "parent_service_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "service_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "state": {
-        "enum": [
-          "active",
-          "disabled",
-          "retired"
-        ],
-        "type": "string"
-      },
-      "workspace_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      }
-    },
-    "required": [
-      "kind",
-      "service_id",
-      "display_name",
-      "state",
-      "revision"
-    ],
-    "type": "object"
-  },
-  "ServiceAction": {
-    "additionalProperties": false,
-    "properties": {
-      "expected_revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "reason": {
-        "maxLength": 500,
-        "minLength": 1,
-        "type": "string"
-      }
-    },
-    "required": [
-      "expected_revision",
-      "reason"
-    ],
-    "type": "object"
-  },
-  "ServiceAdministrationPage": {
-    "additionalProperties": false,
-    "properties": {
-      "items": {
-        "items": {
-          "$ref": "#/components/schemas/ServiceAdministrationRecord"
-        },
-        "type": "array"
-      },
-      "next_cursor": {
-        "type": [
-          "string",
-          "null"
-        ]
-      }
-    },
-    "required": [
-      "items"
-    ],
-    "type": "object"
-  },
-  "ServiceAdministrationRecord": {
-    "additionalProperties": false,
-    "properties": {
-      "bootstrap_scope": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/BootstrapScope"
-          },
-          {
-            "type": "null"
-          }
-        ]
-      },
-      "bootstrap_state": {
-        "enum": [
-          "ready",
-          "revoked",
-          "missing"
-        ],
-        "type": "string"
-      },
-      "credential_generation": {
-        "oneOf": [
-          {
-            "minimum": 1,
-            "type": "integer"
-          },
-          {
-            "type": "null"
-          }
-        ]
-      },
-      "display_name": {
-        "maxLength": 200,
-        "minLength": 1,
-        "type": "string"
-      },
-      "parent_service_id": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/OpaqueId"
-          },
-          {
-            "type": "null"
-          }
-        ]
-      },
-      "prior_generation_expires_at": {
-        "$ref": "#/components/schemas/Timestamp"
-      },
-      "revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "service_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "state": {
-        "enum": [
-          "active",
-          "disabled",
-          "retired"
-        ],
-        "type": "string"
-      }
-    },
-    "required": [
-      "service_id",
-      "display_name",
-      "state",
-      "revision",
-      "bootstrap_state",
-      "credential_generation",
-      "bootstrap_scope"
-    ],
-    "type": "object"
-  },
-  "ServiceCreated": {
-    "additionalProperties": false,
-    "properties": {
-      "bootstrap_secret": {
-        "type": "string",
-        "writeOnly": true
-      },
-      "bootstrap_secret_available": {
-        "type": "boolean"
-      },
-      "credential_generation": {
-        "const": 1,
-        "type": "integer"
-      },
-      "service_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "state": {
-        "const": "active",
-        "type": "string"
-      },
-      "state_revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      }
-    },
-    "required": [
-      "service_id",
-      "state",
-      "state_revision",
-      "bootstrap_secret_available",
-      "credential_generation"
-    ],
-    "type": "object"
-  },
-  "ServiceToken": {
-    "additionalProperties": false,
-    "properties": {
-      "access_token": {
-        "maxLength": 200,
-        "minLength": 43,
-        "pattern": "^[A-Za-z0-9_-]+$",
-        "type": "string",
-        "writeOnly": true
-      },
-      "audience": {
-        "type": "string"
-      },
-      "credential_generation": {
-        "minimum": 1,
-        "type": "integer"
-      },
-      "expires_in": {
-        "const": 300,
-        "type": "integer"
-      },
-      "operations": {
-        "items": {
-          "type": "string"
-        },
-        "type": "array"
-      },
-      "service_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "token_type": {
-        "const": "Bearer",
-        "type": "string"
-      },
-      "workspace_ids": {
-        "items": {
-          "$ref": "#/components/schemas/OpaqueId"
-        },
-        "type": "array"
-      }
-    },
-    "required": [
-      "access_token",
-      "token_type",
-      "expires_in",
-      "service_id",
-      "audience",
-      "operations",
-      "credential_generation"
-    ],
-    "type": "object"
-  },
-  "ServiceTokenExchange": {
-    "additionalProperties": false,
-    "properties": {
-      "audience": {
-        "enum": [
-          "data_plane",
-          "service_management",
-          "host_backend",
-          "accounting",
-          "configuration",
-          "budget_authority"
-        ],
-        "type": "string"
-      },
-      "bootstrap_secret": {
-        "maxLength": 200,
-        "minLength": 43,
-        "pattern": "^[A-Za-z0-9_-]+$",
-        "type": "string",
-        "writeOnly": true
-      },
-      "operations": {
-        "items": {
-          "enum": [
-            "model.create",
-            "model.read",
-            "model.cancel",
-            "embedding.create",
-            "embedding.read",
-            "run.create",
-            "run.read",
-            "run.cancel",
-            "tool.create",
-            "tool.read",
-            "tool.cancel",
-            "attachment.create",
-            "attachment.read",
-            "workspace.create",
-            "workspace.read",
-            "workspace.disable",
-            "workspace.restore",
-            "workspace.retire",
-            "admin_embed.create",
-            "accounting.read",
-            "configuration.read",
-            "configuration.write",
-            "diagnostic.grant.create",
-            "retention.read",
-            "retention.preview",
-            "retention.write",
-            "budget.read",
-            "budget.write",
-            "budget_ceiling.read",
-            "budget_ceiling.write"
-          ],
-          "type": "string"
+          "$ref": "#/components/schemas/InputModality"
         },
         "minItems": 1,
         "type": "array",
         "uniqueItems": true
       },
-      "service_id": {
-        "$ref": "#/components/schemas/OpaqueId"
+      "manual_price": {
+        "$ref": "#/components/schemas/Price"
       },
-      "workspace_ids": {
+      "model_api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      },
+      "output_modalities": {
         "items": {
-          "$ref": "#/components/schemas/OpaqueId"
+          "$ref": "#/components/schemas/OutputModality"
         },
-        "maxItems": 1000,
+        "minItems": 1,
         "type": "array",
         "uniqueItems": true
+      },
+      "price_lookup_key": {
+        "maxLength": 500,
+        "minLength": 1,
+        "type": "string"
+      },
+      "price_source": {
+        "maxLength": 500,
+        "minLength": 1,
+        "type": "string"
+      },
+      "provider_api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      },
+      "provider_model_name": {
+        "maxLength": 500,
+        "minLength": 1,
+        "type": "string"
+      },
+      "reasoning_mappings": {
+        "items": {
+          "$ref": "#/components/schemas/ReasoningMapping"
+        },
+        "maxItems": 4,
+        "type": "array"
       }
     },
     "required": [
-      "service_id",
-      "bootstrap_secret",
-      "audience",
-      "operations"
+      "api_name",
+      "provider_api_name",
+      "model_api_name",
+      "provider_model_name",
+      "enabled"
+    ],
+    "type": "object"
+  },
+  "ProviderPage": {
+    "additionalProperties": false,
+    "properties": {
+      "items": {
+        "items": {
+          "$ref": "#/components/schemas/Provider"
+        },
+        "type": "array"
+      },
+      "page": {
+        "$ref": "#/components/schemas/PageInfo"
+      }
+    },
+    "required": [
+      "items",
+      "page"
+    ],
+    "type": "object"
+  },
+  "ProviderWrite": {
+    "additionalProperties": false,
+    "properties": {
+      "adapter": {
+        "$ref": "#/components/schemas/ProviderAdapter"
+      },
+      "api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      },
+      "credential_api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      },
+      "display_name": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      },
+      "enabled": {
+        "type": "boolean"
+      },
+      "endpoint": {
+        "format": "uri",
+        "type": "string"
+      }
+    },
+    "required": [
+      "api_name",
+      "display_name",
+      "adapter",
+      "enabled"
+    ],
+    "type": "object"
+  },
+  "ReasoningLevel": {
+    "enum": [
+      "none",
+      "low",
+      "medium",
+      "high"
+    ],
+    "type": "string"
+  },
+  "ReasoningMapping": {
+    "additionalProperties": false,
+    "properties": {
+      "level": {
+        "$ref": "#/components/schemas/ReasoningLevel"
+      },
+      "provider_value": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "level",
+      "provider_value"
+    ],
+    "type": "object"
+  },
+  "RequestAttempt": {
+    "additionalProperties": false,
+    "properties": {
+      "applied_prices": {
+        "$ref": "#/components/schemas/Price"
+      },
+      "completed_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "error": {
+        "$ref": "#/components/schemas/Error"
+      },
+      "outcome": {
+        "$ref": "#/components/schemas/Outcome"
+      },
+      "provider_model_api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      },
+      "started_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "usage": {
+        "$ref": "#/components/schemas/Usage"
+      }
+    },
+    "required": [
+      "provider_model_api_name",
+      "outcome",
+      "started_at",
+      "usage",
+      "applied_prices"
+    ],
+    "type": "object"
+  },
+  "RequestLog": {
+    "additionalProperties": false,
+    "properties": {
+      "attempts": {
+        "items": {
+          "$ref": "#/components/schemas/RequestAttempt"
+        },
+        "type": "array"
+      },
+      "media": {
+        "items": {
+          "$ref": "#/components/schemas/LogMedia"
+        },
+        "type": "array"
+      },
+      "request_json": {
+        "maxLength": 5000000,
+        "type": "string"
+      },
+      "response_json": {
+        "maxLength": 5000000,
+        "type": "string"
+      },
+      "summary": {
+        "$ref": "#/components/schemas/RequestLogSummary"
+      }
+    },
+    "required": [
+      "summary",
+      "request_json",
+      "attempts"
+    ],
+    "type": "object"
+  },
+  "RequestLogPage": {
+    "additionalProperties": false,
+    "properties": {
+      "items": {
+        "items": {
+          "$ref": "#/components/schemas/RequestLogSummary"
+        },
+        "type": "array"
+      },
+      "page": {
+        "$ref": "#/components/schemas/PageInfo"
+      }
+    },
+    "required": [
+      "items",
+      "page"
+    ],
+    "type": "object"
+  },
+  "RequestLogSummary": {
+    "additionalProperties": false,
+    "properties": {
+      "assignment_api_name": {
+        "$ref": "#/components/schemas/AssignmentName"
+      },
+      "id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "kind": {
+        "enum": [
+          "model",
+          "embedding",
+          "media"
+        ],
+        "type": "string"
+      },
+      "outcome": {
+        "$ref": "#/components/schemas/Outcome"
+      },
+      "provider_model_api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      },
+      "service_api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      },
+      "started_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "tags": {
+        "$ref": "#/components/schemas/Tags"
+      },
+      "workspace_api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      }
+    },
+    "required": [
+      "id",
+      "service_api_name",
+      "workspace_api_name",
+      "kind",
+      "outcome",
+      "started_at"
+    ],
+    "type": "object"
+  },
+  "Service": {
+    "additionalProperties": false,
+    "properties": {
+      "api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      },
+      "created_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "display_name": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      },
+      "parent_service_api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      }
+    },
+    "required": [
+      "api_name",
+      "display_name",
+      "created_at"
+    ],
+    "type": "object"
+  },
+  "ServiceCreate": {
+    "additionalProperties": false,
+    "properties": {
+      "api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      },
+      "display_name": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      },
+      "parent_service_api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      }
+    },
+    "required": [
+      "api_name",
+      "display_name"
+    ],
+    "type": "object"
+  },
+  "ServiceKey": {
+    "additionalProperties": false,
+    "properties": {
+      "created_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "last_used_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "name": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "name",
+      "created_at"
+    ],
+    "type": "object"
+  },
+  "ServiceKeyCreate": {
+    "additionalProperties": false,
+    "properties": {
+      "name": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "name"
+    ],
+    "type": "object"
+  },
+  "ServiceKeyCreated": {
+    "additionalProperties": false,
+    "properties": {
+      "key": {
+        "$ref": "#/components/schemas/ServiceKey"
+      },
+      "secret": {
+        "maxLength": 500,
+        "minLength": 32,
+        "type": "string"
+      }
+    },
+    "required": [
+      "key",
+      "secret"
+    ],
+    "type": "object"
+  },
+  "ServiceKeyPage": {
+    "additionalProperties": false,
+    "properties": {
+      "items": {
+        "items": {
+          "$ref": "#/components/schemas/ServiceKey"
+        },
+        "type": "array"
+      },
+      "page": {
+        "$ref": "#/components/schemas/PageInfo"
+      }
+    },
+    "required": [
+      "items",
+      "page"
+    ],
+    "type": "object"
+  },
+  "ServicePage": {
+    "additionalProperties": false,
+    "properties": {
+      "items": {
+        "items": {
+          "$ref": "#/components/schemas/Service"
+        },
+        "type": "array"
+      },
+      "page": {
+        "$ref": "#/components/schemas/PageInfo"
+      }
+    },
+    "required": [
+      "items",
+      "page"
     ],
     "type": "object"
   },
@@ -7575,147 +2389,271 @@ export const contractSchemas = {
         "minLength": 1,
         "type": "string"
       },
-      "expected_revision": {
-        "$ref": "#/components/schemas/OpaqueId"
+      "parent_service_api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      }
+    },
+    "required": [
+      "display_name"
+    ],
+    "type": "object"
+  },
+  "StandardModelCallResult": {
+    "additionalProperties": false,
+    "properties": {
+      "content": {
+        "items": {
+          "$ref": "#/components/schemas/AssistantContentPart"
+        },
+        "minItems": 1,
+        "type": "array"
       },
-      "new_parent_service_id": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/OpaqueId"
-          },
-          {
-            "type": "null"
-          }
-        ]
+      "output_type": {
+        "const": "standard"
       },
-      "reason": {
-        "maxLength": 500,
+      "provider_model_api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      },
+      "usage": {
+        "$ref": "#/components/schemas/Usage"
+      }
+    },
+    "required": [
+      "output_type",
+      "provider_model_api_name",
+      "content",
+      "usage"
+    ],
+    "type": "object"
+  },
+  "StatisticsBucket": {
+    "additionalProperties": false,
+    "properties": {
+      "attempts": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "calls": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "cost": {
+        "pattern": "^[0-9]+(?:\\.[0-9]+)?$",
+        "type": "string"
+      },
+      "currency": {
+        "pattern": "^[A-Z]{3}$",
+        "type": "string"
+      },
+      "dimensions": {
+        "items": {
+          "maxLength": 200,
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "units": {
+        "items": {
+          "$ref": "#/components/schemas/UsageItem"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "dimensions",
+      "calls",
+      "attempts",
+      "units",
+      "cost",
+      "currency"
+    ],
+    "type": "object"
+  },
+  "StatisticsDimension": {
+    "enum": [
+      "date",
+      "service",
+      "workspace",
+      "assignment",
+      "provider_model",
+      "outcome",
+      "tag"
+    ],
+    "type": "string"
+  },
+  "StatisticsResult": {
+    "additionalProperties": false,
+    "properties": {
+      "buckets": {
+        "items": {
+          "$ref": "#/components/schemas/StatisticsBucket"
+        },
+        "maxItems": 1000,
+        "type": "array"
+      },
+      "from": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "group_by": {
+        "items": {
+          "$ref": "#/components/schemas/StatisticsDimension"
+        },
+        "type": "array"
+      },
+      "to": {
+        "$ref": "#/components/schemas/Timestamp"
+      }
+    },
+    "required": [
+      "from",
+      "to",
+      "group_by",
+      "buckets"
+    ],
+    "type": "object"
+  },
+  "StreamCompleted": {
+    "additionalProperties": false,
+    "properties": {
+      "provider_model_api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      },
+      "usage": {
+        "$ref": "#/components/schemas/Usage"
+      }
+    },
+    "required": [
+      "provider_model_api_name",
+      "usage"
+    ],
+    "type": "object"
+  },
+  "StreamStart": {
+    "additionalProperties": false,
+    "properties": {
+      "provider_model_api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      }
+    },
+    "required": [
+      "provider_model_api_name"
+    ],
+    "type": "object"
+  },
+  "StreamTextDelta": {
+    "additionalProperties": false,
+    "properties": {
+      "delta": {
         "minLength": 1,
         "type": "string"
       }
     },
     "required": [
-      "expected_revision",
-      "reason",
-      "display_name",
-      "new_parent_service_id"
+      "delta"
     ],
     "type": "object"
   },
-  "SharedToolRequest": {
+  "StreamToolCall": {
     "additionalProperties": false,
     "properties": {
-      "api_version": {
-        "const": "1",
-        "type": "string",
-        "x-router-fingerprint": true
-      },
-      "assignment": {
-        "$ref": "#/components/schemas/AssignmentName",
-        "x-router-fingerprint": true
-      },
-      "data_profile": {
-        "$ref": "#/components/schemas/DataProfile",
-        "x-router-fingerprint": true
-      },
-      "input": {
-        "$ref": "#/components/schemas/RegisteredDocument",
-        "x-router-fingerprint": true
-      },
-      "limits": {
-        "$ref": "#/components/schemas/RequestLimits",
-        "x-router-fingerprint": true
-      },
-      "tool": {
-        "enum": [
-          "search",
-          "extract",
-          "scrape",
-          "screenshot"
-        ],
-        "type": "string",
-        "x-router-fingerprint": true
-      },
-      "trace_context": {
-        "$ref": "#/components/schemas/TraceContext",
-        "x-router-fingerprint": false
-      },
-      "workspace_id": {
-        "$ref": "#/components/schemas/OpaqueId",
-        "x-router-fingerprint": true
+      "tool_call": {
+        "$ref": "#/components/schemas/ToolCallPart"
       }
     },
     "required": [
-      "api_version",
-      "data_profile",
-      "assignment",
-      "tool",
-      "input",
-      "limits"
+      "tool_call"
     ],
     "type": "object"
   },
-  "SignedMoney": {
+  "StructuredModelCallResult": {
     "additionalProperties": false,
     "properties": {
-      "amount": {
-        "$ref": "#/components/schemas/Decimal"
+      "output_type": {
+        "const": "structured_json"
       },
-      "currency": {
-        "pattern": "^[A-Z]{3}$",
+      "provider_model_api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      },
+      "structured_output_json": {
+        "maxLength": 1000000,
+        "minLength": 1,
         "type": "string"
+      },
+      "usage": {
+        "$ref": "#/components/schemas/Usage"
       }
     },
     "required": [
-      "amount",
-      "currency"
+      "output_type",
+      "provider_model_api_name",
+      "structured_output_json",
+      "usage"
     ],
     "type": "object"
   },
-  "TerminalError": {
+  "SystemMessage": {
     "additionalProperties": false,
     "properties": {
-      "affected_scope": {
-        "enum": [
-          "attempt",
-          "provider_model_route",
-          "provider_instance",
-          "credential",
-          "assignment_candidate",
-          "logical_request"
-        ],
+      "content": {
+        "maxLength": 1000000,
+        "minLength": 1,
         "type": "string"
       },
-      "class": {
-        "enum": [
-          "authentication",
-          "policy",
-          "budget",
-          "rate_limit",
-          "timeout",
-          "transport",
-          "provider_unavailable",
-          "invalid_provider_response",
-          "incompatible_request",
-          "cancelled",
-          "uncertain_effect",
-          "router_internal"
-        ],
-        "type": "string"
-      },
-      "message": {
-        "maxLength": 1000,
-        "type": "string"
-      },
-      "safe_provider_code": {
-        "maxLength": 200,
-        "type": "string"
+      "role": {
+        "const": "system"
       }
     },
     "required": [
-      "class",
-      "affected_scope",
-      "message"
+      "role",
+      "content"
+    ],
+    "type": "object"
+  },
+  "Tag": {
+    "maxLength": 128,
+    "minLength": 1,
+    "type": "string",
+    "x-max-utf8-bytes": 128
+  },
+  "Tags": {
+    "items": {
+      "$ref": "#/components/schemas/Tag"
+    },
+    "maxItems": 32,
+    "type": "array",
+    "x-max-total-utf8-bytes": 2048
+  },
+  "TextInputPart": {
+    "additionalProperties": false,
+    "properties": {
+      "text": {
+        "maxLength": 1000000,
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": {
+        "const": "text"
+      }
+    },
+    "required": [
+      "type",
+      "text"
+    ],
+    "type": "object"
+  },
+  "TextOutputPart": {
+    "additionalProperties": false,
+    "properties": {
+      "text": {
+        "type": "string"
+      },
+      "type": {
+        "const": "text"
+      }
+    },
+    "required": [
+      "type",
+      "text"
     ],
     "type": "object"
   },
@@ -7723,45 +2661,31 @@ export const contractSchemas = {
     "format": "date-time",
     "type": "string"
   },
-  "ToolCallStatus": {
+  "ToolCallPart": {
     "additionalProperties": false,
     "properties": {
-      "committed_effect": {
-        "type": "boolean"
-      },
-      "error": {
-        "$ref": "#/components/schemas/TerminalError"
-      },
-      "state": {
-        "enum": [
-          "pending",
-          "running",
-          "succeeded",
-          "failed",
-          "cancelled",
-          "uncertain"
-        ],
+      "arguments_json": {
+        "maxLength": 1000000,
+        "minLength": 1,
         "type": "string"
       },
-      "tool_call_id": {
+      "id": {
         "$ref": "#/components/schemas/OpaqueId"
       },
-      "tool_kind": {
-        "enum": [
-          "shared",
-          "business"
-        ],
+      "name": {
+        "maxLength": 200,
+        "minLength": 1,
         "type": "string"
       },
-      "tool_name": {
-        "type": "string"
+      "type": {
+        "const": "tool_call"
       }
     },
     "required": [
-      "tool_call_id",
-      "tool_name",
-      "tool_kind",
-      "state"
+      "type",
+      "id",
+      "name",
+      "arguments_json"
     ],
     "type": "object"
   },
@@ -7769,52 +2693,101 @@ export const contractSchemas = {
     "additionalProperties": false,
     "properties": {
       "description": {
-        "maxLength": 4000,
+        "maxLength": 2000,
+        "minLength": 1,
         "type": "string"
       },
-      "input_schema_major_version": {
-        "minimum": 1,
-        "type": "integer"
-      },
-      "input_schema_name": {
-        "pattern": "^[a-z][a-z0-9._-]{0,99}$",
+      "input_schema_json": {
+        "maxLength": 100000,
+        "minLength": 2,
         "type": "string"
       },
       "name": {
-        "pattern": "^[a-zA-Z][a-zA-Z0-9_.-]{0,99}$",
+        "maxLength": 200,
+        "minLength": 1,
         "type": "string"
       }
     },
     "required": [
       "name",
       "description",
-      "input_schema_name",
-      "input_schema_major_version"
+      "input_schema_json"
     ],
     "type": "object"
   },
-  "TraceContext": {
+  "ToolResultPart": {
     "additionalProperties": false,
     "properties": {
-      "traceparent": {
-        "pattern": "^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$",
+      "result_json": {
+        "maxLength": 1000000,
+        "minLength": 1,
         "type": "string"
       },
-      "tracestate": {
-        "maxLength": 512,
-        "type": "string"
+      "tool_call_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "type": {
+        "const": "tool_result"
       }
     },
+    "required": [
+      "type",
+      "tool_call_id",
+      "result_json"
+    ],
     "type": "object"
   },
-  "UsageComponent": {
+  "UnitPrice": {
+    "additionalProperties": false,
+    "properties": {
+      "amount": {
+        "pattern": "^[0-9]+(?:\\.[0-9]+)?$",
+        "type": "string"
+      },
+      "unit": {
+        "$ref": "#/components/schemas/UsageUnit"
+      }
+    },
+    "required": [
+      "unit",
+      "amount"
+    ],
+    "type": "object"
+  },
+  "Usage": {
+    "additionalProperties": false,
+    "properties": {
+      "cost": {
+        "pattern": "^[0-9]+(?:\\.[0-9]+)?$",
+        "type": "string"
+      },
+      "currency": {
+        "pattern": "^[A-Z]{3}$",
+        "type": "string"
+      },
+      "units": {
+        "items": {
+          "$ref": "#/components/schemas/UsageItem"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "units",
+      "cost",
+      "currency"
+    ],
+    "type": "object"
+  },
+  "UsageItem": {
     "additionalProperties": false,
     "properties": {
       "quantity": {
-        "$ref": "#/components/schemas/NonNegativeDecimal"
+        "pattern": "^[0-9]+(?:\\.[0-9]+)?$",
+        "type": "string"
       },
       "unit": {
-        "type": "string"
+        "$ref": "#/components/schemas/UsageUnit"
       }
     },
     "required": [
@@ -7823,63 +2796,108 @@ export const contractSchemas = {
     ],
     "type": "object"
   },
-  "UuidV7": {
-    "format": "uuid",
-    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+  "UsageUnit": {
+    "enum": [
+      "input_token",
+      "output_token",
+      "cached_input_token",
+      "image",
+      "video_second",
+      "audio_second",
+      "request",
+      "provider_unit"
+    ],
     "type": "string"
+  },
+  "UserContentPart": {
+    "oneOf": [
+      {
+        "$ref": "#/components/schemas/TextInputPart"
+      },
+      {
+        "$ref": "#/components/schemas/ImageInputPart"
+      },
+      {
+        "$ref": "#/components/schemas/ToolResultPart"
+      }
+    ]
+  },
+  "UserMessage": {
+    "additionalProperties": false,
+    "properties": {
+      "content": {
+        "items": {
+          "$ref": "#/components/schemas/UserContentPart"
+        },
+        "minItems": 1,
+        "type": "array"
+      },
+      "role": {
+        "const": "user"
+      }
+    },
+    "required": [
+      "role",
+      "content"
+    ],
+    "type": "object"
   },
   "Workspace": {
     "additionalProperties": false,
     "properties": {
-      "caller_reference": {
-        "type": "string"
+      "api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      },
+      "created_at": {
+        "$ref": "#/components/schemas/Timestamp"
       },
       "display_name": {
-        "type": "string"
-      },
-      "operation_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "state": {
-        "enum": [
-          "active",
-          "disabled",
-          "retired"
-        ],
-        "type": "string"
-      },
-      "state_revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "workspace_id": {
-        "$ref": "#/components/schemas/OpaqueId"
-      }
-    },
-    "required": [
-      "workspace_id",
-      "caller_reference",
-      "display_name",
-      "state",
-      "state_revision",
-      "operation_id"
-    ],
-    "type": "object"
-  },
-  "WorkspaceStateChange": {
-    "additionalProperties": false,
-    "properties": {
-      "expected_state_revision": {
-        "$ref": "#/components/schemas/OpaqueId"
-      },
-      "reason": {
-        "maxLength": 500,
+        "maxLength": 200,
         "minLength": 1,
         "type": "string"
       }
     },
     "required": [
-      "expected_state_revision",
-      "reason"
+      "api_name",
+      "display_name",
+      "created_at"
+    ],
+    "type": "object"
+  },
+  "WorkspaceCreate": {
+    "additionalProperties": false,
+    "properties": {
+      "api_name": {
+        "$ref": "#/components/schemas/ApiName"
+      },
+      "display_name": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "api_name",
+      "display_name"
+    ],
+    "type": "object"
+  },
+  "WorkspacePage": {
+    "additionalProperties": false,
+    "properties": {
+      "items": {
+        "items": {
+          "$ref": "#/components/schemas/Workspace"
+        },
+        "type": "array"
+      },
+      "page": {
+        "$ref": "#/components/schemas/PageInfo"
+      }
+    },
+    "required": [
+      "items",
+      "page"
     ],
     "type": "object"
   }

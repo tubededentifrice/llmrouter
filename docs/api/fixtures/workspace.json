@@ -1,8 +1,5 @@
 {
-  "workspace_id": "workspace-1",
-  "caller_reference": "customer-1",
-  "display_name": "Example workspace",
-  "state": "active",
-  "state_revision": "revision-1",
-  "operation_id": "operation-1"
+  "api_name": "billing-production",
+  "display_name": "Billing production",
+  "created_at": "2026-08-23T12:00:00Z"
 }

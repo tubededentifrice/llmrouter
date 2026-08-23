@@ -1,0 +1,26 @@
+{
+  "api_name": "primary-text",
+  "provider_api_name": "main-provider",
+  "model_api_name": "text-model",
+  "provider_model_name": "text-model-2026",
+  "enabled": true,
+  "input_modalities": ["text"],
+  "output_modalities": ["text", "structured_json"],
+  "capabilities": ["tool_calling", "streaming", "reasoning"],
+  "reasoning_mappings": [
+    {"level": "none", "provider_value": "disabled"},
+    {"level": "medium", "provider_value": "medium"}
+  ],
+  "price_source": "openrouter",
+  "price_lookup_key": "text-model-2026",
+  "effective_price": {
+    "currency": "USD",
+    "unit_prices": [
+      {"unit": "input_token", "amount": "0.000001"},
+      {"unit": "output_token", "amount": "0.000003"}
+    ],
+    "source": "catalog",
+    "synchronized_at": "2026-08-23T00:00:00Z"
+  },
+  "created_at": "2026-08-20T08:00:00Z"
+}

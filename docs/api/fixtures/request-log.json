@@ -1,0 +1,41 @@
+{
+  "summary": {
+    "id": "log_01",
+    "service_api_name": "billing",
+    "workspace_api_name": "billing-production",
+    "assignment_api_name": "summarize",
+    "provider_model_api_name": "primary-text",
+    "kind": "model",
+    "outcome": "succeeded",
+    "tags": ["scheduled"],
+    "started_at": "2026-08-23T12:00:00Z"
+  },
+  "request_json": "{\"messages\":[{\"role\":\"user\"}]}",
+  "response_json": "{\"content\":[{\"type\":\"text\"}]}",
+  "attempts": [
+    {
+      "provider_model_api_name": "primary-text",
+      "outcome": "succeeded",
+      "started_at": "2026-08-23T12:00:00Z",
+      "completed_at": "2026-08-23T12:00:01Z",
+      "usage": {
+        "units": [
+          {"unit": "input_token", "quantity": "42"},
+          {"unit": "output_token", "quantity": "8"}
+        ],
+        "cost": "0.00015",
+        "currency": "USD"
+      },
+      "applied_prices": {
+        "currency": "USD",
+        "unit_prices": [
+          {"unit": "input_token", "amount": "0.000001"},
+          {"unit": "output_token", "amount": "0.000003"}
+        ],
+        "source": "catalog",
+        "synchronized_at": "2026-08-23T00:00:00Z"
+      }
+    }
+  ],
+  "media": []
+}

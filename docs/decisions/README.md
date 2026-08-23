@@ -1,66 +1,17 @@
 # Architecture decisions
 
-Accepted decisions:
+The accepted decision set is:
 
-- [0001: Complete platform with optional harness](0001-complete-platform-with-optional-harness.md)
-- [0002: Nearest scope replaces an assignment chain](0002-nearest-scope-replaces-assignment-chain.md)
-- [0003: Central service tree and passkey administration](0003-central-service-tree-and-passkey-administration.md)
-- [0004: Hosted frame and headless administration](0004-hosted-frame-and-headless-administration.md)
-- [0005: Route shared external tools](0005-route-shared-external-tools.md)
-- [0006: Controlled exact-model diagnostics](0006-controlled-exact-model-diagnostics.md)
-- [0007: Router-owned retries and stream boundary](0007-router-owned-retries-and-stream-boundary.md)
-- [0008: Use normal configuration for up to 24 hours](0008-use-normal-configuration-for-up-to-24-hours.md)
-- [0009: Durable agent runs with asynchronous checkpoints](0009-durable-agent-runs-with-asynchronous-checkpoints.md)
-- [0010: Registered service tool gateway](0010-use-a-registered-service-tool-gateway.md)
-- [0011: Exchange service secrets for short-lived tokens](0011-exchange-service-secrets-for-short-lived-tokens.md)
-- [0012: Capture complete content by default](0012-capture-complete-content-by-default-for-public-data.md)
-- [0013: Editable retention defaults](0013-use-editable-retention-defaults.md)
-- [0014: Local spools, central ledger, and object storage](0014-use-local-spools-a-central-ledger-and-object-storage.md)
-- [0015: Native API and OpenAI compatibility](0015-use-a-native-api-and-openai-compatibility.md)
-- [0016: Python and TypeScript clients](0016-publish-python-and-typescript-clients.md)
-- [0017: One image with runtime roles](0017-publish-one-image-with-runtime-roles.md)
-- [0018: Breaking changes before version 1](0018-permit-breaking-changes-before-version-1.md)
-- [0019: FSL 1.1 with an Apache 2.0 future license](0019-use-fsl-1-1-with-an-apache-2-0-future-license.md)
-- [0020: Shared catalog with scoped provider instances](0020-use-a-shared-catalog-with-scoped-provider-instances.md)
-- [0021: Fallback after candidate-scoped failures](0021-fallback-after-candidate-scoped-failures.md)
-- [0022: Hierarchical budgets with synchronized prices](0022-use-hierarchical-budgets-with-synchronized-prices.md)
-- [0023: Built-in encrypted credential storage](0023-use-built-in-encrypted-credential-storage.md)
-- [0024: Immediate publication after validation](0024-publish-valid-configuration-saves-immediately.md)
-- [0025: Leased allowances for distributed budgets](0025-use-leased-allowances-for-distributed-budgets.md)
-- [0026: Static ordered node lists](0026-use-static-ordered-node-lists.md)
-- [0027: Warm control-plane standby](0027-use-a-warm-control-plane-standby.md)
-- [0028: Public-data profile only; superseded](0028-ship-only-the-public-data-profile.md)
-- [0029: Graph and inspector administration](0029-use-graph-and-inspector-administration.md)
-- [0030: Calling-service work stays in its repository](0030-keep-calling-service-work-in-its-repository.md)
-- [0031: Client-generated UUIDv7 request identity](0031-use-client-generated-uuidv7-request-identity.md)
-- [0032: 24-hour terminal request recovery](0032-retain-terminal-request-recovery-for-24-hours.md)
-- [0033: Best-effort cancellation states](0033-use-explicit-best-effort-cancellation-states.md)
-- [0034: Local health circuits with fleet hints](0034-use-local-health-circuits-with-fleet-hints.md)
-- [0035: Graduated spool-pressure shedding](0035-use-graduated-spool-pressure-shedding.md)
-- [0036: Five-minute RTO and 30-second RPO](0036-target-five-minute-rto-and-thirty-second-rpo.md)
-- [0037: Use shared Pocket ID for human authentication](0037-use-shared-pocket-id-for-human-authentication.md)
-- [0038: Process authorized service data with normal capture](0038-process-authorized-service-data-with-normal-capture.md)
-- [0039: Let services manage their router workspace scopes](0039-let-services-manage-router-workspace-scopes.md)
-- [0040: Limit cancellation reconciliation to 10 minutes](0040-limit-cancellation-reconciliation-to-ten-minutes.md)
-- [0041: Allow a 24-hour service-secret rotation overlap](0041-allow-24-hour-service-secret-rotation-overlap.md)
-- [0042: Retain agent and business-tool audit for 30 days](0042-retain-agent-and-business-tool-audit-for-thirty-days.md)
-- [0043: Use Python backends and React TypeScript frontends](0043-use-python-backends-and-react-typescript-frontends.md)
-- [0044: Use a PostgreSQL, FastAPI, and Vite foundation](0044-use-a-postgresql-fastapi-and-vite-foundation.md)
-- [0045: Use source-driven adapters with registered contracts](0045-use-source-driven-adapters-with-registered-contracts.md)
-- [0046: Use least-privilege grants and global secret custody](0046-use-least-privilege-grants-and-global-secret-custody.md)
-- [0047: Use one currency per hard-budget scope](0047-use-one-currency-per-hard-budget-scope.md)
-- [0048: Use immutable attachments and explicit compatibility diagnostics](0048-use-immutable-attachments-and-explicit-compatibility-diagnostics.md)
-- [0049: Proxy protected exports and version operations](0049-proxy-protected-exports-and-version-operations.md)
-- [0050: Use bounded attempt timeouts and node draining](0050-use-bounded-attempt-timeouts-and-node-draining.md)
-- [0051: Use daily backups with point-in-time recovery](0051-use-daily-backups-with-point-in-time-recovery.md)
-- [0052: Use structured secret fields and standard endpoint trust](0052-use-structured-secret-fields-and-standard-endpoint-trust.md)
-- [0053: Allow two early security-fix pins](0053-allow-two-early-security-fix-pins.md)
-- [0054: Add a bounded workspace-scoped embedding operation](0054-add-a-bounded-workspace-scoped-embedding-operation.md)
-- [0055: Keep administrator sessions for seven days](0055-keep-administrator-sessions-for-seven-days.md)
+- [0001: Reset to the simplified calling service](0001-reset-to-the-simplified-calling-service.md)
+- [0002: Use FSL 1.1 with an Apache 2.0 future license](0002-use-fsl-1-1-with-an-apache-2-0-future-license.md)
+- [0003: Keep calling-service work in its repository](0003-keep-calling-service-work-in-its-repository.md)
+- [0004: Use the Python, PostgreSQL, FastAPI, React, and Vite foundation](0004-use-the-python-postgresql-fastapi-react-and-vite-foundation.md)
+- [0005: Use built-in encrypted provider credential storage](0005-use-built-in-encrypted-provider-credential-storage.md)
+- [0006: Use structured control fields and standard endpoint trust](0006-use-structured-control-fields-and-standard-endpoint-trust.md)
+- [0007: Keep the applied npm security pins](0007-keep-the-applied-npm-security-pins.md)
 
-Add a numbered decision record only after the user accepts a material choice.
-Each record must state the context, the accepted choice, alternatives, good and
-bad effects, migration effect, security effect, and review conditions.
+Product requirements belong in `docs/specs/`. A decision record explains why
+an accepted material choice exists. It does not duplicate normative behavior.
 
-Do not record a working proposal as accepted. Draft analysis belongs in
-`docs/architecture.md`, `docs/interviews/`, or `docs/research/`.
+The 2026-08-23 reset removed the earlier decision set. Git history keeps those
+records available as historical input. They are not accepted product sources.

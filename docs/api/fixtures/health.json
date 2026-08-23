@@ -1,12 +1,4 @@
 {
-  "status": "ready",
-  "role": "combined",
-  "contract_set": "llmrouter-v1",
-  "active_configuration_revision": "revision-1",
-  "configuration_age_seconds": 1,
-  "configuration_state": "current",
-  "circuits": [],
-  "spool": {"state": "normal", "used_bytes": 1, "capacity_bytes": 1000},
-  "replication": {"control_plane_state": "primary", "promotion_state": "stable", "possible_data_loss_seconds": 0},
-  "recovery": {"newest_backup_at": "2026-08-13T00:00:00Z", "recovery_log_continuous": true, "point_in_time_window_days": 35, "last_restore_test_state": "passed", "disaster_recovery_state": "not_run"}
+  "status": "healthy",
+  "checked_at": "2026-08-23T12:00:00Z"
 }

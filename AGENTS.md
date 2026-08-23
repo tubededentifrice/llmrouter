@@ -4,9 +4,9 @@ These instructions apply to the complete repository.
 
 ## Mission
 
-Build and operate LLM Router. It is a source-available control plane and data
-plane for model providers, models, assignments, fallbacks, agent runs, shared
-tools, request accounting, and administration.
+Build and operate LLM Router. It is a source-available calling service for
+models, embeddings, media generation, assignments, provider fallback, request
+accounting, and administration.
 
 Keep service-specific product rules in the calling service. Move shared router
 behavior here only when two or more services need it or when one control point
@@ -92,31 +92,34 @@ the user approves the applicable specifications. Repository maintenance tools,
 research notes, interface experiments, and formal contract drafts are
 permitted when the user asks for them.
 
-The user accepted the specification set and enabled Beads planning on
-2026-08-13. Use the repository `beads` skill for implementation planning and
-work-item changes. Keep product gaps as explicit blocker or decision items.
+The user approved the service simplification reset on 2026-08-23. The current
+specifications use that accepted decision source. Use the repository `beads`
+skill for implementation planning and work-item changes. Keep product gaps as
+explicit blocker or decision items.
 
 ## Service boundaries
 
-Every runtime request must have a service identity. A workspace request must
-also have a workspace identity. A normal service must not read or change
-another service's configuration, credentials, requests, accounting data,
-agents, tools, or workspaces.
+Every model, embedding, and media request must have a service identity and one
+workspace identity. A normal service must not read or change another service's
+configuration, credentials, requests, accounting data, media, or workspaces.
 
 Service configuration uses one ordered parent chain. For one named assignment,
-the nearest service or workspace layer replaces the complete inherited
-fallback chain. Do not merge chains or add partial chain edits in the first
-release.
+the nearest service definition replaces the complete inherited fallback chain.
+Workspaces do not define configuration. Do not merge chains or add partial
+chain edits in the first release.
 
 Global administration uses a separate identity and permission path. Each
-global administration action must produce an audit event.
+administrator or service configuration change must produce a basic activity
+event.
 
-Treat prompts, model responses, tool inputs, tool outputs, and provider
-credentials as sensitive data. Do not log their contents unless an approved
-specification permits it. Redact secrets before data leaves a process.
+Treat prompts, model responses, tool definitions, tool results, media, and
+provider credentials as sensitive data. Detailed request logs contain complete
+model content under the approved specification. Control credentials and
+authorization data must never enter a request-log field.
 
 Keep provider, storage, queue, telemetry, React, and agent-framework products
-out of the public contract. Use versioned, product-neutral interfaces.
+out of the public contract. Publish only the native, versioned,
+provider-neutral API.
 
 ## Dependencies and interfaces
 
@@ -130,8 +133,8 @@ and tools. Do not use `pip`, `pipx`, Poetry, or a manually created virtual
 environment.
 
 Keep each public contract versioned and product-neutral.
-Compatibility APIs, SDKs, hosted administration views, and headless interfaces
-must not weaken service or workspace isolation.
+SDKs, shared components, and administration interfaces must not weaken service
+or workspace isolation.
 
 If a React application is added, each change must keep React Doctor at score
 100 with zero diagnostics. Add and run the React gate with the application.

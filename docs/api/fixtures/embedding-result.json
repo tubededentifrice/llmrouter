@@ -1,0 +1,13 @@
+{
+  "provider_model_api_name": "primary-embedding",
+  "embeddings": [
+    {"index": 0, "values": [0.25, -0.5, 0.75]}
+  ],
+  "usage": {
+    "units": [
+      {"unit": "input_token", "quantity": "3"}
+    ],
+    "cost": "0.00001",
+    "currency": "USD"
+  }
+}

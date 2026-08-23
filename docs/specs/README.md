@@ -1,28 +1,25 @@
 # Product specifications
 
-The user accepted the specification set on 2026-08-13. Implementation planning
-is active. An implementation question that changes product behavior must stay
-as an explicit blocker until the user accepts its specification update.
+Status: Accepted reset set on 2026-08-23.
 
-- [Product and boundaries](00-product-and-boundaries.md)
-- [Configuration and inheritance](01-configuration-and-inheritance.md)
-- [Routing, failover, and request lifecycle](02-routing-failover-and-request-lifecycle.md)
-- [Agent harness and tools](03-agent-harness-and-tools.md)
-- [Identity, credentials, and tool gateway](04-identity-credentials-and-tool-gateway.md)
-- [Logging, accounting, and retention](05-logging-accounting-and-retention.md)
-- [Administration and shared interface](06-administration-and-shared-interface.md)
-- [Reliability, deployment, and operations](07-reliability-deployment-and-operations.md)
-- [Public interfaces, clients, and packaging](08-public-interfaces-clients-and-packaging.md)
+These files are the normative product source:
 
-Keep these rules:
+- [Product scope and ownership](00-product-scope-and-ownership.md)
+- [Services, workspaces, and assignments](01-services-workspaces-and-assignments.md)
+- [Providers, models, prices, and configuration](02-providers-models-prices-and-configuration.md)
+- [Model, embedding, and media calls](03-model-embedding-and-media-calls.md)
+- [Authentication, administration, and shared UI](04-authentication-administration-and-shared-ui.md)
+- [Accounting, logs, retention, and operations](05-accounting-logs-retention-and-operations.md)
+- [Python SDK and shared harness](06-python-sdk-and-shared-harness.md)
 
-- Put normative product behavior only in this directory.
-- Give each requirement one source location.
-- Define ownership, scope, success, failure, limits, consistency, retention,
-  and audit behavior.
-- Separate a logical request from its provider attempts.
-- Cover normal services, workspaces, global administration, agents, and tools
-  where behavior differs.
-- Link accepted implementation choices from `docs/decisions/`.
-- Use Beads for implementation planning. Keep specification gaps as blocker or
-  decision items, and do not start their dependent implementation first.
+The accepted [simplification decision source](../interviews/service-simplification-2026-08-23.md)
+explains the reset. These specifications own the resulting requirements.
+Formal files in `docs/api/` own HTTP shapes, stream events, and public errors.
+
+Services, workspaces, and configuration resources have current state only.
+They have no resource revision or version. Native API contract versions are
+separate and do not create resource history.
+
+Do not restore a removed agent-run, shared-tool, hosted-frame, token-exchange,
+durable-request, distributed-control, or OpenAI-compatibility requirement
+without a new accepted decision and specification change.

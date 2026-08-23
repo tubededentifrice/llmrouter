@@ -6,7 +6,8 @@
 #   "ruamel.yaml==0.18.15",
 # ]
 # ///
-"""Check the complete first-release API contract."""
+"""Check the native version 1 API contract."""
+# ruff: noqa: ANN401, C901, E402, E501, EM101, EM102, FURB167, TRY003
 
 from __future__ import annotations
 
@@ -25,36 +26,53 @@ from jsonschema import Draft202012Validator, RefResolver
 from openapi_spec_validator import validate_spec
 from ruamel.yaml import YAML
 
-
 HTTP_METHODS = {"get", "put", "post", "delete", "options", "head", "patch", "trace"}
-FINGERPRINT_SCHEMAS = {
-    "EmbeddingRequest",
-    "ModelRequest",
-    "AgentRunRequest",
-    "SharedToolRequest",
-    "CompatibleChatRequest",
-    "CompatibleResponsesRequest",
-}
 ADMIN_WRITE_METHODS = {"post", "put", "patch", "delete"}
-PUBLIC_OPERATION_IDS = {
-    "bootstrapAdministrationEmbedSession",
-    "completeAdministratorSession",
-    "exchangeServiceToken",
-    "getContractManifest",
-    "getHealth",
-    "startAdministratorSession",
-}
 CONTRACT_ARTIFACT_FILES = {
     "docs/api/README.md",
-    "docs/api/business-tool-gateway.md",
-    "docs/api/cross-service-conformance.md",
-    "docs/api/embed-protocol.md",
-    "docs/api/embedding-protocol.md",
     "docs/api/errors.md",
     "docs/api/openapi.yaml",
-    "docs/api/request-fingerprint.md",
-    "docs/api/service-management.md",
     "docs/api/stream-protocol.md",
+}
+FORBIDDEN_PATH_PARTS = {
+    "/openai",
+    "/token-exchange",
+    "/requests/",
+    "/agent-runs",
+    "/shared-tools",
+    "/embed-sessions",
+    "/budgets",
+    "/revisions",
+    "/drafts",
+    "/rollouts",
+    "/rollback",
+}
+FORBIDDEN_SCHEMA_NAMES = {
+    "AgentRun",
+    "Budget",
+    "ConfigurationRevision",
+    "EmbedSession",
+    "RequestAdmission",
+    "SharedTool",
+    "TokenExchange",
+}
+UNVERSIONED_RESOURCE_SCHEMAS = {
+    "AvailableProviderModel",
+    "Assignment",
+    "AssignmentWrite",
+    "Credential",
+    "CredentialWrite",
+    "Model",
+    "ModelWrite",
+    "Provider",
+    "ProviderModel",
+    "ProviderModelWrite",
+    "ProviderWrite",
+    "Service",
+    "ServiceCreate",
+    "ServiceUpdate",
+    "Workspace",
+    "WorkspaceCreate",
 }
 
 
@@ -63,6 +81,7 @@ class ContractError(RuntimeError):
 
 
 def strict_yaml(text: str, source: str) -> Any:
+    """Parse YAML and reject duplicate keys."""
     yaml = YAML(typ="safe")
     yaml.allow_duplicate_keys = False
     try:
@@ -72,10 +91,13 @@ def strict_yaml(text: str, source: str) -> Any:
 
 
 def load_yaml(path: Path) -> Any:
+    """Load one strict YAML file."""
     return strict_yaml(path.read_text(encoding="utf-8"), str(path))
 
 
 def strict_json(text: str, source: str) -> Any:
+    """Parse JSON and reject duplicate keys and non-finite numbers."""
+
     def object_from_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
         result: dict[str, Any] = {}
         for key, value in pairs:
@@ -99,20 +121,12 @@ def strict_json(text: str, source: str) -> Any:
         raise ContractError(f"Strict JSON parse failed for {source}: {exc}") from exc
 
 
-def resolve_local_ref(spec: dict[str, Any], reference: str) -> Any:
-    if not reference.startswith("#/"):
-        raise ContractError(
-            f"Only local contract references are supported: {reference}"
-        )
-    node: Any = spec
-    for part in reference[2:].split("/"):
-        node = node[part.replace("~1", "/").replace("~0", "~")]
-    return node
-
-
 def operations(spec: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Collect each HTTP operation by its stable operation ID."""
     result: dict[str, dict[str, Any]] = {}
     for path, path_item in spec.get("paths", {}).items():
+        if not path.startswith("/v1/"):
+            raise ContractError(f"API path is not versioned: {path}")
         for method, operation in path_item.items():
             if method not in HTTP_METHODS:
                 continue
@@ -129,52 +143,8 @@ def operations(spec: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return result
 
 
-def check_conditional_rule(
-    spec: dict[str, Any],
-    operation_id: str,
-    operation: dict[str, Any],
-    rule_name: str,
-    rule: Any,
-    value_type: type,
-) -> None:
-    if isinstance(rule, value_type):
-        if value_type is str and not rule:
-            raise ContractError(f"{operation_id} has an empty {rule_name} rule")
-        return
-    if not isinstance(rule, dict) or set(rule) != {"field", "values"}:
-        raise ContractError(f"{operation_id} has an invalid {rule_name} rule")
-    field = rule["field"]
-    values = rule["values"]
-    if not isinstance(field, str) or not isinstance(values, dict) or not values:
-        raise ContractError(
-            f"{operation_id} has an invalid conditional {rule_name} rule"
-        )
-    if any(
-        not isinstance(value, value_type) or (value_type is str and not value)
-        for value in values.values()
-    ):
-        raise ContractError(
-            f"{operation_id} has an invalid conditional {rule_name} value"
-        )
-
-    request_schema = (
-        operation.get("requestBody", {})
-        .get("content", {})
-        .get("application/json", {})
-        .get("schema", {})
-    )
-    if "$ref" in request_schema:
-        request_schema = resolve_local_ref(spec, request_schema["$ref"])
-    field_schema = request_schema.get("properties", {}).get(field, {})
-    accepted_values = set(field_schema.get("enum", []))
-    if not accepted_values or set(values) != accepted_values:
-        raise ContractError(
-            f"{operation_id} conditional {rule_name} values do not equal "
-            f"the {field} enum"
-        )
-
-
 def parameter_references(operation: dict[str, Any]) -> set[str]:
+    """Get parameter component references from one operation."""
     return {
         parameter["$ref"]
         for parameter in operation.get("parameters", [])
@@ -182,178 +152,225 @@ def parameter_references(operation: dict[str, Any]) -> set[str]:
     }
 
 
-def check_operation_contracts(
-    spec: dict[str, Any],
-    spec_operations: dict[str, dict[str, Any]],
-    policy: dict[str, Any],
+def check_operations(
+    spec: dict[str, Any], spec_operations: dict[str, dict[str, Any]], policy: dict[str, Any]
 ) -> None:
+    """Check operation access, errors, and browser write controls."""
     policy_operations = policy.get("operations", {})
     if set(spec_operations) != set(policy_operations):
         missing = sorted(set(spec_operations) - set(policy_operations))
         extra = sorted(set(policy_operations) - set(spec_operations))
         raise ContractError(f"Operation policy drift. Missing={missing}; extra={extra}")
 
-    fixture_cases = policy.get("conformance_cases", {})
+    required_reset_operations = {
+        "adminGetLogRetention",
+        "adminPutLogRetention",
+        "adminRemoveObservedAssignmentRequirement",
+        "getMetrics",
+        "listAvailableProviderModels",
+        "removeObservedAssignmentRequirement",
+    }
+    if not required_reset_operations.issubset(spec_operations):
+        raise ContractError(
+            "Required simplified operations are missing: "
+            f"{sorted(required_reset_operations - set(spec_operations))}"
+        )
+
+    expected_security = {
+        "public": set(),
+        "service": {"serviceKey"},
+        "administrator": {"administratorSession"},
+    }
     for operation_id, item in spec_operations.items():
-        responses = item["operation"].get("responses", {})
-        if not any(
-            str(status) == "default" or str(status)[0] in "45" for status in responses
-        ):
-            raise ContractError(f"{operation_id} has no declared error response")
+        operation = item["operation"]
+        responses = operation.get("responses", {})
+        if "default" not in {str(status) for status in responses}:
+            raise ContractError(f"{operation_id} has no default error response")
 
-        operation_policy = policy_operations[operation_id]
-        check_conditional_rule(
-            spec,
-            operation_id,
-            item["operation"],
-            "permission",
-            operation_policy.get("permission"),
-            str,
-        )
-        check_conditional_rule(
-            spec,
-            operation_id,
-            item["operation"],
-            "recent-authentication",
-            operation_policy.get("recent_auth"),
-            bool,
-        )
-        case = operation_policy.get("conformance_case")
-        if case not in fixture_cases:
+        rule = policy_operations[operation_id]
+        actor = rule.get("actor")
+        permission = rule.get("permission")
+        if actor not in expected_security:
+            raise ContractError(f"{operation_id} has invalid actor {actor!r}")
+        if not isinstance(permission, str) or not permission:
+            raise ContractError(f"{operation_id} has no permission")
+        security = operation.get("security", spec.get("security", []))
+        names = {name for requirement in security for name in requirement}
+        if names != expected_security[actor]:
             raise ContractError(
-                f"{operation_id} names unknown conformance case {case!r}"
+                f"{operation_id} security {sorted(names)} does not equal "
+                f"{sorted(expected_security[actor])}"
             )
 
-        path = item["path"]
-        method = item["method"]
-        security = item["operation"].get("security", spec.get("security", []))
-        security_names = {name for requirement in security for name in requirement}
-        if operation_id in PUBLIC_OPERATION_IDS:
-            expected_security: set[str] = set()
-        elif path.startswith("/v1/admin/"):
-            expected_security = {"administratorSession"}
-        elif path.startswith("/v1/embed/"):
-            expected_security = {"embedSession"}
-        else:
-            expected_security = {"bearerToken"}
-        if security_names != expected_security:
-            raise ContractError(
-                f"{operation_id} security {sorted(security_names)} does not equal "
-                f"{sorted(expected_security)}"
-            )
-        uses_administrator_session = any(
-            "administratorSession" in requirement for requirement in security
-        )
-        if (
-            path.startswith("/v1/admin/")
-            and uses_administrator_session
-            and method in ADMIN_WRITE_METHODS
-        ):
-            parameters = parameter_references(item["operation"])
+        if actor == "administrator" and item["method"] in ADMIN_WRITE_METHODS:
             required = {
                 "#/components/parameters/CsrfToken",
                 "#/components/parameters/Origin",
             }
-            missing_controls = sorted(required - parameters)
+            missing_controls = sorted(required - parameter_references(operation))
             if missing_controls:
                 raise ContractError(
                     f"{operation_id} lacks administrator write controls {missing_controls}"
                 )
 
 
-def check_fingerprints(spec: dict[str, Any]) -> None:
-    schemas = spec["components"]["schemas"]
-    for schema_name in FINGERPRINT_SCHEMAS:
-        properties = schemas[schema_name].get("properties", {})
-        for property_name, property_schema in properties.items():
-            if not isinstance(property_schema.get("x-router-fingerprint"), bool):
-                raise ContractError(
-                    f"{schema_name}.{property_name} has no x-router-fingerprint annotation"
-                )
-
-
-def check_embedding_contract(root: Path, spec: dict[str, Any]) -> None:
-    schemas = spec["components"]["schemas"]
-    request = schemas["EmbeddingRequest"]
-    properties = request["properties"]
-    inputs = properties["inputs"]
-    text = schemas["EmbeddingInput"]["properties"]["text"]
-    vector_values = schemas["EmbeddingVector"]["properties"]["vector"]["items"]
-
-    expected_request_rules = {
-        "data_profile": {
-            "type": "string",
-            "const": "service-data",
-            "x-router-fingerprint": True,
-        },
-        "timeout_ms": {
-            "type": "integer",
-            "const": 120000,
-            "x-router-fingerprint": True,
-        },
-    }
-    for property_name, expected in expected_request_rules.items():
-        if properties.get(property_name) != expected:
-            raise ContractError(
-                f"EmbeddingRequest.{property_name} does not equal {expected}"
-            )
-    if (
-        inputs.get("minItems") != 1
-        or inputs.get("maxItems") != 32
-        or inputs.get("x-max-total-utf8-bytes") != 262144
-        or inputs.get("x-unique-property") != "input_id"
-    ):
-        raise ContractError("EmbeddingRequest.inputs lacks the fixed batch rules")
-    if text.get("x-max-utf8-bytes") != 32768:
-        raise ContractError("EmbeddingInput.text lacks the fixed UTF-8 byte limit")
-    if vector_values.get("x-finite") is not True:
-        raise ContractError("EmbeddingVector values do not require finite numbers")
-
-    manifest = strict_json(
-        (root / "docs/api/fixtures/contract-manifest.json").read_text(encoding="utf-8"),
-        "docs/api/fixtures/contract-manifest.json",
-    )
-    if "embedding_requests_v1" not in manifest.get("capabilities", []):
-        raise ContractError("Contract manifest lacks embedding_requests_v1")
-    majors = {
-        artifact.get("name"): artifact.get("major_version")
-        for artifact in manifest.get("artifacts", [])
-    }
-    if majors.get("embedding_protocol") != 1 or majors.get("openapi") != 1:
-        raise ContractError(
-            "Contract manifest does not publish embedding_protocol and openapi major 1"
-        )
-
-
-def walk_public_schemas(node: Any, location: str = "openapi") -> None:
+def walk_closed_objects(node: Any, location: str = "openapi") -> None:
+    """Require each declared object schema to reject unknown fields."""
     if isinstance(node, list):
         for index, child in enumerate(node):
-            walk_public_schemas(child, f"{location}[{index}]")
+            walk_closed_objects(child, f"{location}[{index}]")
         return
     if not isinstance(node, dict):
         return
-
-    is_object = node.get("type") == "object"
-    if is_object and "$ref" not in node:
-        registered = node.get("x-registered-schema") is True
-        if node.get("additionalProperties") is not False and not registered:
-            raise ContractError(
-                f"Public object {location} is open and has no registered-schema marker"
-            )
-
+    if node.get("type") == "object" and node.get("additionalProperties") is not False:
+        raise ContractError(f"Public object {location} is open")
+    if "additionalProperties" in node and node["additionalProperties"] is not False:
+        raise ContractError(f"Public map {location} permits unknown fields")
     for key, child in node.items():
-        walk_public_schemas(child, f"{location}.{key}")
+        walk_closed_objects(child, f"{location}.{key}")
+
+
+def check_reset_boundaries(spec: dict[str, Any]) -> None:
+    """Reject the removed product surfaces and resource concurrency fields."""
+    paths = set(spec.get("paths", {}))
+    required_paths = {
+        "/v1/metrics",
+        "/v1/provider-models",
+        "/v1/admin/settings/log-retention",
+    }
+    if not required_paths.issubset(paths):
+        raise ContractError(
+            f"Required simplified API paths are missing: {sorted(required_paths - paths)}"
+        )
+    callback = spec.get("paths", {}).get("/v1/admin/session/callback", {})
+    if "get" not in callback or "post" in callback:
+        raise ContractError("The OpenID Connect callback is not a browser GET operation")
+    for path in paths:
+        for forbidden in FORBIDDEN_PATH_PARTS:
+            if forbidden in path:
+                raise ContractError(f"Removed API surface remains at {path}")
+
+    schemas = spec["components"]["schemas"]
+    stale_schemas = sorted(set(schemas) & FORBIDDEN_SCHEMA_NAMES)
+    if stale_schemas:
+        raise ContractError(f"Removed schemas remain: {stale_schemas}")
+    for name in UNVERSIONED_RESOURCE_SCHEMAS:
+        fields = set(schemas[name].get("properties", {}))
+        stale_fields = sorted(fields & {"revision", "version", "state"})
+        if stale_fields:
+            raise ContractError(f"{name} has removed fields {stale_fields}")
+
+    selector = schemas.get("ModelSelector", {})
+    refs = {
+        item.get("$ref") for item in selector.get("oneOf", []) if isinstance(item, dict)
+    }
+    expected_refs = {
+        "#/components/schemas/AssignmentSelector",
+        "#/components/schemas/ExactProviderModelSelector",
+    }
+    if refs != expected_refs:
+        raise ContractError("ModelSelector must select one assignment or exact provider-model")
+    for name in ("ModelCallRequest", "EmbeddingRequest", "MediaJobRequest"):
+        required = set(schemas[name].get("required", []))
+        if not {"workspace_api_name", "selector"}.issubset(required):
+            raise ContractError(f"{name} does not require a workspace and selector")
+
+    effective_chain = schemas.get("EffectiveAssignmentChain", {})
+    if effective_chain.get("minItems") != 0:
+        raise ContractError("The effective assignment chain cannot represent empty default")
+    assignment_fields = set(schemas.get("Assignment", {}).get("properties", {}))
+    if "observed_requirements" not in assignment_fields:
+        raise ContractError("Assignments do not expose observed call requirements")
+
+    model_fields = set(schemas.get("ModelWrite", {}).get("properties", {}))
+    required_model_fields = {
+        "input_modalities",
+        "output_modalities",
+        "capabilities",
+        "constraints",
+    }
+    if not required_model_fields.issubset(model_fields):
+        raise ContractError(
+            f"Model configuration lacks capability fields: {sorted(required_model_fields - model_fields)}"
+        )
+    provider_model_fields = set(
+        schemas.get("ProviderModelWrite", {}).get("properties", {})
+    )
+    required_provider_model_fields = {
+        "input_modalities",
+        "output_modalities",
+        "capabilities",
+        "constraints",
+        "reasoning_mappings",
+        "price_source",
+        "price_lookup_key",
+        "manual_price",
+    }
+    if not required_provider_model_fields.issubset(provider_model_fields):
+        raise ContractError(
+            "Provider-model configuration lacks required narrowing, reasoning, or price fields"
+        )
+
+    model_result_refs = {
+        item.get("$ref")
+        for item in schemas.get("ModelCallResult", {}).get("oneOf", [])
+        if isinstance(item, dict)
+    }
+    expected_result_refs = {
+        "#/components/schemas/StandardModelCallResult",
+        "#/components/schemas/StructuredModelCallResult",
+    }
+    if model_result_refs != expected_result_refs:
+        raise ContractError("Model-call results are not discriminated by output form")
+
+    retention = schemas.get("LogRetentionSettings", {}).get("properties", {}).get(
+        "duration_days", {}
+    )
+    if retention.get("minimum") != 1 or retention.get("maximum") != 30:
+        raise ContractError("Log retention is not bounded from 1 through 30 days")
+    return_to = (
+        schemas.get("AdministratorSessionStart", {})
+        .get("properties", {})
+        .get("return_to", {})
+    )
+    return_to_pattern = str(return_to.get("pattern", ""))
+    if (
+        not return_to_pattern.startswith("^/")
+        or re.fullmatch(return_to_pattern, "//example.com") is not None
+        or re.fullmatch(return_to_pattern, "/admin") is None
+    ):
+        raise ContractError("The administrator return target is not a local path")
+
+    for page_name in (
+        "AssignmentPage",
+        "AvailableProviderModelPage",
+        "CredentialPage",
+        "ModelPage",
+        "ProviderModelPage",
+        "ProviderPage",
+        "ServiceKeyPage",
+        "ServicePage",
+        "WorkspacePage",
+    ):
+        if "page" not in schemas.get(page_name, {}).get("properties", {}):
+            raise ContractError(f"{page_name} has no cursor page metadata")
+    media_fields = set(schemas["MediaJob"].get("properties", {})) | set(
+        schemas["MediaContent"].get("properties", {})
+    )
+    if media_fields & {"url", "storage_url", "provider_url"}:
+        raise ContractError("Media resources expose a storage or provider URL")
+
+    service_key = spec["components"]["securitySchemes"].get("serviceKey", {})
+    if service_key.get("type") != "http" or service_key.get("scheme") != "bearer":
+        raise ContractError("Service authentication is not direct bearer service-key authentication")
 
 
 def check_error_drift(spec: dict[str, Any], errors_path: Path) -> None:
+    """Keep stable error names equal in OpenAPI and readable documentation."""
     markdown_codes = set(
-        re.findall(r"^\|\s*\d{3}\s*\|\s*`([^`]+)`\s*\|", errors_path.read_text(), re.M)
+        re.findall(r"^- `([^`]+)`:", errors_path.read_text(encoding="utf-8"), re.M)
     )
-    openapi_codes = set(
-        spec["components"]["schemas"]["ErrorEnvelope"]["properties"]["error"][
-            "properties"
-        ]["code"]["enum"]
-    )
+    openapi_codes = set(spec["components"]["schemas"]["ErrorCode"]["enum"])
     if markdown_codes != openapi_codes:
         raise ContractError(
             "Error catalog drift. "
@@ -362,135 +379,120 @@ def check_error_drift(spec: dict[str, Any], errors_path: Path) -> None:
         )
 
 
-def check_readable_contracts(
-    root: Path, policy: dict[str, Any], spec_ops: dict[str, Any]
-) -> None:
-    for relative_path, contract in policy.get("readable_contracts", {}).items():
-        text = (root / relative_path).read_text(encoding="utf-8")
-        for marker in contract.get("required_markers", []):
-            if marker not in text:
-                raise ContractError(f"{relative_path} lacks required marker {marker!r}")
-        for operation_id in contract.get("operation_ids", []):
-            if operation_id not in spec_ops:
-                raise ContractError(
-                    f"{relative_path} names unknown operation {operation_id}"
-                )
-            path = spec_ops[operation_id]["path"]
-            if path not in text:
-                raise ContractError(
-                    f"{relative_path} does not name {path} for {operation_id}"
-                )
+def check_readable_contracts(root: Path, policy: dict[str, Any]) -> None:
+    """Check stable markers in the small readable contract set."""
+    readable = policy.get("readable_contracts", {})
+    for relative_path, marker in readable.items():
+        path = root / "docs/api" / relative_path
+        if not path.is_file() or marker not in path.read_text(encoding="utf-8"):
+            raise ContractError(f"{relative_path} lacks required marker {marker!r}")
 
 
 def check_fixtures(root: Path, spec: dict[str, Any], policy: dict[str, Any]) -> None:
+    """Validate each declared strict JSON fixture against its component schema."""
     resolver = RefResolver.from_schema(spec)
-    cases = policy.get("conformance_cases", {})
-    for case_name, case in cases.items():
-        fixture_path = root / case["fixture"]
-        if not fixture_path.is_file():
-            raise ContractError(
-                f"Fixture {case_name} does not exist: {case['fixture']}"
-            )
-        instance = strict_json(
-            fixture_path.read_text(encoding="utf-8"), str(fixture_path)
+    declared = policy.get("fixtures", {})
+    fixture_directory = root / "docs/api/fixtures"
+    actual = {
+        str(path.relative_to(root / "docs/api"))
+        for path in fixture_directory.glob("*.json")
+    }
+    if set(declared) != actual:
+        raise ContractError(
+            f"Fixture set drift. Missing={sorted(set(declared) - actual)}; "
+            f"extra={sorted(actual - set(declared))}"
         )
-        schema_name = case["schema"]
+    for relative_path, schema_name in declared.items():
+        fixture_path = root / "docs/api" / relative_path
+        instance = strict_json(fixture_path.read_text(encoding="utf-8"), str(fixture_path))
         schema = spec["components"]["schemas"].get(schema_name)
         if schema is None:
-            raise ContractError(
-                f"Fixture {case_name} names unknown schema {schema_name}"
-            )
+            raise ContractError(f"{relative_path} names unknown schema {schema_name}")
         errors = sorted(
             Draft202012Validator(schema, resolver=resolver).iter_errors(instance),
             key=lambda error: list(error.path),
         )
         if errors:
             detail = "; ".join(error.message for error in errors[:5])
-            raise ContractError(
-                f"Fixture {case_name} does not match {schema_name}: {detail}"
-            )
+            raise ContractError(f"{relative_path} does not match {schema_name}: {detail}")
 
 
-def check_artifact_digests(root: Path, policy: dict[str, Any]) -> None:
-    declared = policy.get("artifact_sha256", {})
+def check_artifact_digests(root: Path) -> None:
+    """Check the generated digest manifest and its bounded artifact set."""
+    path = root / "docs/api/contract-digests.json"
+    manifest = strict_json(path.read_text(encoding="utf-8"), str(path))
+    declared = {
+        item.get("path"): item.get("sha256") for item in manifest.get("artifacts", [])
+    }
     if set(declared) != CONTRACT_ARTIFACT_FILES:
         raise ContractError(
-            "Contract artifact set drift. "
-            f"Missing={sorted(CONTRACT_ARTIFACT_FILES - set(declared))}; "
+            f"Contract artifact set drift. Missing={sorted(CONTRACT_ARTIFACT_FILES - set(declared))}; "
             f"extra={sorted(set(declared) - CONTRACT_ARTIFACT_FILES)}"
         )
     for relative_path, expected in declared.items():
         actual = hashlib.sha256((root / relative_path).read_bytes()).hexdigest()
-        if actual != expected:
-            raise ContractError(
-                f"Contract artifact digest drift for {relative_path}: expected {expected}, got {actual}"
-            )
+        if expected != actual:
+            raise ContractError(f"Contract artifact digest drift for {relative_path}")
 
 
 def run(root: Path) -> None:
-    spec_path = root / "docs/api/openapi.yaml"
-    policy_path = root / "docs/api/contract-policy.yaml"
-    spec = load_yaml(spec_path)
-    policy = load_yaml(policy_path)
+    """Run all contract checks."""
+    spec = load_yaml(root / "docs/api/openapi.yaml")
+    policy = load_yaml(root / "docs/api/contract-policy.yaml")
     validate_spec(spec)
     spec_operations = operations(spec)
-    check_operation_contracts(spec, spec_operations, policy)
-    check_fingerprints(spec)
-    check_embedding_contract(root, spec)
-    walk_public_schemas(spec["components"]["schemas"], "components.schemas")
+    check_operations(spec, spec_operations, policy)
+    walk_closed_objects(spec["components"]["schemas"], "components.schemas")
+    check_reset_boundaries(spec)
     check_error_drift(spec, root / "docs/api/errors.md")
-    check_readable_contracts(root, policy, spec_operations)
+    check_readable_contracts(root, policy)
     check_fixtures(root, spec, policy)
-    check_artifact_digests(root, policy)
+    check_artifact_digests(root)
+
+
+def expect_failure(function: Any, message: str) -> None:
+    """Require one unsafe-input self-test to fail."""
+    try:
+        function()
+    except ContractError:
+        return
+    raise ContractError(message)
 
 
 def self_test() -> None:
-    duplicate_yaml = "a: 1\na: 2\n"
-    try:
-        strict_yaml(duplicate_yaml, "duplicate-key self-test")
-    except ContractError:
-        pass
-    else:
-        raise ContractError("Strict YAML duplicate-key self-test did not fail")
-
+    """Prove success helpers and expected failures for unsafe contract input."""
+    expect_failure(
+        lambda: strict_yaml("a: 1\na: 2\n", "duplicate-key self-test"),
+        "Strict YAML duplicate-key self-test did not fail",
+    )
+    expect_failure(
+        lambda: strict_json('{"a": 1, "a": 2}', "duplicate-key self-test"),
+        "Strict JSON duplicate-key self-test did not fail",
+    )
+    expect_failure(
+        lambda: strict_json('{"a": NaN}', "non-finite-number self-test"),
+        "Strict JSON non-finite-number self-test did not fail",
+    )
+    expect_failure(
+        lambda: walk_closed_objects(
+            {"type": "object", "properties": {"value": {"type": "string"}}}
+        ),
+        "Open public-object self-test did not fail",
+    )
     duplicate_operations = {
         "paths": {
-            "/one": {"get": {"operationId": "same"}},
-            "/two": {"post": {"operationId": "same"}},
+            "/v1/one": {"get": {"operationId": "same"}},
+            "/v1/two": {"post": {"operationId": "same"}},
         }
     }
-    try:
-        operations(duplicate_operations)
-    except ContractError:
-        pass
-    else:
-        raise ContractError("Duplicate operationId self-test did not fail")
-
-    try:
-        strict_json('{"a": 1, "a": 2}', "duplicate-key self-test")
-    except ContractError:
-        pass
-    else:
-        raise ContractError("Strict JSON duplicate-key self-test did not fail")
-
-    try:
-        strict_json('{"a": NaN}', "non-finite-number self-test")
-    except ContractError:
-        pass
-    else:
-        raise ContractError("Strict JSON non-finite-number self-test did not fail")
-
-    try:
-        walk_public_schemas(
-            {"type": "object", "properties": {"value": {"type": "string"}}}
-        )
-    except ContractError:
-        pass
-    else:
-        raise ContractError("Open public-object self-test did not fail")
+    expect_failure(
+        lambda: operations(duplicate_operations),
+        "Duplicate operationId self-test did not fail",
+    )
 
 
 def main() -> int:
+    """Run the checker or its deterministic self-test."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()

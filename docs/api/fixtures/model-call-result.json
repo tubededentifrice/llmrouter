@@ -1,0 +1,15 @@
+{
+  "output_type": "standard",
+  "provider_model_api_name": "primary-text",
+  "content": [
+    {"type": "text", "text": "The operation is complete."}
+  ],
+  "usage": {
+    "units": [
+      {"unit": "input_token", "quantity": "42"},
+      {"unit": "output_token", "quantity": "8"}
+    ],
+    "cost": "0.00015",
+    "currency": "USD"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "api_name": "summarize",
+  "display_name": "Summarize",
+  "definition_kind": "direct_chain",
+  "defined_by_service_api_name": "billing",
+  "direct_chain": [
+    {"provider_model_api_name": "primary-text"},
+    {"provider_model_api_name": "backup-text"}
+  ],
+  "effective_chain": [
+    {"provider_model_api_name": "primary-text"},
+    {"provider_model_api_name": "backup-text"}
+  ],
+  "reasoning_level": "medium",
+  "observed_requirements": ["text_input", "text_output"],
+  "last_used_at": "2026-08-23T12:00:00Z",
+  "created_at": "2026-08-20T08:00:00Z"
+}

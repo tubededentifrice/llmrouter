@@ -1,91 +1,53 @@
 # Product direction
 
-Status: Accepted as the first-release product direction on 2026-08-13.
+Status: Accepted on 2026-08-23.
 
 ## Problem
 
-Crewday, FJ2, Xbot, and future services need similar LLM infrastructure. Each
-service now has some local provider, model, assignment, fallback, tool, and
-administration logic. This duplicates work and can make security, reliability,
-cost control, and operational analysis different in each service.
+Crewday, FJ2, Xbot, and future services need the same provider, model,
+assignment, fallback, embedding, media, and accounting functions. Local copies
+make behavior and cost difficult to keep consistent.
+
+The earlier Router design also put agent execution, shared tools, durable
+request recovery, embedded administration, and distributed coordination in
+one product. That design had too many states and failure modes for the current
+need.
 
 ## Outcome
 
-LLM Router will give each calling service a small and stable interface. The
-router will centralize shared infrastructure without taking ownership of the
-calling service's product logic.
+LLM Router is one small shared calling service. It owns provider connections,
+model availability, assignments, fallback calls, price data, request logs,
+and accounting.
 
-The planned operator outcomes are:
+A calling service uses one backend API key. Each call identifies one owned
+workspace. The service selects a named assignment or one exact provider-model.
+The Router filters candidates by the call shape and tries the eligible
+candidates in order before output becomes visible.
 
-- define providers and models once;
-- assign model fallback chains to named work types;
-- inherit assignments through an ordered service chain;
-- let a service control workspace overrides;
-- operate local router nodes and fail over to healthy remote nodes;
-- inspect requests, usage, cost, failures, and configuration changes;
-- manage credentials and permissions with a global administration identity;
-- expose safe service-scoped management views in different web frameworks.
+Calling services keep all domain behavior. Shared Python SDK and harness code
+belongs in OpenDLE Lib. Shared React assignment and playground components
+belong in OpenDLE UI.
 
-The planned calling-service outcomes are:
+## First-release goals
 
-- keep its domain workflows and prompt construction in its own code;
-- select an assignment, not a provider-specific model, for normal requests;
-- register or allow the tools that an agent can use;
-- send service and workspace identity with each request;
-- receive a stable result and detailed machine-readable failure information;
-- use a local router node without losing service when that node fails.
+- Keep configuration direct and easy to inspect.
+- Keep one parent service chain and no workspace configuration layer.
+- Make assignments the central routing object.
+- Support text, image input, structured output, embeddings, and generated
+  image, video, and audio.
+- Keep provider credentials under global administrator control.
+- Record accurate usage and cost for each attempt.
+- Keep complete detailed logs for a short global period.
+- Use normal web application and PostgreSQL deployment patterns.
+- Keep the public API native, versioned, and provider-neutral.
 
-## Initial callers
+## Limits
 
-- Crewday is the reference for the advanced React LLM graph experience.
-- FJ2 proves that the shared administration experience cannot require React in
-  the host application.
-- Xbot provides additional agent and tool integration cases.
+The Router does not own agent runs, tool execution, conversation databases,
+calling-service user authorization, or calling-service user interfaces. It
+does not provide service-owned providers, workspace budgets, OpenAI
+compatibility, token exchange, hosted service frames, durable model-request
+status, or Router-specific high-availability coordination.
 
-The router repository will not contain calling-service implementation or
-migration tasks. Xbot specification alignment is part of shared-contract
-planning. Crewday code alignment and FJ2 code and data migration are separate
-work in their own repositories.
-
-## Accepted scope
-
-The shared service owns model routing, provider adapters, health and circuit
-state, request policy, common external-tool adapters, agent-run mechanics,
-accounting, retention, and administration surfaces.
-
-The complete agent harness is part of the first release, but a service can
-choose not to use it. Direct model and external-tool endpoints use the same
-routing, failover, policy, and accounting as harness requests.
-
-The calling service can own domain prompts, domain data, user approval,
-business workflow state, end-user permissions, and tool authorization for each
-agent or request.
-
-Accepted specifications and decisions define the remaining boundary details.
-
-## Quality goals
-
-- Make a local healthy node the normal request path.
-- Give a node failure a bounded and observable failover path.
-- Give a configuration change a revision, author, validation result, and
-  audit record.
-- Give a request a stable identity across retries and fallback attempts.
-- Do not count one logical request more than once in accounting.
-- Remove secrets before logs or captured content leave the receiving process.
-- Use different retention for diagnostic logs, audit records, accounting
-  records, and optional request content.
-- Keep service and workspace data isolated in APIs, storage, logs, and
-  administration views.
-- Do not make the public interface depend on one provider SDK, agent framework,
-  storage product, queue, or UI framework.
-
-## Out of scope
-
-- Crewday or FJ2 implementation and migration work;
-- Xbot implementation work beyond specification alignment;
-- an implementation language other than the accepted Python backend and React
-  TypeScript frontend;
-- a public protocol other than the accepted versioned contracts;
-- end-user chat or prompt-management product features;
-- global semantic memory or domain knowledge storage;
-- calling-service implementation planning in this repository.
+The first calling services are Crewday, FJ2, and Xbot. Their code and data
+changes stay in their own repositories.

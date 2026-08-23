@@ -1,229 +1,89 @@
 version: 1
-
-profiles:
-  public: &public {permission: public, recent_auth: false, conformance_case: contract_manifest}
-  service_auth: &service_auth {permission: service.bootstrap.exchange, recent_auth: false, conformance_case: service_authentication}
-  workspace_read: &workspace_read {permission: workspace.read, recent_auth: false, conformance_case: workspace}
-  workspace_write: &workspace_write {permission: workspace.write, recent_auth: false, conformance_case: workspace}
-  attachment_read: &attachment_read {permission: attachment.read, recent_auth: false, conformance_case: attachment}
-  attachment_write: &attachment_write {permission: attachment.create, recent_auth: false, conformance_case: attachment}
-  model_read: &model_read {permission: model.read, recent_auth: false, conformance_case: model_request}
-  model_create: &model_create {permission: model.create, recent_auth: false, conformance_case: model_request}
-  model_cancel: &model_cancel {permission: model.cancel, recent_auth: false, conformance_case: model_request}
-  embedding_read: &embedding_read {permission: embedding.read, recent_auth: false, conformance_case: embedding_status}
-  embedding_create: &embedding_create {permission: embedding.create, recent_auth: false, conformance_case: embedding_request}
-  run_read: &run_read {permission: run.read, recent_auth: false, conformance_case: model_request}
-  run_create: &run_create {permission: run.create, recent_auth: false, conformance_case: model_request}
-  run_cancel: &run_cancel {permission: run.cancel, recent_auth: false, conformance_case: model_request}
-  tool_read: &tool_read {permission: tool.read, recent_auth: false, conformance_case: model_request}
-  tool_create: &tool_create {permission: tool.create, recent_auth: false, conformance_case: model_request}
-  tool_cancel: &tool_cancel {permission: tool.cancel, recent_auth: false, conformance_case: model_request}
-  configuration_read: &configuration_read {permission: configuration.read, recent_auth: false, conformance_case: effective_configuration}
-  configuration_write: &configuration_write {permission: configuration.write, recent_auth: false, conformance_case: effective_configuration}
-  budget_read: &budget_read {permission: budget.read, recent_auth: false, conformance_case: effective_configuration}
-  budget_write: &budget_write {permission: budget.write, recent_auth: false, conformance_case: effective_configuration}
-  accounting_read: &accounting_read {permission: accounting.read, recent_auth: false, conformance_case: effective_configuration}
-  request_status_read: &request_status_read {permission: request_status.read, recent_auth: false, conformance_case: administrator_grant}
-  admin_session: &admin_session {permission: administrator.session, recent_auth: false, conformance_case: administrator_grant}
-  service_read: &service_read {permission: service.manage, recent_auth: false, conformance_case: administrator_grant}
-  service_write: &service_write {permission: service.manage, recent_auth: true, conformance_case: administrator_grant}
-  catalog_read: &catalog_read {permission: catalog.manage, recent_auth: false, conformance_case: administrator_grant}
-  catalog_write: &catalog_write {permission: catalog.manage, recent_auth: false, conformance_case: administrator_grant}
-  provider_instance_read: &provider_instance_read {permission: provider_instance.manage, recent_auth: false, conformance_case: administrator_grant}
-  provider_instance_write: &provider_instance_write {permission: provider_instance.manage, recent_auth: false, conformance_case: administrator_grant}
-  provider_route_read: &provider_route_read {permission: provider_route.manage, recent_auth: false, conformance_case: administrator_grant}
-  provider_route_write: &provider_route_write {permission: provider_route.manage, recent_auth: false, conformance_case: administrator_grant}
-  credential_read: &credential_read {permission: credential.manage, recent_auth: false, conformance_case: administrator_grant}
-  credential_write: &credential_write {permission: credential.manage, recent_auth: true, conformance_case: administrator_grant}
-  grant_read: &grant_read {permission: grant.manage, recent_auth: false, conformance_case: administrator_grant}
-  grant_write: &grant_write {permission: grant.manage, recent_auth: true, conformance_case: administrator_grant}
-  operation_read: &operation_read {permission: health.read, recent_auth: false, conformance_case: administrator_grant}
-  retention_read: &retention_read {permission: retention.manage, recent_auth: false, conformance_case: administrator_grant}
-  retention_write: &retention_write {permission: retention.manage, recent_auth: true, conformance_case: administrator_grant}
-  export_read: &export_read {permission: export.create, recent_auth: false, conformance_case: administrator_grant}
-  content_read: &content_read {permission: content.read, recent_auth: true, conformance_case: administrator_grant}
-  health: &health {permission: health.read, recent_auth: false, conformance_case: health}
-
 operations:
-  getContractManifest: *public
-  exchangeServiceToken: *service_auth
-  createWorkspace: *workspace_write
-  getWorkspace: *workspace_read
-  disableWorkspace: *workspace_write
-  restoreWorkspace: *workspace_write
-  retireWorkspace: *workspace_write
-  getWorkspaceBudgetCeiling: *budget_read
-  putWorkspaceBudgetCeiling: *budget_write
-  createAttachment: *attachment_write
-  getAttachment: *attachment_read
-  putAttachmentContent: *attachment_write
-  getAttachmentContent: *attachment_read
-  listModelRequests: *model_read
-  createModelRequest: *model_create
-  getModelRequest: *model_read
-  cancelModelRequest: *model_cancel
-  streamModelRequest: *model_read
-  createEmbeddingRequest: *embedding_create
-  getEmbeddingRequest: *embedding_read
-  listAgentRuns: *run_read
-  createAgentRun: *run_create
-  getAgentRun: *run_read
-  cancelAgentRun: *run_cancel
-  streamAgentRun: *run_read
-  listSharedToolRequests: *tool_read
-  createSharedToolRequest: *tool_create
-  getSharedToolRequest: *tool_read
-  cancelSharedToolRequest: *tool_cancel
-  createChatCompletion: *model_create
-  createCompatibleResponse: *model_create
-  getEffectiveConfiguration: *configuration_read
-  getScopedAdministrationState: *operation_read
-  listScopedAdministrationAssignments: {permission: assignment.manage, recent_auth: false, conformance_case: administrator_grant}
-  putScopedAdministrationAssignment: {permission: assignment.manage, recent_auth: true, conformance_case: administrator_grant}
-  listScopedAdministrationProviderInstances: {permission: provider_instance.manage, recent_auth: false, conformance_case: administrator_grant}
-  createScopedAdministrationProviderInstance: {permission: provider_instance.manage, recent_auth: true, conformance_case: administrator_grant}
-  putScopedAdministrationProviderInstance: {permission: provider_instance.manage, recent_auth: true, conformance_case: administrator_grant}
-  listScopedAdministrationProviderModelRoutes: {permission: provider_route.manage, recent_auth: false, conformance_case: administrator_grant}
-  createScopedAdministrationProviderModelRoute: {permission: provider_route.manage, recent_auth: true, conformance_case: administrator_grant}
-  putScopedAdministrationProviderModelRoute: {permission: provider_route.manage, recent_auth: true, conformance_case: administrator_grant}
-  getScopedAdministrationAccountingSummary: {permission: accounting.read, recent_auth: false, conformance_case: administrator_grant}
-  getSelectedAdministrationBudget: {permission: budget.read, recent_auth: false, conformance_case: administrator_grant}
-  putSelectedAdministrationBudget: {permission: budget.write, recent_auth: false, conformance_case: administrator_grant}
-  listScopedAdministrationModelRequests: *request_status_read
-  getScopedAdministrationModelRequest: *request_status_read
-  runScopedAdministrationDiagnostic: {permission: diagnostic.run, recent_auth: true, conformance_case: administrator_grant}
-  getBusinessToolGateway: *configuration_read
-  putBusinessToolGateway: *configuration_write
-  createDiagnosticGrant: {permission: diagnostic.grant.create, recent_auth: false, conformance_case: effective_configuration}
-  listAssignments: *configuration_read
-  putAssignment: *configuration_write
-  listProviderInstances: *configuration_read
-  createProviderInstance: *configuration_write
-  getProviderInstance: *configuration_read
-  putProviderInstance: *configuration_write
-  listProviderModelRoutes: *configuration_read
-  createProviderModelRoute: *configuration_write
-  getProviderModelRoute: *configuration_read
-  putProviderModelRoute: *configuration_write
-  synchronizePrices: *configuration_write
-  getPriceSynchronization: *configuration_read
-  getBudgetSummary: *budget_read
-  putSubordinateBudget: *budget_write
-  getAccountingSummary: *accounting_read
-  getScopedRetentionConfiguration: {permission: retention.read, recent_auth: false, conformance_case: effective_configuration}
-  putScopedRetentionConfiguration: {permission: retention.write, recent_auth: false, conformance_case: effective_configuration}
-  previewScopedRetentionConfiguration: {permission: retention.preview, recent_auth: false, conformance_case: effective_configuration}
-  listConfigurationRevisions: *configuration_read
-  rollbackConfiguration: *configuration_write
-  createAdministrationEmbedSession: {permission: admin_embed.create, recent_auth: false, conformance_case: effective_configuration}
-  revokeAdministrationEmbedSession: {permission: admin_embed.create, recent_auth: false, conformance_case: effective_configuration}
-  bootstrapAdministrationEmbedSession: {permission: admin_embed.bootstrap, recent_auth: false, conformance_case: effective_configuration}
-  getEmbedAdministrationSnapshot: {permission: exact granted embed read permission, recent_auth: false, conformance_case: embed_administration_snapshot}
-  startAdministratorSession: *admin_session
-  completeAdministratorSession: *admin_session
-  getAdministratorSession: *admin_session
-  deleteAdministratorSession: *admin_session
-  listServices: *service_read
-  createService: {permission: service.manage and credential.manage, recent_auth: true, conformance_case: administrator_grant}
-  getService: *service_read
-  putService: {permission: service.manage and service_parent.manage when new_parent_service_id is present, recent_auth: true, conformance_case: administrator_grant}
-  changeService: *service_write
-  listCatalog: *catalog_read
-  createCatalogEntry: *catalog_write
-  getCatalogEntry: *catalog_read
-  putCatalogEntry: *catalog_write
-  listGlobalProviderInstances: *provider_instance_read
-  createGlobalProviderInstance: *provider_instance_write
-  getGlobalProviderInstance: *provider_instance_read
-  putGlobalProviderInstance: *provider_instance_write
-  listGlobalProviderModelRoutes: *provider_route_read
-  createGlobalProviderModelRoute: *provider_route_write
-  getGlobalProviderModelRoute: *provider_route_read
-  putGlobalProviderModelRoute: *provider_route_write
-  approveBusinessToolGateway: {permission: business_tool_gateway.approve, recent_auth: true, conformance_case: administrator_grant}
-  listCredentials: *credential_read
-  createCredential: *credential_write
-  changeCredential: *credential_write
-  listAdministratorGrants: *grant_read
-  createAdministratorGrant: *grant_write
-  getAdministratorGrant: *grant_read
-  putAdministratorGrant: *grant_write
-  revokeAdministratorGrant: *grant_write
-  getOperationalState: *operation_read
-  createOperationalAction:
-    permission:
-      field: action
-      values:
-        node_drain: node.drain
-        circuit_probe: circuit.probe
-        circuit_reset: circuit.reset
-        promote: high_availability.promote
-        failback: high_availability.failback
-        backup_start: backup.start
-        restore_validate: restore.validate
-        disaster_recovery_test_start: disaster_recovery.test
-    recent_auth:
-      field: action
-      values:
-        node_drain: false
-        circuit_probe: false
-        circuit_reset: false
-        promote: true
-        failback: true
-        backup_start: false
-        restore_validate: true
-        disaster_recovery_test_start: false
-    conformance_case: administrator_grant
-  getOperationalAction: *operation_read
-  listAuditEvents: {permission: audit.read, recent_auth: false, conformance_case: administrator_grant}
-  getRetentionConfiguration: *retention_read
-  putRetentionConfiguration: *retention_write
-  previewRetentionConfiguration: *retention_read
-  createRetentionExport: {permission: export.create and content.read for captured_content, recent_auth: true, conformance_case: administrator_grant}
-  getRetentionExport: *export_read
-  redeemRetentionExport: {permission: export.create and content.read for captured_content, recent_auth: true, conformance_case: administrator_grant}
-  listCapturedContent: *content_read
-  getCapturedContent: *content_read
-  getHealth: *health
-
-conformance_cases:
-  contract_manifest: {fixture: docs/api/fixtures/contract-manifest.json, schema: ContractManifest}
-  service_authentication: {fixture: docs/api/fixtures/service-token.json, schema: ServiceToken}
-  workspace: {fixture: docs/api/fixtures/workspace.json, schema: Workspace}
-  attachment: {fixture: docs/api/fixtures/attachment.json, schema: Attachment}
-  model_request: {fixture: docs/api/fixtures/model-request.json, schema: ModelRequest}
-  embedding_request: {fixture: docs/api/fixtures/embedding-request.json, schema: EmbeddingRequest}
-  embedding_admission: {fixture: docs/api/fixtures/embedding-admission.json, schema: EmbeddingAdmissionReceipt}
-  embedding_status: {fixture: docs/api/fixtures/embedding-status.json, schema: EmbeddingRequestStatus}
-  effective_configuration: {fixture: docs/api/fixtures/effective-configuration.json, schema: EffectiveConfiguration}
-  embed_administration_snapshot: {fixture: docs/api/fixtures/embed-administration-snapshot.json, schema: EmbedAdministrationSnapshot}
-  administrator_grant: {fixture: docs/api/fixtures/administration-grant.json, schema: AdministratorGrant}
-  health: {fixture: docs/api/fixtures/health.json, schema: Health}
-  business_tool_gateway: {fixture: docs/api/fixtures/business-tool-call.json, schema: BusinessToolCall}
-
+  getHealth: {actor: public, permission: health.read}
+  getMetrics: {actor: public, permission: metrics.read}
+  listWorkspaces: {actor: service, permission: workspace.read}
+  createWorkspace: {actor: service, permission: workspace.write}
+  getWorkspace: {actor: service, permission: workspace.read}
+  deleteWorkspace: {actor: service, permission: workspace.write}
+  listAssignments: {actor: service, permission: assignment.read}
+  getAssignment: {actor: service, permission: assignment.read}
+  putAssignment: {actor: service, permission: assignment.write}
+  deleteAssignment: {actor: service, permission: assignment.write}
+  removeObservedAssignmentRequirement: {actor: service, permission: assignment.write}
+  createModelCall: {actor: service, permission: model.call}
+  createModelStream: {actor: service, permission: model.call}
+  createEmbedding: {actor: service, permission: embedding.call}
+  createMediaJob: {actor: service, permission: media.call}
+  getMediaJob: {actor: service, permission: media.read}
+  getMediaJobContent: {actor: service, permission: media.read}
+  getServiceStatistics: {actor: service, permission: statistics.read}
+  listAvailableProviderModels: {actor: service, permission: provider_model.read}
+  listServiceKeys: {actor: service, permission: service_key.read}
+  createServiceKey: {actor: service, permission: service_key.write}
+  revokeServiceKey: {actor: service, permission: service_key.write}
+  startAdministratorSession: {actor: public, permission: administrator.sign_in}
+  completeAdministratorSession: {actor: public, permission: administrator.sign_in}
+  getAdministratorSession: {actor: administrator, permission: administrator.session}
+  deleteAdministratorSession: {actor: administrator, permission: administrator.session}
+  adminListServices: {actor: administrator, permission: service.read}
+  adminCreateService: {actor: administrator, permission: service.write}
+  adminGetService: {actor: administrator, permission: service.read}
+  adminPutService: {actor: administrator, permission: service.write}
+  adminDeleteService: {actor: administrator, permission: service.write}
+  adminListWorkspaces: {actor: administrator, permission: workspace.read}
+  adminCreateWorkspace: {actor: administrator, permission: workspace.write}
+  adminGetWorkspace: {actor: administrator, permission: workspace.read}
+  adminDeleteWorkspace: {actor: administrator, permission: workspace.write}
+  adminListServiceKeys: {actor: administrator, permission: service_key.read}
+  adminCreateServiceKey: {actor: administrator, permission: service_key.write}
+  adminRevokeServiceKey: {actor: administrator, permission: service_key.write}
+  adminListAssignments: {actor: administrator, permission: assignment.read}
+  adminGetAssignment: {actor: administrator, permission: assignment.read}
+  adminPutAssignment: {actor: administrator, permission: assignment.write}
+  adminDeleteAssignment: {actor: administrator, permission: assignment.write}
+  adminRemoveObservedAssignmentRequirement: {actor: administrator, permission: assignment.write}
+  adminListProviders: {actor: administrator, permission: provider.read}
+  adminCreateProvider: {actor: administrator, permission: provider.write}
+  adminGetProvider: {actor: administrator, permission: provider.read}
+  adminPutProvider: {actor: administrator, permission: provider.write}
+  adminDeleteProvider: {actor: administrator, permission: provider.write}
+  adminListModels: {actor: administrator, permission: model.read}
+  adminCreateModel: {actor: administrator, permission: model.write}
+  adminGetModel: {actor: administrator, permission: model.read}
+  adminPutModel: {actor: administrator, permission: model.write}
+  adminDeleteModel: {actor: administrator, permission: model.write}
+  adminPreviewModelImport: {actor: administrator, permission: model.import}
+  adminImportModels: {actor: administrator, permission: model.import}
+  adminListProviderModels: {actor: administrator, permission: provider_model.read}
+  adminCreateProviderModel: {actor: administrator, permission: provider_model.write}
+  adminGetProviderModel: {actor: administrator, permission: provider_model.read}
+  adminPutProviderModel: {actor: administrator, permission: provider_model.write}
+  adminDeleteProviderModel: {actor: administrator, permission: provider_model.write}
+  adminListCredentials: {actor: administrator, permission: credential.read}
+  adminCreateCredential: {actor: administrator, permission: credential.write}
+  adminPutCredential: {actor: administrator, permission: credential.write}
+  adminDeleteCredential: {actor: administrator, permission: credential.write}
+  adminSynchronizePrices: {actor: administrator, permission: price.write}
+  adminListRequestLogs: {actor: administrator, permission: request_log.read}
+  adminGetRequestLog: {actor: administrator, permission: request_log.read}
+  adminGetRequestLogMedia: {actor: administrator, permission: request_log.read}
+  adminListActivity: {actor: administrator, permission: activity.read}
+  adminGetLogRetention: {actor: administrator, permission: log_retention.read}
+  adminPutLogRetention: {actor: administrator, permission: log_retention.write}
+  adminGetHealth: {actor: administrator, permission: health.read}
+  adminGetStatistics: {actor: administrator, permission: statistics.read}
+fixtures:
+  fixtures/health.json: HealthSummary
+  fixtures/workspace.json: Workspace
+  fixtures/assignment.json: Assignment
+  fixtures/model-call-result.json: ModelCallResult
+  fixtures/embedding-result.json: EmbeddingResult
+  fixtures/media-job.json: MediaJob
+  fixtures/statistics.json: StatisticsResult
+  fixtures/provider-model.json: ProviderModel
+  fixtures/request-log.json: RequestLog
 readable_contracts:
-  docs/api/embed-protocol.md:
-    required_markers: [llmrouter-admin-embed, frame.ready, host.bootstrap, frame_nonce, /v1/embed/administration/snapshot, __Host-llmrouter-embed]
-    operation_ids: [createAdministrationEmbedSession, revokeAdministrationEmbedSession, bootstrapAdministrationEmbedSession, getEmbedAdministrationSnapshot]
-  docs/api/README.md:
-    required_markers: [/v1/contracts, /v1/model-requests, '/v1/services/{service_id}/workspaces/{workspace_id}/embedding-requests', /v1/admin/captured-content]
-  docs/api/embedding-protocol.md:
-    required_markers: ['/v1/services/{service_id}/workspaces/{workspace_id}/embedding-requests', embedding_requests_v1, input_policy_id, SHA-256]
-  docs/api/business-tool-gateway.md:
-    required_markers: [/llmrouter/business-tool-gateway/v1/calls, /llmrouter/business-tool-gateway/v1/reconciliations, BusinessToolCall, BusinessToolResult]
-  docs/api/request-fingerprint.md:
-    required_markers: [x_llmrouter_exact_route, x_llmrouter_exact_route_grant, embedding batch, SHA-256]
-  docs/api/cross-service-conformance.md:
-    required_markers: [attachment, exact route, embedding_requests_v1, grant, backup]
-
-artifact_sha256:
-  docs/api/README.md: 66bbe674dd11683474140f54e1e51ce1a2fac649ee3b8ba84deed195b78f89d4
-  docs/api/business-tool-gateway.md: 8622f79febd1e7499a38eec3d6735929555edb974321b6a792f1eb36f8fdca76
-  docs/api/cross-service-conformance.md: 350f8eb8e79cf4dee699d0bc948f1aaeabda722ca48d47c691f8e3684598ea82
-  docs/api/embed-protocol.md: 4cf8b7514f6159b6b3affedc15157bfe2192dfbc643c83d53595a5031c4d0355
-  docs/api/embedding-protocol.md: 3dcf022e4663c7adace7e6b533e0e0770cc1420fbba39987ac0a330dbe008a18
-  docs/api/errors.md: 0b25b51de943f8419d3f53985b9877dc05fcd97dd191fc3cf687845219b7ab1f
-  docs/api/openapi.yaml: bc55629d59949839bd013955b4a97a6fce73a4ac839c43f8afddbb46f2c65184
-  docs/api/request-fingerprint.md: ce37b2d9a12e0ef15c065a0e73f2107ac5c4dc446e09ead82c4b205cd7da587f
-  docs/api/service-management.md: 501f672274ecb9599ee005d66b33938ead8757693608c8d5e36d9e19c5a76215
-  docs/api/stream-protocol.md: 3245e7315826449a1017af56f1cebbafad97dec4e0e9bb8c1592d34d121021a2
+  README.md: "# LLM Router native API contract"
+  errors.md: "<!-- contract:errors -->"
+  stream-protocol.md: "<!-- contract:stream-protocol -->"

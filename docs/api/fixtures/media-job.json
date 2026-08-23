@@ -1,0 +1,10 @@
+{
+  "id": "media_01",
+  "workspace_api_name": "billing-production",
+  "provider_model_api_name": "primary-image",
+  "kind": "image",
+  "state": "succeeded",
+  "content": {"media_type": "image/png", "size_bytes": 2048},
+  "created_at": "2026-08-23T12:00:00Z",
+  "completed_at": "2026-08-23T12:00:03Z"
+}

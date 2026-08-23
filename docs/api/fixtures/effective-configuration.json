@@ -1,9 +1,0 @@
-{
-  "service_id": "service-1",
-  "active_revision": "revision-1",
-  "distribution_state": "current",
-  "catalog": [],
-  "assignments": [],
-  "provider_instances": [],
-  "provider_model_routes": []
-}
