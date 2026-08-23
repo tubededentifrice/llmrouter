@@ -9,6 +9,8 @@ import psycopg
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
+from llmrouter_backend.database import migration_plan
+
 _DATABASE_CONNECT_TIMEOUT_SECONDS = 2
 
 
@@ -24,28 +26,34 @@ def create_app(*, database_url: str | None = None) -> FastAPI:
 
     @application.get("/ready", include_in_schema=False, response_model=None)
     def ready() -> dict[str, str] | JSONResponse:
-        """Report readiness only when the clean database base is available."""
+        """Report readiness only when the complete clean schema is available."""
         configured_url = application.state.database_url or os.environ.get(
             "LLMROUTER_DATABASE_URL"
         )
         if configured_url is None:
             return _not_ready()
         try:
+            expected_history = tuple(
+                (migration.version, migration.name, migration.checksum)
+                for migration in migration_plan()
+            )
             with psycopg.connect(
                 configured_url,
                 connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
             ) as connection:
-                row = connection.execute(
-                    """SELECT to_regnamespace('router') IS NOT NULL
-                       AND EXISTS (
-                           SELECT 1
-                           FROM public.router_schema_migrations
-                           WHERE version = 1 AND name = 'foundation'
-                       )"""
+                schema_row = connection.execute(
+                    "SELECT to_regnamespace('router') IS NOT NULL"
                 ).fetchone()
-        except psycopg.Error:
+                history = tuple(
+                    connection.execute(
+                        """SELECT version, name, checksum
+                           FROM public.router_schema_migrations
+                           ORDER BY version"""
+                    ).fetchall()
+                )
+        except OSError, UnicodeError, psycopg.Error, RuntimeError:
             return _not_ready()
-        if row != (True,):
+        if schema_row != (True,) or history != expected_history:
             return _not_ready()
         return {"status": "ready"}
 

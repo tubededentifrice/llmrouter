@@ -47,12 +47,20 @@ def main() -> None:
         raise SystemExit("A local development service has a public port binding.")
 
     required_identity_inputs = {
+        "LLMROUTER_PUBLIC_ADMIN_AUTH: ${LLMROUTER_PUBLIC_ADMIN_AUTH:-0}",
         "LLMROUTER_OIDC_CLIENT_ID_FILE: /run/secrets/oidc_client_id",
         "LLMROUTER_OIDC_CLIENT_SECRET_FILE: /run/secrets/oidc_client_secret",
         "LLMROUTER_ADMINISTRATOR_SUBJECTS_FILE: /run/secrets/administrator_subjects",
+        "LLMROUTER_ADMIN_DIGEST_KEY_FILE: /run/secrets/administrator_digest_key",
+        (
+            "LLMROUTER_ADMIN_ENCRYPTION_KEY_FILE: "
+            "/run/secrets/administrator_encryption_key"
+        ),
         "file: .local-development/pocket-id-client-id",
         "file: .local-development/pocket-id-client-secret",
         "file: .local-development/pocket-id-administrator-subjects",
+        "file: .local-development/administrator-digest-key",
+        "file: .local-development/administrator-encryption-key",
     }
     if any(value not in text for value in required_identity_inputs):
         raise SystemExit("The Pocket ID deployment inputs are not preserved.")

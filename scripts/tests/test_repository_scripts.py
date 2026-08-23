@@ -49,6 +49,21 @@ def test_backend_reset_gate_rejects_a_removed_script(
         module.main()
 
 
+def test_backend_reset_gate_rejects_a_removed_runtime_reference(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Fail when an active source restores a removed runtime protocol."""
+    module = _backend_reset_module()
+    probe = tmp_path / "probe.py"
+    probe.write_text("request_recovery = True\n", encoding="utf-8")
+    monkeypatch.setattr(module, "REPOSITORY_ROOT", tmp_path)
+    monkeypatch.setattr(module, "REMOVED_PATHS", set())
+    monkeypatch.setattr(module, "ACTIVE_REFERENCE_PATHS", {"probe.py"})
+    with pytest.raises(SystemExit, match="removed backend surface"):
+        module.main()
+
+
 def test_node_check_installs_the_locked_dependency_tree() -> None:
     """Install exact Node dependencies before repository tools run."""
     script = (REPOSITORY_ROOT / "scripts/check-node.sh").read_text(encoding="utf-8")

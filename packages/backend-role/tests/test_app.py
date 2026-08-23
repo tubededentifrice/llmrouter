@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Self
 import psycopg
 from fastapi.testclient import TestClient
 from llmrouter_backend import create_app
+from llmrouter_backend.database import migration_plan
 
 if TYPE_CHECKING:
     import pytest
@@ -50,14 +51,35 @@ def test_readiness_fails_when_the_database_is_unavailable(
     assert "private" not in response.text
 
 
+def test_readiness_fails_safely_when_the_migration_plan_is_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Do not expose an internal migration package error."""
+
+    def invalid_plan() -> None:
+        message = "private migration detail"
+        raise RuntimeError(message)
+
+    monkeypatch.setattr(application_module, "migration_plan", invalid_plan)
+    response = TestClient(create_app(database_url="postgresql://test")).get("/ready")
+    assert response.status_code == HTTPStatus.SERVICE_UNAVAILABLE
+    assert response.json() == {"status": "not_ready"}
+    assert "private" not in response.text
+
+
 def test_readiness_requires_the_clean_foundation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Do not accept a reachable database without the migration base."""
+    expected = migration_plan()[0]
 
-    class Result:
+    class SchemaResult:
         def fetchone(self) -> tuple[bool]:
             return (False,)
+
+    class HistoryResult:
+        def fetchall(self) -> list[tuple[int, str, str]]:
+            return [(expected.version, expected.name, expected.checksum)]
 
     class Connection:
         def __enter__(self) -> Self:
@@ -66,9 +88,11 @@ def test_readiness_requires_the_clean_foundation(
         def __exit__(self, *_args: object) -> None:
             return None
 
-        def execute(self, statement: str) -> Result:
+        def execute(self, statement: str) -> SchemaResult | HistoryResult:
+            if "to_regnamespace" in statement:
+                return SchemaResult()
             assert "router_schema_migrations" in statement
-            return Result()
+            return HistoryResult()
 
     monkeypatch.setattr(
         application_module.psycopg, "connect", lambda *_args, **_kwargs: Connection()
@@ -82,10 +106,15 @@ def test_readiness_accepts_the_clean_foundation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Report readiness after migration 0001 is present."""
+    expected = migration_plan()[0]
 
-    class Result:
+    class SchemaResult:
         def fetchone(self) -> tuple[bool]:
             return (True,)
+
+    class HistoryResult:
+        def fetchall(self) -> list[tuple[int, str, str]]:
+            return [(expected.version, expected.name, expected.checksum)]
 
     class Connection:
         def __enter__(self) -> Self:
@@ -94,8 +123,12 @@ def test_readiness_accepts_the_clean_foundation(
         def __exit__(self, *_args: object) -> None:
             return None
 
-        def execute(self, _statement: str) -> Result:
-            return Result()
+        def execute(self, statement: str) -> SchemaResult | HistoryResult:
+            if "to_regnamespace" in statement:
+                return SchemaResult()
+            assert "router_schema_migrations" in statement
+            assert "checksum" in statement
+            return HistoryResult()
 
     monkeypatch.setattr(
         application_module.psycopg, "connect", lambda *_args, **_kwargs: Connection()

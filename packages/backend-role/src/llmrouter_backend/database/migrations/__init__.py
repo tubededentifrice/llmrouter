@@ -32,6 +32,11 @@ class Migration:
 def migration_plan() -> tuple[Migration, ...]:
     """Load all migration pairs in contiguous version order."""
     directory = files(__package__)
+    sql_names = {
+        item.name
+        for item in directory.iterdir()
+        if item.name.endswith((".up.sql", ".down.sql"))
+    }
     result: list[Migration] = []
     for item in directory.iterdir():
         match = _MIGRATION_NAME.fullmatch(item.name)
@@ -57,6 +62,14 @@ def migration_plan() -> tuple[Migration, ...]:
     versions = [migration.version for migration in result]
     if not result or versions != list(range(1, len(result) + 1)):
         msg = "Migration versions must start at 0001 and remain contiguous."
+        raise RuntimeError(msg)
+    expected_sql_names = {
+        f"{migration.version:04d}_{migration.name}.{direction}.sql"
+        for migration in result
+        for direction in ("up", "down")
+    }
+    if sql_names != expected_sql_names:
+        msg = "Migration SQL files must form exact up and down pairs."
         raise RuntimeError(msg)
     return tuple(result)
 

@@ -83,6 +83,9 @@ def test_local_wrapper_preserves_identity_inputs_and_resets_database() -> None:
     reset = script[script.index("    reset)") : script.index("    status)")]
     assert "compose down --volumes --remove-orphans" in reset
     assert "state_directory" not in reset
+    identity_check = script[script.index("  for target in") : script.index("  done")]
+    assert "pocket-id-administrator-subjects" in identity_check
+    assert 'if [[ "${configured}" == "3" ]]' in script
 
 
 def test_local_wrapper_rejects_a_public_address_before_start() -> None:
@@ -97,7 +100,7 @@ def test_local_wrapper_rejects_a_public_address_before_start() -> None:
 
 
 def test_local_start_reruns_migrations_before_the_application() -> None:
-    """Apply each new migration when an existing deployment starts again."""
+    """Stop the old application before each migration and restart."""
     script = (REPOSITORY_ROOT / "scripts/local-development.sh").read_text(
         encoding="utf-8"
     )
@@ -105,7 +108,14 @@ def test_local_start_reruns_migrations_before_the_application() -> None:
         "compose up --detach --remove-orphans --force-recreate "
         "migrate node-dependencies"
     )
-    migration = script.index(migration_command)
-    application = script.index("compose up --detach --remove-orphans", migration + 1)
-    restart = script.index("compose restart admin-dev backend", application)
-    assert migration < application < restart
+    stop = script.index("compose stop admin-dev backend")
+    migration = script.index(migration_command, stop)
+    jobs_complete = script.index(
+        "compose wait migrate node-dependencies", migration
+    )
+    application_command = (
+        "compose up --detach --remove-orphans --no-deps backend admin-dev"
+    )
+    application = script.index(application_command, jobs_complete)
+    readiness = script.index("wait_until_ready", application)
+    assert stop < migration < jobs_complete < application < readiness

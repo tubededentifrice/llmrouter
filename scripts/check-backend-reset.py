@@ -18,19 +18,24 @@ REQUIRED_FOUNDATION_FILES = {
 }
 REMOVED_PATHS = {
     "packages/backend-role/src/llmrouter_backend/admission",
+    "packages/backend-role/src/llmrouter_backend/agent_runs",
     "packages/backend-role/src/llmrouter_backend/budgets",
     "packages/backend-role/src/llmrouter_backend/embed_sessions",
     "packages/backend-role/src/llmrouter_backend/local_runtime.py",
+    "packages/backend-role/src/llmrouter_backend/request_recovery",
+    "packages/backend-role/src/llmrouter_backend/runtime_roles",
     "packages/backend-role/src/llmrouter_backend/spool",
+    "packages/backend-role/src/llmrouter_backend/token_exchange",
+    "packages/backend-role/src/llmrouter_backend/tool_gateway",
     "scripts/administrator-grant.py",
     "scripts/local-development-bootstrap.py",
     "scripts/local-development-live-openrouter.py",
 }
 REMOVED_MIGRATION_NAMES = re.compile(
-    r"(?:control_foundation|runtime_ledger|service_workspace_lifecycle|"
-    r"machine_credentials|administrator_authentication|configuration_publication|"
-    r"admission_binding|budget_reservations|budget_allowances|execution_lifecycle|"
-    r"embed_sessions|routing_success_commit_boundary)"
+    r"(?:control_foundation|runtime_ledger|machine_credentials|"
+    r"configuration_publication|admission_binding|budget_reservations|"
+    r"budget_allowances|execution_lifecycle|embed_sessions|"
+    r"routing_success_commit_boundary)"
 )
 ACTIVE_REFERENCE_PATHS = {
     "docker-compose.dev.yml",
@@ -41,8 +46,9 @@ ACTIVE_REFERENCE_PATHS = {
 FORBIDDEN_REFERENCE = re.compile(
     r"(?:control[-_ ]plane|data[-_ ]plane|token[-_ ]worker|"
     r"PostgresAdmissionRepository|BudgetAllowance|LocalCanonicalSpool|"
-    r"agent[-_ ]runs|EmbedSession|ConfigurationRevision|token[-_ ]exchange|"
-    r"frame[-_ ]origin)",
+    r"agent[-_ ]runs?|EmbedSession|ConfigurationRevision|"
+    r"configuration[-_ ]publication|request[-_ ]recovery|runtime[-_ ]roles?|"
+    r"token[-_ ]exchange|tool[-_ ]gateway|frame[-_ ]origin)",
     re.IGNORECASE,
 )
 

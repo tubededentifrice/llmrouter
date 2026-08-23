@@ -83,12 +83,15 @@ compose() {
   local public_admin_auth=0
   local configured=0
   local target
-  for target in pocket-id-client-id pocket-id-client-secret; do
+  for target in \
+    pocket-id-client-id \
+    pocket-id-client-secret \
+    pocket-id-administrator-subjects; do
     if [[ -s "${state_directory}/${target}" ]]; then
       configured=$((configured + 1))
     fi
   done
-  if [[ "${configured}" == "2" ]]; then
+  if [[ "${configured}" == "3" ]]; then
     public_admin_auth=1
   elif [[ "${configured}" != "0" ]]; then
     fail "The Pocket ID client configuration is incomplete."
@@ -142,9 +145,10 @@ main() {
       if [[ -z "$(compose ps --quiet)" ]]; then
         cleanup_new_deployment=1
       fi
+      compose stop admin-dev backend >/dev/null
       compose up --detach --remove-orphans --force-recreate migrate node-dependencies
-      compose up --detach --remove-orphans
-      compose restart admin-dev backend >/dev/null
+      compose wait migrate node-dependencies >/dev/null
+      compose up --detach --remove-orphans --no-deps backend admin-dev
       wait_until_ready
       cleanup_new_deployment=0
       trap - EXIT
