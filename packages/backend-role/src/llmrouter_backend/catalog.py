@@ -522,11 +522,20 @@ def replace_model(
     _validate_model(value)
     row = connection.execute(
         """UPDATE router.canonical_models
-           SET display_name = %s, input_modalities = %s, output_modalities = %s,
+           SET synchronized_price = CASE
+                   WHEN price_source IS NOT DISTINCT FROM %s
+                    AND price_lookup_key IS NOT DISTINCT FROM %s
+                   THEN synchronized_price ELSE NULL END,
+               display_name = %s, input_modalities = %s, output_modalities = %s,
                capabilities = %s, constraints = %s, price_source = %s,
                price_lookup_key = %s, manual_price = %s
            WHERE api_name = %s RETURNING *""",
-        (*_model_parameters(value)[1:], api_name),
+        (
+            value.price_source,
+            value.price_lookup_key,
+            *_model_parameters(value)[1:],
+            api_name,
+        ),
     ).fetchone()
     if row is None:
         raise not_found("model")
@@ -609,12 +618,16 @@ def replace_provider_model(
     normalized = _normalized_provider_model(connection, value)
     row = connection.execute(
         """UPDATE router.provider_models SET
+               synchronized_price = CASE
+                   WHEN price_source IS NOT DISTINCT FROM %s
+                    AND price_lookup_key IS NOT DISTINCT FROM %s
+                   THEN synchronized_price ELSE NULL END,
                provider_id = %s, model_id = %s, provider_model_name = %s,
                enabled = %s, input_modalities = %s, output_modalities = %s,
                capabilities = %s, constraints = %s, reasoning_mappings = %s,
                price_source = %s, price_lookup_key = %s, manual_price = %s
            WHERE api_name = %s RETURNING id""",
-        (*normalized[1:], api_name),
+        (value.price_source, value.price_lookup_key, *normalized[1:], api_name),
     ).fetchone()
     if row is None:
         raise not_found("provider-model")
@@ -652,8 +665,10 @@ def list_available_provider_models(
         """SELECT mapping.api_name, model.display_name,
                   mapping.input_modalities, mapping.output_modalities,
                   mapping.capabilities, mapping.constraints,
-                  CASE WHEN mapping.price_source IS NOT NULL THEN mapping.manual_price
-                       ELSE COALESCE(mapping.manual_price, model.manual_price)
+                  CASE WHEN mapping.price_source IS NOT NULL THEN mapping.synchronized_price
+                       WHEN mapping.manual_price IS NOT NULL THEN mapping.manual_price
+                       WHEN model.price_source IS NOT NULL THEN model.synchronized_price
+                       ELSE model.manual_price
                   END AS effective_price
            FROM router.provider_models AS mapping
            JOIN router.provider_connections AS provider ON provider.id = mapping.provider_id
@@ -1390,7 +1405,9 @@ def _model_parameters(value: ModelWrite) -> tuple[Any, ...]:
 
 def _model_row(row: dict[str, Any]) -> dict[str, Any]:
     result = dict(row)
-    result["current_price"] = result.pop("manual_price", None)
+    manual = result.pop("manual_price", None)
+    synchronized = result.pop("synchronized_price", None)
+    result["current_price"] = synchronized if result.get("price_source") else manual
     result.pop("id", None)
     return result
 
@@ -1404,8 +1421,10 @@ _PROVIDER_MODEL_SELECT = """SELECT mapping.api_name,
          ELSE COALESCE(mapping.price_source, model.price_source) END AS price_source,
     CASE WHEN mapping.manual_price IS NOT NULL THEN NULL
          ELSE COALESCE(mapping.price_lookup_key, model.price_lookup_key) END AS price_lookup_key,
-    CASE WHEN mapping.price_source IS NOT NULL THEN mapping.manual_price
-         ELSE COALESCE(mapping.manual_price, model.manual_price) END AS effective_price,
+    CASE WHEN mapping.price_source IS NOT NULL THEN mapping.synchronized_price
+         WHEN mapping.manual_price IS NOT NULL THEN mapping.manual_price
+         WHEN model.price_source IS NOT NULL THEN model.synchronized_price
+         ELSE model.manual_price END AS effective_price,
     mapping.created_at
 FROM router.provider_models AS mapping
 JOIN router.provider_connections AS provider ON provider.id = mapping.provider_id

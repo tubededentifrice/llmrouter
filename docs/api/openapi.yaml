@@ -2860,6 +2860,7 @@ components:
           $ref: "#/components/schemas/UsageUnit"
         amount:
           type: string
+          maxLength: 64
           pattern: "^[0-9]+(?:\\.[0-9]+)?$"
     PriceSyncRequest:
       type: object

@@ -2,7 +2,7 @@
   "artifacts": [
     {
       "path": "docs/api/README.md",
-      "sha256": "79715b9458af40c16c573c7f363728b2bb6ec3457e85b526ae739dcbca2e0983"
+      "sha256": "822bdabb259d824abfed47e4b401d852e1a0334ea0458c9d8d0edcbd49d4e67b"
     },
     {
       "path": "docs/api/errors.md",
@@ -10,7 +10,7 @@
     },
     {
       "path": "docs/api/openapi.yaml",
-      "sha256": "3fd7ca7959c1d461c2976961cc9cd155ae33f84991ed6afb9507c377a3872b98"
+      "sha256": "16edd4aa7f29bc85f5a075068717937cc1c03bb7335b6bb4ed729695048977c9"
     },
     {
       "path": "docs/api/stream-protocol.md",
@@ -126,7 +126,7 @@
     "ToolCallPart": "0b1ced099fff616cf165e1c232ac47b96fd3eb7767537dc88e7470c572195637",
     "ToolDefinition": "2503649ea9a8fe53198899f09c8971935bbbb3629ac075d519c5df1f2ba6bd72",
     "ToolResultPart": "744292159064cb7437957b43b503824c215a4562811518d75a4d490dc7112956",
-    "UnitPrice": "252849c9f4f58da617c1d06f55d7dc6e3ae15a440eb6b78e2d972ca130065019",
+    "UnitPrice": "8a8db1b5b533afe846d7f517ed8fd02cbf8666de3e895abdb59fd30d3a74affc",
     "Usage": "9b399ecdbb143b6c7a56da9f49ab628850b0a3d4ea4a5c037ed26662eae81a3e",
     "UsageItem": "b6d8f1ebe29bad7db6e0f0163d2677e8cdbc52d810ab07b5b3c81939677c3e97",
     "UsageUnit": "d936a595582753ad645e3d48daa20dbf8341e72f5d38ce404184b0294c3bd666",
@@ -138,6 +138,6 @@
   },
   "contract_set": "llmrouter-v1",
   "generator_version": 3,
-  "source_sha256": "3fd7ca7959c1d461c2976961cc9cd155ae33f84991ed6afb9507c377a3872b98",
+  "source_sha256": "16edd4aa7f29bc85f5a075068717937cc1c03bb7335b6bb4ed729695048977c9",
   "version": "1.0.0"
 }

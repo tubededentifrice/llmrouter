@@ -34,6 +34,9 @@ the one detailed-log retention duration from 1 through 30 whole days.
 application authentication, so the deployment must limit network access to the
 monitoring system.
 
+The statistics assignment dimension uses `(exact)` for an exact provider-model
+selection. This marker cannot be an assignment name.
+
 The other normative files are:
 
 - `stream-protocol.md` for server-sent model stream events.

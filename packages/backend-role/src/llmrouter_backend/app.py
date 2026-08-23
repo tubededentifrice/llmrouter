@@ -11,7 +11,7 @@ from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
-from typing import Annotated, Any, Literal, cast
+from typing import TYPE_CHECKING, Annotated, Any, Literal, cast
 
 import httpx
 import psycopg
@@ -23,7 +23,7 @@ from pydantic import ValidationError
 from starlette.exceptions import HTTPException as StarletteHttpException
 from starlette.middleware.base import RequestResponseEndpoint
 
-from llmrouter_backend import assignments, catalog
+from llmrouter_backend import accounting, assignments, catalog
 from llmrouter_backend.config import Settings
 from llmrouter_backend.database import migration_plan
 from llmrouter_backend.diagnostics import (
@@ -66,6 +66,8 @@ from llmrouter_backend.models import (
     ModelPage,
     ModelWrite,
     PageInfo,
+    PriceSyncRequest,
+    PriceSyncResult,
     Provider,
     ProviderModel,
     ProviderModelPage,
@@ -83,6 +85,8 @@ from llmrouter_backend.models import (
     ServiceKeyPage,
     ServicePage,
     ServiceUpdate,
+    StatisticsDimension,
+    StatisticsResult,
     Workspace,
     WorkspaceCreate,
     WorkspacePage,
@@ -114,6 +118,7 @@ from llmrouter_backend.store import (
     list_services,
     list_workspaces,
     lock_oidc_flow,
+    record_activity,
     revoke_key,
     service_by_api_name,
     service_id,
@@ -123,9 +128,13 @@ from llmrouter_backend.store import (
     workspace_by_api_name,
 )
 
+if TYPE_CHECKING:
+    from llmrouter_backend.accounting import PriceSource
+
 _DATABASE_CONNECT_TIMEOUT_SECONDS = 2
 _DATABASE_STATEMENT_TIMEOUT_MILLISECONDS = 2_000
 _DATABASE_LOCK_TIMEOUT_MILLISECONDS = 500
+_ACCOUNTING_SCHEDULE_LOCK = 4_993_044_345_824
 _ADMINISTRATOR_COOKIE = "llmrouter_admin_session"
 _OIDC_FLOW_COOKIE = "llmrouter_admin_oidc_flow"
 _OIDC_FLOW_MINUTES = 10
@@ -155,6 +164,8 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
     settings: Settings | None = None,
     oidc_transport: httpx.BaseTransport | None = None,
     object_store: ObjectStore | None = None,
+    price_sources: dict[str, PriceSource] | None = None,
+    openrouter_price_transport: httpx.BaseTransport | None = None,
 ) -> FastAPI:
     """Create one application with optional fixed runtime dependencies."""
     settings_value = settings or Settings.from_environment()
@@ -169,18 +180,32 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
         cleanup_task = asyncio.create_task(
             _retention_cleanup_loop(database_url, object_store_value)
         )
+        accounting_task = asyncio.create_task(
+            _accounting_maintenance_loop(
+                database_url,
+                price_source_values,
+            )
+        )
         try:
             yield
         finally:
             cleanup_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await cleanup_task
+            accounting_task.cancel()
+            for task in (cleanup_task, accounting_task):
+                with suppress(asyncio.CancelledError):
+                    await task
 
     application = FastAPI(title="LLM Router", version="1.0.0", lifespan=lifespan)
     application.state.database_url = database_url
     application.state.settings = settings_value
     application.state.oidc_transport = oidc_transport
     application.state.object_store = object_store_value
+    price_source_values = (
+        price_sources
+        if price_sources is not None
+        else accounting.default_price_sources(openrouter_price_transport)
+    )
+    application.state.price_sources = price_source_values
     _install_error_handlers(application)
 
     @application.middleware("http")
@@ -468,6 +493,44 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
             ),
         )
         return Response(status_code=HTTPStatus.NO_CONTENT)
+
+    @application.get(
+        "/v1/statistics",
+        response_model=StatisticsResult,
+        response_model_by_alias=True,
+    )
+    def service_statistics(
+        from_time: Annotated[datetime, Query(alias="from")],
+        to_time: Annotated[datetime, Query(alias="to")],
+        workspace: Annotated[
+            str | None,
+            Query(pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$"),
+        ] = None,
+        assignment: Annotated[
+            str | None, Query(pattern=r"^[a-z0-9][a-z0-9._-]{0,126}$")
+        ] = None,
+        provider_model: Annotated[
+            str | None,
+            Query(pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$"),
+        ] = None,
+        outcome: Annotated[Literal["succeeded", "failed"] | None, Query()] = None,
+        tag: Annotated[str | None, Query(min_length=1, max_length=128)] = None,
+        group_by: Annotated[list[StatisticsDimension] | None, Query()] = None,
+        actor: ServiceActor = Depends(service_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+    ) -> StatisticsResult:
+        return accounting.statistics(
+            database,
+            from_time=from_time,
+            to_time=to_time,
+            group_by=group_by or [],
+            service_id=actor.service_id,
+            workspace=workspace,
+            assignment=assignment,
+            provider_model=provider_model,
+            outcome=outcome,
+            tag=tag,
+        )
 
     @application.get(
         "/v1/provider-models",
@@ -1517,6 +1580,47 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
         return Response(status_code=HTTPStatus.NO_CONTENT)
 
     @application.post(
+        "/v1/admin/prices/synchronize",
+        response_model=PriceSyncResult,
+        response_model_exclude_none=True,
+    )
+    def admin_synchronize_prices(
+        body: PriceSyncRequest,
+        request: Request,
+        actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+        controls: ControlKeys = Depends(control_keys),
+    ) -> PriceSyncResult:
+        _require_browser_write(request, actor, controls)
+        failure_id = uuid.uuid4()
+        try:
+            synchronization_id, result = accounting.synchronize_prices(
+                database,
+                sources=cast("dict[str, PriceSource]", request.app.state.price_sources),
+                provider_model_api_names=body.provider_model_api_names,
+            )
+            record_activity(
+                database,
+                actor.activity_subject,
+                "price.synchronize",
+                "price_synchronization",
+                resource_id=synchronization_id,
+            )
+        except Exception:
+            database.rollback()
+            record_activity(
+                database,
+                actor.activity_subject,
+                "price.synchronize",
+                "price_synchronization",
+                resource_id=failure_id,
+                result="failed",
+            )
+            database.commit()
+            raise
+        return result
+
+    @application.post(
         "/v1/admin/model-imports/preview",
         response_model=ModelImportPreview,
         response_model_exclude_none=True,
@@ -1590,6 +1694,48 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
         return ActivityPage(
             items=[ActivityEvent.model_validate(item) for item in items],
             page=PageInfo(has_more=next_cursor is not None, next_cursor=next_cursor),
+        )
+
+    @application.get(
+        "/v1/admin/statistics",
+        response_model=StatisticsResult,
+        response_model_by_alias=True,
+    )
+    def admin_statistics(
+        from_time: Annotated[datetime, Query(alias="from")],
+        to_time: Annotated[datetime, Query(alias="to")],
+        service: Annotated[
+            str | None,
+            Query(pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$"),
+        ] = None,
+        workspace: Annotated[
+            str | None,
+            Query(pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$"),
+        ] = None,
+        assignment: Annotated[
+            str | None, Query(pattern=r"^[a-z0-9][a-z0-9._-]{0,126}$")
+        ] = None,
+        provider_model: Annotated[
+            str | None,
+            Query(pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$"),
+        ] = None,
+        outcome: Annotated[Literal["succeeded", "failed"] | None, Query()] = None,
+        tag: Annotated[str | None, Query(min_length=1, max_length=128)] = None,
+        group_by: Annotated[list[StatisticsDimension] | None, Query()] = None,
+        _actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+    ) -> StatisticsResult:
+        return accounting.statistics(
+            database,
+            from_time=from_time,
+            to_time=to_time,
+            group_by=group_by or [],
+            service=service,
+            workspace=workspace,
+            assignment=assignment,
+            provider_model=provider_model,
+            outcome=outcome,
+            tag=tag,
         )
 
     @application.get(
@@ -1706,13 +1852,22 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
             "healthy" if objects is not None and objects.healthy() else "unavailable"
         )
         retention_status = cleanup_health(database)
+        price_status_value, rollup_status_value = accounting.maintenance_health(
+            database
+        )
+        price_status = cast(
+            'Literal["healthy", "degraded", "unavailable"]', price_status_value
+        )
+        rollup_status = cast(
+            'Literal["healthy", "degraded", "unavailable"]', rollup_status_value
+        )
         components = [
             HealthComponent(name="web_application", status="healthy"),
             HealthComponent(name="postgresql", status="healthy"),
             HealthComponent(name="object_storage", status=object_status),
-            HealthComponent(name="price_synchronization", status="healthy"),
+            HealthComponent(name="price_synchronization", status=price_status),
             HealthComponent(name="log_retention", status=retention_status),
-            HealthComponent(name="accounting_rollup", status="healthy"),
+            HealthComponent(name="accounting_rollup", status=rollup_status),
         ]
         overall: Literal["healthy", "degraded", "unavailable"] = (
             "unavailable"
@@ -1827,6 +1982,70 @@ async def _retention_cleanup_loop(
             _run_scheduled_cleanup, fixed_database_url, object_store
         )
         await asyncio.sleep(60)
+
+
+async def _accounting_maintenance_loop(
+    fixed_database_url: str | None,
+    price_sources: dict[str, PriceSource],
+) -> None:
+    """Run due fixed price and accounting work and survive dependency failures."""
+    while True:
+        await asyncio.to_thread(
+            _run_due_accounting_maintenance,
+            fixed_database_url,
+            price_sources,
+        )
+        await asyncio.sleep(60)
+
+
+def _run_due_accounting_maintenance(
+    fixed_database_url: str | None,
+    price_sources: dict[str, PriceSource],
+    *,
+    now: datetime | None = None,
+) -> None:
+    """Catch up fixed daily work after a normal application restart."""
+    database_url = fixed_database_url or os.environ.get("LLMROUTER_DATABASE_URL")
+    if database_url is None:
+        return
+    current = (now or datetime.now(tz=UTC)).astimezone(UTC)
+    try:
+        with psycopg.connect(
+            database_url,
+            connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
+            row_factory=dict_row,
+            options=_database_timeout_options(),
+        ) as database:
+            if current.hour >= 2:
+                database.execute(
+                    "SELECT pg_advisory_xact_lock(%s)",
+                    (_ACCOUNTING_SCHEDULE_LOCK,),
+                )
+                existing = database.execute(
+                    """SELECT 1 FROM router.price_synchronizations
+                       WHERE run_kind = 'scheduled'
+                         AND (attempted_at AT TIME ZONE 'UTC')::date = %s
+                       LIMIT 1""",
+                    (current.date(),),
+                ).fetchone()
+                if existing is None:
+                    synchronization_id, _result = accounting.synchronize_prices(
+                        database,
+                        sources=price_sources,
+                        now=current,
+                        run_kind="scheduled",
+                    )
+                    record_activity(
+                        database,
+                        "system:price-synchronization",
+                        "price.synchronize",
+                        "price_synchronization",
+                        resource_id=synchronization_id,
+                    )
+            if current.hour >= 3:
+                accounting.rollup_pending_days(database, now=current)
+    except Exception:  # noqa: BLE001 - The next fixed maintenance pass retries safely.
+        return
 
 
 def _run_scheduled_cleanup(

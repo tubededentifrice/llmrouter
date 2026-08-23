@@ -195,6 +195,9 @@ CREATE TABLE router.canonical_models (
     price_source text CHECK (char_length(price_source) BETWEEN 1 AND 500),
     price_lookup_key text CHECK (char_length(price_lookup_key) BETWEEN 1 AND 500),
     manual_price jsonb CHECK (manual_price IS NULL OR jsonb_typeof(manual_price) = 'object'),
+    synchronized_price jsonb CHECK (
+        synchronized_price IS NULL OR jsonb_typeof(synchronized_price) = 'object'
+    ),
     created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
     CHECK ((price_source IS NULL) = (price_lookup_key IS NULL))
 );
@@ -215,6 +218,9 @@ CREATE TABLE router.provider_models (
     price_source text CHECK (char_length(price_source) BETWEEN 1 AND 500),
     price_lookup_key text CHECK (char_length(price_lookup_key) BETWEEN 1 AND 500),
     manual_price jsonb CHECK (manual_price IS NULL OR jsonb_typeof(manual_price) = 'object'),
+    synchronized_price jsonb CHECK (
+        synchronized_price IS NULL OR jsonb_typeof(synchronized_price) = 'object'
+    ),
     created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
     UNIQUE (provider_id, provider_model_name),
     CHECK ((price_source IS NULL) = (price_lookup_key IS NULL))
@@ -254,25 +260,106 @@ CREATE INDEX request_logs_time
 CREATE INDEX request_logs_scope_time
     ON router.request_logs(service_id, workspace_id, started_at DESC, id DESC);
 
-CREATE TABLE router.raw_accounting (
+CREATE TABLE router.raw_accounting_calls (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     service_id uuid NOT NULL,
     workspace_id uuid NOT NULL,
-    payload jsonb NOT NULL DEFAULT '{}'::jsonb,
-    created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+    assignment_api_name router.assignment_name,
+    tags text[] NOT NULL DEFAULT '{}',
+    outcome text NOT NULL CHECK (outcome IN ('succeeded', 'failed')),
+    started_at timestamptz NOT NULL,
+    completed_at timestamptz NOT NULL,
+    CHECK (completed_at >= started_at),
+    CHECK (cardinality(tags) BETWEEN 0 AND 32),
+    CHECK (router.text_array_is_unique(tags)),
+    UNIQUE (service_id, workspace_id, id),
     FOREIGN KEY (service_id, workspace_id)
         REFERENCES router.workspaces(service_id, id) ON DELETE CASCADE
 );
+
+CREATE INDEX raw_accounting_calls_scope_time
+    ON router.raw_accounting_calls(service_id, started_at, id);
+
+CREATE TABLE router.raw_accounting_attempts (
+    id uuid PRIMARY KEY,
+    call_id uuid NOT NULL,
+    service_id uuid NOT NULL,
+    workspace_id uuid NOT NULL,
+    position integer NOT NULL CHECK (position BETWEEN 0 AND 15),
+    provider_connection_api_name router.api_name NOT NULL,
+    provider_model_api_name router.api_name NOT NULL,
+    outcome text NOT NULL CHECK (outcome IN ('succeeded', 'failed')),
+    usage jsonb NOT NULL CHECK (jsonb_typeof(usage) = 'array'),
+    applied_price jsonb NOT NULL CHECK (jsonb_typeof(applied_price) = 'object'),
+    cost numeric(76, 36) NOT NULL CHECK (cost >= 0),
+    currency char(3) NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
+    failure_class text CHECK (failure_class IN (
+        'authentication', 'rate_limited', 'timeout', 'transport',
+        'unavailable', 'refusal', 'incompatible', 'invalid_response',
+        'interrupted', 'upstream_failed'
+    )),
+    started_at timestamptz NOT NULL,
+    completed_at timestamptz NOT NULL,
+    recorded_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+    CHECK (completed_at >= started_at),
+    UNIQUE (call_id, position),
+    FOREIGN KEY (service_id, workspace_id, call_id)
+        REFERENCES router.raw_accounting_calls(service_id, workspace_id, id)
+        ON DELETE CASCADE
+);
+
+CREATE INDEX raw_accounting_attempts_scope_time
+    ON router.raw_accounting_attempts(service_id, started_at, id);
 
 CREATE TABLE router.daily_accounting (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     service_id uuid NOT NULL,
     workspace_id uuid NOT NULL,
     day date NOT NULL,
-    payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+    assignment_api_name router.assignment_name,
+    provider_model_api_name router.api_name NOT NULL,
+    outcome text NOT NULL CHECK (outcome IN ('succeeded', 'failed')),
+    tags text[] NOT NULL,
+    usage_unit text NOT NULL CHECK (usage_unit IN (
+        'input_token', 'output_token', 'cached_input_token', 'image',
+        'video_second', 'audio_second', 'request', 'provider_unit'
+    )),
+    currency char(3) NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
+    calls bigint NOT NULL CHECK (calls >= 0),
+    attempts bigint NOT NULL CHECK (attempts >= 0),
+    quantity numeric(76, 18) NOT NULL CHECK (quantity >= 0),
+    cost numeric(112, 36) NOT NULL CHECK (cost >= 0),
+    rolled_up_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+    UNIQUE NULLS NOT DISTINCT (
+        service_id, workspace_id, day, assignment_api_name,
+        provider_model_api_name, outcome, tags, usage_unit, currency
+    ),
     FOREIGN KEY (service_id, workspace_id)
         REFERENCES router.workspaces(service_id, id) ON DELETE CASCADE
 );
+
+CREATE INDEX daily_accounting_scope_day
+    ON router.daily_accounting(service_id, day);
+
+CREATE TABLE router.accounting_rollups (
+    day date PRIMARY KEY,
+    completed_at timestamptz NOT NULL,
+    attempt_count bigint NOT NULL CHECK (attempt_count >= 0)
+);
+
+CREATE TABLE router.price_synchronizations (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    attempted_at timestamptz NOT NULL,
+    run_kind text NOT NULL CHECK (run_kind IN ('scheduled', 'on_demand')),
+    result jsonb NOT NULL CHECK (jsonb_typeof(result) = 'array'),
+    completed boolean NOT NULL,
+    failure_class text CHECK (char_length(failure_class) BETWEEN 1 AND 200)
+);
+
+CREATE UNIQUE INDEX price_synchronizations_one_scheduled_utc_day
+    ON router.price_synchronizations (
+        ((attempted_at AT TIME ZONE 'UTC')::date)
+    ) WHERE run_kind = 'scheduled';
 
 CREATE TABLE router.media_jobs (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -4,9 +4,10 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 ApiName = str
 ProviderAdapter = Literal[
@@ -49,6 +50,8 @@ UsageUnit = Literal[
     "request",
     "provider_unit",
 ]
+_MAXIMUM_FIXED_DECIMAL = Decimal("99999999999999999999.999999999999999999")
+_MAXIMUM_FIXED_DECIMAL_SCALE = 18
 
 
 class ClosedModel(BaseModel):
@@ -301,7 +304,26 @@ class UnitPriceWrite(ClosedModel):
     """One fixed-decimal unit price."""
 
     unit: UsageUnit
-    amount: str = Field(pattern=r"^[0-9]+(?:\.[0-9]+)?$")
+    amount: str = Field(max_length=64, pattern=r"^[0-9]+(?:\.[0-9]+)?$")
+
+    @field_validator("amount")
+    @classmethod
+    def require_bounded_fixed_decimal(cls, value: str) -> str:
+        """Reject a price that PostgreSQL accounting cannot preserve exactly."""
+        try:
+            parsed = Decimal(value)
+        except InvalidOperation as error:
+            raise ValueError("The price amount is invalid.") from error
+        exponent = parsed.as_tuple().exponent
+        if (
+            not parsed.is_finite()
+            or parsed < 0
+            or parsed > _MAXIMUM_FIXED_DECIMAL
+            or not isinstance(exponent, int)
+            or exponent < -_MAXIMUM_FIXED_DECIMAL_SCALE
+        ):
+            raise ValueError("The price amount is outside its safe range.")
+        return value
 
 
 class Price(ClosedModel):
@@ -311,6 +333,14 @@ class Price(ClosedModel):
     unit_prices: list[UnitPriceWrite] = Field(min_length=1, max_length=16)
     source: str | None = Field(default=None, max_length=500)
     synchronized_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def require_unique_units(self) -> Price:
+        """Keep one exact amount for each typed usage unit."""
+        units = [item.unit for item in self.unit_prices]
+        if len(units) != len(set(units)):
+            raise ValueError("A price unit cannot occur more than once.")
+        return self
 
 
 class ModelWrite(ClosedModel):
@@ -441,6 +471,39 @@ class CredentialPage(ClosedModel):
     page: PageInfo
 
 
+class PriceSyncRequest(ClosedModel):
+    """Select at most 1000 provider-model rows for one synchronization."""
+
+    provider_model_api_names: (
+        list[Annotated[str, Field(pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$")]]
+        | None
+    ) = Field(default=None, max_length=1000)
+
+    @model_validator(mode="after")
+    def require_unique_names(self) -> PriceSyncRequest:
+        """Reject duplicate synchronization targets."""
+        names = self.provider_model_api_names or []
+        if len(names) != len(set(names)):
+            raise ValueError("A provider-model can occur only once.")
+        return self
+
+
+class PriceSyncItem(ClosedModel):
+    """One safe provider-model synchronization result."""
+
+    provider_model_api_name: str
+    outcome: Literal["updated", "unchanged", "missing", "failed"]
+    price: Price | None = None
+    message: str | None = Field(default=None, max_length=500)
+
+
+class PriceSyncResult(ClosedModel):
+    """One complete bounded price synchronization result."""
+
+    attempted_at: datetime
+    items: list[PriceSyncItem]
+
+
 class ModelImportPreviewRequest(ClosedModel):
     """Select one registered provider catalog."""
 
@@ -522,6 +585,37 @@ class Usage(ClosedModel):
     units: list[UsageItem]
     cost: str = Field(pattern=r"^[0-9]+(?:\.[0-9]+)?$")
     currency: str = Field(pattern=r"^[A-Z]{3}$")
+
+
+StatisticsDimension = Literal[
+    "date",
+    "service",
+    "workspace",
+    "assignment",
+    "provider_model",
+    "outcome",
+    "tag",
+]
+
+
+class StatisticsBucket(ClosedModel):
+    """One exact accounting statistics group."""
+
+    dimensions: list[str]
+    calls: int = Field(ge=0)
+    attempts: int = Field(ge=0)
+    units: list[UsageItem]
+    cost: str = Field(pattern=r"^[0-9]+(?:\.[0-9]+)?$")
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
+
+
+class StatisticsResult(ClosedModel):
+    """One bounded statistics response."""
+
+    from_time: datetime = Field(alias="from")
+    to_time: datetime = Field(alias="to")
+    group_by: list[StatisticsDimension] = Field(max_length=8)
+    buckets: list[StatisticsBucket] = Field(max_length=1000)
 
 
 class UnitPrice(ClosedModel):

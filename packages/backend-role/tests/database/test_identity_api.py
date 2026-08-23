@@ -549,15 +549,34 @@ def test_workspace_delete_cascades_and_blocks_late_media_results(
                VALUES (%s, %s, 'model', 'failed', '{}', statement_timestamp())""",
             (service, workspace),
         )
-        connection.execute(
-            """INSERT INTO router.raw_accounting (service_id, workspace_id)
-               VALUES (%s, %s)""",
+        accounting_call = connection.execute(
+            """INSERT INTO router.raw_accounting_calls
+                   (service_id, workspace_id, outcome, started_at, completed_at)
+               VALUES (%s, %s, 'failed', statement_timestamp(), statement_timestamp())
+               RETURNING id""",
             (service, workspace),
+        ).fetchone()
+        assert accounting_call is not None
+        connection.execute(
+            """INSERT INTO router.raw_accounting_attempts
+                   (id, call_id, service_id, workspace_id, position,
+                    provider_connection_api_name, provider_model_api_name,
+                    outcome, usage, applied_price, cost, currency,
+                    failure_class, started_at, completed_at)
+               VALUES (gen_random_uuid(), %s, %s, %s, 0, 'example', 'example', 'failed',
+                       '[{"unit":"request","quantity":"1"}]',
+                       '{"currency":"USD","unit_prices":[{"unit":"request","amount":"0"}]}',
+                       0, 'USD', 'upstream_failed', statement_timestamp(),
+                       statement_timestamp())""",
+            (accounting_call[0], service, workspace),
         )
         connection.execute(
             """INSERT INTO router.daily_accounting
-                   (service_id, workspace_id, day)
-               VALUES (%s, %s, CURRENT_DATE)""",
+                   (service_id, workspace_id, day, provider_model_api_name,
+                    outcome, tags, usage_unit, currency, calls, attempts,
+                    quantity, cost)
+               VALUES (%s, %s, CURRENT_DATE, 'example', 'failed', '{}',
+                       'request', 'USD', 1, 1, 1, 0)""",
             (service, workspace),
         )
         connection.execute(
@@ -583,7 +602,8 @@ def test_workspace_delete_cascades_and_blocks_late_media_results(
         connection.execute("DELETE FROM router.workspaces WHERE id = %s", (workspace,))
         for table in (
             "request_logs",
-            "raw_accounting",
+            "raw_accounting_attempts",
+            "raw_accounting_calls",
             "daily_accounting",
             "media_jobs",
             "media_objects",
