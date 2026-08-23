@@ -256,27 +256,21 @@ def test_local_secret_paths_are_ignored_and_not_printed() -> None:
         "data-plane-token",
     ):
         assert f'install_secret "${{state_directory}}/{name}"' in script
-    assert "local-development-e2e.py prepare" in script
-    assert "local-development-e2e.py resume" in script
-    assert "compose kill --signal KILL backend" in script
-    assert "compose up --detach backend" in script
+    assert "local-development-e2e.py" not in script
     bootstrap = BOOTSTRAP_PATH.read_text(encoding="utf-8")
     assert "_clear_expired_administrator_sessions(connection, current)" in bootstrap
     assert "provider_columns_ready" in bootstrap
     assert "provider_refresh_token_ciphertext = NULL" in bootstrap
 
 
-def test_local_proof_resets_and_stops_the_deployment() -> None:
-    """Keep the clean deterministic proof as one safe command."""
+def test_local_wrapper_does_not_offer_the_removed_embed_proof() -> None:
+    """Do not run the obsolete service-frame browser proof."""
     script = (REPOSITORY_ROOT / "scripts/local-development.sh").read_text(
         encoding="utf-8"
     )
-    proof = script[script.index("    prove)") : script.index("    *)")]
-    assert 'local-development.sh" reset' in proof
-    assert 'local-development.sh" start' in proof
-    assert 'local-development.sh" e2e' in proof
-    assert 'local-development.sh" stop' in proof
-    assert "trap" in proof
+    assert "Deterministic proof" not in script
+    assert "\n    e2e)" not in script
+    assert "\n    prove)" not in script
 
 
 def test_restart_recovery_waits_for_durable_provider_dispatch(
@@ -344,12 +338,11 @@ def test_live_openrouter_proof_is_guarded_and_always_resets() -> None:
         'scripts/local-development-live-openrouter.py "${model_arguments[@]}"' in live
     )
     assert "env -u OPENROUTER_API_KEY LLMROUTER_LOCAL_OPENROUTER_LIVE=1" in live
-    prove = live.index('local-development.sh" prove')
-    reset = live.index('local-development.sh" reset', prove)
+    reset = live.index('local-development.sh" reset')
     live_start = live.index("LLMROUTER_LOCAL_OPENROUTER_LIVE=1", reset)
-    assert prove < reset < live_start
+    assert reset < live_start
     assert "model_arguments" not in live[reset:live_start]
-    assert live.count('local-development.sh" reset') >= 3  # noqa: PLR2004
+    assert live.count('local-development.sh" reset') >= 2  # noqa: PLR2004
     assert "trap" in live
 
 

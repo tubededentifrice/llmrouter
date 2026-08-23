@@ -129,7 +129,6 @@ wait_until_ready() {
       echo "The LLM Router localhost foundation is available."
       echo "Administration: http://127.0.0.1:5174"
       echo "Runtime components: http://127.0.0.1:8010/ready"
-      echo "Deterministic proof: ./scripts/local-development.sh e2e"
       return
     fi
     sleep 2
@@ -171,29 +170,12 @@ main() {
           >/dev/null
         compose down --volumes --remove-orphans >/dev/null
       fi
-      rm -f "${state_directory}/e2e-state.json"
       ;;
     status)
       compose ps
       ;;
     logs)
       compose logs --follow --tail 100
-      ;;
-    e2e)
-      lock_operation
-      uv run --package llmrouter-backend python scripts/local-development-e2e.py prepare
-      compose kill --signal KILL backend >/dev/null
-      compose up --detach backend >/dev/null
-      wait_until_ready
-      uv run --package llmrouter-backend python scripts/local-development-e2e.py resume
-      ;;
-    prove)
-      trap '"${repository_root}/scripts/local-development.sh" stop >/dev/null 2>&1 || true' EXIT
-      "${repository_root}/scripts/local-development.sh" reset
-      "${repository_root}/scripts/local-development.sh" start
-      "${repository_root}/scripts/local-development.sh" e2e
-      "${repository_root}/scripts/local-development.sh" stop
-      trap - EXIT
       ;;
     live-openrouter|live-openrouter-mimo|live-openrouter-granite|live-openrouter-granite-stream)
       if [[ ! -v OPENROUTER_API_KEY ]]; then
@@ -209,8 +191,6 @@ main() {
       fi
       trap 'env -u OPENROUTER_API_KEY "${repository_root}/scripts/local-development.sh" reset >/dev/null 2>&1 || true' EXIT
       env -u OPENROUTER_API_KEY \
-        "${repository_root}/scripts/local-development.sh" prove
-      env -u OPENROUTER_API_KEY \
         "${repository_root}/scripts/local-development.sh" reset
       env -u OPENROUTER_API_KEY LLMROUTER_LOCAL_OPENROUTER_LIVE=1 \
         "${repository_root}/scripts/local-development.sh" start
@@ -221,7 +201,7 @@ main() {
       trap - EXIT
       ;;
     *)
-      fail "Usage: ./scripts/local-development.sh {start|stop|reset|status|logs|e2e|prove|live-openrouter|live-openrouter-mimo|live-openrouter-granite|live-openrouter-granite-stream}"
+      fail "Usage: ./scripts/local-development.sh {start|stop|reset|status|logs|live-openrouter|live-openrouter-mimo|live-openrouter-granite|live-openrouter-granite-stream}"
       ;;
   esac
 }
