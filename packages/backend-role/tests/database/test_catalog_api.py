@@ -100,7 +100,62 @@ def catalog_database(database_url: str) -> str:
     return database_url
 
 
-def test_credential_envelopes_rotate_snapshot_and_never_leave_control_fields(
+@pytest.mark.parametrize(
+    ("api_name", "inputs", "outputs", "constraints"),
+    [
+        (
+            "boolean-embedding",
+            ["text"],
+            ["embedding"],
+            {"embedding_dimensions": [True]},
+        ),
+        (
+            "boolean-image-count",
+            ["text", "image"],
+            ["text"],
+            {"max_input_images": True, "max_input_image_bytes": 1000},
+        ),
+        (
+            "boolean-image-size",
+            ["text", "image"],
+            ["text"],
+            {"max_input_images": 1, "max_input_image_bytes": True},
+        ),
+        (
+            "boolean-duration",
+            ["text"],
+            ["video"],
+            {"max_output_duration_seconds": True},
+        ),
+    ],
+)
+def test_model_constraint_integer_fields_reject_booleans(
+    catalog_database: str,
+    catalog_settings: Settings,
+    api_name: str,
+    inputs: list[str],
+    outputs: list[str],
+    constraints: dict[str, Any],
+) -> None:
+    """Reject JSON Boolean values where the native contract requires integers."""
+    context = CatalogContext(catalog_database, catalog_settings)
+    response = context.client.post(
+        "/v1/admin/models",
+        json={
+            "api_name": api_name,
+            "display_name": "Boolean constraint",
+            "input_modalities": inputs,
+            "output_modalities": outputs,
+            "capabilities": [],
+            "constraints": constraints,
+        },
+        headers=context.write_headers,
+    )
+    assert response.status_code == HTTPStatus.BAD_REQUEST
+    assert response.json()["error"]["code"] == "invalid_request"
+
+
+def test_credential_envelopes_rotate_snapshot_and_never_leave_control_fields(  # noqa: PLR0915
     catalog_database: str, catalog_settings: Settings
 ) -> None:
     """Keep credential values write-only and effective at transaction commit."""
@@ -120,6 +175,14 @@ def test_credential_envelopes_rotate_snapshot_and_never_leave_control_fields(
         "updated_at",
     }
     assert secret_one not in created.text
+
+    mismatched = context.client.put(
+        "/v1/admin/credentials/primary",
+        json={"api_name": "other", "secret": "mismatched-value"},
+        headers=context.write_headers,
+    )
+    assert mismatched.status_code == HTTPStatus.BAD_REQUEST
+    assert "mismatched-value" not in mismatched.text
 
     with psycopg.connect(catalog_database, row_factory=dict_row) as connection:
         row = connection.execute(
@@ -219,6 +282,10 @@ def test_credential_envelopes_rotate_snapshot_and_never_leave_control_fields(
         item["action"] == "credential.create" and item["result"] == "failed"
         for item in activity.json()["items"]
     )
+    assert any(
+        item["action"] == "credential.update" and item["result"] == "failed"
+        for item in activity.json()["items"]
+    )
 
 
 def test_provider_wrapping_key_cannot_reuse_administrator_control_key(
@@ -289,9 +356,7 @@ def test_provider_wrapping_key_requires_one_bounded_regular_file(
         invalid.write_bytes(b"short")
     else:
         invalid.write_bytes(b"x" * 10_001)
-    settings = replace(
-        catalog_settings, provider_credential_wrapping_key_file=invalid
-    )
+    settings = replace(catalog_settings, provider_credential_wrapping_key_file=invalid)
     with pytest.raises(Exception, match="provider credential is not available"):
         ProviderCredentialKeys.load(settings)
 
@@ -315,6 +380,8 @@ def test_provider_wrapping_key_requires_one_bounded_regular_file(
         ("custom", "https://127.0.0.2/v1", "primary", False),
         ("custom", "https://user:pass@example.test/v1", "primary", False),
         ("custom", "https://api.example.test/v1?token=x", "primary", False),
+        ("custom", "https://[broken", "primary", False),
+        ("custom", "https://example.test\uff1a443", "primary", False),
         ("ollama", "https://api.example.test", None, False),
         ("fake", None, "primary", False),
     ],
@@ -417,6 +484,55 @@ def test_global_models_mappings_reasoning_and_service_visibility(
             "output_modalities": ["video"],
             "capabilities": [],
         },
+        {
+            "api_name": "invalid-embedding-dimension",
+            "display_name": "Invalid embedding dimension",
+            "input_modalities": ["text"],
+            "output_modalities": ["embedding"],
+            "capabilities": [],
+            "constraints": {"embedding_dimensions": [65537]},
+        },
+        {
+            "api_name": "unknown-price-source",
+            "display_name": "Unknown price source",
+            "input_modalities": ["text"],
+            "output_modalities": ["text"],
+            "capabilities": [],
+            "price_source": "unknown",
+            "price_lookup_key": "wire-model",
+        },
+        {
+            "api_name": "mixed-price-authority",
+            "display_name": "Mixed price authority",
+            "input_modalities": ["text"],
+            "output_modalities": ["text"],
+            "capabilities": [],
+            "price_source": "openrouter",
+            "price_lookup_key": "wire-model",
+            "manual_price": {
+                "currency": "USD",
+                "unit_prices": [{"unit": "request", "amount": "1"}],
+            },
+        },
+        {
+            "api_name": "manual-synchronization-metadata",
+            "display_name": "Manual synchronization metadata",
+            "input_modalities": ["text"],
+            "output_modalities": ["text"],
+            "capabilities": [],
+            "manual_price": {
+                "currency": "USD",
+                "unit_prices": [{"unit": "request", "amount": "1"}],
+                "source": "openrouter",
+            },
+        },
+        {
+            "api_name": "invalid-media-capability",
+            "display_name": "Invalid media capability",
+            "input_modalities": ["text"],
+            "output_modalities": ["image"],
+            "capabilities": ["streaming"],
+        },
     ):
         assert (
             client.post(
@@ -483,6 +599,10 @@ def test_global_models_mappings_reasoning_and_service_visibility(
                 connection, ["fake-text", "fake-text"], "high"
             )
         assert duplicate_candidate.value.field == "candidates"
+        for invalid_chain in ([], ["fake-text"] * 17):
+            with pytest.raises(ApiError) as chain_size:
+                validate_assignment_reasoning(connection, invalid_chain, "high")
+            assert chain_size.value.field == "candidates"
         with pytest.raises(Exception, match="does not support"):
             resolve_provider_route(
                 connection,
@@ -597,9 +717,12 @@ def test_provider_model_outputs_control_capabilities_and_bounds(
         "adapter": "fake",
         "enabled": True,
     }
-    assert client.post(
-        "/v1/admin/providers", json=provider, headers=context.write_headers
-    ).status_code == HTTPStatus.CREATED
+    assert (
+        client.post(
+            "/v1/admin/providers", json=provider, headers=context.write_headers
+        ).status_code
+        == HTTPStatus.CREATED
+    )
     model = {
         "api_name": "mixed",
         "display_name": "Mixed",
@@ -613,9 +736,12 @@ def test_provider_model_outputs_control_capabilities_and_bounds(
             "max_output_duration_seconds": 60,
         },
     }
-    assert client.post(
-        "/v1/admin/models", json=model, headers=context.write_headers
-    ).status_code == HTTPStatus.CREATED
+    assert (
+        client.post(
+            "/v1/admin/models", json=model, headers=context.write_headers
+        ).status_code
+        == HTTPStatus.CREATED
+    )
     base = {
         "provider_api_name": "fake",
         "model_api_name": "mixed",
@@ -678,32 +804,127 @@ def test_provider_model_outputs_control_capabilities_and_bounds(
     assert valid.json()["constraints"] == {"embedding_dimensions": [3]}
 
 
+def test_provider_model_price_override_replaces_complete_canonical_authority(
+    catalog_database: str, catalog_settings: Settings
+) -> None:
+    """Do not combine one inherited source with a mapping manual price."""
+    context = CatalogContext(catalog_database, catalog_settings)
+    assert (
+        context.client.post(
+            "/v1/admin/providers",
+            json={
+                "api_name": "fake",
+                "display_name": "Fake",
+                "adapter": "fake",
+                "enabled": True,
+            },
+            headers=context.write_headers,
+        ).status_code
+        == HTTPStatus.CREATED
+    )
+    assert (
+        context.client.post(
+            "/v1/admin/models",
+            json={
+                "api_name": "priced",
+                "display_name": "Priced",
+                "input_modalities": ["text"],
+                "output_modalities": ["text"],
+                "capabilities": [],
+                "price_source": "openrouter",
+                "price_lookup_key": "source-model",
+            },
+            headers=context.write_headers,
+        ).status_code
+        == HTTPStatus.CREATED
+    )
+    manual_mapping = {
+        "api_name": "priced",
+        "provider_api_name": "fake",
+        "model_api_name": "priced",
+        "provider_model_name": "wire-priced",
+        "enabled": True,
+        "manual_price": {
+            "currency": "USD",
+            "unit_prices": [{"unit": "input_token", "amount": "0.000001"}],
+        },
+    }
+    created = context.client.post(
+        "/v1/admin/provider-models",
+        json=manual_mapping,
+        headers=context.write_headers,
+    )
+    assert created.status_code == HTTPStatus.CREATED
+    assert "price_source" not in created.json()
+    assert created.json()["effective_price"]["currency"] == "USD"
+
+    selected_source = {
+        **manual_mapping,
+        "manual_price": None,
+        "price_source": "wavespeed",
+        "price_lookup_key": "source-media-model",
+    }
+    replaced = context.client.put(
+        "/v1/admin/provider-models/priced",
+        json=selected_source,
+        headers=context.write_headers,
+    )
+    assert replaced.status_code == HTTPStatus.OK
+    assert replaced.json()["price_source"] == "wavespeed"
+    assert "effective_price" not in replaced.json()
+
+    mixed_authority = context.client.put(
+        "/v1/admin/provider-models/priced",
+        json={**selected_source, "manual_price": manual_mapping["manual_price"]},
+        headers=context.write_headers,
+    )
+    assert mixed_authority.status_code == HTTPStatus.BAD_REQUEST
+    current = context.client.get(
+        "/v1/admin/provider-models/priced", headers=context.read_headers
+    ).json()
+    assert current["price_source"] == "wavespeed"
+    assert "effective_price" not in current
+    with psycopg.connect(catalog_database, row_factory=dict_row) as connection:
+        available, next_cursor = catalog.list_available_provider_models(
+            connection, limit=50, cursor=None
+        )
+    assert next_cursor is None
+    assert available[0]["api_name"] == "priced"
+    assert available[0]["effective_price"] is None
+
+
 def test_provider_adapter_change_waits_for_concurrent_mapping(
     catalog_database: str, catalog_settings: Settings
 ) -> None:
     """Keep the committed provider and mapping state valid after concurrent writes."""
     context = CatalogContext(catalog_database, catalog_settings)
-    assert context.client.post(
-        "/v1/admin/providers",
-        json={
-            "api_name": "provider",
-            "display_name": "Provider",
-            "adapter": "fake",
-            "enabled": True,
-        },
-        headers=context.write_headers,
-    ).status_code == HTTPStatus.CREATED
-    assert context.client.post(
-        "/v1/admin/models",
-        json={
-            "api_name": "text",
-            "display_name": "Text",
-            "input_modalities": ["text"],
-            "output_modalities": ["text"],
-            "capabilities": [],
-        },
-        headers=context.write_headers,
-    ).status_code == HTTPStatus.CREATED
+    assert (
+        context.client.post(
+            "/v1/admin/providers",
+            json={
+                "api_name": "provider",
+                "display_name": "Provider",
+                "adapter": "fake",
+                "enabled": True,
+            },
+            headers=context.write_headers,
+        ).status_code
+        == HTTPStatus.CREATED
+    )
+    assert (
+        context.client.post(
+            "/v1/admin/models",
+            json={
+                "api_name": "text",
+                "display_name": "Text",
+                "input_modalities": ["text"],
+                "output_modalities": ["text"],
+                "capabilities": [],
+            },
+            headers=context.write_headers,
+        ).status_code
+        == HTTPStatus.CREATED
+    )
     mapping = ProviderModelWrite(
         api_name="concurrent",
         provider_api_name="provider",
@@ -749,16 +970,19 @@ def test_canonical_model_change_waits_for_concurrent_mapping(
 ) -> None:
     """Keep the committed canonical model and mapping valid after concurrent writes."""
     context = CatalogContext(catalog_database, catalog_settings)
-    assert context.client.post(
-        "/v1/admin/providers",
-        json={
-            "api_name": "provider",
-            "display_name": "Provider",
-            "adapter": "fake",
-            "enabled": True,
-        },
-        headers=context.write_headers,
-    ).status_code == HTTPStatus.CREATED
+    assert (
+        context.client.post(
+            "/v1/admin/providers",
+            json={
+                "api_name": "provider",
+                "display_name": "Provider",
+                "adapter": "fake",
+                "enabled": True,
+            },
+            headers=context.write_headers,
+        ).status_code
+        == HTTPStatus.CREATED
+    )
     original_model = {
         "api_name": "mixed",
         "display_name": "Mixed",
@@ -767,9 +991,12 @@ def test_canonical_model_change_waits_for_concurrent_mapping(
         "capabilities": ["streaming"],
         "constraints": {"embedding_dimensions": [3]},
     }
-    assert context.client.post(
-        "/v1/admin/models", json=original_model, headers=context.write_headers
-    ).status_code == HTTPStatus.CREATED
+    assert (
+        context.client.post(
+            "/v1/admin/models", json=original_model, headers=context.write_headers
+        ).status_code
+        == HTTPStatus.CREATED
+    )
     mapping = ProviderModelWrite(
         api_name="concurrent",
         provider_api_name="provider",
@@ -810,7 +1037,7 @@ def test_canonical_model_change_waits_for_concurrent_mapping(
         assert current == {"output_modalities": ["text", "embedding"]}
 
 
-def test_catalog_preview_import_atomicity_dependencies_and_failed_activity(
+def test_catalog_preview_import_atomicity_dependencies_and_failed_activity(  # noqa: PLR0915
     catalog_database: str, catalog_settings: Settings
 ) -> None:
     """Preview without writes and import a complete selection atomically."""
@@ -951,6 +1178,32 @@ def test_catalog_preview_import_atomicity_dependencies_and_failed_activity(
         ).status_code
         == HTTPStatus.CONFLICT
     )
+    with psycopg.connect(catalog_database) as connection:
+        connection.execute(
+            """UPDATE router.assignment_definitions
+               SET reasoning_level = 'high'
+               WHERE api_name = 'default'"""
+        )
+    incompatible_reasoning = client.put(
+        "/v1/admin/provider-models/text",
+        json={
+            "api_name": "text",
+            "provider_api_name": "fake",
+            "model_api_name": "text",
+            "provider_model_name": "fake-text-v1",
+            "enabled": True,
+            "capabilities": [],
+            "reasoning_mappings": [],
+        },
+        headers=context.write_headers,
+    )
+    assert incompatible_reasoning.status_code == HTTPStatus.BAD_REQUEST
+    assert (
+        "reasoning"
+        in client.get(
+            "/v1/admin/provider-models/text", headers=context.read_headers
+        ).json()["capabilities"]
+    )
     disabled = client.put(
         "/v1/admin/provider-models/text",
         json={
@@ -968,6 +1221,26 @@ def test_catalog_preview_import_atomicity_dependencies_and_failed_activity(
     )
     assert disabled.status_code == HTTPStatus.CONFLICT
     with psycopg.connect(catalog_database) as connection:
+        assignment_id = connection.execute(
+            """SELECT assignment.id
+               FROM router.assignment_definitions AS assignment
+               JOIN router.services AS service ON service.id = assignment.service_id
+               WHERE service.api_name = 'assigned-service'
+                 AND assignment.api_name = 'default'"""
+        ).fetchone()
+        provider_model_id = connection.execute(
+            "SELECT id FROM router.provider_models WHERE api_name = 'embedding'"
+        ).fetchone()
+        assert assignment_id is not None
+        assert provider_model_id is not None
+        with pytest.raises(psycopg.errors.CheckViolation):
+            connection.execute(
+                """INSERT INTO router.assignment_candidates
+                       (assignment_id, position, provider_model_id)
+                   VALUES (%s, 16, %s)""",
+                (assignment_id[0], provider_model_id[0]),
+            )
+        connection.rollback()
         connection.execute(
             """DELETE FROM router.assignment_definitions
                WHERE api_name = 'default'"""

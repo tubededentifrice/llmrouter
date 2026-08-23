@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -25,6 +25,7 @@ OutputModality = Literal[
 ]
 ModelCapability = Literal["tool_calling", "streaming", "reasoning"]
 ReasoningLevel = Literal["none", "low", "medium", "high"]
+EmbeddingDimension = Annotated[int, Field(strict=True, ge=1, le=65_536)]
 UsageUnit = Literal[
     "input_token",
     "output_token",
@@ -178,12 +179,16 @@ class ProviderPage(ClosedModel):
 class ModelConstraints(ClosedModel):
     """Bounded embedding and media limits."""
 
-    embedding_dimensions: list[int] | None = Field(
+    embedding_dimensions: list[EmbeddingDimension] | None = Field(
         default=None, min_length=1, max_length=64
     )
-    max_input_images: int | None = Field(default=None, ge=0, le=8)
-    max_input_image_bytes: int | None = Field(default=None, ge=1, le=20 * 1024 * 1024)
-    max_output_duration_seconds: int | None = Field(default=None, ge=1, le=86_400)
+    max_input_images: int | None = Field(default=None, strict=True, ge=1, le=8)
+    max_input_image_bytes: int | None = Field(
+        default=None, strict=True, ge=1, le=20 * 1024 * 1024
+    )
+    max_output_duration_seconds: int | None = Field(
+        default=None, strict=True, ge=1, le=86_400
+    )
 
 
 class ReasoningMapping(ClosedModel):

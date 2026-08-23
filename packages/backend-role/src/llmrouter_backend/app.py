@@ -1209,8 +1209,6 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
         controls: ControlKeys = Depends(control_keys),
     ) -> dict[str, Any]:
         _require_browser_write(request, actor, controls)
-        if body.api_name != credential_api_name:
-            raise invalid_request("api_name", "The body identity must match the path.")
         return cast(
             "dict[str, Any]",
             catalog.configuration_change(
@@ -1222,7 +1220,7 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
                 operation=lambda: catalog.replace_credential(
                     database,
                     api_name=credential_api_name,
-                    secret=body.secret,
+                    value=body,
                     keys=catalog.ProviderCredentialKeys.load(
                         request.app.state.settings
                     ),

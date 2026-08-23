@@ -10,7 +10,7 @@
     },
     {
       "path": "docs/api/openapi.yaml",
-      "sha256": "fdcb595d0a4e8b73cc0f80ee01edd9a2d454ba6dfeab1df2ba407eea35cd34b7"
+      "sha256": "3fd7ca7959c1d461c2976961cc9cd155ae33f84991ed6afb9507c377a3872b98"
     },
     {
       "path": "docs/api/stream-protocol.md",
@@ -65,7 +65,7 @@
     "ModelCallRequest": "f610f8fc9830710885c0c4482d911899e3ed9957f8eb7d43ca299b6bdb159a7a",
     "ModelCallResult": "029646e5d93e0c3c112a28661407e1345e12024f7f8d9393aa372317cc0d26b9",
     "ModelCapability": "b3ac3d69a2cecc7252fbd1bf9f19fd34b1a0306b5ee1d56dd383c79df0b08993",
-    "ModelConstraints": "11503050380eaab651f010f9f05eea3a6150b02efb5b35cf9c2f751220e266b0",
+    "ModelConstraints": "1f945b572030f2b20ac51d4617aae33eefc30211faa30039581a125f86aca093",
     "ModelImportCandidate": "7ef1aa4cf0219634a599e892582932f81967793d0149e4b9098591c2a7f54408",
     "ModelImportPreview": "1af105da570cce9b3956873227fb098c11b13f09ab0938df949e2353cead22e3",
     "ModelImportPreviewRequest": "55c71f56b111cc889eeac082fd34a1e5969369052826e7156d63008e2f86395a",
@@ -82,7 +82,7 @@
     "OutputFormat": "6aab00b49f173347a4937cfa089b386c5d579f15fd1209e7d64a0e0be152ee5e",
     "OutputModality": "ffc9e9b35e27512f3f83fdeeebadb82c9080c856f92062df61be74556c055da4",
     "PageInfo": "9b6a8738e918befcb01f67be69ec7b6686ff09c0c6fa1450ebcf67d397dc1435",
-    "Price": "d789e0e5392003269ca1147cfe35b9f39b2936937d624103d0ca89a318cdbf4a",
+    "Price": "c47b5bf789c8d0d5abef4fad38a2e1522d81e447ada8d8cf35e0b1b79aaf1f29",
     "PriceSyncItem": "f20ebb4ab1b84d0a119c2c70b435b887f945df5ff7ead78e9fba3906e22d6618",
     "PriceSyncRequest": "29cd3235feaf7c4ba47b5213ff99f81661395795be74c38b19c6557b9976b1a9",
     "PriceSyncResult": "b0036f98544c9f7e1b2b9b05820adea692f34c51ba43b9c2c7260b531d2ed972",
@@ -138,6 +138,6 @@
   },
   "contract_set": "llmrouter-v1",
   "generator_version": 3,
-  "source_sha256": "fdcb595d0a4e8b73cc0f80ee01edd9a2d454ba6dfeab1df2ba407eea35cd34b7",
+  "source_sha256": "3fd7ca7959c1d461c2976961cc9cd155ae33f84991ed6afb9507c377a3872b98",
   "version": "1.0.0"
 }

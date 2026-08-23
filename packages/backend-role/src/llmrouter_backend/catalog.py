@@ -21,10 +21,12 @@ from psycopg.types.json import Jsonb
 from llmrouter_backend.control_files import ControlFileError, read_control_file
 from llmrouter_backend.errors import ApiError, conflict, invalid_request, not_found
 from llmrouter_backend.models import (
+    CredentialWrite,
     ModelConstraints,
     ModelImportCandidate,
     ModelImportSelection,
     ModelWrite,
+    Price,
     ProviderModelWrite,
     ProviderWrite,
     ReasoningLevel,
@@ -104,6 +106,7 @@ _REQUIRED_CREDENTIAL_ADAPTERS = frozenset({"openai", "openrouter", "wavespeed"})
 _CREDENTIAL_ADAPTERS = _REQUIRED_CREDENTIAL_ADAPTERS | frozenset(
     {"openai_compatible", "custom", "ollama"}
 )
+_PRICE_SOURCES = frozenset({"openrouter", "wavespeed"})
 _CATALOGS: dict[str, tuple[ModelImportCandidate, ...]] = {
     "openai": (
         ModelImportCandidate(
@@ -325,12 +328,14 @@ def replace_credential(
     connection: Connection[Any],
     *,
     api_name: str,
-    secret: str,
+    value: CredentialWrite,
     keys: ProviderCredentialKeys,
 ) -> dict[str, Any]:
     """Replace one credential for attempts that resolve after commit."""
+    if value.api_name != api_name:
+        raise invalid_request("api_name", "The body identity must match the path.")
     _lock_catalog_write(connection)
-    encrypted, fingerprint = keys.encrypt(api_name, secret)
+    encrypted, fingerprint = keys.encrypt(api_name, value.secret)
     row = connection.execute(
         """UPDATE router.provider_credentials
            SET encrypted_secret = %s, fingerprint = %s,
@@ -402,10 +407,13 @@ def replace_provider(
     if value.api_name != api_name:
         raise invalid_request("api_name", "The body identity must match the path.")
     _lock_catalog_write(connection)
-    if connection.execute(
-        "SELECT 1 FROM router.provider_connections WHERE api_name = %s FOR UPDATE",
-        (api_name,),
-    ).fetchone() is None:
+    if (
+        connection.execute(
+            "SELECT 1 FROM router.provider_connections WHERE api_name = %s FOR UPDATE",
+            (api_name,),
+        ).fetchone()
+        is None
+    ):
         raise not_found("provider")
     _validate_provider(value)
     credential_id = _credential_id(connection, value.credential_api_name)
@@ -503,10 +511,13 @@ def replace_model(
     if value.api_name != api_name:
         raise invalid_request("api_name", "The body identity must match the path.")
     _lock_catalog_write(connection)
-    if connection.execute(
-        "SELECT 1 FROM router.canonical_models WHERE api_name = %s FOR UPDATE",
-        (api_name,),
-    ).fetchone() is None:
+    if (
+        connection.execute(
+            "SELECT 1 FROM router.canonical_models WHERE api_name = %s FOR UPDATE",
+            (api_name,),
+        ).fetchone()
+        is None
+    ):
         raise not_found("model")
     _validate_model(value)
     row = connection.execute(
@@ -585,10 +596,13 @@ def replace_provider_model(
     if value.api_name != api_name:
         raise invalid_request("api_name", "The body identity must match the path.")
     _lock_catalog_write(connection)
-    if connection.execute(
-        "SELECT 1 FROM router.provider_models WHERE api_name = %s FOR UPDATE",
-        (api_name,),
-    ).fetchone() is None:
+    if (
+        connection.execute(
+            "SELECT 1 FROM router.provider_models WHERE api_name = %s FOR UPDATE",
+            (api_name,),
+        ).fetchone()
+        is None
+    ):
         raise not_found("provider-model")
     if not value.enabled and _provider_model_is_assigned(connection, api_name):
         raise conflict("A current assignment requires this provider-model.")
@@ -604,6 +618,7 @@ def replace_provider_model(
     ).fetchone()
     if row is None:
         raise not_found("provider-model")
+    _validate_assigned_provider_model(connection, api_name)
     return _required_provider_model(connection, api_name)
 
 
@@ -637,7 +652,9 @@ def list_available_provider_models(
         """SELECT mapping.api_name, model.display_name,
                   mapping.input_modalities, mapping.output_modalities,
                   mapping.capabilities, mapping.constraints,
-                  COALESCE(mapping.manual_price, model.manual_price) AS effective_price
+                  CASE WHEN mapping.price_source IS NOT NULL THEN mapping.manual_price
+                       ELSE COALESCE(mapping.manual_price, model.manual_price)
+                  END AS effective_price
            FROM router.provider_models AS mapping
            JOIN router.provider_connections AS provider ON provider.id = mapping.provider_id
            JOIN router.canonical_models AS model ON model.id = mapping.model_id
@@ -834,6 +851,10 @@ def validate_assignment_reasoning(
     reasoning_level: ReasoningLevel | None,
 ) -> None:
     """Validate one assignment reasoning value across each exact candidate."""
+    if not 1 <= len(provider_model_api_names) <= 16:
+        raise invalid_request(
+            "candidates", "An assignment must contain from 1 through 16 candidates."
+        )
     if len(set(provider_model_api_names)) != len(provider_model_api_names):
         raise invalid_request(
             "candidates", "An assignment cannot contain a duplicate candidate."
@@ -958,12 +979,14 @@ def _validate_provider(value: ProviderWrite) -> None:
 
 
 def _validate_endpoint(value: str, *, loopback_required: bool) -> None:
-    parsed = urlsplit(value)
     try:
+        parsed = urlsplit(value)
         port = parsed.port
+        host = parsed.hostname
     except ValueError:
-        port = 0
-    host = parsed.hostname
+        raise invalid_request(
+            "endpoint", "The provider endpoint is not safe."
+        ) from None
     loopback = host in {"127.0.0.1", "localhost", "::1"}
     valid_host = bool(host and (_valid_public_hostname(host) or loopback))
     if (
@@ -1018,7 +1041,9 @@ def _validate_model(value: ModelWrite) -> None:
         if value.constraints is not None
         else {},
     )
+    _validate_capability_applicability(value.output_modalities, value.capabilities)
     _validate_price_source(value.price_source, value.price_lookup_key)
+    _validate_price_authority(value.price_source, value.manual_price)
     _validate_price(
         value.manual_price.model_dump(mode="json", exclude_none=True)
         if value.manual_price
@@ -1124,6 +1149,7 @@ def _normalized_provider_model(
         reasoning=reasoning,
     )
     _validate_price_source(value.price_source, value.price_lookup_key)
+    _validate_price_authority(value.price_source, value.manual_price)
     manual_price = (
         value.manual_price.model_dump(mode="json", exclude_none=True)
         if value.manual_price
@@ -1178,11 +1204,7 @@ def _validate_mapping_values(
         raise invalid_request(
             "capabilities", "The mapping claims an unavailable capability."
         )
-    if not ({"text", "structured_json"} & set(outputs)) and capabilities:
-        raise invalid_request(
-            "capabilities",
-            "Text-route capabilities require text or structured JSON output.",
-        )
+    _validate_capability_applicability(outputs, capabilities)
     _validate_constraint_applicability(inputs, outputs, constraints)
     _validate_constraint_narrowing(canonical["constraints"], constraints)
     mapping_levels = [item["level"] for item in reasoning]
@@ -1211,6 +1233,16 @@ def _validate_mapping_values(
 def _validate_constraints(value: ModelConstraints | None) -> None:
     if value and value.embedding_dimensions:
         _unique(value.embedding_dimensions, "embedding_dimensions")
+
+
+def _validate_capability_applicability(
+    outputs: Sequence[str], capabilities: Sequence[str]
+) -> None:
+    if not ({"text", "structured_json"} & set(outputs)) and capabilities:
+        raise invalid_request(
+            "capabilities",
+            "Text-route capabilities require text or structured JSON output.",
+        )
 
 
 def _validate_constraint_narrowing(
@@ -1288,6 +1320,45 @@ def _provider_has_assigned_mapping(connection: Connection[Any], api_name: str) -
     )
 
 
+def _validate_assigned_provider_model(
+    connection: Connection[Any], api_name: str
+) -> None:
+    """Keep each assignment valid after one mapping replacement."""
+    rows = connection.execute(
+        """SELECT assignment.id, assignment.reasoning_level
+           FROM router.assignment_definitions AS assignment
+           JOIN router.assignment_candidates AS candidate
+             ON candidate.assignment_id = assignment.id
+           JOIN router.provider_models AS mapping
+             ON mapping.id = candidate.provider_model_id
+           WHERE mapping.api_name = %s
+           FOR UPDATE OF assignment""",
+        (api_name,),
+    ).fetchall()
+    for row in rows:
+        candidates = connection.execute(
+            """SELECT mapping.api_name
+               FROM router.assignment_candidates AS candidate
+               JOIN router.provider_models AS mapping
+                 ON mapping.id = candidate.provider_model_id
+               WHERE candidate.assignment_id = %s
+               ORDER BY candidate.position""",
+            (row["id"],),
+        ).fetchall()
+        try:
+            validate_assignment_reasoning(
+                connection,
+                [candidate["api_name"] for candidate in candidates],
+                row["reasoning_level"],
+            )
+        except ApiError as error:
+            if error.code == "provider_unavailable":
+                raise conflict(
+                    "A current assignment requires this provider-model."
+                ) from error
+            raise
+
+
 def _model_parameters(value: ModelWrite) -> tuple[Any, ...]:
     constraints = (
         value.constraints.model_dump(mode="json", exclude_none=True)
@@ -1323,9 +1394,13 @@ _PROVIDER_MODEL_SELECT = """SELECT mapping.api_name,
     provider.api_name AS provider_api_name, model.api_name AS model_api_name,
     mapping.provider_model_name, mapping.enabled, mapping.input_modalities,
     mapping.output_modalities, mapping.capabilities, mapping.constraints,
-    mapping.reasoning_mappings, COALESCE(mapping.price_source, model.price_source) AS price_source,
-    COALESCE(mapping.price_lookup_key, model.price_lookup_key) AS price_lookup_key,
-    COALESCE(mapping.manual_price, model.manual_price) AS effective_price,
+    mapping.reasoning_mappings,
+    CASE WHEN mapping.manual_price IS NOT NULL THEN NULL
+         ELSE COALESCE(mapping.price_source, model.price_source) END AS price_source,
+    CASE WHEN mapping.manual_price IS NOT NULL THEN NULL
+         ELSE COALESCE(mapping.price_lookup_key, model.price_lookup_key) END AS price_lookup_key,
+    CASE WHEN mapping.price_source IS NOT NULL THEN mapping.manual_price
+         ELSE COALESCE(mapping.manual_price, model.manual_price) END AS effective_price,
     mapping.created_at
 FROM router.provider_models AS mapping
 JOIN router.provider_connections AS provider ON provider.id = mapping.provider_id
@@ -1370,6 +1445,21 @@ def _validate_price_source(source: str | None, key: str | None) -> None:
     if (source is None) != (key is None):
         raise invalid_request(
             "price_source", "A price source and lookup key must occur together."
+        )
+    if source is not None and source not in _PRICE_SOURCES:
+        raise invalid_request("price_source", "The price source is not registered.")
+
+
+def _validate_price_authority(source: str | None, manual_price: Price | None) -> None:
+    if source is not None and manual_price is not None:
+        raise invalid_request(
+            "manual_price", "Manual pricing cannot also select a price source."
+        )
+    if manual_price is not None and (
+        manual_price.source is not None or manual_price.synchronized_at is not None
+    ):
+        raise invalid_request(
+            "manual_price", "Manual pricing cannot contain synchronization metadata."
         )
 
 

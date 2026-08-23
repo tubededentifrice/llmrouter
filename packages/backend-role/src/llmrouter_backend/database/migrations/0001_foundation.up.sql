@@ -195,7 +195,7 @@ CREATE TABLE router.provider_models (
 
 CREATE TABLE router.assignment_candidates (
     assignment_id uuid NOT NULL REFERENCES router.assignment_definitions(id) ON DELETE CASCADE,
-    position integer NOT NULL CHECK (position BETWEEN 0 AND 63),
+    position integer NOT NULL CHECK (position BETWEEN 0 AND 15),
     provider_model_id uuid NOT NULL REFERENCES router.provider_models(id) ON DELETE RESTRICT,
     PRIMARY KEY (assignment_id, position),
     UNIQUE (assignment_id, provider_model_id)
