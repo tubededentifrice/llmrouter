@@ -1,1 +1,15 @@
+DROP TABLE router.media_objects;
+DROP TABLE router.media_jobs;
+DROP TABLE router.daily_accounting;
+DROP TABLE router.raw_accounting;
+DROP TABLE router.request_logs;
+DROP TABLE router.assignment_definitions;
+DROP TABLE router.activity_events;
+DROP TABLE router.administrator_sessions;
+DROP TABLE router.administrator_oidc_flows;
+DROP TABLE router.service_api_keys;
+DROP TABLE router.workspaces;
+DROP TABLE router.services;
+DROP FUNCTION router.reject_service_cycle();
+DROP DOMAIN router.api_name;
 DROP SCHEMA router;

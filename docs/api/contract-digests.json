@@ -10,7 +10,7 @@
     },
     {
       "path": "docs/api/openapi.yaml",
-      "sha256": "ecfc50cb2429e7ff2c32fe791d1ab7d3ce6097a916e2606470fc11773c363adb"
+      "sha256": "382c95a3b7d8d981a9bfb7c5f8258e4fb73d37e78f6bddd5ab9a89626c65436d"
     },
     {
       "path": "docs/api/stream-protocol.md",
@@ -18,7 +18,7 @@
     }
   ],
   "component_schemas": {
-    "ActivityEvent": "a7722ddc9c51eef29f142a9c864c25181097a2b55bd43f37838fe84f55da0b51",
+    "ActivityEvent": "d6029ad4263c202618bc2b38217c5ccd67a4dbe3678e1b9c566cfcdba5ec3e1c",
     "ActivityPage": "360434a60db7b696d56c2af8cc4f4e0cf30e3723e89f64f62804be0387c17418",
     "AdministratorHealth": "7dae8629e96b35a995493822700c779cd61befab435d2bdad51b97061cd3ad68",
     "AdministratorSession": "89727f3387d58554e69d7938d5063df4f4410726a998f979ca3b586cf6a36bc0",
@@ -138,6 +138,6 @@
   },
   "contract_set": "llmrouter-v1",
   "generator_version": 3,
-  "source_sha256": "ecfc50cb2429e7ff2c32fe791d1ab7d3ce6097a916e2606470fc11773c363adb",
+  "source_sha256": "382c95a3b7d8d981a9bfb7c5f8258e4fb73d37e78f6bddd5ab9a89626c65436d",
   "version": "1.0.0"
 }

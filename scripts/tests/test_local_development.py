@@ -88,6 +88,17 @@ def test_local_wrapper_preserves_identity_inputs_and_resets_database() -> None:
     assert 'if [[ "${configured}" == "3" ]]' in script
 
 
+def test_pocket_id_callback_matches_the_registered_exact_redirect() -> None:
+    """Keep one callback that matches the existing Pocket ID client."""
+    compose = COMPOSE_PATH.read_text(encoding="utf-8")
+    contract = (REPOSITORY_ROOT / "docs/api/openapi.yaml").read_text(encoding="utf-8")
+    callback = "/v1/admin/oidc/callback"
+    assert f"https://llmrouter.opendle.dev{callback}" in compose
+    assert f"  {callback}:" in contract
+    assert "/v1/admin/session/callback" not in compose
+    assert "/v1/admin/session/callback" not in contract
+
+
 def test_local_wrapper_rejects_a_public_address_before_start() -> None:
     """Keep the wrapper loopback check explicit and early."""
     script = (REPOSITORY_ROOT / "scripts/local-development.sh").read_text(
@@ -110,9 +121,7 @@ def test_local_start_reruns_migrations_before_the_application() -> None:
     )
     stop = script.index("compose stop admin-dev backend")
     migration = script.index(migration_command, stop)
-    jobs_complete = script.index(
-        "compose wait migrate node-dependencies", migration
-    )
+    jobs_complete = script.index("compose wait migrate node-dependencies", migration)
     application_command = (
         "compose up --detach --remove-orphans --no-deps backend admin-dev"
     )

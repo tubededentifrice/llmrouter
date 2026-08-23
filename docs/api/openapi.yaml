@@ -408,13 +408,18 @@ paths:
       responses:
         "200":
           description: Sign-in redirect.
+          headers:
+            Set-Cookie:
+              description: Short-lived browser binding for the sign-in callback.
+              schema:
+                type: string
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/AdministratorSessionRedirect"
         default:
           $ref: "#/components/responses/ErrorResponse"
-  /v1/admin/session/callback:
+  /v1/admin/oidc/callback:
     get:
       operationId: completeAdministratorSession
       summary: Complete the Pocket ID sign-in flow.
@@ -423,12 +428,16 @@ paths:
         - $ref: "#/components/parameters/AuthorizationCode"
         - $ref: "#/components/parameters/OidcState"
       responses:
-        "200":
-          description: Administrator session.
-          content:
-            application/json:
+        "303":
+          description: Administrator session created and browser returned locally.
+          headers:
+            Location:
+              required: true
               schema:
-                $ref: "#/components/schemas/AdministratorSession"
+                type: string
+                minLength: 1
+                maxLength: 1000
+                pattern: "^/(?:[A-Za-z0-9_?&=.-][A-Za-z0-9/_?&=.-]*)?$"
         default:
           $ref: "#/components/responses/ErrorResponse"
   /v1/admin/session:
@@ -3077,8 +3086,12 @@ components:
           type: string
           minLength: 1
           maxLength: 200
+        service_api_name:
+          $ref: "#/components/schemas/ApiName"
         resource_api_name:
           $ref: "#/components/schemas/ApiName"
+        resource_id:
+          $ref: "#/components/schemas/OpaqueId"
         result:
           type: string
           enum: [succeeded, failed]

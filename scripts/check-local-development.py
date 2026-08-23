@@ -48,6 +48,16 @@ def main() -> None:
 
     required_identity_inputs = {
         "LLMROUTER_PUBLIC_ADMIN_AUTH: ${LLMROUTER_PUBLIC_ADMIN_AUTH:-0}",
+        "LLMROUTER_OIDC_ISSUER: https://auth.opendle.dev",
+        (
+            "LLMROUTER_OIDC_REDIRECT_URI: "
+            "https://llmrouter.opendle.dev/v1/admin/oidc/callback"
+        ),
+        'LLMROUTER_ADMIN_SESSION_HOURS: "24"',
+        (
+            "LLMROUTER_ADMIN_ALLOWED_ORIGINS: "
+            "http://127.0.0.1:5174,https://llmrouter.opendle.dev"
+        ),
         "LLMROUTER_OIDC_CLIENT_ID_FILE: /run/secrets/oidc_client_id",
         "LLMROUTER_OIDC_CLIENT_SECRET_FILE: /run/secrets/oidc_client_secret",
         "LLMROUTER_ADMINISTRATOR_SUBJECTS_FILE: /run/secrets/administrator_subjects",

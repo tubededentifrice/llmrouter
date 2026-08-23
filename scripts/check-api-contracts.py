@@ -242,7 +242,7 @@ def check_reset_boundaries(spec: dict[str, Any]) -> None:
         raise ContractError(
             f"Required simplified API paths are missing: {sorted(required_paths - paths)}"
         )
-    callback = spec.get("paths", {}).get("/v1/admin/session/callback", {})
+    callback = spec.get("paths", {}).get("/v1/admin/oidc/callback", {})
     if "get" not in callback or "post" in callback:
         raise ContractError("The OpenID Connect callback is not a browser GET operation")
     for path in paths:

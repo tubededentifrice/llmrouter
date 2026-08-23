@@ -8,11 +8,16 @@ version = "0.0.0"
 description = "LLM Router web application"
 requires-python = "==3.14.*"
 dependencies = [
+  "cryptography==49.0.0",
   "fastapi==0.140.13",
   "httpx==0.28.1",
+  "opendle-lib @ git+https://github.com/opendle/opendle-lib.git@main",
   "psycopg[binary]==3.3.4",
   "uvicorn==0.51.0",
 ]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/llmrouter_backend"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
