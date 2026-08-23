@@ -23,7 +23,7 @@ from pydantic import ValidationError
 from starlette.exceptions import HTTPException as StarletteHttpException
 from starlette.middleware.base import RequestResponseEndpoint
 
-from llmrouter_backend import catalog
+from llmrouter_backend import assignments, catalog
 from llmrouter_backend.config import Settings
 from llmrouter_backend.database import migration_plan
 from llmrouter_backend.diagnostics import (
@@ -48,6 +48,9 @@ from llmrouter_backend.models import (
     AdministratorHealth,
     AdministratorSession,
     AdministratorSessionStart,
+    Assignment,
+    AssignmentPage,
+    AssignmentWrite,
     AvailableProviderModel,
     AvailableProviderModelPage,
     Credential,
@@ -127,6 +130,25 @@ _ADMINISTRATOR_COOKIE = "llmrouter_admin_session"
 _OIDC_FLOW_COOKIE = "llmrouter_admin_oidc_flow"
 _OIDC_FLOW_MINUTES = 10
 ApiNamePath = Annotated[str, Path(pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$")]
+AssignmentNamePath = Annotated[
+    str, Path(pattern=r"^[a-z0-9][a-z0-9._-]{0,126}$")
+]
+ObservedRequirementPath = Annotated[
+    Literal[
+        "text_input",
+        "image_input",
+        "text_output",
+        "structured_json_output",
+        "tool_calling",
+        "streaming",
+        "reasoning",
+        "embedding_output",
+        "image_output",
+        "video_output",
+        "audio_output",
+    ],
+    Path(),
+]
 
 
 def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
@@ -337,6 +359,116 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
             actor_subject=actor.activity_subject,
         )
         _commit_public_delete_and_cleanup(database, objects)
+        return Response(status_code=HTTPStatus.NO_CONTENT)
+
+    @application.get(
+        "/v1/assignments",
+        response_model=AssignmentPage,
+        response_model_exclude_none=True,
+    )
+    def service_list_assignments(
+        limit: Annotated[int, Query(ge=1, le=200)] = 50,
+        cursor: Annotated[str | None, Query(min_length=1, max_length=500)] = None,
+        actor: ServiceActor = Depends(service_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+    ) -> AssignmentPage:
+        items, next_cursor = assignments.list_assignments(
+            database, service_id=actor.service_id, limit=limit, cursor=cursor
+        )
+        return AssignmentPage(
+            items=[Assignment.model_validate(item) for item in items],
+            page=PageInfo(has_more=next_cursor is not None, next_cursor=next_cursor),
+        )
+
+    @application.get(
+        "/v1/assignments/{assignment_api_name}",
+        response_model=Assignment,
+        response_model_exclude_none=True,
+    )
+    def service_get_assignment(
+        assignment_api_name: AssignmentNamePath,
+        actor: ServiceActor = Depends(service_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+    ) -> dict[str, Any]:
+        return assignments.get_assignment(
+            database, service_id=actor.service_id, api_name=assignment_api_name
+        )
+
+    @application.put(
+        "/v1/assignments/{assignment_api_name}",
+        response_model=Assignment,
+        response_model_exclude_none=True,
+    )
+    def service_put_assignment(
+        assignment_api_name: AssignmentNamePath,
+        body: AssignmentWrite,
+        actor: ServiceActor = Depends(service_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+    ) -> dict[str, Any]:
+        return cast(
+            "dict[str, Any]",
+            assignments.configuration_change(
+                database,
+                actor_subject=actor.activity_subject,
+                service_id=actor.service_id,
+                service_api_name=actor.service_api_name,
+                action="assignment.update",
+                assignment_api_name=assignment_api_name,
+                operation=lambda: assignments.put_assignment(
+                    database,
+                    service_id=actor.service_id,
+                    api_name=assignment_api_name,
+                    value=body,
+                ),
+            ),
+        )
+
+    @application.delete(
+        "/v1/assignments/{assignment_api_name}",
+        status_code=HTTPStatus.NO_CONTENT,
+    )
+    def service_delete_assignment(
+        assignment_api_name: AssignmentNamePath,
+        actor: ServiceActor = Depends(service_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+    ) -> Response:
+        assignments.configuration_change(
+            database,
+            actor_subject=actor.activity_subject,
+            service_id=actor.service_id,
+            service_api_name=actor.service_api_name,
+            action="assignment.delete",
+            assignment_api_name=assignment_api_name,
+            operation=lambda: assignments.delete_assignment(
+                database, service_id=actor.service_id, api_name=assignment_api_name
+            ),
+        )
+        return Response(status_code=HTTPStatus.NO_CONTENT)
+
+    @application.delete(
+        "/v1/assignments/{assignment_api_name}/observed-requirements/{observed_requirement}",
+        status_code=HTTPStatus.NO_CONTENT,
+    )
+    def service_remove_observed_assignment_requirement(
+        assignment_api_name: AssignmentNamePath,
+        observed_requirement: ObservedRequirementPath,
+        actor: ServiceActor = Depends(service_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+    ) -> Response:
+        assignments.configuration_change(
+            database,
+            actor_subject=actor.activity_subject,
+            service_id=actor.service_id,
+            service_api_name=actor.service_api_name,
+            action="assignment.observed_requirement.remove",
+            assignment_api_name=assignment_api_name,
+            operation=lambda: assignments.remove_observed_requirement(
+                database,
+                service_id=actor.service_id,
+                api_name=assignment_api_name,
+                observed_requirement=observed_requirement,
+            ),
+        )
         return Response(status_code=HTTPStatus.NO_CONTENT)
 
     @application.get(
@@ -645,6 +777,7 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
             display_name=body.display_name,
             parent_api_name=body.parent_service_api_name,
             actor=actor,
+            validate_dependents=lambda: assignments.validate_all_assignments(database),
         )
 
     @application.delete(
@@ -813,6 +946,141 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
             service_id=service_id(database, service_api_name),
             key_id=_key_id(key_id),
             actor_subject=actor.activity_subject,
+        )
+        return Response(status_code=HTTPStatus.NO_CONTENT)
+
+    @application.get(
+        "/v1/admin/services/{service_api_name}/assignments",
+        response_model=AssignmentPage,
+        response_model_exclude_none=True,
+    )
+    def admin_list_assignments(
+        service_api_name: ApiNamePath,
+        limit: Annotated[int, Query(ge=1, le=200)] = 50,
+        cursor: Annotated[str | None, Query(min_length=1, max_length=500)] = None,
+        _actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+    ) -> AssignmentPage:
+        selected_service_id = service_id(database, service_api_name)
+        items, next_cursor = assignments.list_assignments(
+            database,
+            service_id=selected_service_id,
+            limit=limit,
+            cursor=cursor,
+        )
+        return AssignmentPage(
+            items=[Assignment.model_validate(item) for item in items],
+            page=PageInfo(has_more=next_cursor is not None, next_cursor=next_cursor),
+        )
+
+    @application.get(
+        "/v1/admin/services/{service_api_name}/assignments/{assignment_api_name}",
+        response_model=Assignment,
+        response_model_exclude_none=True,
+    )
+    def admin_get_assignment(
+        service_api_name: ApiNamePath,
+        assignment_api_name: AssignmentNamePath,
+        _actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+    ) -> dict[str, Any]:
+        return assignments.get_assignment(
+            database,
+            service_id=service_id(database, service_api_name),
+            api_name=assignment_api_name,
+        )
+
+    @application.put(
+        "/v1/admin/services/{service_api_name}/assignments/{assignment_api_name}",
+        response_model=Assignment,
+        response_model_exclude_none=True,
+    )
+    def admin_put_assignment(
+        service_api_name: ApiNamePath,
+        assignment_api_name: AssignmentNamePath,
+        body: AssignmentWrite,
+        request: Request,
+        actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+        controls: ControlKeys = Depends(control_keys),
+    ) -> dict[str, Any]:
+        _require_browser_write(request, actor, controls)
+        selected_service_id = service_id(database, service_api_name)
+        return cast(
+            "dict[str, Any]",
+            assignments.configuration_change(
+                database,
+                actor_subject=actor.activity_subject,
+                service_id=selected_service_id,
+                service_api_name=service_api_name,
+                action="assignment.update",
+                assignment_api_name=assignment_api_name,
+                operation=lambda: assignments.put_assignment(
+                    database,
+                    service_id=selected_service_id,
+                    api_name=assignment_api_name,
+                    value=body,
+                ),
+            ),
+        )
+
+    @application.delete(
+        "/v1/admin/services/{service_api_name}/assignments/{assignment_api_name}",
+        status_code=HTTPStatus.NO_CONTENT,
+    )
+    def admin_delete_assignment(
+        service_api_name: ApiNamePath,
+        assignment_api_name: AssignmentNamePath,
+        request: Request,
+        actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+        controls: ControlKeys = Depends(control_keys),
+    ) -> Response:
+        _require_browser_write(request, actor, controls)
+        selected_service_id = service_id(database, service_api_name)
+        assignments.configuration_change(
+            database,
+            actor_subject=actor.activity_subject,
+            service_id=selected_service_id,
+            service_api_name=service_api_name,
+            action="assignment.delete",
+            assignment_api_name=assignment_api_name,
+            operation=lambda: assignments.delete_assignment(
+                database,
+                service_id=selected_service_id,
+                api_name=assignment_api_name,
+            ),
+        )
+        return Response(status_code=HTTPStatus.NO_CONTENT)
+
+    @application.delete(
+        "/v1/admin/services/{service_api_name}/assignments/{assignment_api_name}/observed-requirements/{observed_requirement}",
+        status_code=HTTPStatus.NO_CONTENT,
+    )
+    def admin_remove_observed_assignment_requirement(
+        service_api_name: ApiNamePath,
+        assignment_api_name: AssignmentNamePath,
+        observed_requirement: ObservedRequirementPath,
+        request: Request,
+        actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+        controls: ControlKeys = Depends(control_keys),
+    ) -> Response:
+        _require_browser_write(request, actor, controls)
+        selected_service_id = service_id(database, service_api_name)
+        assignments.configuration_change(
+            database,
+            actor_subject=actor.activity_subject,
+            service_id=selected_service_id,
+            service_api_name=service_api_name,
+            action="assignment.observed_requirement.remove",
+            assignment_api_name=assignment_api_name,
+            operation=lambda: assignments.remove_observed_requirement(
+                database,
+                service_id=selected_service_id,
+                api_name=assignment_api_name,
+                observed_requirement=observed_requirement,
+            ),
         )
         return Response(status_code=HTTPStatus.NO_CONTENT)
 

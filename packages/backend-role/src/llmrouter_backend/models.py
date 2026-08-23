@@ -1,12 +1,12 @@
 """Closed HTTP models for service and administrator operations."""
-# ruff: noqa: TC003
+# ruff: noqa: EM101, TC003, TRY003
 
 from __future__ import annotations
 
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 ApiName = str
 ProviderAdapter = Literal[
@@ -25,6 +25,19 @@ OutputModality = Literal[
 ]
 ModelCapability = Literal["tool_calling", "streaming", "reasoning"]
 ReasoningLevel = Literal["none", "low", "medium", "high"]
+ObservedRequirement = Literal[
+    "text_input",
+    "image_input",
+    "text_output",
+    "structured_json_output",
+    "tool_calling",
+    "streaming",
+    "reasoning",
+    "embedding_output",
+    "image_output",
+    "video_output",
+    "audio_output",
+]
 EmbeddingDimension = Annotated[int, Field(strict=True, ge=1, le=65_536)]
 UsageUnit = Literal[
     "input_token",
@@ -133,6 +146,95 @@ class WorkspacePage(BaseModel):
     """Workspace page."""
 
     items: list[Workspace]
+    page: PageInfo
+
+
+class ProviderModelCandidate(ClosedModel):
+    """One ordered provider-model assignment candidate."""
+
+    provider_model_api_name: str = Field(
+        pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+    )
+
+
+class AssignmentWrite(ClosedModel):
+    """One complete direct or inherited assignment definition."""
+
+    display_name: str | None = Field(default=None, min_length=1, max_length=200)
+    inherits_assignment_api_name: str | None = Field(
+        default=None, pattern=r"^[a-z0-9][a-z0-9._-]{0,126}$"
+    )
+    direct_chain: list[ProviderModelCandidate] | None = Field(
+        default=None, min_length=1, max_length=16
+    )
+    reasoning_level: ReasoningLevel | None = None
+
+    @model_validator(mode="after")
+    def require_one_definition(self) -> AssignmentWrite:
+        """Require exactly one assignment definition form."""
+        if (self.inherits_assignment_api_name is None) == (self.direct_chain is None):
+            raise ValueError("One direct chain or inherited assignment is required.")
+        if self.direct_chain is not None:
+            names = [item.provider_model_api_name for item in self.direct_chain]
+            if len(names) != len(set(names)):
+                raise ValueError("An assignment candidate cannot occur more than once.")
+        return self
+
+
+class Assignment(ClosedModel):
+    """One effective service assignment and its local use evidence."""
+
+    api_name: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{0,126}$")
+    display_name: str = Field(min_length=1, max_length=200)
+    definition_kind: Literal["implicit", "inherited_assignment", "direct_chain"]
+    defined_by_service_api_name: str | None = Field(
+        default=None, pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+    )
+    inherits_assignment_api_name: str | None = Field(
+        default=None, pattern=r"^[a-z0-9][a-z0-9._-]{0,126}$"
+    )
+    direct_chain: list[ProviderModelCandidate] | None = Field(
+        default=None, min_length=1, max_length=16
+    )
+    effective_chain: list[ProviderModelCandidate] = Field(max_length=16)
+    reasoning_level: ReasoningLevel | None = None
+    observed_requirements: list[ObservedRequirement] = Field(max_length=11)
+    last_used_at: datetime | None = None
+    created_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def validate_definition_shape(self) -> Assignment:
+        """Enforce the response union and unique ordered arrays."""
+        if self.definition_kind == "implicit" and (
+            self.inherits_assignment_api_name is not None
+            or self.direct_chain is not None
+        ):
+            raise ValueError("An implicit assignment has no stored definition.")
+        if self.definition_kind == "inherited_assignment" and (
+            self.inherits_assignment_api_name is None or self.direct_chain is not None
+        ):
+            raise ValueError("An inherited assignment must name one assignment.")
+        if self.definition_kind == "direct_chain" and (
+            self.direct_chain is None
+            or self.inherits_assignment_api_name is not None
+        ):
+            raise ValueError("A direct assignment must contain one direct chain.")
+        for values in (
+            self.direct_chain or [],
+            self.effective_chain,
+        ):
+            names = [item.provider_model_api_name for item in values]
+            if len(names) != len(set(names)):
+                raise ValueError("An assignment candidate cannot occur more than once.")
+        if len(self.observed_requirements) != len(set(self.observed_requirements)):
+            raise ValueError("An observed requirement cannot occur more than once.")
+        return self
+
+
+class AssignmentPage(ClosedModel):
+    """Assignment page."""
+
+    items: list[Assignment]
     page: PageInfo
 
 

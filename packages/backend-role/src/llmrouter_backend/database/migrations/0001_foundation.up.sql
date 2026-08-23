@@ -129,9 +129,36 @@ CREATE TABLE router.assignment_definitions (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     service_id uuid NOT NULL REFERENCES router.services(id) ON DELETE CASCADE,
     api_name router.assignment_name NOT NULL,
-    payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+    display_name text NOT NULL DEFAULT 'Assignment'
+        CHECK (char_length(display_name) BETWEEN 1 AND 200),
+    inherits_assignment_api_name router.assignment_name,
     reasoning_level text CHECK (reasoning_level IN ('none', 'low', 'medium', 'high')),
+    created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
     UNIQUE (service_id, api_name)
+);
+
+CREATE FUNCTION router.text_array_is_unique(input_values text[]) RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+STRICT
+SET search_path = pg_catalog
+AS $$
+    SELECT cardinality(input_values) = count(DISTINCT item)
+    FROM unnest(input_values) AS item
+$$;
+
+CREATE TABLE router.assignment_usage (
+    service_id uuid NOT NULL REFERENCES router.services(id) ON DELETE CASCADE,
+    api_name router.assignment_name NOT NULL,
+    observed_requirements text[] NOT NULL DEFAULT '{}',
+    last_used_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+    PRIMARY KEY (service_id, api_name),
+    CHECK (observed_requirements <@ ARRAY[
+        'text_input', 'image_input', 'text_output',
+        'structured_json_output', 'tool_calling', 'streaming', 'reasoning',
+        'embedding_output', 'image_output', 'video_output', 'audio_output'
+    ]::text[]),
+    CHECK (router.text_array_is_unique(observed_requirements))
 );
 
 CREATE TABLE router.provider_credentials (

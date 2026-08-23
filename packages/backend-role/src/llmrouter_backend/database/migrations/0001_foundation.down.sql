@@ -7,6 +7,8 @@ DROP TABLE router.daily_accounting;
 DROP TABLE router.raw_accounting;
 DROP TABLE router.request_logs;
 DROP TABLE router.assignment_candidates;
+DROP TABLE router.assignment_usage;
+DROP FUNCTION router.text_array_is_unique(text[]);
 DROP TABLE router.provider_models;
 DROP TABLE router.canonical_models;
 DROP TABLE router.provider_connections;

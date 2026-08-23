@@ -14,6 +14,8 @@ from llmrouter_backend.errors import authentication_required, invalid_request, n
 from llmrouter_backend.security import ControlKeys, create_service_key, service_key_id
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from psycopg import Connection
 
 
@@ -101,27 +103,49 @@ def update_service(
     display_name: str,
     parent_api_name: str | None,
     actor: AdministratorActor,
+    validate_dependents: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
-    """Replace mutable service fields under the database cycle lock."""
-    parent_id = _service_id(connection, parent_api_name) if parent_api_name else None
-    row = connection.execute(
-        """UPDATE router.services
-           SET display_name = %s, parent_service_id = %s
-           WHERE api_name = %s
-           RETURNING id, api_name, display_name, created_at""",
-        (display_name, parent_id, api_name),
-    ).fetchone()
-    if row is None:
-        raise not_found("service")
-    row["parent_service_api_name"] = parent_api_name
-    record_activity(
-        connection,
-        actor.activity_subject,
-        "service.update",
-        "service",
-        resource_api_name=api_name,
-        resource_id=row["id"],
-    )
+    """Replace service fields and validate dependent assignment graphs."""
+    try:
+        parent_id = (
+            _service_id(connection, parent_api_name) if parent_api_name else None
+        )
+        row = connection.execute(
+            """UPDATE router.services
+               SET display_name = %s, parent_service_id = %s
+               WHERE api_name = %s
+               RETURNING id, api_name, display_name, created_at""",
+            (display_name, parent_id, api_name),
+        ).fetchone()
+        if row is None:
+            raise not_found("service")  # noqa: TRY301
+        if validate_dependents is not None:
+            validate_dependents()
+        row["parent_service_api_name"] = parent_api_name
+        record_activity(
+            connection,
+            actor.activity_subject,
+            "service.update",
+            "service",
+            resource_api_name=api_name,
+            resource_id=row["id"],
+        )
+    except Exception:
+        connection.rollback()
+        current = connection.execute(
+            "SELECT id FROM router.services WHERE api_name = %s", (api_name,)
+        ).fetchone()
+        record_activity(
+            connection,
+            actor.activity_subject,
+            "service.update",
+            "service",
+            resource_api_name=api_name,
+            resource_id=current["id"] if current is not None else None,
+            result="failed",
+        )
+        connection.commit()
+        raise
     return cast("dict[str, Any]", row)
 
 

@@ -54,6 +54,24 @@ def invalid_request(field: str | None = None, reason: str | None = None) -> ApiE
     )
 
 
+def assignment_cycle() -> ApiError:
+    """Create the stable assignment inheritance cycle result."""
+    return ApiError(
+        409,
+        "assignment_cycle",
+        "The assignment inheritance would contain a cycle.",
+    )
+
+
+def provider_unavailable() -> ApiError:
+    """Report that no current provider-model can accept the call."""
+    return ApiError(
+        503,
+        "provider_unavailable",
+        "No eligible provider-model is available.",
+    )
+
+
 def content_unavailable() -> ApiError:
     """Report safe early loss or expiry of retained media bytes."""
     return ApiError(
