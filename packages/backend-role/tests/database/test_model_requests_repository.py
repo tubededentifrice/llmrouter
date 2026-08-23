@@ -7,6 +7,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import psycopg
+import pytest
 from llmrouter_backend.admission.repository import _snapshot_routing_chain
 from llmrouter_backend.authority import (
     Audience,
@@ -19,6 +20,8 @@ from llmrouter_backend.authority import (
 )
 from llmrouter_backend.database import migrate
 from llmrouter_backend.execution import (
+    ExecutionError,
+    ExecutionErrorCode,
     ExecutionKind,
     ExecutionState,
     ExecutionTarget,
@@ -83,6 +86,24 @@ def _context(operation: str = "model.read") -> RequestContext:
     )
 
 
+def _administrator_context(
+    *, service_id: str = SERVICE_ID, workspace_id: str | None = WORKSPACE_ID
+) -> RequestContext:
+    return RequestContext(
+        "administrator-request",
+        PrincipalKind.ADMINISTRATOR,
+        "administrator",
+        AuthorityClass.GLOBAL_ADMINISTRATOR,
+        AuthorityPath.GLOBAL_ADMINISTRATION,
+        None,
+        "request_status.read",
+        Scope(service_id, workspace_id),
+        NOW,
+        None,
+        mutation=False,
+    )
+
+
 def test_views_hide_other_scopes_and_return_bounded_zero_accounting(
     database_url: str,
 ) -> None:
@@ -111,6 +132,16 @@ def test_views_hide_other_scopes_and_return_bounded_zero_accounting(
     }
     assert "fingerprint" not in status
     assert "credential" not in status
+    administrator_status = views.status(
+        _administrator_context(), ExecutionTarget(ExecutionKind.MODEL, REQUEST_ID)
+    )
+    assert "result" not in administrator_status
+    with pytest.raises(ExecutionError) as hidden:
+        views.status(
+            _administrator_context(workspace_id=None),
+            ExecutionTarget(ExecutionKind.MODEL, REQUEST_ID),
+        )
+    assert hidden.value.code is ExecutionErrorCode.NOT_FOUND
     point = views.resume_point(
         _context("model.create"), ExecutionTarget(ExecutionKind.MODEL, REQUEST_ID)
     )
@@ -397,3 +428,6 @@ def test_views_reconstruct_only_completed_retained_text(database_url: str) -> No
     assert status["result"] == {
         "outputs": [{"type": "text", "text": "retained result"}]
     }
+    administrator_status = views.status(_administrator_context(), target)
+    assert administrator_status["state"] == "succeeded"
+    assert "result" not in administrator_status

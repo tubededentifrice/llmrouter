@@ -1075,7 +1075,11 @@ paths:
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
       responses:
-        '200': {$ref: '#/components/responses/RequestStatusPage'}
+        '200':
+          description: Content-free administrator request status page.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdministrationRequestStatusPage'}
         default: {$ref: '#/components/responses/Error'}
   /v1/admin/services/{service_id}/model-requests/{request_id}:
     parameters:
@@ -1089,7 +1093,11 @@ paths:
       parameters:
         - $ref: '#/components/parameters/WorkspaceIdQuery'
       responses:
-        '200': {$ref: '#/components/responses/RequestStatus'}
+        '200':
+          description: Content-free administrator request status.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdministrationRequestStatus'}
         '404': {$ref: '#/components/responses/NotFound'}
   /v1/admin/services/{service_id}/budgets:
     parameters:
@@ -2988,6 +2996,50 @@ components:
       properties:
         items: {type: array, maxItems: 1000, items: {$ref: '#/components/schemas/RequestStatus'}}
         next_cursor: {type: [string, 'null']}
+    AdministrationRequestStatus:
+      type: object
+      additionalProperties: false
+      description: Content-free logical request status for administrator and embed reads.
+      required: [request_id, state, state_revision, admitted_at, last_transition_at, partial_output, committed_effects, configuration_revision, admission, attempts, tool_calls, accounting]
+      oneOf:
+        - required: [assignment]
+          properties:
+            assignment: {}
+            exact_route: {}
+          not:
+            required: [exact_route]
+        - required: [exact_route]
+          properties:
+            assignment: {}
+            exact_route: {}
+          not:
+            required: [assignment]
+      properties:
+        request_id: {$ref: '#/components/schemas/UuidV7'}
+        run_id: {$ref: '#/components/schemas/OpaqueId'}
+        state: {$ref: '#/components/schemas/RequestState'}
+        state_revision: {type: integer, minimum: 1}
+        admitted_at: {$ref: '#/components/schemas/Timestamp'}
+        last_transition_at: {$ref: '#/components/schemas/Timestamp'}
+        terminal_at: {$ref: '#/components/schemas/Timestamp'}
+        partial_output: {type: boolean}
+        committed_effects: {type: boolean}
+        configuration_revision: {$ref: '#/components/schemas/OpaqueId'}
+        assignment: {$ref: '#/components/schemas/AssignmentName'}
+        exact_route: {$ref: '#/components/schemas/OpaqueId'}
+        admission: {$ref: '#/components/schemas/AdmissionReceipt'}
+        owner_epoch: {type: integer, minimum: 1}
+        attempts: {type: array, maxItems: 1000, items: {$ref: '#/components/schemas/AttemptStatus'}}
+        tool_calls: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/ToolCallStatus'}}
+        error: {$ref: '#/components/schemas/TerminalError'}
+        accounting: {$ref: '#/components/schemas/RequestAccounting'}
+    AdministrationRequestStatusPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/AdministrationRequestStatus'}}
+        next_cursor: {type: [string, 'null']}
     EmbeddingRequestState:
       type: string
       enum: [admitted, running, succeeded, failed]
@@ -3858,9 +3910,7 @@ components:
         routes: {type: array, maxItems: 10000, items: {$ref: '#/components/schemas/EmbedProviderModelRoute'}}
         assignments: {type: array, maxItems: 10000, items: {$ref: '#/components/schemas/AdministrationAssignment'}}
     EmbedRequestStatus:
-      allOf:
-        - $ref: '#/components/schemas/RequestStatus'
-        - not: {required: [result]}
+      $ref: '#/components/schemas/AdministrationRequestStatus'
       description: Bounded request status with retained output content forbidden.
     EmbedAdministrationSnapshot:
       type: object

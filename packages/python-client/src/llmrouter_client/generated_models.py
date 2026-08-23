@@ -86,6 +86,16 @@ OutputResultOutputsItemOption3 = TypedDict('OutputResultOutputsItemOption3', {
     'attachment_id': 'OpaqueId',
 })
 
+AdministrationRequestStatusOption1 = TypedDict('AdministrationRequestStatusOption1', {
+    'assignment': 'JsonValue',
+    'exact_route': 'NotRequired[JsonValue]',
+})
+
+AdministrationRequestStatusOption2 = TypedDict('AdministrationRequestStatusOption2', {
+    'assignment': 'NotRequired[JsonValue]',
+    'exact_route': 'JsonValue',
+})
+
 EmbeddingRequestStatusOption1 = TypedDict('EmbeddingRequestStatusOption1', {
     'state': 'NotRequired[Literal["succeeded"]]',
 })
@@ -630,6 +640,32 @@ RequestStatusPage = TypedDict('RequestStatusPage', {
     'next_cursor': 'NotRequired[str | None]',
 })
 
+AdministrationRequestStatus = TypedDict('AdministrationRequestStatus', {
+    'request_id': 'UuidV7',
+    'run_id': 'NotRequired[OpaqueId]',
+    'state': 'RequestState',
+    'state_revision': 'int',
+    'admitted_at': 'Timestamp',
+    'last_transition_at': 'Timestamp',
+    'terminal_at': 'NotRequired[Timestamp]',
+    'partial_output': 'bool',
+    'committed_effects': 'bool',
+    'configuration_revision': 'OpaqueId',
+    'assignment': 'NotRequired[AssignmentName]',
+    'exact_route': 'NotRequired[OpaqueId]',
+    'admission': 'AdmissionReceipt',
+    'owner_epoch': 'NotRequired[int]',
+    'attempts': 'list[AttemptStatus]',
+    'tool_calls': 'list[ToolCallStatus]',
+    'error': 'NotRequired[TerminalError]',
+    'accounting': 'RequestAccounting',
+})
+
+AdministrationRequestStatusPage = TypedDict('AdministrationRequestStatusPage', {
+    'items': 'list[AdministrationRequestStatus]',
+    'next_cursor': 'NotRequired[str | None]',
+})
+
 EmbeddingRequestState: TypeAlias = Literal["admitted", "running", "succeeded", "failed"]
 
 EmbeddingAdmissionReceipt = TypedDict('EmbeddingAdmissionReceipt', {
@@ -1159,7 +1195,7 @@ EmbedAdministrationConfiguration = TypedDict('EmbedAdministrationConfiguration',
     'assignments': 'list[AdministrationAssignment]',
 })
 
-EmbedRequestStatus: TypeAlias = dict[str, JsonValue]
+EmbedRequestStatus: TypeAlias = AdministrationRequestStatus
 
 EmbedAdministrationSnapshot = TypedDict('EmbedAdministrationSnapshot', {
     'service_id': 'OpaqueId',
@@ -2260,6 +2296,143 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
       "state",
       "expected_revision",
       "reason"
+    ],
+    "type": "object"
+  },
+  "AdministrationRequestStatus": {
+    "additionalProperties": false,
+    "description": "Content-free logical request status for administrator and embed reads.",
+    "oneOf": [
+      {
+        "not": {
+          "required": [
+            "exact_route"
+          ]
+        },
+        "properties": {
+          "assignment": {},
+          "exact_route": {}
+        },
+        "required": [
+          "assignment"
+        ]
+      },
+      {
+        "not": {
+          "required": [
+            "assignment"
+          ]
+        },
+        "properties": {
+          "assignment": {},
+          "exact_route": {}
+        },
+        "required": [
+          "exact_route"
+        ]
+      }
+    ],
+    "properties": {
+      "accounting": {
+        "$ref": "#/components/schemas/RequestAccounting"
+      },
+      "admission": {
+        "$ref": "#/components/schemas/AdmissionReceipt"
+      },
+      "admitted_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "assignment": {
+        "$ref": "#/components/schemas/AssignmentName"
+      },
+      "attempts": {
+        "items": {
+          "$ref": "#/components/schemas/AttemptStatus"
+        },
+        "maxItems": 1000,
+        "type": "array"
+      },
+      "committed_effects": {
+        "type": "boolean"
+      },
+      "configuration_revision": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "error": {
+        "$ref": "#/components/schemas/TerminalError"
+      },
+      "exact_route": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "last_transition_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "owner_epoch": {
+        "minimum": 1,
+        "type": "integer"
+      },
+      "partial_output": {
+        "type": "boolean"
+      },
+      "request_id": {
+        "$ref": "#/components/schemas/UuidV7"
+      },
+      "run_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "state": {
+        "$ref": "#/components/schemas/RequestState"
+      },
+      "state_revision": {
+        "minimum": 1,
+        "type": "integer"
+      },
+      "terminal_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "tool_calls": {
+        "items": {
+          "$ref": "#/components/schemas/ToolCallStatus"
+        },
+        "maxItems": 100,
+        "type": "array"
+      }
+    },
+    "required": [
+      "request_id",
+      "state",
+      "state_revision",
+      "admitted_at",
+      "last_transition_at",
+      "partial_output",
+      "committed_effects",
+      "configuration_revision",
+      "admission",
+      "attempts",
+      "tool_calls",
+      "accounting"
+    ],
+    "type": "object"
+  },
+  "AdministrationRequestStatusPage": {
+    "additionalProperties": false,
+    "properties": {
+      "items": {
+        "items": {
+          "$ref": "#/components/schemas/AdministrationRequestStatus"
+        },
+        "maxItems": 100,
+        "type": "array"
+      },
+      "next_cursor": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "items"
     ],
     "type": "object"
   },
@@ -5336,18 +5509,7 @@ CONTRACT_SCHEMAS: dict[str, JsonValue] = json.loads(r"""
     "type": "object"
   },
   "EmbedRequestStatus": {
-    "allOf": [
-      {
-        "$ref": "#/components/schemas/RequestStatus"
-      },
-      {
-        "not": {
-          "required": [
-            "result"
-          ]
-        }
-      }
-    ],
+    "$ref": "#/components/schemas/AdministrationRequestStatus",
     "description": "Bounded request status with retained output content forbidden."
   },
   "EmbedSession": {

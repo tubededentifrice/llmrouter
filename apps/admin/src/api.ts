@@ -44,17 +44,20 @@ export interface ScopeSelection {
 
 export function scopeFromSearch(search: string): ScopeSelection {
   const query = new URLSearchParams(search);
+  const serviceId = query.get("service_id") ?? "";
   return {
     mode: "global",
-    serviceId: query.get("service_id") ?? "",
-    workspaceId: query.get("workspace_id") ?? "",
+    serviceId,
+    workspaceId: serviceId === "" ? "" : (query.get("workspace_id") ?? ""),
   };
 }
 
 export function scopeSearch(scope: ScopeSelection): string {
   const query = new URLSearchParams();
   if (scope.serviceId !== "") query.set("service_id", scope.serviceId);
-  if (scope.workspaceId !== "") query.set("workspace_id", scope.workspaceId);
+  if (scope.serviceId !== "" && scope.workspaceId !== "") {
+    query.set("workspace_id", scope.workspaceId);
+  }
   return query.toString();
 }
 
@@ -250,6 +253,7 @@ export interface RequestStatus {
   readonly state:
     | "admitted"
     | "running"
+    | "waiting_for_tool"
     | "succeeded"
     | "failed"
     | "interrupted"

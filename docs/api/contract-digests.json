@@ -26,7 +26,7 @@
     },
     {
       "path": "docs/api/openapi.yaml",
-      "sha256": "50c1775bd93fe6102bb4dde4f4d079ee5a3697d2f541b1d6d4f18d65cdf81a6a"
+      "sha256": "fc0357793023d2d6cd88d740a73dfb1ef7c0918c6f2b8c33ff6f4112bbd3577e"
     },
     {
       "path": "docs/api/request-fingerprint.md",
@@ -53,6 +53,8 @@
     "AdministrationPutAssignment": "733f874a28fbf20f0df7217f709a7f21676270b9d31cb9fcc4f29aa7dc2d0c9e",
     "AdministrationPutProviderInstance": "053f14a411b0c3b94d37be3628d97ed04da5485194d2f701a896794ef7d101ac",
     "AdministrationPutProviderModelRoute": "ac10174f281bd7dac4c960a6282973c56f269ff5f568866891c4aa6a33a26431",
+    "AdministrationRequestStatus": "3b66ce28d3dba1d4de1b968dd0fbd4f7632bfa2eff84374d822e2f3b9dd5ea3f",
+    "AdministrationRequestStatusPage": "934f69123d8c252b48be293ac5f40642b0574f09ca7f9b38f348dda18da0a2bd",
     "AdministrationResult": "4e216893ef349abcf0421712d90965e47b699221d74334aab87ab52cc0afd5bb",
     "AdministratorAuthorization": "6e3c9b3e10f2ab5295888370902911a27e329b64fb8fec015f1a064292e4c888",
     "AdministratorGrant": "d71250d4f1c51b2544b37d7170b6ca2707a10e0a787228c2b54fefc0468a5310",
@@ -121,7 +123,7 @@
     "EmbedBootstrapRequest": "04e5dbcfe4885a265b701ad811a24e65a1b4c2e60ae3c608300e043ff3c1f334",
     "EmbedProviderInstance": "d0ca27e314a40f80009af7e7fc8d368ee03af510d1116690a4b68eb1f1ecec67",
     "EmbedProviderModelRoute": "038691416312ac4f8b1a097d6a916ee02a4c2b2c8378c0c0b9a2dd2858fd87f7",
-    "EmbedRequestStatus": "44fb52908efd45fff13e3d44831f7eb0d80e9f64bdf6a1bf82ad149ad034e06a",
+    "EmbedRequestStatus": "0fe264fab0bad144c4c250090b4328e7f87f8230613dacf4c220cafd32b054a4",
     "EmbedSession": "4b2d8b056e156cc2323aa2f38659627320c10c6ff898b9b513bc0a1b0900fc37",
     "EmbedSessionRequest": "e337b3e226115ceaea9e99f8b350ba0c3567f3648fa5ba6dee3d173224fb1b80",
     "EmbeddingAccounting": "0fc839055750986f76007bb7bdb224e7b5208cc30e95e8844e79d301f32b0ac4",
@@ -199,6 +201,6 @@
   },
   "contract_set": "llmrouter-v1",
   "generator_version": 1,
-  "source_sha256": "50c1775bd93fe6102bb4dde4f4d079ee5a3697d2f541b1d6d4f18d65cdf81a6a",
+  "source_sha256": "fc0357793023d2d6cd88d740a73dfb1ef7c0918c6f2b8c33ff6f4112bbd3577e",
   "version": "1.0.0"
 }

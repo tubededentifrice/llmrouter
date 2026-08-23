@@ -6,10 +6,10 @@ from typing import Any, cast
 
 import pytest
 from llmrouter_client import ContractValidationError, validate_contract
-from llmrouter_client.generated_models import CONTRACT_SCHEMA_NAMES
+from llmrouter_client.generated_models import CONTRACT_SCHEMA_NAMES, CONTRACT_SCHEMAS
 
 ROOT = Path(__file__).parents[3]
-EXPECTED_SCHEMA_COUNT = 154
+EXPECTED_SCHEMA_COUNT = 156
 FIXTURES = {
     "ContractManifest": "contract-manifest.json",
     "ServiceToken": "service-token.json",
@@ -96,6 +96,21 @@ def test_generated_schema_catalog_is_complete() -> None:
     assert len(CONTRACT_SCHEMA_NAMES) == EXPECTED_SCHEMA_COUNT
     with pytest.raises(ContractValidationError, match="Unknown contract schema"):
         validate_contract("NotAContract", {})
+
+
+def test_administrator_request_status_forbids_retained_result_content() -> None:
+    """Administrator request status has no retained result field."""
+    status = cast("dict[str, Any]", CONTRACT_SCHEMAS["AdministrationRequestStatus"])
+    properties = cast("dict[str, Any]", status["properties"])
+    assert status["additionalProperties"] is False
+    assert "result" not in properties
+    page = cast("dict[str, Any]", CONTRACT_SCHEMAS["AdministrationRequestStatusPage"])
+    page_properties = cast("dict[str, Any]", page["properties"])
+    items = cast("dict[str, Any]", page_properties["items"])
+    item_schema = cast("dict[str, Any]", items["items"])
+    assert item_schema["$ref"] == "#/components/schemas/AdministrationRequestStatus"
+    embed = cast("dict[str, Any]", CONTRACT_SCHEMAS["EmbedRequestStatus"])
+    assert embed["$ref"] == "#/components/schemas/AdministrationRequestStatus"
 
 
 def test_identity_and_exact_route_negative_cases() -> None:

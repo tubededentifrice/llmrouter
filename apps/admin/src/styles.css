@@ -270,6 +270,16 @@ textarea:focus {
   display: grid;
   gap: var(--od-space-lg);
 }
+
+.request-view:focus {
+  outline: 2px solid var(--od-color-focus, #2563eb);
+  outline-offset: 4px;
+}
+
+.table-scroll:focus {
+  outline: 2px solid var(--od-color-focus, #2563eb);
+  outline-offset: 2px;
+}
 .request-detail-actions {
   display: flex;
   flex-wrap: wrap;

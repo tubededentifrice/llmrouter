@@ -285,6 +285,21 @@ describe("administration app states", () => {
     expect(scopeFromSearch(`?${search}`)).toEqual(globalScope);
   });
 
+  it("removes a workspace when its service is absent", () => {
+    expect(scopeFromSearch("?workspace_id=orphan-workspace")).toEqual({
+      mode: "global",
+      serviceId: "",
+      workspaceId: "",
+    });
+    expect(
+      scopeSearch({
+        mode: "global",
+        serviceId: "",
+        workspaceId: "orphan-workspace",
+      }),
+    ).toBe("");
+  });
+
   it("does not rotate the session proof from a temporary Strict Mode effect", () => {
     const callbacks: (() => void)[] = [];
     const inspect = vi.fn();
@@ -889,6 +904,8 @@ describe("protected administration dashboard", () => {
     const accountingHtml = dashboard("accounting");
     expect(requestHtml).toContain("Content-free status");
     expect(requestHtml).toContain("request-1");
+    expect(requestHtml).toContain('aria-label="Logical requests table"');
+    expect(requestHtml).toContain('tabindex="0"');
     expect(requestHtml).not.toContain("model output value");
     expect(workspaceRequestHtml).toContain(globalScope.workspaceId);
     expect(workspaceRequestHtml).not.toContain("Service level");
@@ -1090,6 +1107,176 @@ describe("protected administration dashboard", () => {
       });
     },
   );
+
+  it("moves focus through request-detail states and back to its row", async () => {
+    const pending = deferred<RequestStatus>();
+    const readFailure = new AdministrationApiError("The safe read failed.", {
+      code: "request_read_failed",
+      requestId: null,
+      status: 500,
+    });
+    const getRequest = vi
+      .fn()
+      .mockImplementationOnce(() => pending.promise)
+      .mockRejectedValueOnce(readFailure);
+    const detailFocus = vi.fn();
+    const requestActionFocus = vi.fn();
+    const request = snapshot.requests[0];
+    if (request === undefined)
+      throw new Error("The request fixture is absent.");
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        <AdministrationDashboard
+          client={{ ...client, getRequest }}
+          initialSection="requests"
+          notice={null}
+          onNotice={vi.fn()}
+          onReload={vi.fn()}
+          scope={globalScope}
+          services={[registeredService]}
+          snapshot={snapshot}
+        />,
+        {
+          createNodeMock(element) {
+            const props = element.props as Record<string, unknown>;
+            if (element.type === "div" && props.className === "request-view") {
+              return {
+                focus: detailFocus,
+                querySelectorAll: () => [
+                  {
+                    dataset: { requestId: "request-1" },
+                    focus: requestActionFocus,
+                  },
+                ],
+              };
+            }
+            return null;
+          },
+        },
+      );
+    });
+    const view = renderer.root
+      .findAllByType("button")
+      .find((item) => renderedText(item).trim() === "View request");
+    if (view === undefined) throw new Error("Request detail action is absent.");
+    act(() => {
+      (view.props.onClick as () => void)();
+    });
+    expect(renderedText(renderer.root)).toContain("Loading request detail");
+    expect(renderedText(renderer.root)).toContain("Back to requests");
+    expect(detailFocus).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      pending.resolve(request);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(renderedText(renderer.root)).toContain("Ordered provider attempts");
+    expect(detailFocus).toHaveBeenCalledTimes(2);
+
+    const refresh = renderer.root
+      .findAllByType("button")
+      .find((item) => renderedText(item).trim() === "Refresh detail");
+    if (refresh === undefined) throw new Error("Detail refresh is absent.");
+    await act(async () => {
+      (refresh.props.onClick as () => void)();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(renderedText(renderer.root)).toContain(
+      "Request detail is not available",
+    );
+    expect(detailFocus).toHaveBeenCalledTimes(3);
+
+    const back = renderer.root
+      .findAllByType("button")
+      .find((item) => renderedText(item).trim() === "Back to requests");
+    if (back === undefined) throw new Error("Detail back action is absent.");
+    act(() => {
+      (back.props.onClick as () => void)();
+    });
+    expect(requestActionFocus).toHaveBeenCalledOnce();
+    act(() => {
+      renderer.unmount();
+    });
+  });
+
+  it("aborts and removes request detail when the exact scope changes", async () => {
+    const oldRead = deferred<RequestStatus>();
+    const getRequest = vi.fn<AdministrationClient["getRequest"]>();
+    getRequest.mockReturnValue(oldRead.promise);
+    const oldClient: AdministrationClient = { ...client, getRequest };
+    const existingRequest = snapshot.requests[0];
+    if (existingRequest === undefined) {
+      throw new Error("The request fixture is absent.");
+    }
+    const newScope: ScopeSelection = {
+      mode: "global",
+      serviceId: "0198a080-0000-7000-8000-000000000099",
+      workspaceId: "0198a080-0000-7000-8000-000000000098",
+    };
+    const newSnapshot: AdministrationSnapshot = {
+      ...snapshot,
+      state: {
+        kind: "workspace",
+        service_id: newScope.serviceId,
+        workspace_id: newScope.workspaceId,
+        display_name: "New workspace",
+        state: "active",
+        revision: "new-scope-revision",
+      },
+      requests: [
+        {
+          ...existingRequest,
+          request_id: "request-new-scope",
+        },
+      ],
+    };
+    const view = (scope: ScopeSelection, value: AdministrationSnapshot) => (
+      <AdministrationDashboard
+        client={oldClient}
+        initialSection="requests"
+        notice={null}
+        onNotice={vi.fn()}
+        onReload={vi.fn()}
+        scope={scope}
+        services={[registeredService]}
+        snapshot={value}
+      />
+    );
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(view(globalScope, snapshot));
+    });
+    const open = renderer.root
+      .findAllByType("button")
+      .find((item) => renderedText(item).trim() === "View request");
+    if (open === undefined) throw new Error("Request detail action is absent.");
+    act(() => {
+      (open.props.onClick as () => void)();
+    });
+    const oldSignal = getRequest.mock.calls[0]?.[2];
+    expect(oldSignal).toBeInstanceOf(AbortSignal);
+    expect(oldSignal?.aborted).toBe(false);
+
+    act(() => {
+      renderer.update(view(newScope, newSnapshot));
+    });
+    expect(oldSignal?.aborted).toBe(true);
+    expect(renderedText(renderer.root)).toContain("request-new-scope");
+    expect(renderedText(renderer.root)).not.toContain("Loading request detail");
+    await act(async () => {
+      oldRead.resolve(existingRequest);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(renderedText(renderer.root)).toContain("request-new-scope");
+    expect(renderedText(renderer.root)).not.toContain("request-1");
+    act(() => {
+      renderer.unmount();
+    });
+  });
   /* eslint-enable @typescript-eslint/no-deprecated */
 
   it("shows all exact budget totals and the current revision", () => {

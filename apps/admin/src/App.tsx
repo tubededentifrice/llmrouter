@@ -147,6 +147,7 @@ function toneForState(state: string): "green" | "amber" | "red" | "blue" {
   if (
     state === "disabled" ||
     state === "running" ||
+    state === "waiting_for_tool" ||
     state === "cancel_requested" ||
     state === "distributing"
   ) {
@@ -1711,7 +1712,12 @@ function RequestTable({
   readonly onSelect: (requestId: string) => void;
 }) {
   return (
-    <div className="table-scroll">
+    <div
+      className="table-scroll"
+      role="region"
+      aria-label="Logical requests table"
+      tabIndex={0}
+    >
       <table>
         <thead>
           <tr>
@@ -1750,6 +1756,7 @@ function RequestTable({
                 <td>{item.error?.message ?? "No safe diagnostic"}</td>
                 <td>
                   <Button
+                    data-request-id={item.request_id}
                     variant="quiet"
                     aria-label={`View request ${item.request_id}`}
                     onClick={() => {
@@ -1774,7 +1781,12 @@ function RequestAttemptTable({
   readonly values: readonly RequestAttemptStatus[];
 }) {
   return (
-    <div className="table-scroll">
+    <div
+      className="table-scroll"
+      role="region"
+      aria-label="Ordered provider attempts table"
+      tabIndex={0}
+    >
       <table>
         <thead>
           <tr>
@@ -2046,6 +2058,9 @@ function RequestsView({
     readonly message: string;
   } | null>(null);
   const controller = useRef<AbortController | null>(null);
+  const focusTarget = useRef<HTMLDivElement | null>(null);
+  const returnFocusRequestId = useRef<string | null>(null);
+  const focusAfterInteraction = useRef(false);
 
   useEffect(
     () => () => {
@@ -2054,8 +2069,27 @@ function RequestsView({
     [],
   );
 
+  useEffect(() => {
+    if (!focusAfterInteraction.current) return;
+    if (selectedRequestId === null && returnFocusRequestId.current !== null) {
+      const actions = focusTarget.current?.querySelectorAll<HTMLButtonElement>(
+        "button[data-request-id]",
+      );
+      const selected = Array.from(actions ?? []).find(
+        (element) => element.dataset.requestId === returnFocusRequestId.current,
+      );
+      if (selected !== undefined) {
+        selected.focus();
+        return;
+      }
+    }
+    focusTarget.current?.focus();
+  }, [selectedRequestId, detail, detailFailure, detailLoading]);
+
   const loadDetail = useCallback(
     async (requestId: string) => {
+      focusAfterInteraction.current = true;
+      returnFocusRequestId.current = requestId;
       controller.current?.abort();
       const nextController = new AbortController();
       controller.current = nextController;
@@ -2082,6 +2116,7 @@ function RequestsView({
   );
 
   function backToList() {
+    focusAfterInteraction.current = true;
     controller.current?.abort();
     setSelectedRequestId(null);
     setDetail(null);
@@ -2089,24 +2124,28 @@ function RequestsView({
     setDetailLoading(false);
   }
 
+  let content: ReactNode;
   if (selectedRequestId === null) {
-    return (
+    content = (
       <RequestTable
         scope={scope}
         values={values}
         onSelect={(id) => void loadDetail(id)}
       />
     );
-  }
-  if (detailLoading) {
-    return (
-      <StatePanel kind="loading" title="Loading request detail">
-        The Router is loading safe status for {selectedRequestId}.
-      </StatePanel>
+  } else if (detailLoading) {
+    content = (
+      <div className="request-detail-state">
+        <StatePanel kind="loading" title="Loading request detail">
+          The Router is loading safe status for {selectedRequestId}.
+        </StatePanel>
+        <Button variant="secondary" onClick={backToList}>
+          Back to requests
+        </Button>
+      </div>
     );
-  }
-  if (detailFailure !== null) {
-    return (
+  } else if (detailFailure !== null) {
+    content = (
       <div className="request-detail-state">
         <StatePanel
           kind="error"
@@ -2120,14 +2159,32 @@ function RequestsView({
         </Button>
       </div>
     );
+  } else {
+    content =
+      detail === null ? null : (
+        <RequestDetail
+          scope={scope}
+          value={detail}
+          onBack={backToList}
+          onRefresh={() => void loadDetail(selectedRequestId)}
+        />
+      );
   }
-  return detail === null ? null : (
-    <RequestDetail
-      scope={scope}
-      value={detail}
-      onBack={backToList}
-      onRefresh={() => void loadDetail(selectedRequestId)}
-    />
+
+  return (
+    <div
+      ref={focusTarget}
+      className="request-view"
+      tabIndex={-1}
+      aria-busy={detailLoading}
+      aria-label={
+        selectedRequestId === null
+          ? "Logical request list"
+          : "Logical request detail"
+      }
+    >
+      {content}
+    </div>
   );
 }
 

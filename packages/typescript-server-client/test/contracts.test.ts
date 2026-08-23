@@ -30,7 +30,9 @@ function loadFixture(filename: string): Record<string, unknown> {
 
 describe("generated contract models", () => {
   it("contains every accepted component schema", () => {
-    expect(Object.keys(contractSchemas)).toHaveLength(154);
+    expect(Object.keys(contractSchemas)).toHaveLength(156);
+    expect(contractSchemas).toHaveProperty("AdministrationRequestStatus");
+    expect(contractSchemas).toHaveProperty("AdministrationRequestStatusPage");
     expect(contractSchemas).toHaveProperty("EmbedBootstrap");
     expect(contractSchemas).toHaveProperty("EmbedBootstrapRequest");
     expect(contractSchemas).toHaveProperty("EmbedAdministrationSnapshot");
@@ -99,12 +101,31 @@ describe("generated contract models", () => {
     ).toThrow("pattern");
   });
 
-  it("forbids retained result content in embedded request status", () => {
+  it("forbids retained result content in administrator request status", () => {
+    expect(contractSchemas.AdministrationRequestStatus).toMatchObject({
+      additionalProperties: false,
+      properties: {
+        request_id: { $ref: "#/components/schemas/UuidV7" },
+        attempts: {
+          items: { $ref: "#/components/schemas/AttemptStatus" },
+        },
+        accounting: { $ref: "#/components/schemas/RequestAccounting" },
+      },
+    });
+    expect(
+      contractSchemas.AdministrationRequestStatus.properties,
+    ).not.toHaveProperty("result");
+    expect(contractSchemas.AdministrationRequestStatusPage).toMatchObject({
+      properties: {
+        items: {
+          items: {
+            $ref: "#/components/schemas/AdministrationRequestStatus",
+          },
+        },
+      },
+    });
     expect(contractSchemas.EmbedRequestStatus).toMatchObject({
-      allOf: [
-        { $ref: "#/components/schemas/RequestStatus" },
-        { not: { required: ["result"] } },
-      ],
+      $ref: "#/components/schemas/AdministrationRequestStatus",
     });
   });
 

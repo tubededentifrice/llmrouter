@@ -470,8 +470,10 @@ def _prove_global_administration(successful_request_id: str) -> None:
         browser.wait_for_text("Effective configuration")
         browser.click_button("Requests")
         browser.wait_for_text(successful_request_id)
+        browser.track_request_detail_reads(successful_request_id)
         browser.click_request_detail(successful_request_id)
         browser.wait_for_text("Ordered provider attempts")
+        assert browser.active_element_label() == "Logical request detail"
         detail_text = browser.body_text()
         assert SERVICE_ID in detail_text and WORKSPACE_ID in detail_text
         assert "No retry. Router used the next fallback." in detail_text
@@ -484,11 +486,26 @@ def _prove_global_administration(successful_request_id: str) -> None:
         assert "succeeded" in attempt_rows[1]
         assert "Return the deterministic response." not in detail_text
         assert "local response" not in detail_text
+        browser.set_viewport(390, 844)
+        assert browser.focus_region("Ordered provider attempts table")
+        request_reads = browser.request_detail_reads()
         browser.click_button("Refresh detail")
-        browser.wait_for_text("Ordered provider attempts")
+        browser.wait_until(
+            lambda: browser.request_detail_reads() > request_reads,
+            "The request detail refresh did not start a new HTTP read.",
+        )
+        browser.wait_until(
+            lambda: (
+                "Ordered provider attempts" in browser.body_text()
+                and browser.active_element_label() == "Logical request detail"
+            ),
+            "The refreshed request detail did not become active.",
+        )
         assert browser.request_attempt_rows() == attempt_rows
         browser.click_button("Back to requests")
         browser.wait_for_text(successful_request_id)
+        assert browser.active_element_label() == f"View request {successful_request_id}"
+        assert browser.focus_region("Logical requests table")
         browser.click_button("Provider credentials")
         browser.wait_for_text("Store OpenRouter credential")
         credential_count = browser.evaluate(
@@ -774,6 +791,64 @@ class _CdpBrowser:
             }})()"""
         )
         assert clicked is True
+
+    def track_request_detail_reads(self, request_id: str) -> None:
+        """Count exact request-detail fetches in this local browser page."""
+        installed = self.evaluate(
+            f"""(() => {{
+              performance.clearResourceTimings();
+              globalThis.__llmrouterDetailTarget = "/model-requests/{request_id}";
+              return true;
+            }})()"""
+        )
+        assert installed is True
+
+    def request_detail_reads(self) -> int:
+        """Return the count of tracked exact request-detail fetches."""
+        value = self.evaluate(
+            """performance.getEntriesByType("resource")
+              .filter((entry) => entry.name.includes(
+                globalThis.__llmrouterDetailTarget ?? ""
+              )).length"""
+        )
+        if not isinstance(value, int):
+            raise TypeError("The request-detail read count is invalid.")
+        return value
+
+    def set_viewport(self, width: int, height: int) -> None:
+        """Set one local phone-size browser viewport."""
+        self.command(
+            "Emulation.setDeviceMetricsOverride",
+            {
+                "width": width,
+                "height": height,
+                "deviceScaleFactor": 1,
+                "mobile": True,
+            },
+        )
+
+    def active_element_label(self) -> str:
+        """Read the accessible label of the active browser element."""
+        value = self.evaluate(
+            "document.activeElement?.getAttribute('aria-label') ?? ''"
+        )
+        return value if isinstance(value, str) else ""
+
+    def focus_region(self, label: str) -> bool:
+        """Focus one named scroll region and confirm keyboard access."""
+        value = self.evaluate(
+            f"""(() => {{
+              const region = document.querySelector(
+                `[role="region"][aria-label={json.dumps(label)}]`
+              );
+              if (!(region instanceof HTMLElement) || region.tabIndex !== 0) {{
+                return false;
+              }}
+              region.focus();
+              return document.activeElement === region;
+            }})()"""
+        )
+        return value is True
 
     def request_attempt_rows(self) -> list[str]:
         """Read the ordered provider-attempt rows from request detail."""

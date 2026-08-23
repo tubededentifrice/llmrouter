@@ -106,6 +106,10 @@ export type OutputResult = { readonly outputs: ReadonlyArray<{ readonly type: "t
 
 export type RequestStatusPage = { readonly items: ReadonlyArray<RequestStatus>; readonly next_cursor?: string | null; };
 
+export type AdministrationRequestStatus = { readonly request_id: UuidV7; readonly run_id?: OpaqueId; readonly state: RequestState; readonly state_revision: number; readonly admitted_at: Timestamp; readonly last_transition_at: Timestamp; readonly terminal_at?: Timestamp; readonly partial_output: boolean; readonly committed_effects: boolean; readonly configuration_revision: OpaqueId; readonly assignment: AssignmentName; readonly admission: AdmissionReceipt; readonly owner_epoch?: number; readonly attempts: ReadonlyArray<AttemptStatus>; readonly tool_calls: ReadonlyArray<ToolCallStatus>; readonly error?: TerminalError; readonly accounting: RequestAccounting; } | { readonly request_id: UuidV7; readonly run_id?: OpaqueId; readonly state: RequestState; readonly state_revision: number; readonly admitted_at: Timestamp; readonly last_transition_at: Timestamp; readonly terminal_at?: Timestamp; readonly partial_output: boolean; readonly committed_effects: boolean; readonly configuration_revision: OpaqueId; readonly exact_route: OpaqueId; readonly admission: AdmissionReceipt; readonly owner_epoch?: number; readonly attempts: ReadonlyArray<AttemptStatus>; readonly tool_calls: ReadonlyArray<ToolCallStatus>; readonly error?: TerminalError; readonly accounting: RequestAccounting; };
+
+export type AdministrationRequestStatusPage = { readonly items: ReadonlyArray<AdministrationRequestStatus>; readonly next_cursor?: string | null; };
+
 export type EmbeddingRequestState = "admitted" | "running" | "succeeded" | "failed";
 
 export type EmbeddingAdmissionReceipt = { readonly request_id: UuidV7; readonly admitted_at: Timestamp; readonly state: EmbeddingRequestState; readonly state_revision: number; readonly status_url: string; readonly fingerprint_version: "rfc8785-sha256-v1"; readonly capture_enabled: boolean; readonly capture_reason: "configured" | "spool_pressure"; readonly capture_expires_at: Timestamp; };
@@ -222,7 +226,7 @@ export type EmbedProviderModelRoute = { readonly provider_model_route_id: Opaque
 
 export type EmbedAdministrationConfiguration = { readonly providers: ReadonlyArray<EmbedProviderInstance>; readonly routes: ReadonlyArray<EmbedProviderModelRoute>; readonly assignments: ReadonlyArray<AdministrationAssignment>; };
 
-export type EmbedRequestStatus = RequestStatus & JsonValue;
+export type EmbedRequestStatus = AdministrationRequestStatus;
 
 export type EmbedAdministrationSnapshot = { readonly service_id: OpaqueId; readonly workspace_id: OpaqueId | null; readonly permissions: ReadonlyArray<"configuration.read" | "accounting.read" | "request_status.read" | "health.read">; readonly expires_at: Timestamp; readonly state?: EmbedAdministrationState; readonly configuration?: EmbedAdministrationConfiguration; readonly requests?: ReadonlyArray<EmbedRequestStatus>; readonly accounting?: AccountingSummary; };
 
@@ -1065,6 +1069,143 @@ export const contractSchemas = {
       "state",
       "expected_revision",
       "reason"
+    ],
+    "type": "object"
+  },
+  "AdministrationRequestStatus": {
+    "additionalProperties": false,
+    "description": "Content-free logical request status for administrator and embed reads.",
+    "oneOf": [
+      {
+        "not": {
+          "required": [
+            "exact_route"
+          ]
+        },
+        "properties": {
+          "assignment": {},
+          "exact_route": {}
+        },
+        "required": [
+          "assignment"
+        ]
+      },
+      {
+        "not": {
+          "required": [
+            "assignment"
+          ]
+        },
+        "properties": {
+          "assignment": {},
+          "exact_route": {}
+        },
+        "required": [
+          "exact_route"
+        ]
+      }
+    ],
+    "properties": {
+      "accounting": {
+        "$ref": "#/components/schemas/RequestAccounting"
+      },
+      "admission": {
+        "$ref": "#/components/schemas/AdmissionReceipt"
+      },
+      "admitted_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "assignment": {
+        "$ref": "#/components/schemas/AssignmentName"
+      },
+      "attempts": {
+        "items": {
+          "$ref": "#/components/schemas/AttemptStatus"
+        },
+        "maxItems": 1000,
+        "type": "array"
+      },
+      "committed_effects": {
+        "type": "boolean"
+      },
+      "configuration_revision": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "error": {
+        "$ref": "#/components/schemas/TerminalError"
+      },
+      "exact_route": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "last_transition_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "owner_epoch": {
+        "minimum": 1,
+        "type": "integer"
+      },
+      "partial_output": {
+        "type": "boolean"
+      },
+      "request_id": {
+        "$ref": "#/components/schemas/UuidV7"
+      },
+      "run_id": {
+        "$ref": "#/components/schemas/OpaqueId"
+      },
+      "state": {
+        "$ref": "#/components/schemas/RequestState"
+      },
+      "state_revision": {
+        "minimum": 1,
+        "type": "integer"
+      },
+      "terminal_at": {
+        "$ref": "#/components/schemas/Timestamp"
+      },
+      "tool_calls": {
+        "items": {
+          "$ref": "#/components/schemas/ToolCallStatus"
+        },
+        "maxItems": 100,
+        "type": "array"
+      }
+    },
+    "required": [
+      "request_id",
+      "state",
+      "state_revision",
+      "admitted_at",
+      "last_transition_at",
+      "partial_output",
+      "committed_effects",
+      "configuration_revision",
+      "admission",
+      "attempts",
+      "tool_calls",
+      "accounting"
+    ],
+    "type": "object"
+  },
+  "AdministrationRequestStatusPage": {
+    "additionalProperties": false,
+    "properties": {
+      "items": {
+        "items": {
+          "$ref": "#/components/schemas/AdministrationRequestStatus"
+        },
+        "maxItems": 100,
+        "type": "array"
+      },
+      "next_cursor": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "items"
     ],
     "type": "object"
   },
@@ -4141,18 +4282,7 @@ export const contractSchemas = {
     "type": "object"
   },
   "EmbedRequestStatus": {
-    "allOf": [
-      {
-        "$ref": "#/components/schemas/RequestStatus"
-      },
-      {
-        "not": {
-          "required": [
-            "result"
-          ]
-        }
-      }
-    ],
+    "$ref": "#/components/schemas/AdministrationRequestStatus",
     "description": "Bounded request status with retained output content forbidden."
   },
   "EmbedSession": {
