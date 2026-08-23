@@ -152,9 +152,7 @@ class WorkspacePage(BaseModel):
 class ProviderModelCandidate(ClosedModel):
     """One ordered provider-model assignment candidate."""
 
-    provider_model_api_name: str = Field(
-        pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$"
-    )
+    provider_model_api_name: str = Field(pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 
 
 class AssignmentWrite(ClosedModel):
@@ -215,8 +213,7 @@ class Assignment(ClosedModel):
         ):
             raise ValueError("An inherited assignment must name one assignment.")
         if self.definition_kind == "direct_chain" and (
-            self.direct_chain is None
-            or self.inherits_assignment_api_name is not None
+            self.direct_chain is None or self.inherits_assignment_api_name is not None
         ):
             raise ValueError("A direct assignment must contain one direct chain.")
         for values in (

@@ -1357,6 +1357,11 @@ def _validate_assigned_provider_model(
                     "A current assignment requires this provider-model."
                 ) from error
             raise
+    # An inherited assignment can set a reasoning level that its direct source
+    # does not set. Validate the complete graph before this mapping can commit.
+    from llmrouter_backend.assignments import validate_all_assignments  # noqa: PLC0415
+
+    validate_all_assignments(connection)
 
 
 def _model_parameters(value: ModelWrite) -> tuple[Any, ...]:

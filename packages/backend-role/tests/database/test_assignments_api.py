@@ -189,16 +189,22 @@ def test_native_assignment_inheritance_replacement_cycles_and_isolation(
     inherited_again = client.get("/v1/assignments/default", headers=child).json()
     assert len(inherited_again["effective_chain"]) == 2
 
-    assert client.put(
-        "/v1/assignments/a",
-        json={"direct_chain": [{"provider_model_api_name": "text-one"}]},
-        headers=child,
-    ).status_code == 200
-    assert client.put(
-        "/v1/assignments/b",
-        json={"inherits_assignment_api_name": "a"},
-        headers=child,
-    ).status_code == 200
+    assert (
+        client.put(
+            "/v1/assignments/a",
+            json={"direct_chain": [{"provider_model_api_name": "text-one"}]},
+            headers=child,
+        ).status_code
+        == 200
+    )
+    assert (
+        client.put(
+            "/v1/assignments/b",
+            json={"inherits_assignment_api_name": "a"},
+            headers=child,
+        ).status_code
+        == 200
+    )
     blocked_delete = client.delete("/v1/assignments/a", headers=child)
     assert blocked_delete.status_code == HTTPStatus.BAD_REQUEST
     assert client.get("/v1/assignments/a", headers=child).status_code == HTTPStatus.OK
@@ -219,15 +225,18 @@ def test_native_assignment_inheritance_replacement_cycles_and_isolation(
     assert client.get("/v1/assignments/missing", headers=child).status_code == 404
 
     assert client.get("/v1/assignments/a", headers=other).status_code == 404
-    assert client.get(
-        "/v1/admin/services/child/assignments/a", headers=child
-    ).status_code == HTTPStatus.UNAUTHORIZED
-    assert client.get(
-        "/v1/assignments/a", headers=context.admin_read_headers
-    ).status_code == HTTPStatus.UNAUTHORIZED
-    assert client.get(
-        "/v1/workspaces/main/assignments", headers=child
-    ).status_code == HTTPStatus.NOT_FOUND
+    assert (
+        client.get("/v1/admin/services/child/assignments/a", headers=child).status_code
+        == HTTPStatus.UNAUTHORIZED
+    )
+    assert (
+        client.get("/v1/assignments/a", headers=context.admin_read_headers).status_code
+        == HTTPStatus.UNAUTHORIZED
+    )
+    assert (
+        client.get("/v1/workspaces/main/assignments", headers=child).status_code
+        == HTTPStatus.NOT_FOUND
+    )
 
     administrator_write = client.put(
         "/v1/admin/services/child/assignments/admin-defined",
@@ -235,9 +244,10 @@ def test_native_assignment_inheritance_replacement_cycles_and_isolation(
         headers=context.admin_headers,
     )
     assert administrator_write.status_code == HTTPStatus.OK
-    assert client.get(
-        "/v1/assignments/admin-defined", headers=child
-    ).status_code == HTTPStatus.OK
+    assert (
+        client.get("/v1/assignments/admin-defined", headers=child).status_code
+        == HTTPStatus.OK
+    )
     denied_browser_write = client.put(
         "/v1/admin/services/child/assignments/denied",
         json={"inherits_assignment_api_name": "default"},
@@ -246,16 +256,22 @@ def test_native_assignment_inheritance_replacement_cycles_and_isolation(
     assert denied_browser_write.status_code == HTTPStatus.FORBIDDEN
     assert client.get("/v1/assignments/denied", headers=child).status_code == 404
 
-    assert client.put(
-        "/v1/assignments/base",
-        json={"direct_chain": [{"provider_model_api_name": "text-one"}]},
-        headers=root,
-    ).status_code == HTTPStatus.OK
-    assert client.put(
-        "/v1/assignments/parent-dependent",
-        json={"inherits_assignment_api_name": "base"},
-        headers=child,
-    ).status_code == HTTPStatus.OK
+    assert (
+        client.put(
+            "/v1/assignments/base",
+            json={"direct_chain": [{"provider_model_api_name": "text-one"}]},
+            headers=root,
+        ).status_code
+        == HTTPStatus.OK
+    )
+    assert (
+        client.put(
+            "/v1/assignments/parent-dependent",
+            json={"inherits_assignment_api_name": "base"},
+            headers=child,
+        ).status_code
+        == HTTPStatus.OK
+    )
     invalid_parent_move = client.put(
         "/v1/admin/services/child",
         json={"display_name": "Child", "parent_service_api_name": "other"},
@@ -311,8 +327,7 @@ def test_assignment_validation_bounds_reasoning_and_atomic_rollback(
         },
         {
             "direct_chain": [
-                {"provider_model_api_name": f"text-{index}"}
-                for index in range(17)
+                {"provider_model_api_name": f"text-{index}"} for index in range(17)
             ]
         },
     )
@@ -369,16 +384,19 @@ def test_runtime_uses_actual_requirements_and_persists_use_evidence(
     context = assignment_context
     client = context.client
     headers = context.service_headers("root")
-    assert client.put(
-        "/v1/assignments/mixed",
-        json={
-            "direct_chain": [
-                {"provider_model_api_name": "embedding"},
-                {"provider_model_api_name": "text-one"},
-            ]
-        },
-        headers=headers,
-    ).status_code == 200
+    assert (
+        client.put(
+            "/v1/assignments/mixed",
+            json={
+                "direct_chain": [
+                    {"provider_model_api_name": "embedding"},
+                    {"provider_model_api_name": "text-one"},
+                ]
+            },
+            headers=headers,
+        ).status_code
+        == 200
+    )
     with psycopg.connect(context.database_url, row_factory=dict_row) as connection:
         service = connection.execute(
             "SELECT id FROM router.services WHERE api_name = 'root'"
@@ -403,12 +421,18 @@ def test_runtime_uses_actual_requirements_and_persists_use_evidence(
         "text_input",
         "text_output",
     ]
-    assert client.delete(
-        "/v1/assignments/mixed/observed-requirements/streaming", headers=headers
-    ).status_code == 204
-    assert "streaming" not in client.get(
-        "/v1/assignments/mixed", headers=headers
-    ).json()["observed_requirements"]
+    assert (
+        client.delete(
+            "/v1/assignments/mixed/observed-requirements/streaming", headers=headers
+        ).status_code
+        == 204
+    )
+    assert (
+        "streaming"
+        not in client.get("/v1/assignments/mixed", headers=headers).json()[
+            "observed_requirements"
+        ]
+    )
 
     with psycopg.connect(context.database_url, row_factory=dict_row) as connection:
         service = connection.execute(
@@ -477,11 +501,14 @@ def test_used_assignment_deletion_keeps_only_effective_evidence(
     root = context.service_headers("root")
     child = context.service_headers("child")
     for headers, candidate in ((root, "text-one"), (child, "text-two")):
-        assert client.put(
-            "/v1/assignments/shared",
-            json={"direct_chain": [{"provider_model_api_name": candidate}]},
-            headers=headers,
-        ).status_code == HTTPStatus.OK
+        assert (
+            client.put(
+                "/v1/assignments/shared",
+                json={"direct_chain": [{"provider_model_api_name": candidate}]},
+                headers=headers,
+            ).status_code
+            == HTTPStatus.OK
+        )
     with psycopg.connect(context.database_url, row_factory=dict_row) as connection:
         child_service = connection.execute(
             "SELECT id FROM router.services WHERE api_name = 'child'"
@@ -497,10 +524,13 @@ def test_used_assignment_deletion_keeps_only_effective_evidence(
             required_capabilities=frozenset(),
             actor_subject=context.actor_subjects["child"],
         )
-    assert client.delete(
-        "/v1/admin/services/child/assignments/shared",
-        headers=context.admin_headers,
-    ).status_code == HTTPStatus.NO_CONTENT
+    assert (
+        client.delete(
+            "/v1/admin/services/child/assignments/shared",
+            headers=context.admin_headers,
+        ).status_code
+        == HTTPStatus.NO_CONTENT
+    )
     inherited = client.get("/v1/assignments/shared", headers=child).json()
     assert inherited["defined_by_service_api_name"] == "root"
     assert inherited["observed_requirements"] == ["text_input", "text_output"]
@@ -509,11 +539,14 @@ def test_used_assignment_deletion_keeps_only_effective_evidence(
         for item in client.get("/v1/assignments", headers=child).json()["items"]
     }
 
-    assert client.put(
-        "/v1/assignments/ephemeral",
-        json={"direct_chain": [{"provider_model_api_name": "text-one"}]},
-        headers=child,
-    ).status_code == HTTPStatus.OK
+    assert (
+        client.put(
+            "/v1/assignments/ephemeral",
+            json={"direct_chain": [{"provider_model_api_name": "text-one"}]},
+            headers=child,
+        ).status_code
+        == HTTPStatus.OK
+    )
     with psycopg.connect(context.database_url, row_factory=dict_row) as connection:
         child_service = connection.execute(
             "SELECT id FROM router.services WHERE api_name = 'child'"
@@ -529,9 +562,10 @@ def test_used_assignment_deletion_keeps_only_effective_evidence(
             required_capabilities=frozenset(),
             actor_subject=context.actor_subjects["child"],
         )
-    assert client.delete(
-        "/v1/assignments/ephemeral", headers=child
-    ).status_code == HTTPStatus.NO_CONTENT
+    assert (
+        client.delete("/v1/assignments/ephemeral", headers=child).status_code
+        == HTTPStatus.NO_CONTENT
+    )
     assert client.get("/v1/assignments/ephemeral", headers=child).status_code == 404
     assert "ephemeral" not in {
         item["api_name"]
@@ -545,16 +579,22 @@ def test_used_assignment_deletion_keeps_only_effective_evidence(
                  AND usage.api_name = 'ephemeral'"""
         ).fetchone() == {"count": 0}
 
-    assert client.put(
-        "/v1/assignments/guarded",
-        json={"direct_chain": [{"provider_model_api_name": "text-one"}]},
-        headers=child,
-    ).status_code == HTTPStatus.OK
-    assert client.put(
-        "/v1/assignments/guard-dependent",
-        json={"inherits_assignment_api_name": "guarded"},
-        headers=child,
-    ).status_code == HTTPStatus.OK
+    assert (
+        client.put(
+            "/v1/assignments/guarded",
+            json={"direct_chain": [{"provider_model_api_name": "text-one"}]},
+            headers=child,
+        ).status_code
+        == HTTPStatus.OK
+    )
+    assert (
+        client.put(
+            "/v1/assignments/guard-dependent",
+            json={"inherits_assignment_api_name": "guarded"},
+            headers=child,
+        ).status_code
+        == HTTPStatus.OK
+    )
     with psycopg.connect(context.database_url, row_factory=dict_row) as connection:
         child_service = connection.execute(
             "SELECT id FROM router.services WHERE api_name = 'child'"
@@ -592,16 +632,19 @@ def test_actual_candidate_constraints_control_fallback(
         "media-bounds": ["media-short", "media-long"],
     }
     for name, candidates in definitions.items():
-        assert client.put(
-            f"/v1/assignments/{name}",
-            json={
-                "direct_chain": [
-                    {"provider_model_api_name": candidate}
-                    for candidate in candidates
-                ]
-            },
-            headers=headers,
-        ).status_code == HTTPStatus.OK
+        assert (
+            client.put(
+                f"/v1/assignments/{name}",
+                json={
+                    "direct_chain": [
+                        {"provider_model_api_name": candidate}
+                        for candidate in candidates
+                    ]
+                },
+                headers=headers,
+            ).status_code
+            == HTTPStatus.OK
+        )
     with psycopg.connect(context.database_url, row_factory=dict_row) as connection:
         root_service = connection.execute(
             "SELECT id FROM router.services WHERE api_name = 'root'"
@@ -717,11 +760,14 @@ def test_concurrent_first_use_creates_one_local_assignment(
 ) -> None:
     """Use the unique key to serialize one automatic local definition."""
     context = assignment_context
-    assert context.client.put(
-        "/v1/assignments/default",
-        json={"direct_chain": [{"provider_model_api_name": "text-one"}]},
-        headers=context.service_headers("root"),
-    ).status_code == HTTPStatus.OK
+    assert (
+        context.client.put(
+            "/v1/assignments/default",
+            json={"direct_chain": [{"provider_model_api_name": "text-one"}]},
+            headers=context.service_headers("root"),
+        ).status_code
+        == HTTPStatus.OK
+    )
 
     def call_once(assignment_name: str = "concurrent") -> str:
         with psycopg.connect(context.database_url, row_factory=dict_row) as connection:
@@ -742,9 +788,10 @@ def test_concurrent_first_use_creates_one_local_assignment(
             return resolved.api_name
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-        assert list(executor.map(lambda _index: call_once(), range(8))) == [
-            "concurrent"
-        ] * 8
+        assert (
+            list(executor.map(lambda _index: call_once(), range(8)))
+            == ["concurrent"] * 8
+        )
     with psycopg.connect(context.database_url) as connection:
         assert connection.execute(
             """SELECT count(*) FROM router.assignment_definitions AS assignment
@@ -807,11 +854,14 @@ def test_call_admission_serializes_assignment_and_catalog_writes(
     context = assignment_context
     client = context.client
     headers = context.service_headers("root")
-    assert client.put(
-        "/v1/assignments/race",
-        json={"direct_chain": [{"provider_model_api_name": "text-one"}]},
-        headers=headers,
-    ).status_code == HTTPStatus.OK
+    assert (
+        client.put(
+            "/v1/assignments/race",
+            json={"direct_chain": [{"provider_model_api_name": "text-one"}]},
+            headers=headers,
+        ).status_code
+        == HTTPStatus.OK
+    )
 
     entered = threading.Event()
     release = threading.Event()
@@ -883,19 +933,20 @@ def test_call_admission_serializes_assignment_and_catalog_writes(
     assert client.get("/v1/assignments/race", headers=headers).status_code == 404
     assignment_list = client.get("/v1/assignments", headers=headers)
     assert assignment_list.status_code == HTTPStatus.OK
-    assert "race" not in {
-        item["api_name"] for item in assignment_list.json()["items"]
-    }
+    assert "race" not in {item["api_name"] for item in assignment_list.json()["items"]}
     with psycopg.connect(context.database_url) as connection:
         assert connection.execute(
             "SELECT count(*) FROM router.assignment_usage WHERE api_name = 'race'"
         ).fetchone() == (0,)
 
-    assert client.put(
-        "/v1/assignments/race",
-        json={"direct_chain": [{"provider_model_api_name": "text-one"}]},
-        headers=headers,
-    ).status_code == HTTPStatus.OK
+    assert (
+        client.put(
+            "/v1/assignments/race",
+            json={"direct_chain": [{"provider_model_api_name": "text-one"}]},
+            headers=headers,
+        ).status_code
+        == HTTPStatus.OK
+    )
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         admitted = start_call(executor)
         replacement = executor.submit(
@@ -933,6 +984,132 @@ def test_call_admission_serializes_assignment_and_catalog_writes(
         assert admitted.result(timeout=2) == ("text-two", "two")
         assert catalog_change.result(timeout=2).status_code == HTTPStatus.OK
     assert call_once() == ("text-two", "changed")
+
+
+def test_call_admission_locks_the_live_workspace(
+    assignment_context: AssignmentContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Do not admit a call through a workspace that a delete removes."""
+    context = assignment_context
+    client = context.client
+    headers = context.service_headers("root")
+    assert (
+        client.put(
+            "/v1/assignments/workspace-race",
+            json={"direct_chain": [{"provider_model_api_name": "text-one"}]},
+            headers=headers,
+        ).status_code
+        == HTTPStatus.OK
+    )
+
+    entered = threading.Event()
+    release = threading.Event()
+    original_resolve = catalog.resolve_provider_route
+
+    def paused_resolve(  # noqa: PLR0913 - Match the catalog call boundary.
+        connection: psycopg.Connection[Any],
+        api_name: str,
+        *,
+        required_inputs: frozenset[str],
+        required_output: str,
+        required_capabilities: frozenset[str],
+        reasoning_level: Literal["none", "low", "medium", "high"] | None,
+    ) -> catalog.ProviderRoute:
+        route = original_resolve(
+            connection,
+            api_name,
+            required_inputs=required_inputs,
+            required_output=required_output,
+            required_capabilities=required_capabilities,
+            reasoning_level=reasoning_level,
+        )
+        entered.set()
+        assert release.wait(timeout=5)
+        return route
+
+    monkeypatch.setattr(catalog, "resolve_provider_route", paused_resolve)
+
+    def call_once() -> tuple[str, ...]:
+        with psycopg.connect(context.database_url, row_factory=dict_row) as connection:
+            service = connection.execute(
+                "SELECT id FROM router.services WHERE api_name = 'root'"
+            ).fetchone()
+            assert service is not None
+            _resolved, routes = resolve_assignment_for_call(
+                connection,
+                service_id=service["id"],
+                workspace_api_name="main",
+                assignment_api_name="workspace-race",
+                required_inputs=frozenset({"text"}),
+                required_output="text",
+                required_capabilities=frozenset(),
+                actor_subject=context.actor_subjects["root"],
+            )
+            return tuple(route.provider_model_api_name for route in routes)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        admitted = executor.submit(call_once)
+        assert entered.wait(timeout=2)
+        deletion = executor.submit(
+            client.delete, "/v1/workspaces/main", headers=headers
+        )
+        assert not concurrent.futures.wait((deletion,), timeout=0.1).done
+        release.set()
+        assert admitted.result(timeout=2) == ("text-one",)
+        assert deletion.result(timeout=2).status_code == HTTPStatus.NO_CONTENT
+
+
+def test_catalog_change_validates_inherited_reasoning(
+    assignment_context: AssignmentContext,
+) -> None:
+    """Keep a mapping that an inherited assignment still needs."""
+    context = assignment_context
+    client = context.client
+    headers = context.service_headers("root")
+    assert (
+        client.put(
+            "/v1/assignments/reasoning-base",
+            json={"direct_chain": [{"provider_model_api_name": "text-one"}]},
+            headers=headers,
+        ).status_code
+        == HTTPStatus.OK
+    )
+    assert (
+        client.put(
+            "/v1/assignments/reasoning-high",
+            json={
+                "inherits_assignment_api_name": "reasoning-base",
+                "reasoning_level": "high",
+            },
+            headers=headers,
+        ).status_code
+        == HTTPStatus.OK
+    )
+
+    replacement = client.put(
+        "/v1/admin/provider-models/text-one",
+        json={
+            "api_name": "text-one",
+            "provider_api_name": "fake",
+            "model_api_name": "text",
+            "provider_model_name": "one",
+            "enabled": True,
+            "capabilities": [],
+        },
+        headers=context.admin_headers,
+    )
+    assert replacement.status_code == HTTPStatus.BAD_REQUEST
+    current = client.get(
+        "/v1/admin/provider-models/text-one", headers=context.admin_read_headers
+    )
+    assert current.status_code == HTTPStatus.OK
+    assert {item["level"] for item in current.json()["reasoning_mappings"]} == {
+        "none",
+        "low",
+        "medium",
+        "high",
+    }
 
 
 def _seed_catalog(connection: psycopg.Connection[Any]) -> None:

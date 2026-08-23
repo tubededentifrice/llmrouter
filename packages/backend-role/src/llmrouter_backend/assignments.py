@@ -161,9 +161,11 @@ def put_assignment(
     )
     if candidates:
         _validate_direct_candidates(connection, candidates, value.reasoning_level)
-    display_name = value.display_name or _existing_display_name(
-        connection, service_id, api_name
-    ) or _default_display_name(api_name)
+    display_name = (
+        value.display_name
+        or _existing_display_name(connection, service_id, api_name)
+        or _default_display_name(api_name)
+    )
     row = connection.execute(
         """INSERT INTO router.assignment_definitions
                (service_id, api_name, display_name,
@@ -297,7 +299,8 @@ def resolve_assignment_for_call(
         """SELECT service.api_name AS service_api_name
            FROM router.workspaces AS workspace
            JOIN router.services AS service ON service.id = workspace.service_id
-           WHERE workspace.service_id = %s AND workspace.api_name = %s""",
+           WHERE workspace.service_id = %s AND workspace.api_name = %s
+           FOR KEY SHARE OF workspace, service""",
         (service_id, workspace_api_name),
     ).fetchone()
     if workspace is None:
@@ -580,9 +583,7 @@ def _validate_direct_candidates(
     reasoning_level: ReasoningLevel | None,
 ) -> None:
     try:
-        catalog.validate_assignment_reasoning(
-            connection, candidates, reasoning_level
-        )
+        catalog.validate_assignment_reasoning(connection, candidates, reasoning_level)
     except ApiError as error:
         if error.code == "provider_unavailable":
             raise invalid_request(
@@ -705,8 +706,7 @@ def _validate_actual_bounds(
     if (
         len(input_image_sizes) > _MAXIMUM_INPUT_IMAGES
         or any(
-            type(size) is not int
-            or not 1 <= size <= _MAXIMUM_INPUT_IMAGE_BYTES
+            type(size) is not int or not 1 <= size <= _MAXIMUM_INPUT_IMAGE_BYTES
             for size in input_image_sizes
         )
         or sum(input_image_sizes) > _MAXIMUM_TOTAL_IMAGE_BYTES
@@ -725,11 +725,14 @@ def _prune_absent_usage(connection: Connection[Any]) -> None:
            WHERE api_name <> 'default' ORDER BY service_id, api_name"""
     ).fetchall()
     for row in rows:
-        if resolve_assignment(
-            connection,
-            service_id=row["service_id"],
-            api_name=row["api_name"],
-        ) is None:
+        if (
+            resolve_assignment(
+                connection,
+                service_id=row["service_id"],
+                api_name=row["api_name"],
+            )
+            is None
+        ):
             connection.execute(
                 """DELETE FROM router.assignment_usage
                    WHERE service_id = %s AND api_name = %s""",
@@ -752,17 +755,18 @@ def _lock_writes(connection: Connection[Any]) -> None:
 
 
 def _require_service(connection: Connection[Any], service_id: uuid.UUID) -> None:
-    if connection.execute(
-        "SELECT 1 FROM router.services WHERE id = %s", (service_id,)
-    ).fetchone() is None:
+    if (
+        connection.execute(
+            "SELECT 1 FROM router.services WHERE id = %s", (service_id,)
+        ).fetchone()
+        is None
+    ):
         raise not_found("service")
 
 
 def _require_assignment_name(value: str) -> None:
     if _ASSIGNMENT_NAME.fullmatch(value) is None:
-        raise invalid_request(
-            "assignment_api_name", "The assignment name is invalid."
-        )
+        raise invalid_request("assignment_api_name", "The assignment name is invalid.")
 
 
 def _require_actor_subject(value: str) -> None:

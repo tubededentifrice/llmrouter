@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import importlib.util
+import os
+import shutil
+import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -14,6 +17,8 @@ if TYPE_CHECKING:
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 BACKEND_RESET_PATH = REPOSITORY_ROOT / "scripts/check-backend-reset.py"
 DEPENDENCY_POLICY_PATH = REPOSITORY_ROOT / "scripts/check-dependency-policy.py"
+PYTHON_STYLE_PATH = REPOSITORY_ROOT / "scripts/check-python-style.sh"
+ARGUMENT_ERROR = 2
 
 
 def _backend_reset_module() -> ModuleType:
@@ -151,3 +156,111 @@ def test_python_check_scans_the_complete_backend_source() -> None:
     assert "packages/backend-role/src" in script
     assert "uv run mypy packages" in script
     assert "uv run bandit -q -r" in script
+
+
+def test_normal_repository_check_runs_python_style() -> None:
+    """Run Python formatting and lint without the optional full checks."""
+    script = (REPOSITORY_ROOT / "scripts/check-repository.sh").read_text(
+        encoding="utf-8"
+    )
+    invocation = '"${repository_root}/scripts/check-python-style.sh"'
+    assert script.count(invocation) == 1
+    assert script.index(invocation) < script.index(
+        'if [[ "${LLMROUTER_FULL_CHECKS:-0}" == "1" ]]'
+    )
+
+
+def test_full_python_check_delegates_style() -> None:
+    """Keep one source for the Python formatting and lint commands."""
+    script = (REPOSITORY_ROOT / "scripts/check-python.sh").read_text(encoding="utf-8")
+    assert '"${repository_root}/scripts/check-python-style.sh"' in script
+    assert "ruff format" not in script
+    assert "ruff check" not in script
+
+
+@pytest.mark.parametrize(
+    ("source", "message"),
+    [
+        ("value=1\n", "would be reformatted"),
+        ('"""Module."""\n\nimport os\n', "F401"),
+    ],
+)
+def test_python_style_gate_rejects_bad_source(
+    tmp_path: Path, source: str, message: str
+) -> None:
+    """Fail for bad formatting or lint in an untracked package file."""
+    result = _run_python_style_fixture(tmp_path, source)
+    assert result.returncode != 0
+    assert message in result.stdout
+
+
+def test_python_style_gate_accepts_a_clean_checkout(tmp_path: Path) -> None:
+    """Check complete source directories without a Git worktree."""
+    result = _run_python_style_fixture(tmp_path, '"""Module."""\n\nVALUE = 1\n')
+    assert result.returncode == 0, result.stdout
+    assert "Python style checks passed." in result.stdout
+
+
+def test_python_style_gate_rejects_arguments(tmp_path: Path) -> None:
+    """Do not let a caller replace the fixed repository targets."""
+    checkout, environment = _python_style_fixture(
+        tmp_path, '"""Module."""\n\nVALUE = 1\n'
+    )
+    result = subprocess.run(  # noqa: S603 - Run the fixed local test script.
+        [checkout / "scripts/check-python-style.sh", "packages/example.py"],
+        cwd=checkout,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == ARGUMENT_ERROR
+    assert "does not accept arguments" in result.stderr
+
+
+def _run_python_style_fixture(
+    tmp_path: Path, source: str
+) -> subprocess.CompletedProcess[str]:
+    checkout, environment = _python_style_fixture(tmp_path, source)
+    return subprocess.run(  # noqa: S603 - Run the fixed local test script.
+        [checkout / "scripts/check-python-style.sh"],
+        cwd=checkout,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _python_style_fixture(tmp_path: Path, source: str) -> tuple[Path, dict[str, str]]:
+    checkout = tmp_path / "checkout"
+    scripts = checkout / "scripts"
+    packages = checkout / "packages"
+    commands = tmp_path / "commands"
+    scripts.mkdir(parents=True)
+    packages.mkdir()
+    commands.mkdir()
+    shutil.copy2(PYTHON_STYLE_PATH, scripts / "check-python-style.sh")
+    (packages / "example.py").write_text(source, encoding="utf-8")
+    for name in ("check-dependency-policy.py", "generate-contract-digests.py"):
+        (scripts / name).write_text('"""Module."""\n', encoding="utf-8")
+    uv = commands / "uv"
+    uv.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "--version" ]]; then
+  echo "uv 0.12.0"
+  exit 0
+fi
+if [[ "${1:-}" == "run" ]]; then
+  shift
+  exec "$@"
+fi
+exit 64
+""",
+        encoding="utf-8",
+    )
+    uv.chmod(0o755)
+    environment = dict(os.environ)
+    environment["PATH"] = f"{commands}:{environment['PATH']}"
+    return checkout, environment

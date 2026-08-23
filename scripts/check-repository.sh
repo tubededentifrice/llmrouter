@@ -76,6 +76,7 @@ required_files=(
   "scripts/check-backend-reset.py"
   "scripts/check-client-packages.sh"
   "scripts/check-contract-digests.sh"
+  "scripts/check-python-style.sh"
   "scripts/generate-contract-digests.py"
   "scripts/check-local-development.py"
   "scripts/local-development-migrate.py"
@@ -150,6 +151,8 @@ for required_executable in "${repository_root}"/scripts/*.sh; do
   fi
   bash -n "${required_executable}"
 done
+
+"${repository_root}/scripts/check-python-style.sh"
 
 grep -qx "min-release-age=14" "${repository_root}/.npmrc"
 jq -e . "${repository_root}/renovate.json" >/dev/null

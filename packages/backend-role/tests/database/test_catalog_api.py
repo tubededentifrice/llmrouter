@@ -25,7 +25,12 @@ from llmrouter_backend.catalog import (
 from llmrouter_backend.config import Settings
 from llmrouter_backend.database import migrate
 from llmrouter_backend.errors import ApiError
-from llmrouter_backend.models import ModelWrite, ProviderModelWrite, ProviderWrite
+from llmrouter_backend.models import (
+    ModelConstraints,
+    ModelWrite,
+    ProviderModelWrite,
+    ProviderWrite,
+)
 from llmrouter_backend.security import ControlKeys, new_token
 from llmrouter_backend.store import create_administrator_session
 from psycopg.rows import dict_row
@@ -1005,7 +1010,7 @@ def test_canonical_model_change_waits_for_concurrent_mapping(
         enabled=True,
         output_modalities=["text"],
         capabilities=["streaming"],
-        constraints={},
+        constraints=ModelConstraints(),
     )
     incompatible_model = ModelWrite(
         api_name="mixed",
@@ -1013,7 +1018,7 @@ def test_canonical_model_change_waits_for_concurrent_mapping(
         input_modalities=["text"],
         output_modalities=["embedding"],
         capabilities=[],
-        constraints={"embedding_dimensions": [3]},
+        constraints=ModelConstraints(embedding_dimensions=[3]),
     )
     with (
         psycopg.connect(catalog_database, row_factory=dict_row) as mapping_connection,

@@ -130,9 +130,7 @@ _ADMINISTRATOR_COOKIE = "llmrouter_admin_session"
 _OIDC_FLOW_COOKIE = "llmrouter_admin_oidc_flow"
 _OIDC_FLOW_MINUTES = 10
 ApiNamePath = Annotated[str, Path(pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$")]
-AssignmentNamePath = Annotated[
-    str, Path(pattern=r"^[a-z0-9][a-z0-9._-]{0,126}$")
-]
+AssignmentNamePath = Annotated[str, Path(pattern=r"^[a-z0-9][a-z0-9._-]{0,126}$")]
 ObservedRequirementPath = Annotated[
     Literal[
         "text_input",
