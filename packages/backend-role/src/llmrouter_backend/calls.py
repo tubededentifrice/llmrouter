@@ -1089,19 +1089,33 @@ class CallExecutor:
                         raise ValueError("The adapter emitted data after completion.")
                     if isinstance(event, ProviderCompleted):
                         usage = event.usage
+                        if not request.streaming:
+                            validated: list[ProviderOutput] = []
+                            for output in outputs:
+                                try:
+                                    await _validate_output(
+                                        request, output, validated, tool_call_ids
+                                    )
+                                finally:
+                                    validated.append(output)
                         continue
                     output_bytes += len(event.content_json.encode("utf-8"))
                     if output_bytes > self._limits.maximum_output_json_bytes or (
                         len(outputs) >= self._limits.maximum_output_events
                     ):
                         raise ValueError("The provider output exceeds its bound.")
-                    # Retain every bounded provider event even when semantic
-                    # validation rejects it and normal fallback continues.
+                    if not request.streaming:
+                        # Read the terminal usage before semantic validation so a
+                        # rejected buffered response keeps available billable facts.
+                        outputs.append(event)
+                        continue
+                    # Retain every bounded stream event even when semantic
+                    # validation rejects it after provider output starts.
                     try:
                         await _validate_output(request, event, outputs, tool_call_ids)
                     finally:
                         outputs.append(event)
-                    if request.streaming and event.kind in {"text_delta", "tool_call"}:
+                    if event.kind in {"text_delta", "tool_call"}:
                         first_visible = not visible
                         visible = True
                         if write_visible_output is not None:

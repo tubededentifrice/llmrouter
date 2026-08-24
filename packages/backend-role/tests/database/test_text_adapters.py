@@ -198,6 +198,26 @@ def test_optional_custom_credential_omits_authorization_and_openai_uses_its_limi
     assert "max_tokens" not in openai_body
 
 
+def test_openrouter_uses_its_reasoning_object() -> None:
+    """Put the mapped effort in the OpenRouter field, not the OpenAI field."""
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(200, json=_completion())
+
+    request = _request(
+        adapter="openrouter",
+        reasoning="high",
+        capabilities=frozenset({"reasoning"}),
+    )
+    capture = asyncio.run(capture_attempt(_adapter(handler, "openrouter"), request))
+
+    assert capture.failure is None
+    assert captured["reasoning"] == {"effort": "high"}
+    assert "reasoning_effort" not in captured
+
+
 def test_openai_maps_messages_images_tools_results_json_reasoning_and_bounds() -> None:
     """Map all accepted neutral text facts without a provider field in the API."""
     image = CapturedMedia(b"bounded-image", "image/png", "input")
@@ -498,6 +518,10 @@ def test_openai_normalizes_http_failures_without_provider_text(
     )
     assert _SECRET not in str(capture.failure)
     assert "redirect" not in str(capture.failure)
+    assert capture.failure is not None
+    assert {item.unit: item.quantity for item in capture.failure.usage} == {
+        "request": 1
+    }
 
 
 @pytest.mark.parametrize(
@@ -557,6 +581,23 @@ def test_provider_credential_cannot_inject_or_create_an_authorization_header() -
     assert not called
     assert unsafe_control not in str(capture.failure)
 
+    ollama_request = _request(
+        adapter="ollama",
+        endpoint="http://127.0.0.1:11434",
+        credential="",
+    )
+    ollama_capture = asyncio.run(
+        capture_attempt(OllamaTextAdapter(httpx.MockTransport(handler)), ollama_request)
+    )
+    assert_failure(
+        OllamaTextAdapter(httpx.MockTransport(handler)),
+        ollama_request,
+        ollama_capture,
+        FailureCase("authentication", visible_before_failure=False),
+        priced_usage_units=_OLLAMA_UNITS,
+    )
+    assert not called
+
 
 @pytest.mark.parametrize(
     "payload",
@@ -582,6 +623,197 @@ def test_openai_rejects_nonfinite_empty_and_invalid_responses(payload: bytes) ->
         FailureCase("invalid_response", visible_before_failure=False),
         priced_usage_units=_OPENAI_UNITS,
     )
+    assert capture.failure is not None
+    assert {item.unit: item.quantity for item in capture.failure.usage} == {
+        "request": 1
+    }
+
+
+def test_openai_rejects_too_many_buffered_tools_and_keeps_usage() -> None:
+    """Apply the 128-tool bound and keep usage from the rejected response."""
+    calls = [
+        {
+            "id": f"call-{index}",
+            "type": "function",
+            "function": {"name": "lookup", "arguments": "{}"},
+        }
+        for index in range(129)
+    ]
+    response = httpx.Response(
+        200,
+        json={
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": calls,
+                    },
+                }
+            ],
+            "usage": _usage(),
+        },
+    )
+    request = _request(capabilities=frozenset({"tool_calling"}))
+    capture = asyncio.run(capture_attempt(_adapter(lambda _request: response), request))
+
+    assert capture.failure is not None
+    assert capture.failure.failure_class == "invalid_response"
+    assert not capture.events
+    assert {item.unit: item.quantity for item in capture.failure.usage} == {
+        "request": 1,
+        "input_token": 10,
+        "cached_input_token": 2,
+        "output_token": 3,
+    }
+
+
+def test_openai_rejects_an_oversized_unterminated_sse_event_before_visibility() -> None:
+    """Apply the event bound at end of file before one delta becomes visible."""
+    content = "x" * (1024 * 1024)
+    wire = (
+        b'data: {"choices":[{"delta":{"content":'
+        + json.dumps(content).encode()
+        + b'},"finish_reason":null}]}'
+    )
+    response = httpx.Response(
+        200, content=wire, headers={"Content-Type": "text/event-stream"}
+    )
+    request = _request(streaming=True, capabilities=frozenset({"streaming"}))
+    capture = asyncio.run(capture_attempt(_adapter(lambda _request: response), request))
+
+    assert capture.failure is not None
+    assert capture.failure.failure_class == "invalid_response"
+    assert not capture.events
+    assert {item.unit: item.quantity for item in capture.failure.usage} == {
+        "request": 1
+    }
+
+
+def test_openai_stream_rejects_unrequested_tools_and_keeps_terminal_usage() -> None:
+    """Do not release one provider tool call that the native call did not request."""
+    chunks = [
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call-1",
+                                "function": {"name": "lookup", "arguments": "{}"},
+                            }
+                        ]
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ]
+        },
+        {"choices": [], "usage": _usage()},
+    ]
+    wire = (
+        b"".join(
+            b"data: " + json.dumps(item, separators=(",", ":")).encode() + b"\n\n"
+            for item in chunks
+        )
+        + b"data: [DONE]\n\n"
+    )
+    response = httpx.Response(
+        200, content=wire, headers={"Content-Type": "text/event-stream"}
+    )
+    request = _request(streaming=True, capabilities=frozenset({"streaming"}))
+    capture = asyncio.run(capture_attempt(_adapter(lambda _request: response), request))
+
+    assert capture.failure is not None
+    assert capture.failure.failure_class == "invalid_response"
+    assert not capture.events
+    assert {item.unit: item.quantity for item in capture.failure.usage} == {
+        "request": 1,
+        "input_token": 10,
+        "cached_input_token": 2,
+        "output_token": 3,
+    }
+
+
+@pytest.mark.parametrize("invalid_kind", ["incomplete_tool", "duplicate_usage"])
+def test_openai_stream_normalizes_invalid_terminal_facts(invalid_kind: str) -> None:
+    """Return one safe failure for invalid facts found at stream completion."""
+    if invalid_kind == "incomplete_tool":
+        chunks = [
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call-1",
+                                    "function": {"arguments": "{}"},
+                                }
+                            ]
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ]
+            },
+            {"choices": [], "usage": _usage()},
+        ]
+    else:
+        chunks = [
+            {
+                "choices": [{"delta": {}, "finish_reason": "stop"}],
+                "usage": _usage(),
+            },
+            {"choices": [], "usage": _usage()},
+        ]
+    wire = (
+        b"".join(
+            b"data: " + json.dumps(item, separators=(",", ":")).encode() + b"\n\n"
+            for item in chunks
+        )
+        + b"data: [DONE]\n\n"
+    )
+    response = httpx.Response(
+        200, content=wire, headers={"Content-Type": "text/event-stream"}
+    )
+    request = _request(
+        streaming=True,
+        capabilities=frozenset({"streaming", "tool_calling"}),
+    )
+    capture = asyncio.run(capture_attempt(_adapter(lambda _request: response), request))
+
+    assert capture.failure is not None
+    assert capture.failure.failure_class == "invalid_response"
+    assert str(capture.failure) == "The provider attempt failed."
+    assert not capture.events
+    assert {item.unit: item.quantity for item in capture.failure.usage} == {
+        "request": 1,
+        "input_token": 10,
+        "cached_input_token": 2,
+        "output_token": 3,
+    }
+
+
+def test_openai_stream_maps_one_structured_provider_error_without_its_text() -> None:
+    """Use the safe status class and do not return private stream error text."""
+    wire = (
+        b'data: {"error":{"code":429,"message":"private provider detail"}}\n\n'
+        b"data: [DONE]\n\n"
+    )
+    response = httpx.Response(
+        200, content=wire, headers={"Content-Type": "text/event-stream"}
+    )
+    request = _request(streaming=True, capabilities=frozenset({"streaming"}))
+    capture = asyncio.run(capture_attempt(_adapter(lambda _request: response), request))
+
+    assert capture.failure is not None
+    assert capture.failure.failure_class == "rate_limited"
+    assert str(capture.failure) == "The provider attempt failed."
+    assert "private" not in str(capture.failure)
+    assert {item.unit: item.quantity for item in capture.failure.usage} == {
+        "request": 1
+    }
 
 
 def test_ollama_maps_native_buffered_and_streaming_calls() -> None:
@@ -680,6 +912,90 @@ def test_ollama_maps_native_buffered_and_streaming_calls() -> None:
     assert function["arguments"] == {"value": 1}
 
 
+def test_ollama_maps_images_structured_json_and_streamed_tool_calls() -> None:
+    """Map Ollama-only image, schema, and synthetic tool-identity shapes."""
+    requests: list[dict[str, object]] = []
+    replies = [
+        httpx.Response(
+            200,
+            json={
+                "message": {"role": "assistant", "content": '{"ok":true}'},
+                "done": True,
+                "prompt_eval_count": 4,
+                "eval_count": 2,
+            },
+        ),
+        httpx.Response(
+            200,
+            content=(
+                b'{"message":{"content":"","tool_calls":[{"function":'
+                b'{"name":"first","arguments":{"a":1}}}]},"done":false}\n'
+                b'{"message":{"content":"","tool_calls":[{"function":'
+                b'{"name":"second","arguments":{}}}]},"done":true,'
+                b'"prompt_eval_count":4,"eval_count":2}\n'
+            ),
+            headers={"Content-Type": "application/x-ndjson"},
+        ),
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return replies[len(requests) - 1]
+
+    adapter = OllamaTextAdapter(httpx.MockTransport(handler))
+    image = CapturedMedia(b"bounded-image", "image/png", "input")
+    structured = _request(
+        adapter="ollama",
+        endpoint="http://127.0.0.1:11434",
+        credential=None,
+        output="structured_json",
+        media=(image,),
+        body={
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Inspect."},
+                        {"type": "image", "media_type": "image/png", "data_base64": ""},
+                    ],
+                }
+            ],
+            "output_format": {
+                "type": "json_schema",
+                "schema_json": '{"type":"object"}',
+            },
+        },
+    )
+    tools = _request(
+        adapter="ollama",
+        endpoint="http://127.0.0.1:11434",
+        credential=None,
+        streaming=True,
+        capabilities=frozenset({"streaming", "tool_calling"}),
+    )
+
+    structured_capture = asyncio.run(capture_attempt(adapter, structured))
+    tools_capture = asyncio.run(capture_attempt(adapter, tools))
+
+    assert structured_capture.failure is None
+    output = cast("ProviderOutput", structured_capture.events[0])
+    assert output.kind == "structured_json"
+    assert json.loads(output.content_json) == {"ok": True}
+    assert requests[0]["format"] == {"type": "object"}
+    first_message = cast("list[dict[str, object]]", requests[0]["messages"])[0]
+    assert first_message["images"] == ["Ym91bmRlZC1pbWFnZQ=="]
+
+    assert tools_capture.failure is None
+    tool_outputs = [
+        event for event in tools_capture.events if isinstance(event, ProviderOutput)
+    ]
+    assert [event.kind for event in tool_outputs] == ["tool_call", "tool_call"]
+    assert [json.loads(event.content_json)["id"] for event in tool_outputs] == [
+        "ollama-1",
+        "ollama-2",
+    ]
+
+
 def test_ollama_stream_keeps_terminal_usage_when_a_late_row_is_invalid() -> None:
     """Validate the complete body before completion and keep reported usage."""
     response = httpx.Response(
@@ -752,6 +1068,9 @@ def test_ollama_allows_trusted_https_and_rejects_plain_external_http() -> None:
     trusted_capture = asyncio.run(capture_attempt(adapter, trusted))
     assert trusted_capture.failure is not None
     assert trusted_capture.failure.failure_class == "unavailable"
+    assert {item.unit: item.quantity for item in trusted_capture.failure.usage} == {
+        "request": 1
+    }
     assert called
 
     called = False

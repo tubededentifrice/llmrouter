@@ -107,19 +107,36 @@ class OpenAITextAdapter:
                     content=body,
                     headers=headers,
                 ) as response:
-                    _validate_headers(response)
-                    if response.status_code >= 300:
-                        raise _http_failure(response.status_code)
-                    if request.streaming:
-                        _require_content_type(response, "text/event-stream")
-                        async for event in _openai_stream(response):
-                            yield event
-                    else:
-                        _require_content_type(response, "application/json")
-                        payload = await _read_response(response)
-                        output, usage = _openai_completion(payload, request)
-                        yield output
-                        yield ProviderCompleted(usage)
+                    try:
+                        _validate_headers(response)
+                        if response.status_code >= 300:
+                            raise _http_failure(response.status_code)
+                        if request.streaming:
+                            _require_content_type(response, "text/event-stream")
+                            async for event in _openai_stream(response, request):
+                                yield event
+                        else:
+                            _require_content_type(response, "application/json")
+                            payload = await _read_response(response)
+                            output, usage = _openai_completion(payload, request)
+                            yield output
+                            yield ProviderCompleted(usage)
+                    except ProviderFailureError as error:
+                        raise _failure_with_available_usage(error) from None
+                    except httpx.TimeoutException:
+                        raise _failure("timeout", usage=_request_usage()) from None
+                    except httpx.HTTPError:
+                        raise _failure("transport", usage=_request_usage()) from None
+                    except (
+                        KeyError,
+                        TypeError,
+                        UnicodeError,
+                        ValueError,
+                        RecursionError,
+                    ):
+                        raise _failure(
+                            "invalid_response", usage=_request_usage()
+                        ) from None
         except ProviderFailureError:
             raise
         except httpx.TimeoutException:
@@ -162,7 +179,7 @@ class OllamaTextAdapter:
         ):
             raise _failure("incompatible") from None
         headers = {"Content-Type": "application/json", "Accept": "application/x-ndjson"}
-        if request.credential:
+        if request.credential is not None:
             try:
                 headers["Authorization"] = _bearer_authorization(request.credential)
             except ValueError:
@@ -180,21 +197,39 @@ class OllamaTextAdapter:
                     content=body,
                     headers=headers,
                 ) as response:
-                    _validate_headers(response)
-                    if response.status_code >= 300:
-                        raise _http_failure(response.status_code)
-                    if request.streaming:
-                        _require_one_content_type(
-                            response, {"application/x-ndjson", "application/json"}
-                        )
-                        async for event in _ollama_stream(response):
-                            yield event
-                    else:
-                        _require_content_type(response, "application/json")
-                        payload = await _read_response(response)
-                        output, usage = _ollama_completion(payload, request)
-                        yield output
-                        yield ProviderCompleted(usage)
+                    try:
+                        _validate_headers(response)
+                        if response.status_code >= 300:
+                            raise _http_failure(response.status_code)
+                        if request.streaming:
+                            _require_one_content_type(
+                                response,
+                                {"application/x-ndjson", "application/json"},
+                            )
+                            async for event in _ollama_stream(response, request):
+                                yield event
+                        else:
+                            _require_content_type(response, "application/json")
+                            payload = await _read_response(response)
+                            output, usage = _ollama_completion(payload, request)
+                            yield output
+                            yield ProviderCompleted(usage)
+                    except ProviderFailureError as error:
+                        raise _failure_with_available_usage(error) from None
+                    except httpx.TimeoutException:
+                        raise _failure("timeout", usage=_request_usage()) from None
+                    except httpx.HTTPError:
+                        raise _failure("transport", usage=_request_usage()) from None
+                    except (
+                        KeyError,
+                        TypeError,
+                        UnicodeError,
+                        ValueError,
+                        RecursionError,
+                    ):
+                        raise _failure(
+                            "invalid_response", usage=_request_usage()
+                        ) from None
         except ProviderFailureError:
             raise
         except httpx.TimeoutException:
@@ -311,7 +346,12 @@ def _openai_request(request: ProviderAttemptRequest) -> bytes:
     if output_format is not None:
         value["response_format"] = _openai_output_format(output_format)
     if request.route.provider_reasoning_value is not None:
-        value["reasoning_effort"] = request.route.provider_reasoning_value
+        if request.route.adapter == "openrouter":
+            value["reasoning"] = {
+                "effort": request.route.provider_reasoning_value,
+            }
+        else:
+            value["reasoning_effort"] = request.route.provider_reasoning_value
     return _dump_request(value)
 
 
@@ -545,24 +585,29 @@ def _openai_completion(
     payload: bytes, request: ProviderAttemptRequest
 ) -> tuple[ProviderOutput, tuple[UsageAmount, ...]]:
     root = _json_object(payload)
-    choices = root.get("choices")
-    if not isinstance(choices, list) or len(choices) != 1:
-        raise ValueError
-    choice = choices[0]
-    if not isinstance(choice, dict):
-        raise ValueError
-    finish_reason = choice.get("finish_reason")
-    if finish_reason == "content_filter":
-        raise _failure("refusal")
-    if finish_reason not in {"stop", "length", "tool_calls"}:
-        raise ValueError
-    message = choice.get("message")
-    if not isinstance(message, dict):
-        raise ValueError
-    if message.get("refusal") not in {None, ""}:
-        raise _failure("refusal")
-    output = _provider_output(message, request)
-    return output, _openai_usage(root.get("usage"))
+    usage = _openai_usage(root.get("usage"))
+    try:
+        choices = root.get("choices")
+        if not isinstance(choices, list) or len(choices) != 1:
+            raise ValueError
+        choice = choices[0]
+        if not isinstance(choice, dict):
+            raise ValueError
+        finish_reason = choice.get("finish_reason")
+        if finish_reason == "content_filter":
+            raise _failure("refusal")
+        if finish_reason not in {"stop", "length", "tool_calls"}:
+            raise ValueError
+        message = choice.get("message")
+        if not isinstance(message, dict):
+            raise ValueError
+        if message.get("refusal") not in {None, ""}:
+            raise _failure("refusal")
+        return _provider_output(message, request), usage
+    except ProviderFailureError as error:
+        raise _failure(error.failure_class, usage=usage, phase=error.phase) from None
+    except KeyError, TypeError, UnicodeError, ValueError, RecursionError:
+        raise _failure("invalid_response", usage=usage) from None
 
 
 def _provider_output(
@@ -581,21 +626,40 @@ def _provider_output(
         raise ValueError
     tool_calls = message.get("tool_calls")
     if tool_calls is not None:
-        parts.extend(_neutral_tool_calls(tool_calls))
+        parts.extend(
+            _neutral_tool_calls(
+                tool_calls,
+                require_function_type=request.route.adapter != "ollama",
+            )
+        )
     if not parts:
         raise ValueError
     return ProviderOutput("standard", _dump_json(parts))
 
 
-def _neutral_tool_calls(value: object) -> list[dict[str, object]]:
-    if not isinstance(value, list) or not value:
+def _neutral_tool_calls(
+    value: object, *, require_function_type: bool = False
+) -> list[dict[str, object]]:
+    if not isinstance(value, list) or not 1 <= len(value) <= _MAXIMUM_TOOL_CALLS:
         raise ValueError
     result: list[dict[str, object]] = []
     for call in value:
-        if not isinstance(call, dict) or not isinstance(call.get("id"), str):
+        if (
+            not isinstance(call, dict)
+            or not isinstance(call.get("id"), str)
+            or not 1 <= len(call["id"]) <= 200
+            or (require_function_type and call.get("type") != "function")
+            or (
+                not require_function_type and call.get("type") not in {None, "function"}
+            )
+        ):
             raise ValueError
         function = call.get("function")
-        if not isinstance(function, dict) or not isinstance(function.get("name"), str):
+        if (
+            not isinstance(function, dict)
+            or not isinstance(function.get("name"), str)
+            or not 1 <= len(function["name"]) <= 200
+        ):
             raise ValueError
         arguments = function.get("arguments")
         if isinstance(arguments, dict):
@@ -621,12 +685,13 @@ def _neutral_tool_calls(value: object) -> list[dict[str, object]]:
 
 
 async def _openai_stream(
-    response: httpx.Response,
+    response: httpx.Response, request: ProviderAttemptRequest
 ) -> AsyncIterator[ProviderOutput | ProviderCompleted]:
     usage: tuple[UsageAmount, ...] = (UsageAmount("request", Decimal(1)),)
     tool_parts: dict[int, dict[str, str]] = defaultdict(dict)
     finished = False
     done = False
+    usage_reported = False
     try:
         async for data in _sse_data(response):
             if done:
@@ -636,9 +701,12 @@ async def _openai_stream(
                 continue
             root = _json_object(data)
             if root.get("error") is not None:
-                raise _failure("upstream_failed")
+                raise _stream_error_failure(root["error"])
             if root.get("usage") is not None:
+                if usage_reported:
+                    raise ValueError
                 usage = _openai_usage(root["usage"])
+                usage_reported = True
             choices = root.get("choices")
             if choices == []:
                 continue
@@ -682,20 +750,33 @@ async def _openai_stream(
         raise ProviderFailureError("transport", usage=usage) from None
     except KeyError, TypeError, UnicodeError, ValueError, RecursionError:
         raise ProviderFailureError("invalid_response", usage=usage) from None
-    for index in sorted(tool_parts):
-        item = tool_parts[index]
-        calls = _neutral_tool_calls(
-            [
-                {
-                    "id": item.get("id"),
-                    "function": {
-                        "name": item.get("name"),
-                        "arguments": item.get("arguments", ""),
-                    },
-                }
-            ]
-        )
-        yield ProviderOutput("tool_call", _dump_json(calls[0]))
+    tool_outputs: list[ProviderOutput] = []
+    try:
+        if (
+            tool_parts
+            and "tool_calling" not in request.requirements.required_capabilities
+        ):
+            raise ValueError
+        for index in sorted(tool_parts):
+            item = tool_parts[index]
+            calls = _neutral_tool_calls(
+                [
+                    {
+                        "id": item.get("id"),
+                        "type": "function",
+                        "function": {
+                            "name": item.get("name"),
+                            "arguments": item.get("arguments", ""),
+                        },
+                    }
+                ],
+                require_function_type=True,
+            )
+            tool_outputs.append(ProviderOutput("tool_call", _dump_json(calls[0])))
+    except KeyError, TypeError, UnicodeError, ValueError, RecursionError:
+        raise ProviderFailureError("invalid_response", usage=usage) from None
+    for output in tool_outputs:
+        yield output
     yield ProviderCompleted(usage)
 
 
@@ -751,16 +832,20 @@ def _ollama_completion(
     payload: bytes, request: ProviderAttemptRequest
 ) -> tuple[ProviderOutput, tuple[UsageAmount, ...]]:
     root = _json_object(payload)
-    if root.get("done") is not True or root.get("error") is not None:
-        raise ValueError
-    message = root.get("message")
-    if not isinstance(message, dict):
-        raise ValueError
-    normalized = dict(message)
-    calls = normalized.get("tool_calls")
-    if calls is not None:
-        normalized["tool_calls"] = _ollama_tool_calls(calls)
-    return _provider_output(normalized, request), _ollama_usage(root)
+    usage = _ollama_usage(root)
+    try:
+        if root.get("done") is not True or root.get("error") is not None:
+            raise ValueError
+        message = root.get("message")
+        if not isinstance(message, dict):
+            raise ValueError
+        normalized = dict(message)
+        calls = normalized.get("tool_calls")
+        if calls is not None:
+            normalized["tool_calls"] = _ollama_tool_calls(calls)
+        return _provider_output(normalized, request), usage
+    except KeyError, TypeError, UnicodeError, ValueError, RecursionError:
+        raise _failure("invalid_response", usage=usage) from None
 
 
 def _ollama_tool_calls(value: object) -> list[dict[str, object]]:
@@ -775,15 +860,17 @@ def _ollama_tool_calls(value: object) -> list[dict[str, object]]:
 
 
 async def _ollama_stream(
-    response: httpx.Response,
+    response: httpx.Response, request: ProviderAttemptRequest
 ) -> AsyncIterator[ProviderOutput | ProviderCompleted]:
-    terminal_usage: tuple[UsageAmount, ...] | None = None
+    usage = _request_usage()
+    terminal = False
+    tool_calls: list[dict[str, object]] = []
     try:
         async for line in _bounded_lines(response):
             if not line:
                 continue
             root = _json_object(line)
-            if root.get("error") is not None or terminal_usage is not None:
+            if root.get("error") is not None or terminal:
                 raise ValueError
             message = root.get("message")
             if not isinstance(message, dict):
@@ -795,27 +882,42 @@ async def _ollama_stream(
                 raise ValueError
             calls = message.get("tool_calls")
             if calls:
-                for call in _ollama_tool_calls(calls):
-                    yield ProviderOutput(
-                        "tool_call", _dump_json(_neutral_tool_calls([call])[0])
-                    )
+                normalized_calls = _ollama_tool_calls(calls)
+                if len(tool_calls) + len(normalized_calls) > _MAXIMUM_TOOL_CALLS:
+                    raise ValueError
+                tool_calls.extend(normalized_calls)
             if root.get("done") is True:
-                terminal_usage = _ollama_usage(root)
+                usage = _ollama_usage(root)
+                terminal = True
             elif root.get("done") is not False:
                 raise ValueError
-        if terminal_usage is None:
+        if not terminal:
             raise ValueError
     except ProviderFailureError:
         raise
     except httpx.TimeoutException:
-        raise ProviderFailureError("timeout", usage=terminal_usage or ()) from None
+        raise ProviderFailureError("timeout", usage=usage) from None
     except httpx.HTTPError:
-        raise ProviderFailureError("transport", usage=terminal_usage or ()) from None
+        raise ProviderFailureError("transport", usage=usage) from None
     except KeyError, TypeError, UnicodeError, ValueError, RecursionError:
-        raise ProviderFailureError(
-            "invalid_response", usage=terminal_usage or ()
-        ) from None
-    yield ProviderCompleted(terminal_usage)
+        raise ProviderFailureError("invalid_response", usage=usage) from None
+    tool_outputs: list[ProviderOutput] = []
+    try:
+        if (
+            tool_calls
+            and "tool_calling" not in request.requirements.required_capabilities
+        ):
+            raise ValueError
+        for index, call in enumerate(tool_calls):
+            call["id"] = f"ollama-{index + 1}"
+            tool_outputs.append(
+                ProviderOutput("tool_call", _dump_json(_neutral_tool_calls([call])[0]))
+            )
+    except KeyError, TypeError, UnicodeError, ValueError, RecursionError:
+        raise ProviderFailureError("invalid_response", usage=usage) from None
+    for output in tool_outputs:
+        yield output
+    yield ProviderCompleted(usage)
 
 
 def _openai_usage(value: object) -> tuple[UsageAmount, ...]:
@@ -910,7 +1012,10 @@ async def _sse_data(response: httpx.Response) -> AsyncIterator[bytes]:
         else:
             raise ValueError
     if data:
-        yield b"\n".join(data)
+        value = b"\n".join(data)
+        if len(value) > _MAXIMUM_EVENT_BYTES:
+            raise ValueError
+        yield value
 
 
 def _validate_headers(response: httpx.Response) -> None:
@@ -953,6 +1058,15 @@ def _http_failure(status: int) -> ProviderFailureError:
     return _failure("invalid_response")
 
 
+def _stream_error_failure(value: object) -> ProviderFailureError:
+    if not isinstance(value, dict):
+        return _failure("invalid_response")
+    status = value.get("code")
+    if type(status) is int and 100 <= status <= 599:
+        return _http_failure(status)
+    return _failure("unavailable")
+
+
 def _bearer_authorization(credential: str) -> str:
     if not 1 <= len(credential.encode("utf-8")) <= 10_000 or any(
         not 0x21 <= ord(character) <= 0x7E for character in credential
@@ -968,6 +1082,20 @@ def _failure(
     phase: CallFailurePhase = CallFailurePhase.BEFORE_VISIBLE_OUTPUT,
 ) -> ProviderFailureError:
     return ProviderFailureError(cast("Any", failure_class), usage=usage, phase=phase)
+
+
+def _request_usage() -> tuple[UsageAmount, ...]:
+    return (UsageAmount("request", Decimal(1)),)
+
+
+def _failure_with_available_usage(
+    error: ProviderFailureError,
+) -> ProviderFailureError:
+    return _failure(
+        error.failure_class,
+        usage=error.usage or _request_usage(),
+        phase=error.phase,
+    )
 
 
 def _copy_optional(

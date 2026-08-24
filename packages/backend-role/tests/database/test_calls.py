@@ -691,6 +691,13 @@ def test_structured_embedding_and_media_validation_use_normal_fallback(
                 call_context.actors["alpha"], structured
             )
         )
+    with psycopg.connect(call_context.database_url, row_factory=dict_row) as connection:
+        failed_attempt = connection.execute(
+            "SELECT usage FROM router.raw_accounting_attempts"
+        ).fetchone()
+        assert failed_attempt == {
+            "usage": [{"unit": "request", "quantity": "1"}],
+        }
     result = asyncio.run(
         call_context.executor(structured_adapter).execute(
             call_context.actors["alpha"], structured
