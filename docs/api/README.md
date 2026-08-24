@@ -32,6 +32,11 @@ selector omits service context. Administrator playground accounting, detailed
 logs, jobs, and retained media are global administrator-only records.
 Completed playground results include each provider attempt in order so a
 fallback cannot hide usage or cost from an earlier failed attempt.
+Post-admission call errors contain the same correlation and completed-attempt
+data. One successful result has exactly one succeeded final attempt. Missing
+provider usage is absent and is not zero. Result-level usage describes only
+the selected provider result. The attempt list is the source for all-attempt
+totals.
 
 Provider connections, models, provider-models, and credentials are global.
 Services cannot own or restrict them. Configuration writes validate and apply
@@ -49,6 +54,9 @@ The statistics assignment dimension uses `(exact)` for an exact provider-model
 selection. This marker cannot be an assignment name. A statistics dimension
 value is `null` when it does not apply to the call actor. Service statistics
 never include administrator playground records.
+An admitted call with no provider attempt has null currency, zero cost, and an
+empty unit list. A bucket with an attempt that has unavailable usage has null
+cost and contains only reported typed units.
 
 The other normative files are:
 
@@ -58,4 +66,4 @@ The other normative files are:
 
 `contract-digests.json` is generated from this contract. Run
 `./scripts/check-api-contracts.sh` to validate the contract, fixtures, and
-digests.
+digests. The OpenAPI source digest also binds the exact contract-policy digest.

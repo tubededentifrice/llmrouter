@@ -9,10 +9,10 @@ Each service call MUST authenticate one service API key and identify one
 workspace that the service owns. The Router MUST reject a missing, deleted,
 or foreign workspace before provider work.
 
-A call MUST select either one named assignment or one exact enabled
-provider-model. An exact selection MUST use no assignment fallback. Both paths
-MUST use the same workspace isolation, tags, logging, usage, cost, and safety
-limits.
+A service call MUST select either one named assignment or one exact enabled
+provider-model. An exact selection MUST use no assignment fallback. Both
+service paths MUST use the same service and workspace isolation, tags,
+logging, usage, cost, and safety limits.
 
 A request MAY contain 0 through 32 plain string tags. One tag MUST contain 1
 through 128 UTF-8 bytes. The complete normalized tag set MUST contain no more
@@ -69,9 +69,28 @@ create one logical call and its immutable administrator actor and selection
 snapshot in one transaction before provider work. A rollback of this
 transaction MUST start no provider work. Provider I/O MUST occur outside a
 database transaction. Each completed provider attempt MUST commit its raw
-accounting once before the Router starts a fallback attempt. If that commit
-fails, the Router MUST return `internal_error`, MUST NOT start another
-candidate, and MUST NOT repeat the completed provider attempt.
+accounting once before the Router starts a fallback attempt, returns a
+non-streaming success, sends a stream `completed` event, or makes a media job
+terminal. If that commit fails, the Router MUST report `internal_error`, MUST
+NOT start another candidate, MUST NOT report success or stream completion,
+and MUST NOT repeat the completed provider attempt. After visible stream
+output, this dependency failure MUST use the terminal `error` event. A media
+worker MAY retry the accounting or terminal-state transaction, but it MUST
+use the existing logical-call and attempt identities and MUST NOT repeat
+provider work.
+
+Validation that reads a service, assignment, inherited chain, provider-model,
+or other current configuration MUST occur in the call-creation transaction or
+MUST be repeated in that transaction. A concurrent change MUST be wholly
+before or wholly after the admitted snapshot. It MUST NOT produce a snapshot
+from parts of two configuration states.
+
+The immutable selection snapshot MUST keep the admitted assignment chain,
+provider-model configuration, and call controls. It MUST NOT preserve a
+deleted or replaced provider credential for an attempt that has not started.
+The credential rules in
+[Providers, models, prices, and configuration](02-providers-models-prices-and-configuration.md#provider-connections-and-credentials)
+MUST apply when each attempt gets its credential.
 
 A model or embedding response MUST return the logical call identity, elapsed
 milliseconds, selected provider-model, usage, and cost that are available for
@@ -84,6 +103,19 @@ elapsed time, selector, route, attempts, usage, and cost on completion. It MUST
 use the native interruption error when failure occurs after visible output. A
 caller disconnect MUST use the normal model-call rules and MUST NOT create a
 replay or result operation.
+
+A result-level or job-level usage and cost value MUST describe only the
+selected provider result. It MUST NOT add values from the complete attempt
+list. A caller that totals attempts MUST keep different currencies separate.
+
+A successful model, embedding, stream, or media result MUST contain exactly
+one succeeded attempt. That attempt MUST be the last attempt. After the Router
+creates the logical call, a failed model or embedding response and a stream
+`error` event MUST return the logical call identity, selector, elapsed time,
+completed attempts, and safe error. An error before logical-call creation MUST
+use the basic error envelope and MUST NOT invent a logical call identity. An
+attempt MUST omit usage and cost when they are unavailable. It MUST NOT use a
+zero value to represent missing provider data.
 
 Each successful administrator playground response and stream MUST use
 `Cache-Control: no-store`. The stream response MUST also return the logical

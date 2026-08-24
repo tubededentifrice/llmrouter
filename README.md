@@ -38,8 +38,8 @@ roles, durable request recovery for model or embedding calls, or Router-owned
 high-availability coordination.
 
 A calling service owns its prompts, workflows, durable conversations, domain
-data, user permissions, and tools. Each model, embedding, and media request
-identifies one workspace that belongs to the authenticated service.
+data, user permissions, and tools. Each service API model, embedding, and media
+request identifies one workspace that belongs to the authenticated service.
 
 The global playground is the one exception to service call ownership. An
 allowlisted administrator session can call an exact global provider-model or

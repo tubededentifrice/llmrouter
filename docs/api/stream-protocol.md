@@ -14,17 +14,20 @@ The event order is:
 
 `start` data uses `StreamStart`. `text_delta` data uses `StreamTextDelta`.
 `tool_call` data uses `StreamToolCall`. `completed` data uses
-`StreamCompleted`. `error` data uses `ErrorEnvelope`. These closed schemas are
-in `openapi.yaml`.
+`StreamCompleted`. For the service operation, `error` data uses
+`ErrorEnvelope`. These closed schemas are in `openapi.yaml`.
 
 For the administrator operation, `start` data uses
 `AdministratorStreamStart` and `completed` data uses
 `AdministratorStreamCompleted`. Both identify the logical call. The completed
 event also gives the selector, elapsed milliseconds, completed attempts, final
-route, usage, and cost. The intermediate and error schemas are the same as for
-the service operation. The administrator operation requires a current
-administrator session, the session-bound CSRF token, and the exact allowed
-Origin at admission.
+route, usage, and cost. The intermediate schemas are the same as for the
+service operation. The administrator error data uses
+`AdministratorErrorEnvelope`. After logical-call creation, it gives the
+logical call, selector, elapsed milliseconds, and completed attempts. A
+failure before logical-call creation uses the basic form of this administrator
+schema. The administrator operation requires a current administrator session,
+the session-bound CSRF token, and the exact allowed Origin at admission.
 
 The Router can try the next assignment candidate until model output becomes
 visible. Visible output is the first `text_delta` or `tool_call` event. The

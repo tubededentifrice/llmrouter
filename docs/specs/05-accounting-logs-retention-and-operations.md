@@ -10,10 +10,12 @@ attempt. It MUST record billable usage from successful and failed attempts
 when the provider reports it. Fallback MUST NOT hide or replace a prior
 attempt's usage or cost.
 
-Each attempt MUST snapshot its provider connection, provider model, typed
-usage, applied typed prices, cost, outcome, start time, end time, and safe
-failure class. A later price change MUST NOT change this record or a daily
-aggregate.
+Each attempt MUST snapshot its provider connection, provider model, applied
+typed prices, outcome, start time, end time, and safe failure class. It MUST
+also snapshot typed usage and cost when enough provider data is available. A
+later price change MUST NOT change this record or a daily aggregate. Usage and
+cost MUST be absent when the provider does not report enough data to calculate
+them. An absent value MUST NOT become zero.
 
 Each logical call and attempt MUST identify its immutable call actor as
 `service` or `administrator`. A service call MUST keep its service and
@@ -35,7 +37,10 @@ change.
 Raw request and attempt accounting MUST be durable PostgreSQL data until its
 scheduled daily rollup succeeds. A scheduled rollup MUST process each closed
 UTC day no later than 03:00 UTC on the next day. It MUST be safe to repeat and
-MUST NOT count one raw attempt more than once.
+MUST NOT count one raw attempt more than once. A completed attempt that arrives
+after a day was rolled up MUST cause an atomic replacement rollup for that day.
+The replacement MUST include the late attempt and MUST NOT duplicate an
+earlier attempt.
 
 Equivalent rows MAY aggregate when all grouping dimensions are equal.
 Dimensions MUST include date, call actor, service, workspace, administrator,
@@ -43,6 +48,15 @@ assignment or exact-call marker, assignment configuration service,
 provider-model, outcome, normalized tag set, usage unit, and price currency.
 A dimension that does not apply to one call actor MUST have a null value. Daily
 aggregates MUST have no automatic expiry.
+
+Statistics call totals MUST include an admitted logical call that has no
+provider attempt. Its attempt count MUST be zero, its typed-unit list MUST be
+empty, its cost MUST be zero, and its currency MUST be null. An attempt-only
+provider-model or outcome dimension MUST be null for this call. A non-null
+provider-model or outcome filter MUST exclude it. When one or more attempts in
+a statistics bucket have unavailable usage or cost, the bucket MUST contain
+only the reported typed units and MUST use null cost. It MUST NOT present a
+partial cost as a complete total.
 
 Deleting a workspace or service MUST delete its raw accounting and daily
 aggregates. The public resource MUST be absent before physical cleanup starts.
@@ -64,6 +78,8 @@ only service-call records for its authenticated service. It MUST NOT return
 an administrator playground record. One query MUST cover no more than 366 days
 and return no more than 1000 groups. The API MUST use bounded pagination for
 record lists. The product MUST NOT provide a general analytics query language.
+Each statistics bucket MUST have one dimension value for each requested group
+in the same order. Its dimension count MUST equal the `group_by` count.
 
 The administration statistics view MUST use the shared OpenDLE UI data-table
 behavior. Its filter controls and results MUST use the same page gutter and
@@ -88,6 +104,9 @@ identity as its raw accounting and media job. Its summary MUST identify the
 administrator call actor and immutable administrator subject. An assignment
 call summary MUST include the configuration service snapshot. It MUST have no
 service or workspace owner. A service or workspace delete MUST NOT delete it.
+An exact-call summary MUST contain the exact provider-model and MUST omit the
+assignment and configuration service. An assignment-call summary MUST contain
+the assignment and configuration service together.
 
 Provider credentials, service API keys, administrator cookies, authorization
 headers, object-storage credentials, and CSRF values are control data. They

@@ -7,7 +7,7 @@
 # ]
 # ///
 """Check the native version 1 API contract."""
-# ruff: noqa: ANN401, C901, E402, E501, EM101, EM102, FURB167, TRY003
+# ruff: noqa: ANN401, C901, E402, E501, EM101, EM102, FURB167, PLR0912, PLR0915, PLR2004, TRY003
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ import hashlib
 import json
 import re
 import sys
+import tempfile
 import warnings
 from pathlib import Path
 from typing import Any
@@ -506,6 +507,21 @@ def require_invalid_instances(
 def check_administrator_playground(spec: dict[str, Any]) -> None:
     """Check unrestricted administrator calls and their isolated records."""
     schemas = spec["components"]["schemas"]
+    responses = spec["components"]["responses"]
+    if (
+        responses["ErrorResponse"]["content"]["application/json"]["schema"].get("$ref")
+        != "#/components/schemas/ErrorEnvelope"
+    ):
+        raise ContractError("The basic error response does not use ErrorEnvelope")
+    if (
+        responses["AdministratorErrorResponse"]["content"]["application/json"][
+            "schema"
+        ].get("$ref")
+        != "#/components/schemas/AdministratorErrorEnvelope"
+    ):
+        raise ContractError(
+            "The administrator error response does not use its isolated envelope"
+        )
     expected_paths = {
         "adminCreatePlaygroundModelCall": (
             "/v1/admin/playground/model-calls",
@@ -547,6 +563,23 @@ def check_administrator_playground(spec: dict[str, Any]) -> None:
             or no_store.get("schema", {}).get("const") != "no-store"
         ):
             raise ContractError(f"{operation_id} does not require no-store responses")
+        if item["operation"]["responses"].get("default", {}).get("$ref") != (
+            "#/components/responses/AdministratorErrorResponse"
+        ):
+            raise ContractError(
+                f"{operation_id} does not use the administrator error response"
+            )
+
+    administrator_error_operations = {
+        operation_id
+        for operation_id, item in spec_operations.items()
+        if item["operation"]["responses"].get("default", {}).get("$ref")
+        == "#/components/responses/AdministratorErrorResponse"
+    }
+    if administrator_error_operations != set(expected_paths):
+        raise ContractError(
+            "The administrator error response is not limited to playground operations"
+        )
 
     stream_headers = spec_operations["adminCreatePlaygroundModelStream"]["operation"][
         "responses"
@@ -671,6 +704,14 @@ def check_administrator_playground(spec: dict[str, Any]) -> None:
                 "messages": base_messages,
             },
             {
+                "selector": {
+                    "assignment_api_name": "summarize",
+                    "service_api_name": "billing",
+                    "provider_model_api_name": "primary-text",
+                },
+                "messages": base_messages,
+            },
+            {
                 "selector": exact_selector,
                 "messages": base_messages,
                 "excluded_provider_model_api_names": ["secondary-text"],
@@ -730,6 +771,83 @@ def check_administrator_playground(spec: dict[str, Any]) -> None:
         "elapsed_ms": 900,
         "usage": usage,
     }
+    failed_attempt = {
+        "provider_model_api_name": "primary-text",
+        "outcome": "failed",
+        "elapsed_ms": 900,
+        "error": {
+            "code": "upstream_failed",
+            "message": "The provider route failed.",
+        },
+    }
+    basic_error = {
+        "error": {
+            "code": "invalid_request",
+            "message": "The request is invalid.",
+        }
+    }
+    require_valid_instances(
+        spec,
+        "ErrorEnvelope",
+        (basic_error,),
+    )
+    require_invalid_instances(
+        spec,
+        "ErrorEnvelope",
+        (
+            {**basic_error, "logical_call_id": "call-partial"},
+            {**basic_error, "selector": assignment_selector},
+            {**basic_error, "elapsed_ms": 1000},
+            {**basic_error, "attempts": [failed_attempt]},
+            {
+                **basic_error,
+                "logical_call_id": "call-failed",
+                "selector": assignment_selector,
+                "elapsed_ms": 1000,
+                "attempts": [failed_attempt],
+            },
+        ),
+    )
+    require_valid_instances(
+        spec,
+        "AdministratorErrorEnvelope",
+        (
+            basic_error,
+            {
+                "error": {
+                    "code": "upstream_failed",
+                    "message": "All provider routes failed.",
+                },
+                "logical_call_id": "call-failed",
+                "selector": assignment_selector,
+                "elapsed_ms": 1000,
+                "attempts": [failed_attempt],
+            },
+        ),
+    )
+    require_invalid_instances(
+        spec,
+        "AdministratorErrorEnvelope",
+        (
+            {**basic_error, "logical_call_id": "call-partial"},
+            {
+                **basic_error,
+                "logical_call_id": "call-exact",
+                "selector": exact_selector,
+                "elapsed_ms": 1000,
+                "attempts": [failed_attempt, failed_attempt],
+            },
+        ),
+    )
+    for successful_attempt_schema in (
+        "SuccessfulAdministratorAttemptResults",
+        "SuccessfulExactAdministratorAttemptResults",
+        "SuccessfulMediaAdministratorAttemptResults",
+    ):
+        if schemas[successful_attempt_schema].get("x-last-item-outcome") != "succeeded":
+            raise ContractError(
+                f"{successful_attempt_schema} does not require the final success"
+            )
     model_result = {
         "logical_call_id": "call-model",
         "selector": exact_selector,
@@ -805,6 +923,12 @@ def check_administrator_playground(spec: dict[str, Any]) -> None:
             {**model_result, "workspace_api_name": "production"},
             {**model_result, "elapsed_ms": 900001},
             {**model_result, "attempts": [succeeded_attempt, succeeded_attempt]},
+            {**model_result, "attempts": [failed_attempt]},
+            {
+                **model_result,
+                "selector": assignment_selector,
+                "attempts": [succeeded_attempt, succeeded_attempt],
+            },
         ),
     )
     require_valid_instances(
@@ -1024,6 +1148,15 @@ def check_administrator_playground(spec: dict[str, Any]) -> None:
             },
             {
                 **pending_job,
+                "selector": assignment_selector,
+                "state": "succeeded",
+                "elapsed_ms": 1000,
+                "attempts": [failed_attempt],
+                "content": {"media_type": "image/png", "size_bytes": 1024},
+                "completed_at": "2026-08-24T00:00:01Z",
+            },
+            {
+                **pending_job,
                 "state": "succeeded",
                 "elapsed_ms": 1000,
                 "attempts": [succeeded_attempt, succeeded_attempt],
@@ -1103,6 +1236,108 @@ def check_administrator_playground(spec: dict[str, Any]) -> None:
                 "kind": "model",
                 "outcome": "succeeded",
                 "started_at": "2026-08-24T00:00:00Z",
+            },
+            {
+                "id": "log-admin-mixed-selector",
+                "logical_call_id": "call-admin-mixed-selector",
+                "call_actor": "administrator",
+                "administrator_subject": "issuer|subject",
+                "provider_model_api_name": "primary-text",
+                "configuration_service_api_name": "billing",
+                "kind": "model",
+                "outcome": "succeeded",
+                "started_at": "2026-08-24T00:00:00Z",
+            },
+            {
+                "id": "log-admin-missing-service",
+                "logical_call_id": "call-admin-missing-service",
+                "call_actor": "administrator",
+                "administrator_subject": "issuer|subject",
+                "assignment_api_name": "summarize",
+                "kind": "model",
+                "outcome": "failed",
+                "started_at": "2026-08-24T00:00:00Z",
+            },
+        ),
+    )
+
+    applied_prices = {
+        "currency": "USD",
+        "unit_prices": [{"unit": "request", "amount": "0.001"}],
+    }
+    request_attempt = {
+        "provider_model_api_name": "primary-text",
+        "outcome": "failed",
+        "started_at": "2026-08-24T00:00:00Z",
+        "completed_at": "2026-08-24T00:00:01Z",
+        "applied_prices": applied_prices,
+        "error": {
+            "code": "upstream_failed",
+            "message": "The provider route failed.",
+        },
+    }
+    require_valid_instances(spec, "RequestAttempt", (request_attempt,))
+    require_invalid_instances(
+        spec,
+        "RequestAttempt",
+        (
+            {key: value for key, value in request_attempt.items() if key != "error"},
+            {
+                **request_attempt,
+                "outcome": "succeeded",
+            },
+        ),
+    )
+
+    require_valid_instances(
+        spec,
+        "StatisticsBucket",
+        (
+            {
+                "dimensions": ["administrator", None],
+                "calls": 1,
+                "attempts": 0,
+                "units": [],
+                "cost": "0",
+                "currency": None,
+            },
+            {
+                "dimensions": ["administrator", "failed"],
+                "calls": 1,
+                "attempts": 1,
+                "units": [],
+                "cost": None,
+                "currency": "USD",
+            },
+        ),
+    )
+    require_invalid_instances(
+        spec,
+        "StatisticsBucket",
+        (
+            {
+                "dimensions": ["administrator"],
+                "calls": 1,
+                "attempts": 0,
+                "units": [],
+                "cost": "1",
+                "currency": None,
+            },
+            {
+                "dimensions": ["administrator"],
+                "calls": 1,
+                "attempts": 1,
+                "units": [],
+                "cost": None,
+                "currency": None,
+            },
+            {
+                "dimensions": [str(index) for index in range(9)],
+                "calls": 1,
+                "attempts": 1,
+                "units": [],
+                "cost": "0",
+                "currency": "USD",
             },
         ),
     )
@@ -1193,6 +1428,16 @@ def check_artifact_digests(root: Path) -> None:
             raise ContractError(f"Contract artifact digest drift for {relative_path}")
 
 
+def check_policy_digest(root: Path, spec: dict[str, Any]) -> None:
+    """Bind the access policy to the generated OpenAPI source digest."""
+    expected = hashlib.sha256(
+        (root / "docs/api/contract-policy.yaml").read_bytes()
+    ).hexdigest()
+    actual = spec.get("x-contract-policy-sha256")
+    if actual != expected:
+        raise ContractError("The OpenAPI source does not bind the contract policy")
+
+
 def run(root: Path) -> None:
     """Run all contract checks."""
     spec = load_yaml(root / "docs/api/openapi.yaml")
@@ -1206,6 +1451,7 @@ def run(root: Path) -> None:
     check_error_drift(spec, root / "docs/api/errors.md")
     check_readable_contracts(root, policy)
     check_fixtures(root, spec, policy)
+    check_policy_digest(root, spec)
     check_artifact_digests(root)
 
 
@@ -1248,6 +1494,17 @@ def self_test() -> None:
         lambda: operations(duplicate_operations),
         "Duplicate operationId self-test did not fail",
     )
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_root = Path(temporary_directory)
+        policy_path = temporary_root / "docs/api/contract-policy.yaml"
+        policy_path.parent.mkdir(parents=True)
+        policy_path.write_text("version: 1\n", encoding="utf-8")
+        expect_failure(
+            lambda: check_policy_digest(
+                temporary_root, {"x-contract-policy-sha256": "stale"}
+            ),
+            "Contract-policy digest self-test did not fail",
+        )
 
 
 def main() -> int:

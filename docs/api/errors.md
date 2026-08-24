@@ -2,8 +2,13 @@
 
 <!-- contract:errors -->
 
-All non-stream failures use the `ErrorEnvelope` schema. A stream failure uses
-the same object as the `error` event data.
+Basic non-stream failures use the `ErrorEnvelope` schema. Only an
+administrator playground operation can use `AdministratorErrorEnvelope`.
+Before logical-call creation, this administrator schema contains only the
+basic error. After logical-call creation, it also contains the logical call,
+selector, elapsed milliseconds, and completed attempts. An administrator
+stream failure uses this same schema as the `error` event data. A service
+stream failure uses `ErrorEnvelope`.
 
 Stable error names are:
 
