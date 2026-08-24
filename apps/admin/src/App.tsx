@@ -53,6 +53,7 @@ import {
   type ModelCapability,
   type ModelImportPreview,
   type ModelWrite,
+  type LogMedia,
   type ObservedRequirement,
   type OutputModality,
   type Price,
@@ -74,6 +75,11 @@ import {
   initialAccessScopeState,
   reduceAccessScopeState,
 } from "./accessState.js";
+import {
+  expireAdministratorSessionLoads,
+  invalidateRetainedMediaLoad,
+  updateRetentionDuration,
+} from "./administrationSafety.js";
 import {
   createInputImageSelectionQueue,
   parseManualPrice,
@@ -146,6 +152,40 @@ function selectedServiceFromLocation(): string {
   const search = typeof location === "undefined" ? "" : location.search;
   return new URLSearchParams(search).get("service") ?? "";
 }
+function safeReturnPath(): string {
+  const section = currentSection();
+  const candidate = selectedServiceFromLocation();
+  const service = /^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(candidate)
+    ? candidate
+    : "";
+  return service === ""
+    ? `/${section}`
+    : `/${section}?service=${encodeURIComponent(service)}`;
+}
+function confirmDestructiveAction(message: string): boolean {
+  return globalThis.confirm(message);
+}
+function withUnauthorizedSessionHandler(
+  client: AdministrationClient,
+  onUnauthorized: () => void,
+): AdministrationClient {
+  /* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- A Proxy preserves the complete AdministrationClient method interface. */
+  return new Proxy(client, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (typeof value !== "function") return value;
+      return (...args: readonly unknown[]) =>
+        Promise.resolve(Reflect.apply(value, target, args)).catch(
+          (error: unknown) => {
+            if (error instanceof AdministrationApiError && error.status === 401)
+              onUnauthorized();
+            throw error;
+          },
+        );
+    },
+  });
+  /* eslint-enable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return */
+}
 function displayTime(value: string | null | undefined): string {
   if (value == null) return "Never";
   const parsed = new Date(value);
@@ -162,6 +202,12 @@ function words(value: string): readonly string[] {
       }),
     ),
   ];
+}
+function commaItems(value: string): readonly string[] {
+  return value.split(",").flatMap((item) => {
+    const trimmed = item.trim();
+    return trimmed === "" ? [] : [trimmed];
+  });
 }
 function formText(form: FormData, name: string): string {
   const value = form.get(name);
@@ -257,10 +303,7 @@ function SignIn({
     setBusy(true);
     setFailure(null);
     try {
-      const path = `${globalThis.location.pathname}${globalThis.location.search}`;
-      globalThis.location.assign(
-        await client.startSession(path.startsWith("/") ? path : "/"),
-      );
+      globalThis.location.assign(await client.startSession(safeReturnPath()));
     } catch (error) {
       setFailure(errorMessage(error));
       setBusy(false);
@@ -275,15 +318,15 @@ function SignIn({
           </Button>
         }
         description={
-          failure ??
-          (expired
+          expired
             ? "Your local administrator session expired. Sign in again."
-            : "Use an allowlisted Pocket ID identity.")
+            : "Use an allowlisted Pocket ID identity."
         }
         eyebrow="LLM Router administration"
         footer="A Pocket ID account does not give Router access. The subject must be on the deployment allowlist."
         icon={<Icon name="shield" size={25} />}
         title={expired ? "Your session expired" : "Administrator sign-in"}
+        feedback={failure === null ? null : <p role="alert">{failure}</p>}
       />
     </SessionPage>
   );
@@ -518,7 +561,13 @@ function AccessPage({
                         <td>{displayTime(item.created_at)}</td>
                         <td>
                           <Button
-                            onClick={() =>
+                            onClick={() => {
+                              if (
+                                !confirmDestructiveAction(
+                                  `Delete workspace ${item.api_name} and its logs, accounting, jobs, and retained media?`,
+                                )
+                              )
+                                return;
                               void client
                                 .deleteWorkspace(
                                   selectedService,
@@ -528,8 +577,8 @@ function AccessPage({
                                 .then(() => load())
                                 .catch((error: unknown) => {
                                   onNotice("error", errorMessage(error));
-                                })
-                            }
+                                });
+                            }}
                             variant="quiet"
                           >
                             Delete
@@ -592,14 +641,20 @@ function AccessPage({
                         <td>{displayTime(item.last_used_at)}</td>
                         <td>
                           <Button
-                            onClick={() =>
+                            onClick={() => {
+                              if (
+                                !confirmDestructiveAction(
+                                  `Revoke service key ${item.name}? Later requests with this key will fail.`,
+                                )
+                              )
+                                return;
                               void client
                                 .revokeKey(selectedService, item.id, csrf)
                                 .then(() => load())
                                 .catch((error: unknown) => {
                                   onNotice("error", errorMessage(error));
-                                })
-                            }
+                                });
+                            }}
                             variant="quiet"
                           >
                             Revoke
@@ -659,6 +714,13 @@ function ProvidersPage({
       ...(credential === "" ? {} : { credential_api_name: credential }),
     };
     try {
+      if (
+        providers.some((item) => item.api_name === name) &&
+        !confirmDestructiveAction(
+          `Replace the complete provider connection ${name}?`,
+        )
+      )
+        return;
       if (providers.some((item) => item.api_name === name))
         await client.putProvider(name, value, csrf);
       else await client.createProvider(value, csrf);
@@ -677,6 +739,13 @@ function ProvidersPage({
     const secretValue = form.get("secret");
     const secret = typeof secretValue === "string" ? secretValue : "";
     try {
+      if (
+        credentials.some((item) => item.api_name === name) &&
+        !confirmDestructiveAction(
+          `Replace the stored value for credential ${name}? The prior value will stop serving new attempts.`,
+        )
+      )
+        return;
       if (credentials.some((item) => item.api_name === name))
         await client.replaceCredential(name, secret, csrf);
       else await client.createCredential(name, secret, csrf);
@@ -786,14 +855,20 @@ function ProvidersPage({
                     </small>
                   </span>
                   <Button
-                    onClick={() =>
+                    onClick={() => {
+                      if (
+                        !confirmDestructiveAction(
+                          `Delete credential ${item.api_name}? New provider attempts cannot use it.`,
+                        )
+                      )
+                        return;
                       void client
                         .deleteCredential(item.api_name, csrf)
                         .then(onRefresh)
                         .catch((error: unknown) => {
                           onNotice("error", errorMessage(error));
-                        })
-                    }
+                        });
+                    }}
                     variant="quiet"
                   >
                     Delete
@@ -838,14 +913,20 @@ function ProvidersPage({
                     </td>
                     <td>
                       <Button
-                        onClick={() =>
+                        onClick={() => {
+                          if (
+                            !confirmDestructiveAction(
+                              `Delete provider connection ${item.api_name}?`,
+                            )
+                          )
+                            return;
                           void client
                             .deleteProvider(item.api_name, csrf)
                             .then(onRefresh)
                             .catch((error: unknown) => {
                               onNotice("error", errorMessage(error));
-                            })
-                        }
+                            });
+                        }}
                         variant="quiet"
                       >
                         Delete
@@ -870,7 +951,8 @@ function manualPrice(form: FormData): Price | null {
 }
 
 function modelConstraints(form: FormData) {
-  const dimensions = words(formText(form, "dimensions")).map(Number);
+  const dimensionValues = commaItems(formText(form, "dimensions"));
+  const dimensions = dimensionValues.map(Number);
   const maximumImages = formText(form, "max_input_images");
   const maximumImageBytes = formText(form, "max_input_image_bytes");
   const maximumDuration = formText(form, "max_output_duration_seconds");
@@ -881,6 +963,20 @@ function modelConstraints(form: FormData) {
     maximumDuration === ""
   )
     return undefined;
+  if (
+    dimensions.length > 64 ||
+    new Set(dimensions).size !== dimensions.length ||
+    dimensions.some(
+      (value, index) =>
+        !/^\d+$/.test(dimensionValues[index] ?? "") ||
+        !Number.isInteger(value) ||
+        value < 1 ||
+        value > 65_536,
+    )
+  )
+    throw new Error(
+      "Use 1 through 64 unique embedding dimensions from 1 through 65,536.",
+    );
   return {
     ...(dimensions.length === 0 ? {} : { embedding_dimensions: dimensions }),
     ...(maximumImages === ""
@@ -893,6 +989,15 @@ function modelConstraints(form: FormData) {
       ? {}
       : { max_output_duration_seconds: Number(maximumDuration) }),
   };
+}
+
+function catalogApiName(value: string, prefix: string): string {
+  const fragment = value
+    .toLowerCase()
+    .replaceAll(/[^a-z0-9-]/g, "-")
+    .replaceAll(/^-+|-+$/g, "");
+  const combined = `${prefix}-${fragment === "" ? "catalog-entry" : fragment}`;
+  return combined.slice(0, 63).replaceAll(/-+$/g, "");
 }
 
 function ConstraintFields() {
@@ -1162,6 +1267,12 @@ function ProviderModelTable({
                   <td>
                     <Button
                       onClick={() => {
+                        if (
+                          !confirmDestructiveAction(
+                            `Delete provider-model mapping ${item.api_name}?`,
+                          )
+                        )
+                          return;
                         void client
                           .deleteProviderModel(item.api_name, csrf)
                           .then(onRefresh)
@@ -1201,18 +1312,28 @@ function CatalogImportPanel({
   readonly providers: readonly Provider[];
   readonly setPreview: (value: ModelImportPreview | null) => void;
 }) {
-  async function previewCatalog(event: SubmitEvent<HTMLFormElement>) {
+  const previewLoadGuard = useRef(createScopeLoadGuard());
+  useEffect(
+    () => () => {
+      previewLoadGuard.current.invalidate();
+    },
+    [],
+  );
+  function previewCatalog(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
-    try {
-      setPreview(
-        await client.previewImport(
-          formText(new FormData(event.currentTarget), "provider"),
-          csrf,
-        ),
-      );
-    } catch (error) {
-      onNotice("error", errorMessage(error));
-    }
+    const generation = previewLoadGuard.current.begin();
+    void client
+      .previewImport(
+        formText(new FormData(event.currentTarget), "provider"),
+        csrf,
+      )
+      .then((value) => {
+        if (previewLoadGuard.current.isCurrent(generation)) setPreview(value);
+      })
+      .catch((error: unknown) => {
+        if (previewLoadGuard.current.isCurrent(generation))
+          onNotice("error", errorMessage(error));
+      });
   }
   return (
     <Panel>
@@ -1223,7 +1344,7 @@ function CatalogImportPanel({
       <form
         className="administration-form catalog-preview-request-form"
         onSubmit={(event) => {
-          void previewCatalog(event);
+          previewCatalog(event);
         }}
       >
         <label>
@@ -1247,24 +1368,36 @@ function CatalogImportPanel({
             const selectedKeys = new Set(
               new FormData(event.currentTarget).getAll("candidate"),
             );
+            if (selectedKeys.size === 0) {
+              onNotice("error", "Select at least one catalog entry to import.");
+              return;
+            }
             const selected = preview.candidates.flatMap((item) =>
               selectedKeys.has(item.catalog_key)
                 ? [
                     {
                       catalog_key: item.catalog_key,
-                      model_api_name: item.catalog_key
-                        .toLowerCase()
-                        .replaceAll(/[^a-z0-9-]/g, "-")
-                        .slice(0, 63),
-                      provider_model_api_name:
-                        `${preview.provider_api_name}-${item.catalog_key}`
-                          .toLowerCase()
-                          .replaceAll(/[^a-z0-9-]/g, "-")
-                          .slice(0, 63),
+                      model_api_name: catalogApiName(item.catalog_key, "model"),
+                      provider_model_api_name: catalogApiName(
+                        item.catalog_key,
+                        preview.provider_api_name,
+                      ),
                     },
                   ]
                 : [],
             );
+            if (
+              new Set(selected.map((item) => item.model_api_name)).size !==
+                selected.length ||
+              new Set(selected.map((item) => item.provider_model_api_name))
+                .size !== selected.length
+            ) {
+              onNotice(
+                "error",
+                "The selected catalog entries produce duplicate API names. Import a smaller selection.",
+              );
+              return;
+            }
             void client
               .importModels(preview.provider_api_name, selected, csrf)
               .then(() => {
@@ -1367,6 +1500,12 @@ function CanonicalModelTable({
                   <td>
                     <Button
                       onClick={() => {
+                        if (
+                          !confirmDestructiveAction(
+                            `Delete canonical model ${item.api_name}?`,
+                          )
+                        )
+                          return;
                         void client
                           .deleteModel(item.api_name, csrf)
                           .then(onRefresh)
@@ -1413,9 +1552,10 @@ function ModelsPage({
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
     const name = formText(form, "api_name");
-    const constraints = modelConstraints(form);
+    let constraints: ReturnType<typeof modelConstraints>;
     let price: Price | null;
     try {
+      constraints = modelConstraints(form);
       price = manualPrice(form);
     } catch (error) {
       onNotice(
@@ -1446,6 +1586,11 @@ function ModelsPage({
       manual_price: price,
     };
     try {
+      if (
+        models.some((item) => item.api_name === name) &&
+        !confirmDestructiveAction(`Replace the complete model ${name}?`)
+      )
+        return;
       if (models.some((item) => item.api_name === name))
         await client.putModel(name, value, csrf);
       else await client.createModel(value, csrf);
@@ -1461,9 +1606,10 @@ function ModelsPage({
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
     const name = formText(form, "api_name");
-    const constraints = modelConstraints(form);
+    let constraints: ReturnType<typeof modelConstraints>;
     let price: Price | null;
     try {
+      constraints = modelConstraints(form);
       price = manualPrice(form);
     } catch (error) {
       onNotice(
@@ -1472,13 +1618,29 @@ function ModelsPage({
       );
       return;
     }
+    const reasoningLevels = new Set(["none", "low", "medium", "high"]);
     const reasoning = words(formText(form, "reasoning")).map((item) => {
-      const [level, providerValue] = item.split("=");
+      const separator = item.indexOf("=");
+      const level = separator < 0 ? item : item.slice(0, separator).trim();
+      const providerValue =
+        separator < 0 ? item : item.slice(separator + 1).trim();
       return {
-        level: (level ?? "none") as "none",
-        provider_value: providerValue ?? level ?? "none",
+        level: level as "none",
+        provider_value: providerValue,
       };
     });
+    if (
+      reasoning.some(
+        (item) =>
+          !reasoningLevels.has(item.level) || item.provider_value === "",
+      )
+    ) {
+      onNotice(
+        "error",
+        "Use reasoning mappings such as none=disabled or high=high.",
+      );
+      return;
+    }
     const value: ProviderModelWrite = {
       api_name: name,
       provider_api_name: formText(form, "provider"),
@@ -1517,6 +1679,13 @@ function ModelsPage({
       manual_price: price,
     };
     try {
+      if (
+        providerModels.some((item) => item.api_name === name) &&
+        !confirmDestructiveAction(
+          `Replace the complete provider-model mapping ${name}?`,
+        )
+      )
+        return;
       if (providerModels.some((item) => item.api_name === name))
         await client.putProviderModel(name, value, csrf);
       else await client.createProviderModel(value, csrf);
@@ -1618,7 +1787,7 @@ export function AssignmentsPage({
   const [selected, setSelected] = useState<string | null>(null);
   const directLocalAssignments = new Set(
     assignments.flatMap((item) =>
-      item.definition_kind === "direct_chain" &&
+      item.definition_kind !== "implicit" &&
       item.defined_by_service_api_name === selectedService
         ? [item.api_name]
         : [],
@@ -1633,7 +1802,7 @@ export function AssignmentsPage({
   const graphItems: readonly ServiceAssignmentItem[] = assignments.map(
     (item) => ({
       id: item.api_name,
-      name: item.display_name,
+      name: item.api_name,
       source:
         item.definition_kind === "implicit"
           ? {
@@ -1671,18 +1840,38 @@ export function AssignmentsPage({
     const mode = formText(form, "mode");
     const reasoning = formText(form, "reasoning");
     const displayName = formText(form, "display_name");
+    const chain = commaItems(formText(form, "chain"));
+    const inheritedAssignment = formText(form, "inherits");
+    if (mode === "direct" && chain.length === 0) {
+      onNotice(
+        "error",
+        "Enter at least one provider-model in the direct chain.",
+      );
+      return;
+    }
+    if (mode === "direct" && new Set(chain).size !== chain.length) {
+      onNotice(
+        "error",
+        "Enter each provider-model only once in the direct chain.",
+      );
+      return;
+    }
+    if (mode === "inherit" && inheritedAssignment === "") {
+      onNotice("error", "Enter the assignment to inherit.");
+      return;
+    }
     const value =
       mode === "inherit"
         ? {
             ...(displayName === "" ? {} : { display_name: displayName }),
-            inherits_assignment_api_name: formText(form, "inherits"),
+            inherits_assignment_api_name: inheritedAssignment,
             ...(reasoning === ""
               ? {}
               : { reasoning_level: reasoning as "none" }),
           }
         : {
             ...(displayName === "" ? {} : { display_name: displayName }),
-            direct_chain: words(formText(form, "chain")).map((name) => ({
+            direct_chain: chain.map((name) => ({
               provider_model_api_name: name,
             })),
             ...(reasoning === ""
@@ -1690,12 +1879,15 @@ export function AssignmentsPage({
               : { reasoning_level: reasoning as "none" }),
           };
     try {
-      await client.putAssignment(
-        selectedService,
-        formText(form, "api_name"),
-        value,
-        csrf,
-      );
+      const assignmentName = formText(form, "api_name");
+      if (
+        directLocalAssignments.has(assignmentName) &&
+        !confirmDestructiveAction(
+          `Replace the complete local assignment ${assignmentName}?`,
+        )
+      )
+        return;
+      await client.putAssignment(selectedService, assignmentName, value, csrf);
       formElement.reset();
       await onRefresh();
       onNotice("success", "The assignment was saved.");
@@ -1772,14 +1964,20 @@ export function AssignmentsPage({
             <div className="assignment-actions">
               {canDelete ? (
                 <Button
-                  onClick={() =>
+                  onClick={() => {
+                    if (
+                      !confirmDestructiveAction(
+                        `Delete the local assignment ${item.id}? The next inherited definition will become effective.`,
+                      )
+                    )
+                      return;
                     void client
                       .deleteAssignment(selectedService, item.id, csrf)
                       .then(onRefresh)
                       .catch((error: unknown) => {
                         onNotice("error", errorMessage(error));
-                      })
-                  }
+                      });
+                  }}
                   variant="quiet"
                 >
                   Delete local definition
@@ -1788,7 +1986,13 @@ export function AssignmentsPage({
               {item.observedRequirements.map((requirement) => (
                 <Button
                   key={requirement}
-                  onClick={() =>
+                  onClick={() => {
+                    if (
+                      !confirmDestructiveAction(
+                        `Remove the observed requirement ${requirement} from ${item.id}?`,
+                      )
+                    )
+                      return;
                     void client
                       .removeRequirement(
                         selectedService,
@@ -1799,8 +2003,8 @@ export function AssignmentsPage({
                       .then(onRefresh)
                       .catch((error: unknown) => {
                         onNotice("error", errorMessage(error));
-                      })
-                  }
+                      });
+                  }}
                   variant="quiet"
                 >
                   Remove {requirement}
@@ -2055,6 +2259,10 @@ function PlaygroundPage({
       });
       return;
     }
+    if (objectUrl.current !== null) {
+      URL.revokeObjectURL(objectUrl.current);
+      objectUrl.current = null;
+    }
     updatePlayground({
       runState: {
         status: "loading",
@@ -2175,7 +2383,6 @@ function PlaygroundPage({
           current.error?.details ?? undefined,
         );
       const blob = await client.mediaContent(job.id);
-      if (objectUrl.current !== null) URL.revokeObjectURL(objectUrl.current);
       objectUrl.current = URL.createObjectURL(blob);
       updatePlayground({
         runState: {
@@ -2226,6 +2433,105 @@ interface LogsPageState {
   readonly phase: "idle" | "loading" | "error";
 }
 
+function RequestLogDetail({
+  detail,
+  mediaLink,
+  onClose,
+  onPrepareMedia,
+}: {
+  readonly detail: RequestLog;
+  readonly mediaLink: { readonly id: string; readonly url: string } | null;
+  readonly onClose: () => void;
+  readonly onPrepareMedia: (item: LogMedia) => void;
+}) {
+  return (
+    <Panel
+      aria-live="polite"
+      onKeyDown={(event) => {
+        if (event.defaultPrevented || event.key !== "Escape") return;
+        event.preventDefault();
+        event.stopPropagation();
+        onClose();
+      }}
+    >
+      <PanelHeader
+        actions={
+          <Button id="request-log-close" onClick={onClose} variant="quiet">
+            Close
+          </Button>
+        }
+        description={`${detail.summary.service_api_name} / ${detail.summary.workspace_api_name}`}
+        title={`Request ${detail.summary.id}`}
+      />
+      <div className="log-detail">
+        <section>
+          <h3>Request content</h3>
+          <pre>{detail.request_json}</pre>
+        </section>
+        <section>
+          <h3>Response content</h3>
+          <pre>
+            {detail.response_json ?? "Response content is unavailable."}
+          </pre>
+        </section>
+        <section>
+          <h3>Attempts</h3>
+          <ol>
+            {detail.attempts.map((item, index) => (
+              <li key={`${item.provider_model_api_name}-${String(index)}`}>
+                <strong>
+                  {item.provider_model_api_name} · {item.outcome}
+                </strong>
+                <span>
+                  {item.usage.currency} {item.usage.cost} ·{" "}
+                  {item.usage.units
+                    .map((unit) => `${unit.unit} ${unit.quantity}`)
+                    .join(", ")}
+                </span>
+                {item.error == null ? null : (
+                  <span>
+                    {item.error.code}: {item.error.message}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ol>
+        </section>
+        <section>
+          <h3>Retained media</h3>
+          {detail.media == null || detail.media.length === 0 ? (
+            <p>No retained media</p>
+          ) : (
+            <ul>
+              {detail.media.map((item) => (
+                <li key={item.id}>
+                  <span>
+                    {item.role} · {item.media_type} · {String(item.size_bytes)}{" "}
+                    bytes
+                  </span>
+                  <Button
+                    onClick={() => {
+                      onPrepareMedia(item);
+                    }}
+                    variant="quiet"
+                  >
+                    Prepare retained media
+                  </Button>
+                  {mediaLink?.id === item.id ? (
+                    <a href={mediaLink.url} rel="noreferrer" target="_blank">
+                      Open retained media
+                    </a>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      </div>
+    </Panel>
+  );
+}
+
 function LogsPage({
   client,
   onNotice,
@@ -2251,13 +2557,49 @@ function LogsPage({
     },
   );
   const mediaUrl = useRef<string | null>(null);
+  const mediaLoadGuard = useRef(createScopeLoadGuard());
+  const listLoadGuard = useRef(createScopeLoadGuard());
+  const detailLoadGuard = useRef(createScopeLoadGuard());
+  const detailReturnFocus = useRef<HTMLButtonElement | null>(null);
+  const [mediaLink, setMediaLink] = useState<{
+    readonly id: string;
+    readonly url: string;
+  } | null>(null);
   useEffect(
     () => () => {
-      if (mediaUrl.current !== null) URL.revokeObjectURL(mediaUrl.current);
+      listLoadGuard.current.invalidate();
+      detailLoadGuard.current.invalidate();
+      mediaUrl.current = invalidateRetainedMediaLoad(
+        mediaLoadGuard.current,
+        mediaUrl.current,
+        (url) => {
+          URL.revokeObjectURL(url);
+        },
+      );
     },
     [],
   );
+  useEffect(() => {
+    if (logs.detail !== null)
+      globalThis.document.getElementById("request-log-close")?.focus();
+  }, [logs.detail]);
+  function closeDetail(): void {
+    detailLoadGuard.current.invalidate();
+    updateLogs({ detail: null });
+    setMediaLink(null);
+    mediaUrl.current = invalidateRetainedMediaLoad(
+      mediaLoadGuard.current,
+      mediaUrl.current,
+      (url) => {
+        URL.revokeObjectURL(url);
+      },
+    );
+    const target = detailReturnFocus.current;
+    if (target?.isConnected) target.focus();
+    detailReturnFocus.current = null;
+  }
   async function load() {
+    const generation = listLoadGuard.current.begin();
     updateLogs({ phase: "loading" });
     try {
       const items = (
@@ -2266,8 +2608,10 @@ function LogsPage({
           new Date(logs.to).toISOString(),
         )
       ).items;
-      updateLogs({ items, phase: "idle" });
+      if (listLoadGuard.current.isCurrent(generation))
+        updateLogs({ items, phase: "idle" });
     } catch (error) {
+      if (!listLoadGuard.current.isCurrent(generation)) return;
       updateLogs({ phase: "error" });
       onNotice("error", errorMessage(error));
     }
@@ -2357,16 +2701,35 @@ function LogsPage({
                       </td>
                       <td>
                         <Button
-                          onClick={() =>
+                          onClick={(event) => {
+                            const generation = detailLoadGuard.current.begin();
+                            detailReturnFocus.current = event.currentTarget;
+                            mediaUrl.current = invalidateRetainedMediaLoad(
+                              mediaLoadGuard.current,
+                              mediaUrl.current,
+                              (url) => {
+                                URL.revokeObjectURL(url);
+                              },
+                            );
+                            setMediaLink(null);
+                            updateLogs({ detail: null });
                             void client
                               .requestLog(item.id)
                               .then((value) => {
+                                if (
+                                  !detailLoadGuard.current.isCurrent(generation)
+                                )
+                                  return;
                                 updateLogs({ detail: value });
                               })
                               .catch((error: unknown) => {
+                                if (
+                                  !detailLoadGuard.current.isCurrent(generation)
+                                )
+                                  return;
                                 onNotice("error", errorMessage(error));
-                              })
-                          }
+                              });
+                          }}
                           variant="quiet"
                         >
                           Inspect
@@ -2381,99 +2744,30 @@ function LogsPage({
         )}
       </Panel>
       {detail === null ? null : (
-        <Panel aria-live="polite">
-          <PanelHeader
-            actions={
-              <Button
-                onClick={() => {
-                  updateLogs({ detail: null });
-                }}
-                variant="quiet"
-              >
-                Close
-              </Button>
-            }
-            description={`${detail.summary.service_api_name} / ${detail.summary.workspace_api_name}`}
-            title={`Request ${detail.summary.id}`}
-          />
-          <div className="log-detail">
-            <section>
-              <h3>Request content</h3>
-              <pre>{detail.request_json}</pre>
-            </section>
-            <section>
-              <h3>Response content</h3>
-              <pre>
-                {detail.response_json ?? "Response content is unavailable."}
-              </pre>
-            </section>
-            <section>
-              <h3>Attempts</h3>
-              <ol>
-                {detail.attempts.map((item, index) => (
-                  <li key={`${item.provider_model_api_name}-${String(index)}`}>
-                    <strong>
-                      {item.provider_model_api_name} · {item.outcome}
-                    </strong>
-                    <span>
-                      {item.usage.currency} {item.usage.cost} ·{" "}
-                      {item.usage.units
-                        .map((unit) => `${unit.unit} ${unit.quantity}`)
-                        .join(", ")}
-                    </span>
-                    {item.error == null ? null : (
-                      <span>
-                        {item.error.code}: {item.error.message}
-                      </span>
-                    )}
-                  </li>
-                ))}
-              </ol>
-            </section>
-            <section>
-              <h3>Retained media</h3>
-              {detail.media == null || detail.media.length === 0 ? (
-                <p>No retained media</p>
-              ) : (
-                <ul>
-                  {detail.media.map((item) => (
-                    <li key={item.id}>
-                      <span>
-                        {item.role} · {item.media_type} ·{" "}
-                        {String(item.size_bytes)} bytes
-                      </span>
-                      <Button
-                        onClick={() =>
-                          void client
-                            .requestLogMedia(detail.summary.id, item.id)
-                            .then((blob) => {
-                              if (mediaUrl.current !== null)
-                                URL.revokeObjectURL(mediaUrl.current);
-                              mediaUrl.current = URL.createObjectURL(blob);
-                              globalThis.open(
-                                mediaUrl.current,
-                                "_blank",
-                                "noopener,noreferrer",
-                              );
-                            })
-                            .catch((error: unknown) => {
-                              onNotice(
-                                "error",
-                                `The retained media is unavailable. ${errorMessage(error)}`,
-                              );
-                            })
-                        }
-                        variant="quiet"
-                      >
-                        Open retained media
-                      </Button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </section>
-          </div>
-        </Panel>
+        <RequestLogDetail
+          detail={detail}
+          mediaLink={mediaLink}
+          onClose={closeDetail}
+          onPrepareMedia={(item) => {
+            const generation = mediaLoadGuard.current.begin();
+            void client
+              .requestLogMedia(detail.summary.id, item.id)
+              .then((blob) => {
+                if (!mediaLoadGuard.current.isCurrent(generation)) return;
+                if (mediaUrl.current !== null)
+                  URL.revokeObjectURL(mediaUrl.current);
+                mediaUrl.current = URL.createObjectURL(blob);
+                setMediaLink({ id: item.id, url: mediaUrl.current });
+              })
+              .catch((error: unknown) => {
+                if (!mediaLoadGuard.current.isCurrent(generation)) return;
+                onNotice(
+                  "error",
+                  `The retained media is unavailable. ${errorMessage(error)}`,
+                );
+              });
+          }}
+        />
       )}
     </div>
   );
@@ -2490,37 +2784,41 @@ function StatisticsPage({
 }) {
   const initial = useMemo(() => isoRange(30), []);
   const [result, setResult] = useState<StatisticsResult | null>(null);
+  const loadGuard = useRef(createScopeLoadGuard());
+  useEffect(
+    () => () => {
+      loadGuard.current.invalidate();
+    },
+    [],
+  );
   async function load(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
+    const generation = loadGuard.current.begin();
     const form = new FormData(event.currentTarget);
     const outcome = formText(form, "outcome");
     try {
-      setResult(
-        await client.statistics({
-          from: new Date(formText(form, "from")).toISOString(),
-          to: new Date(formText(form, "to")).toISOString(),
-          ...(formText(form, "service") === ""
-            ? {}
-            : { service: formText(form, "service") }),
-          ...(formText(form, "workspace") === ""
-            ? {}
-            : { workspace: formText(form, "workspace") }),
-          ...(formText(form, "assignment") === ""
-            ? {}
-            : { assignment: formText(form, "assignment") }),
-          ...(formText(form, "provider_model") === ""
-            ? {}
-            : { provider_model: formText(form, "provider_model") }),
-          ...(outcome === "succeeded" || outcome === "failed"
-            ? { outcome }
-            : {}),
-          ...(formText(form, "tag") === ""
-            ? {}
-            : { tag: formText(form, "tag") }),
-          group_by: form.getAll("group_by").map(String),
-        }),
-      );
+      const nextResult = await client.statistics({
+        from: new Date(formText(form, "from")).toISOString(),
+        to: new Date(formText(form, "to")).toISOString(),
+        ...(formText(form, "service") === ""
+          ? {}
+          : { service: formText(form, "service") }),
+        ...(formText(form, "workspace") === ""
+          ? {}
+          : { workspace: formText(form, "workspace") }),
+        ...(formText(form, "assignment") === ""
+          ? {}
+          : { assignment: formText(form, "assignment") }),
+        ...(formText(form, "provider_model") === ""
+          ? {}
+          : { provider_model: formText(form, "provider_model") }),
+        ...(outcome === "succeeded" || outcome === "failed" ? { outcome } : {}),
+        ...(formText(form, "tag") === "" ? {} : { tag: formText(form, "tag") }),
+        group_by: form.getAll("group_by").map(String),
+      });
+      if (loadGuard.current.isCurrent(generation)) setResult(nextResult);
     } catch (error) {
+      if (!loadGuard.current.isCurrent(generation)) return;
       onNotice("error", errorMessage(error));
     }
   }
@@ -2677,17 +2975,56 @@ function OperationsPage({
 }) {
   const range = useMemo(() => isoRange(7), []);
   const [activity, setActivity] = useState<readonly ActivityEvent[]>([]);
-  useEffect(() => {
-    void client
+  const [activityPhase, setActivityPhase] = useState<
+    "loading" | "ready" | "error"
+  >("loading");
+  const activityLoadGuard = useRef(createScopeLoadGuard());
+  const loadActivity = useCallback(() => {
+    const generation = activityLoadGuard.current.begin();
+    setActivityPhase("loading");
+    return client
       .activity(range.from, range.to)
       .then((page) => {
+        if (!activityLoadGuard.current.isCurrent(generation)) return;
         setActivity(page.items);
+        setActivityPhase("ready");
       })
       .catch((error: unknown) => {
+        if (!activityLoadGuard.current.isCurrent(generation)) return;
+        setActivity([]);
+        setActivityPhase("error");
         onNotice("error", errorMessage(error));
       });
   }, [client, onNotice, range.from, range.to]);
+  useEffect(() => {
+    const loadGuard = activityLoadGuard.current;
+    const timer = globalThis.setTimeout(() => {
+      void loadActivity();
+    }, 0);
+    return () => {
+      globalThis.clearTimeout(timer);
+      loadGuard.invalidate();
+    };
+  }, [loadActivity]);
   const cooldowns = providerModels.filter((item) => item.cooldown != null);
+  async function saveRetention(event: SubmitEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const days = Number(formText(new FormData(form), "days"));
+    try {
+      if (
+        await updateRetentionDuration(
+          retentionDays,
+          days,
+          confirmDestructiveAction,
+          (value) => client.putRetention(value, csrf),
+        )
+      )
+        await onRefresh();
+    } catch (error) {
+      onNotice("error", errorMessage(error));
+    }
+  }
   return (
     <div className="administration-page">
       <PageHeading
@@ -2721,16 +3058,7 @@ function OperationsPage({
           <form
             className="administration-form retention-form"
             onSubmit={(event) => {
-              event.preventDefault();
-              void client
-                .putRetention(
-                  Number(formText(new FormData(event.currentTarget), "days")),
-                  csrf,
-                )
-                .then(onRefresh)
-                .catch((error: unknown) => {
-                  onNotice("error", errorMessage(error));
-                });
+              void saveRetention(event);
             }}
           >
             <label>
@@ -2773,10 +3101,19 @@ function OperationsPage({
       </Panel>
       <Panel>
         <PanelHeader
+          actions={
+            <Button
+              disabled={activityPhase === "loading"}
+              onClick={() => void loadActivity()}
+              variant="secondary"
+            >
+              Refresh activity
+            </Button>
+          }
           description="This is a basic activity record. It is not immutable configuration history."
           title="Configuration activity, last 7 days"
         />
-        <div className="administration-table-region">
+        <div aria-live="polite" className="administration-table-region">
           <table>
             <thead>
               <tr>
@@ -2789,7 +3126,16 @@ function OperationsPage({
             </thead>
             <tbody>
               {activity.length === 0 ? (
-                <EmptyTable columns={5} text="No retained activity" />
+                <EmptyTable
+                  columns={5}
+                  text={
+                    activityPhase === "loading"
+                      ? "Loading retained activity"
+                      : activityPhase === "error"
+                        ? "Retained activity is unavailable"
+                        : "No retained activity"
+                  }
+                />
               ) : (
                 activity.map((item) => (
                   <tr key={item.id}>
@@ -2830,11 +3176,26 @@ interface MainState {
   readonly section: Section;
   readonly selectedService: string;
   readonly sessionState: {
-    readonly status: "loading" | "active" | "signed-out" | "expired" | "denied";
+    readonly status:
+      "loading" | "active" | "signed-out" | "expired" | "denied" | "failed";
     readonly session?: AdministratorSession;
     readonly message?: string;
   };
   readonly workspaces: readonly Workspace[];
+}
+
+function initialMainState(): MainState {
+  return {
+    assignments: [],
+    data: null,
+    failure: null,
+    notice: null,
+    playgroundKey: "",
+    section: currentSection(),
+    selectedService: selectedServiceFromLocation(),
+    sessionState: { status: "loading" },
+    workspaces: [],
+  };
 }
 
 function AuthenticatedAdministration({
@@ -3133,17 +3494,7 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
   const [main, update] = useReducer(
     (state: MainState, patch: Partial<MainState>) => ({ ...state, ...patch }),
     undefined,
-    (): MainState => ({
-      assignments: [],
-      data: null,
-      failure: null,
-      notice: null,
-      playgroundKey: "",
-      section: currentSection(),
-      selectedService: selectedServiceFromLocation(),
-      sessionState: { status: "loading" },
-      workspaces: [],
-    }),
+    initialMainState,
   );
   const {
     assignments,
@@ -3162,7 +3513,24 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
     },
     [],
   );
-  const scopeLoadGuard = useRef(createScopeLoadGuard());
+  const [scopeLoadGuard] = useState(createScopeLoadGuard);
+  const [globalLoadGuard] = useState(createScopeLoadGuard);
+  const selectedServiceRef = useRef(selectedService);
+  const expireAdministratorSession = useCallback(() => {
+    expireAdministratorSessionLoads(globalLoadGuard, scopeLoadGuard, () => {
+      update({
+        assignments: [],
+        data: null,
+        playgroundKey: "",
+        sessionState: { status: "expired" },
+        workspaces: [],
+      });
+    });
+  }, [globalLoadGuard, scopeLoadGuard]);
+  const authenticatedClient = useMemo(
+    () => withUnauthorizedSessionHandler(client, expireAdministratorSession),
+    [client, expireAdministratorSession],
+  );
   const inspectSession = useCallback(async () => {
     try {
       update({
@@ -3171,10 +3539,19 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
     } catch (error) {
       if (error instanceof AdministrationApiError && error.status === 403)
         update({ sessionState: { status: "denied", message: error.message } });
-      else update({ sessionState: { status: "signed-out" } });
+      else if (error instanceof AdministrationApiError && error.status === 401)
+        update({ sessionState: { status: "signed-out" } });
+      else
+        update({
+          sessionState: {
+            status: "failed",
+            message: errorMessage(error),
+          },
+        });
     }
   }, [client]);
   const loadGlobal = useCallback(async () => {
+    const generation = globalLoadGuard.begin();
     update({ failure: null });
     try {
       const [
@@ -3186,62 +3563,72 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
         health,
         retention,
       ] = await Promise.all([
-        client.services(),
-        client.providers(),
-        client.models(),
-        client.providerModels(),
-        client.credentials(),
-        client.health(),
-        client.retention(),
+        authenticatedClient.services(),
+        authenticatedClient.providers(),
+        authenticatedClient.models(),
+        authenticatedClient.providerModels(),
+        authenticatedClient.credentials(),
+        authenticatedClient.health(),
+        authenticatedClient.retention(),
       ]);
-      update({
-        data: {
-          services: services.items,
-          providers: providers.items,
-          models: models.items,
-          providerModels: providerModels.items,
-          credentials: credentials.items,
-          health,
-          retentionDays: retention.duration_days,
-        },
-      });
-      if (
-        selectedService !== "" &&
-        !services.items.some((item) => item.api_name === selectedService)
-      )
-        update({ playgroundKey: "", selectedService: "" });
-    } catch (error) {
-      if (error instanceof AdministrationApiError && error.status === 401) {
-        update({ sessionState: { status: "expired" } });
-        return;
+      if (globalLoadGuard.isCurrent(generation)) {
+        update({
+          data: {
+            services: services.items,
+            providers: providers.items,
+            models: models.items,
+            providerModels: providerModels.items,
+            credentials: credentials.items,
+            health,
+            retentionDays: retention.duration_days,
+          },
+        });
+        const currentService = selectedServiceRef.current;
+        if (
+          currentService !== "" &&
+          !services.items.some((item) => item.api_name === currentService)
+        ) {
+          selectedServiceRef.current = "";
+          update({ playgroundKey: "", selectedService: "" });
+          const url = new URL(globalThis.location.href);
+          url.searchParams.delete("service");
+          globalThis.history.replaceState(
+            {},
+            "",
+            `${url.pathname}${url.search}`,
+          );
+        }
       }
+    } catch (error) {
+      if (!globalLoadGuard.isCurrent(generation)) return;
       update({ failure: errorMessage(error) });
+      notify("error", errorMessage(error));
     }
-  }, [client, selectedService]);
+  }, [authenticatedClient, globalLoadGuard, notify]);
   const loadScope = useCallback((): Promise<void> => {
-    const generation = scopeLoadGuard.current.begin();
+    const generation = scopeLoadGuard.begin();
     if (selectedService === "") {
       update({ assignments: [], workspaces: [] });
       return Promise.resolve();
     }
     update({ assignments: [], workspaces: [] });
     return Promise.all([
-      client.assignments(selectedService),
-      client.workspaces(selectedService),
+      authenticatedClient.assignments(selectedService),
+      authenticatedClient.workspaces(selectedService),
     ])
       .then(([assignmentPage, workspacePage]) => {
-        if (!scopeLoadGuard.current.isCurrent(generation)) return;
+        if (!scopeLoadGuard.isCurrent(generation)) return;
         update({
           assignments: assignmentPage.items,
           workspaces: workspacePage.items,
         });
       })
       .catch((error: unknown) => {
-        if (!scopeLoadGuard.current.isCurrent(generation)) return;
+        if (!scopeLoadGuard.isCurrent(generation)) return;
         update({ assignments: [], workspaces: [] });
         notify("error", errorMessage(error));
       });
-  }, [client, notify, selectedService]);
+  }, [authenticatedClient, notify, scopeLoadGuard, selectedService]);
   const sessionExpiresAt = sessionState.session?.expires_at;
   useEffect(() => {
     const timer = globalThis.setTimeout(() => {
@@ -3270,20 +3657,12 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
   useEffect(() => {
     if (sessionState.status !== "active" || sessionExpiresAt === undefined)
       return;
-    return scheduleSessionExpiry(sessionExpiresAt, () => {
-      scopeLoadGuard.current.invalidate();
-      update({
-        assignments: [],
-        data: null,
-        playgroundKey: "",
-        sessionState: { status: "expired" },
-        workspaces: [],
-      });
-    });
-  }, [sessionExpiresAt, sessionState.status]);
+    return scheduleSessionExpiry(sessionExpiresAt, expireAdministratorSession);
+  }, [expireAdministratorSession, sessionExpiresAt, sessionState.status]);
   useEffect(() => {
     const restoreLocation = () => {
-      scopeLoadGuard.current.invalidate();
+      scopeLoadGuard.invalidate();
+      selectedServiceRef.current = selectedServiceFromLocation();
       update({
         assignments: [],
         playgroundKey: "",
@@ -3296,9 +3675,10 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
     return () => {
       globalThis.removeEventListener("popstate", restoreLocation);
     };
-  }, []);
+  }, [scopeLoadGuard]);
   function selectService(value: string) {
-    scopeLoadGuard.current.invalidate();
+    scopeLoadGuard.invalidate();
+    selectedServiceRef.current = value;
     update({
       assignments: [],
       playgroundKey: "",
@@ -3331,6 +3711,30 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
     return (
       <SignIn client={client} expired={sessionState.status === "expired"} />
     );
+  if (sessionState.status === "failed")
+    return (
+      <SessionPage>
+        <SessionCard
+          actions={
+            <Button
+              onClick={() => {
+                update({ sessionState: { status: "loading" } });
+                void inspectSession();
+              }}
+            >
+              Try again
+            </Button>
+          }
+          description={
+            sessionState.message ??
+            "The Router could not check the administrator session."
+          }
+          eyebrow="Session check"
+          icon={<Icon name="warning" size={25} />}
+          title="The session status is unavailable"
+        />
+      </SessionPage>
+    );
   if (sessionState.status === "denied")
     return (
       <SessionPage>
@@ -3359,7 +3763,7 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
   return (
     <AuthenticatedAdministration
       assignments={assignments}
-      client={client}
+      client={authenticatedClient}
       data={data}
       failure={failure}
       loadGlobal={loadGlobal}

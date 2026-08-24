@@ -2,6 +2,11 @@ import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App, AssignmentsPage } from "../src/App.js";
+import {
+  expireAdministratorSessionLoads,
+  invalidateRetainedMediaLoad,
+  updateRetentionDuration,
+} from "../src/administrationSafety.js";
 import { ServiceManagement } from "../src/ServiceManagement.js";
 import { AdministrationApiError } from "../src/api.js";
 import type {
@@ -174,7 +179,7 @@ describe("accepted administration composition", () => {
     const assignments: readonly Assignment[] = [
       {
         api_name: "local",
-        display_name: "Local direct",
+        display_name: "Shared display name",
         definition_kind: "direct_chain",
         defined_by_service_api_name: "child",
         direct_chain: [],
@@ -183,16 +188,16 @@ describe("accepted administration composition", () => {
       },
       {
         api_name: "inherited",
-        display_name: "Inherited assignment",
+        display_name: "Shared display name",
         definition_kind: "inherited_assignment",
-        defined_by_service_api_name: "parent",
+        defined_by_service_api_name: "child",
         inherits_assignment_api_name: "local",
         effective_chain: [],
         observed_requirements: ["streaming"],
       },
       {
         api_name: "default",
-        display_name: "Implicit default",
+        display_name: "Shared display name",
         definition_kind: "implicit",
         defined_by_service_api_name: "child",
         effective_chain: [],
@@ -210,7 +215,7 @@ describe("accepted administration composition", () => {
         selectedService="child"
       />,
     );
-    expect(markup.match(/Delete local definition/g)).toHaveLength(1);
+    expect(markup.match(/Delete local definition/g)).toHaveLength(2);
     expect(markup).toContain("Remove text_input");
     expect(markup).toContain("Remove streaming");
     expect(markup).toContain("Remove reasoning");
@@ -487,5 +492,74 @@ describe("absolute session expiry", () => {
     cancel();
     await vi.advanceTimersByTimeAsync(1_000);
     expect(expired).not.toHaveBeenCalled();
+  });
+
+  it("makes every pending administrator load stale before session clear", () => {
+    const globalLoad = createScopeLoadGuard();
+    const scopeLoad = createScopeLoadGuard();
+    const globalGeneration = globalLoad.begin();
+    const scopeGeneration = scopeLoad.begin();
+    const clearSession = vi.fn(() => {
+      expect(globalLoad.isCurrent(globalGeneration)).toBe(false);
+      expect(scopeLoad.isCurrent(scopeGeneration)).toBe(false);
+    });
+
+    expireAdministratorSessionLoads(globalLoad, scopeLoad, clearSession);
+
+    expect(clearSession).toHaveBeenCalledOnce();
+    expect(globalLoad.isCurrent(globalGeneration)).toBe(false);
+    expect(scopeLoad.isCurrent(scopeGeneration)).toBe(false);
+  });
+});
+
+describe("destructive retention and retained-media races", () => {
+  it("does not write when an administrator cancels a retention decrease", async () => {
+    const confirm = vi.fn((message: string) => {
+      void message;
+      return false;
+    });
+    const write = vi.fn().mockResolvedValue({ duration_days: 7 });
+
+    await expect(updateRetentionDuration(30, 7, confirm, write)).resolves.toBe(
+      false,
+    );
+
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(confirm.mock.calls[0]?.[0]).toContain(
+      "Detailed logs, activity, uploaded images, and retained generated media",
+    );
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("writes a retention increase without a destructive confirmation", async () => {
+    const confirm = vi.fn((message: string) => {
+      void message;
+      return true;
+    });
+    const write = vi.fn().mockResolvedValue({ duration_days: 30 });
+
+    await expect(updateRetentionDuration(7, 30, confirm, write)).resolves.toBe(
+      true,
+    );
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(write).toHaveBeenCalledExactlyOnceWith(30);
+  });
+
+  it("ignores retained media that completes after a new detail starts", async () => {
+    const mediaLoad = createScopeLoadGuard();
+    const staleGeneration = mediaLoad.begin();
+    const revoke = vi.fn();
+    const storeBlobUrl = vi.fn();
+
+    expect(
+      invalidateRetainedMediaLoad(mediaLoad, "blob:prior", revoke),
+    ).toBeNull();
+    await Promise.resolve("blob:stale").then((url) => {
+      if (mediaLoad.isCurrent(staleGeneration)) storeBlobUrl(url);
+    });
+
+    expect(revoke).toHaveBeenCalledExactlyOnceWith("blob:prior");
+    expect(storeBlobUrl).not.toHaveBeenCalled();
   });
 });

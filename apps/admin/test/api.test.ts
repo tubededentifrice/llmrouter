@@ -354,6 +354,56 @@ describe("native administration client", () => {
     });
   });
 
+  it("omits top-level null values from closed administrator writes", async () => {
+    const calls: { readonly path: string; readonly body: unknown }[] = [];
+    const client = createAdministrationClient(
+      vi.fn((input: string | URL | Request, init?: RequestInit) => {
+        calls.push({
+          path: url(input),
+          body: JSON.parse(typeof init?.body === "string" ? init.body : "null"),
+        });
+        return Promise.resolve(json({}));
+      }),
+    );
+    await client.createService(
+      {
+        api_name: "root",
+        display_name: "Root",
+        parent_service_api_name: null,
+      },
+      "csrf",
+    );
+    await client.createModel(
+      {
+        api_name: "model",
+        display_name: "Model",
+        input_modalities: ["text"],
+        output_modalities: ["text"],
+        capabilities: [],
+        manual_price: null,
+      },
+      "csrf",
+    );
+    await client.synchronizePrices(null, "csrf");
+    expect(calls).toEqual([
+      {
+        path: "/v1/admin/services",
+        body: { api_name: "root", display_name: "Root" },
+      },
+      {
+        path: "/v1/admin/models",
+        body: {
+          api_name: "model",
+          display_name: "Model",
+          input_modalities: ["text"],
+          output_modalities: ["text"],
+          capabilities: [],
+        },
+      },
+      { path: "/v1/admin/prices/synchronize", body: {} },
+    ]);
+  });
+
   it("keeps provider errors safe and corrective", async () => {
     const client = createAdministrationClient(
       vi.fn(() =>
@@ -442,6 +492,38 @@ describe("native administration client", () => {
     }
     expect(signals).toHaveLength(2);
     expect(signals.every((signal) => signal.aborted)).toBe(true);
+  });
+
+  it("uses one administration deadline for a complete cursor walk", async () => {
+    vi.useFakeTimers();
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(
+        json({
+          items: [{ api_name: "first" }],
+          page: { has_more: true, next_cursor: "next" },
+        }),
+      )
+      .mockImplementationOnce(
+        (_input: string | URL | Request, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => {
+              reject(new DOMException("Aborted", "AbortError"));
+            });
+          }),
+      );
+    const result = createAdministrationClient(fetcher)
+      .services()
+      .catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(
+      clientDeadlineMilliseconds.administration,
+    );
+    await expect(result).resolves.toMatchObject({
+      code: "client_timeout",
+      status: 408,
+    });
   });
 
   it("uses operation-specific runtime and media client deadlines", async () => {

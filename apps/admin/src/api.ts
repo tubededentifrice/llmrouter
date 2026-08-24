@@ -454,6 +454,15 @@ async function parseError(response: Response): Promise<AdministrationApiError> {
       : "The Router could not complete the operation.",
   );
 }
+
+function omitTopLevelNulls(value: unknown): unknown {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return value;
+  return Object.fromEntries(
+    Object.entries(value).filter(([, item]) => item !== null),
+  );
+}
+
 function query(
   values: Record<string, string | readonly string[] | null | undefined>,
 ): string {
@@ -622,7 +631,9 @@ export function createAdministrationClient(
     request<T>(path, {
       method,
       headers: { "X-CSRF-Token": csrf },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      ...(body === undefined
+        ? {}
+        : { body: JSON.stringify(omitTopLevelNulls(body)) }),
     });
   const invalidListResponse = (reason: string) =>
     new AdministrationApiError(
@@ -635,64 +646,71 @@ export function createAdministrationClient(
     path: string,
     filters: Record<string, string | readonly string[] | null | undefined> = {},
   ): Promise<Page<T>> {
-    const items: T[] = [];
-    const seenCursors = new Set<string>();
-    let cursor: string | undefined;
-    for (let pageIndex = 0; pageIndex < maximumListPages; pageIndex += 1) {
-      const response: unknown = await request(
-        `${path}${query({ ...filters, limit: String(listLimit), cursor })}`,
+    return withClientDeadline(async (signal) => {
+      const items: T[] = [];
+      const seenCursors = new Set<string>();
+      let cursor: string | undefined;
+      for (let pageIndex = 0; pageIndex < maximumListPages; pageIndex += 1) {
+        const response: unknown = await request(
+          `${path}${query({ ...filters, limit: String(listLimit), cursor })}`,
+          { signal },
+        );
+        if (
+          typeof response !== "object" ||
+          response === null ||
+          !("items" in response) ||
+          !Array.isArray(response.items) ||
+          !("page" in response) ||
+          typeof response.page !== "object" ||
+          response.page === null ||
+          !("has_more" in response.page) ||
+          typeof response.page.has_more !== "boolean" ||
+          ("next_cursor" in response.page &&
+            response.page.next_cursor !== null &&
+            typeof response.page.next_cursor !== "string")
+        )
+          throw invalidListResponse(
+            "The list page does not match the native cursor contract.",
+          );
+        const current = response as Page<T>;
+        if (current.items.length > listLimit)
+          throw invalidListResponse(
+            `The list page exceeds the requested ${String(listLimit)} item limit.`,
+          );
+        items.push(...current.items);
+        if (items.length > maximumListItems)
+          throw invalidListResponse(
+            `The list exceeds the ${String(maximumListItems)} item safety limit. Narrow the scope and try again.`,
+          );
+        if (items.length === maximumListItems && current.page.has_more)
+          throw invalidListResponse(
+            `The list reaches the ${String(maximumListItems)} item safety limit and has more items. Narrow the scope and try again.`,
+          );
+        if (!current.page.has_more)
+          return {
+            items,
+            page: { has_more: false, next_cursor: null },
+          };
+        const nextCursor = current.page.next_cursor;
+        if (
+          nextCursor === undefined ||
+          nextCursor === null ||
+          nextCursor === ""
+        )
+          throw invalidListResponse(
+            "The list says that more items exist, but it has no next cursor.",
+          );
+        if (seenCursors.has(nextCursor))
+          throw invalidListResponse(
+            "The list repeated a cursor and could not make progress.",
+          );
+        seenCursors.add(nextCursor);
+        cursor = nextCursor;
+      }
+      throw invalidListResponse(
+        `The list exceeds the ${String(maximumListPages)} page safety limit. Narrow the scope and try again.`,
       );
-      if (
-        typeof response !== "object" ||
-        response === null ||
-        !("items" in response) ||
-        !Array.isArray(response.items) ||
-        !("page" in response) ||
-        typeof response.page !== "object" ||
-        response.page === null ||
-        !("has_more" in response.page) ||
-        typeof response.page.has_more !== "boolean" ||
-        ("next_cursor" in response.page &&
-          response.page.next_cursor !== null &&
-          typeof response.page.next_cursor !== "string")
-      )
-        throw invalidListResponse(
-          "The list page does not match the native cursor contract.",
-        );
-      const current = response as Page<T>;
-      if (current.items.length > listLimit)
-        throw invalidListResponse(
-          `The list page exceeds the requested ${String(listLimit)} item limit.`,
-        );
-      items.push(...current.items);
-      if (items.length > maximumListItems)
-        throw invalidListResponse(
-          `The list exceeds the ${String(maximumListItems)} item safety limit. Narrow the scope and try again.`,
-        );
-      if (items.length === maximumListItems && current.page.has_more)
-        throw invalidListResponse(
-          `The list reaches the ${String(maximumListItems)} item safety limit and has more items. Narrow the scope and try again.`,
-        );
-      if (!current.page.has_more)
-        return {
-          items,
-          page: { has_more: false, next_cursor: null },
-        };
-      const nextCursor = current.page.next_cursor;
-      if (nextCursor === undefined || nextCursor === null || nextCursor === "")
-        throw invalidListResponse(
-          "The list says that more items exist, but it has no next cursor.",
-        );
-      if (seenCursors.has(nextCursor))
-        throw invalidListResponse(
-          "The list repeated a cursor and could not make progress.",
-        );
-      seenCursors.add(nextCursor);
-      cursor = nextCursor;
-    }
-    throw invalidListResponse(
-      `The list exceeds the ${String(maximumListPages)} page safety limit. Narrow the scope and try again.`,
-    );
+    }, administrationDeadline);
   }
   return {
     session: () => request("/v1/admin/session"),

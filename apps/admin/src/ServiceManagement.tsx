@@ -1,4 +1,12 @@
-import { useMemo, useState, type ReactNode, type SubmitEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+  type ReactNode,
+  type SubmitEvent,
+} from "react";
 import {
   Button,
   GraphEdge,
@@ -85,6 +93,12 @@ function ServiceInspector({
           : "Child service"
       }
       onClose={onClose}
+      onKeyDown={(event) => {
+        if (event.defaultPrevented || event.key !== "Escape") return;
+        event.preventDefault();
+        event.stopPropagation();
+        onClose();
+      }}
       title={selected.display_name}
     >
       <dl className="record-facts">
@@ -153,6 +167,12 @@ function ServiceInspector({
       <Button
         disabled={busy || hasChildren}
         onClick={() => {
+          if (
+            !globalThis.confirm(
+              `Delete service ${selected.api_name} and its keys, workspaces, assignments, logs, accounting, jobs, and retained media?`,
+            )
+          )
+            return;
           void mutate(
             () => client.deleteService(selected.api_name, csrf),
             "The service was deleted.",
@@ -181,8 +201,8 @@ function ServiceGraph({
 }: {
   readonly inspector: ReactNode;
   readonly layout: TreeLayoutResult;
-  readonly onCreate: () => void;
-  readonly onSelect: (name: string) => void;
+  readonly onCreate: (trigger: HTMLButtonElement) => void;
+  readonly onSelect: (name: string, trigger: HTMLButtonElement) => void;
   readonly selectedService: string;
   readonly services: readonly Service[];
 }) {
@@ -195,7 +215,11 @@ function ServiceGraph({
       toolbar={
         <GraphToolbar
           actions={
-            <Button onClick={onCreate}>
+            <Button
+              onClick={(event) => {
+                onCreate(event.currentTarget);
+              }}
+            >
               <Icon name="plus" size={16} /> Create service
             </Button>
           }
@@ -239,8 +263,8 @@ function ServiceGraph({
               }
               key={service.api_name}
               meta={service.api_name}
-              onClick={() => {
-                onSelect(service.api_name);
+              onClick={(event) => {
+                onSelect(service.api_name, event.currentTarget);
               }}
               root={service.parent_service_api_name == null}
               selected={selectedService === service.api_name}
@@ -260,7 +284,7 @@ function ServiceList({
   onSelect,
   services,
 }: {
-  readonly onSelect: (name: string) => void;
+  readonly onSelect: (name: string, trigger: HTMLButtonElement) => void;
   readonly services: readonly Service[];
 }) {
   return (
@@ -293,8 +317,8 @@ function ServiceList({
                   <td>{service.parent_service_api_name ?? "Root"}</td>
                   <td>
                     <Button
-                      onClick={() => {
-                        onSelect(service.api_name);
+                      onClick={(event) => {
+                        onSelect(service.api_name, event.currentTarget);
                       }}
                       variant="quiet"
                     >
@@ -315,17 +339,26 @@ function CreateService({
   busy,
   onClose,
   onSubmit,
+  panelRef,
   services,
 }: {
   readonly busy: boolean;
   readonly onClose: () => void;
   readonly onSubmit: (event: SubmitEvent<HTMLFormElement>) => void;
+  readonly panelRef: RefObject<HTMLElement | null>;
   readonly services: readonly Service[];
 }) {
   return (
     <section
       aria-labelledby="create-service-title"
       className="service-create-panel"
+      onKeyDown={(event) => {
+        if (event.defaultPrevented || event.key !== "Escape") return;
+        event.preventDefault();
+        event.stopPropagation();
+        onClose();
+      }}
+      ref={panelRef}
     >
       <div>
         <h2 id="create-service-title">Create service</h2>
@@ -389,6 +422,8 @@ export function ServiceManagement({
 }) {
   const [busy, setBusy] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const createPanelRef = useRef<HTMLElement | null>(null);
   const selected =
     services.find((item) => item.api_name === selectedService) ?? null;
   const layout = useMemo(
@@ -407,6 +442,24 @@ export function ServiceManagement({
       ),
     [services],
   );
+  useEffect(() => {
+    if (showCreate)
+      createPanelRef.current?.querySelector<HTMLElement>("input")?.focus();
+  }, [showCreate]);
+
+  function closePanel(): void {
+    setShowCreate(false);
+    const target = returnFocusRef.current;
+    if (target?.isConnected) target.focus();
+    returnFocusRef.current = null;
+  }
+
+  function closeInspector(): void {
+    const target = returnFocusRef.current;
+    if (target?.isConnected) target.focus();
+    returnFocusRef.current = null;
+    onSelect("");
+  }
 
   async function mutate(
     action: () => Promise<unknown>,
@@ -442,7 +495,7 @@ export function ServiceManagement({
         ),
       "The service was created.",
     );
-    if (created) setShowCreate(false);
+    if (created) closePanel();
   }
 
   const inspector =
@@ -452,9 +505,7 @@ export function ServiceManagement({
         client={client}
         csrf={csrf}
         mutate={mutate}
-        onClose={() => {
-          onSelect("");
-        }}
+        onClose={closeInspector}
         selected={selected}
         services={services}
       />
@@ -464,23 +515,46 @@ export function ServiceManagement({
       <ServiceGraph
         inspector={inspector}
         layout={layout}
-        onCreate={() => {
+        onCreate={(trigger) => {
+          returnFocusRef.current = trigger;
           setShowCreate(true);
         }}
-        onSelect={onSelect}
+        onSelect={(name, trigger) => {
+          returnFocusRef.current = trigger;
+          onSelect(name);
+          globalThis.setTimeout(() => {
+            globalThis.document
+              .querySelector<HTMLElement>(
+                ".service-management .od-graph-inspector-close",
+              )
+              ?.focus();
+          }, 0);
+        }}
         selectedService={selectedService}
         services={services}
       />
-      <ServiceList onSelect={onSelect} services={services} />
+      <ServiceList
+        onSelect={(name, trigger) => {
+          returnFocusRef.current = trigger;
+          onSelect(name);
+          globalThis.setTimeout(() => {
+            globalThis.document
+              .querySelector<HTMLElement>(
+                ".service-management .od-graph-inspector-close",
+              )
+              ?.focus();
+          }, 0);
+        }}
+        services={services}
+      />
       {showCreate ? (
         <CreateService
           busy={busy}
-          onClose={() => {
-            setShowCreate(false);
-          }}
+          onClose={closePanel}
           onSubmit={(event) => {
             void create(event);
           }}
+          panelRef={createPanelRef}
           services={services}
         />
       ) : null}
