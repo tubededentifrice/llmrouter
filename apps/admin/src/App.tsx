@@ -6,7 +6,6 @@ import {
   useRef,
   useState,
   type ReactNode,
-  type RefObject,
   type SubmitEvent,
 } from "react";
 import {
@@ -20,9 +19,11 @@ import {
   Icon,
   MobileNavigation,
   NavigationItem,
+  OperationPlayground,
   PageHeading,
   Panel,
   PanelHeader,
+  ServiceAssignmentGraph,
   SessionCard,
   SessionPage,
   ShellErrorBoundary,
@@ -30,2229 +31,826 @@ import {
   StatePanel,
   StatusPill,
   Toast,
+  WorkspaceSelector,
   type IconName,
+  type PlaygroundRunState,
+  type PlaygroundValue,
+  type ServiceAssignmentItem,
 } from "@opendle/ui";
 import {
-  activateLocalAdministrator,
-  configurationRevisionForScope,
-  consumeTrustedGrantToken,
-  createFetchAdministrationClient,
-  endAdministratorSession,
-  errorMessage,
-  inspectLocalAdministratorSession,
-  newLogicalRequestId,
-  scheduleAdministrationSessionInspection,
-  scopeFromSearch,
-  scopeSearch,
-  startPocketIDAdministratorSession,
-  startPocketIDRecentAuthentication,
   AdministrationApiError,
-  type AccountingSummary,
+  createAdministrationClient,
+  createRuntimeClient,
+  errorMessage,
+  isoRange,
+  type ActivityEvent,
   type AdministrationClient,
-  type AdministrationSnapshot,
+  type AdministratorHealth,
+  type AdministratorSession,
   type Assignment,
-  type AuditEvent,
-  type BudgetSummary,
-  type CatalogEntry,
   type Credential,
-  type DiagnosticPhase,
-  type DiagnosticRun,
-  type ExportDataClass,
-  type ExportCreate,
-  type ExportFormat,
-  type ExportOperation,
-  type ProviderInstance,
-  type ProviderModelRoute,
-  type RequestStatus,
-  type RequestAttemptStatus,
-  type RequestFailureClass,
-  type ScopeSelection,
-  type ServiceCreated,
-  type ServiceSummary,
+  type Model,
+  type ModelCapability,
+  type ModelImportPreview,
+  type ModelWrite,
+  type ObservedRequirement,
+  type OutputModality,
+  type Price,
+  type PriceSyncResult,
+  type Provider,
+  type ProviderAdapter,
+  type ProviderModel,
+  type ProviderModelWrite,
+  type RequestLog,
+  type RequestLogSummary,
+  type RuntimeInputImage,
+  type Service,
+  type StatisticsResult,
+  type Workspace,
 } from "./api.js";
-import { recoverAfterMutationFailure } from "./mutationRecovery.js";
 import { ServiceManagement } from "./ServiceManagement.js";
-
-const initialTrustedGrantToken =
-  typeof window === "undefined" ? undefined : consumeTrustedGrantToken();
+import {
+  createScopeLoadGuard,
+  initialAccessScopeState,
+  reduceAccessScopeState,
+} from "./accessState.js";
+import {
+  createInputImageSelectionQueue,
+  parseManualPrice,
+  usageUnits,
+  validateInputImageSelection,
+} from "./formContracts.js";
+import { scheduleSessionExpiry } from "./sessionExpiry.js";
+import { waitForMediaJob } from "./mediaPolling.js";
 
 type Section =
   | "overview"
   | "services"
-  | "credentials"
-  | "audit"
-  | "exports"
-  | "setup"
-  | "configuration"
+  | "access"
+  | "providers"
+  | "models"
   | "assignments"
-  | "requests"
-  | "diagnostics"
-  | "accounting"
-  | "budgets";
-type SessionAction =
-  "idle" | "sign_in_pending" | "sign_out_pending" | "recent_pending" | "error";
-export interface Notice {
+  | "playground"
+  | "logs"
+  | "statistics"
+  | "operations";
+interface Notice {
   readonly tone: "success" | "error";
   readonly message: string;
-  readonly staleRevision?: boolean;
 }
-
-function committedRefreshNotice(message: string, error: unknown): Notice {
-  return {
-    tone: "error",
-    message: `${message} The change was committed, but current data did not refresh. ${errorMessage(error)}`,
-  };
+interface AppData {
+  readonly services: readonly Service[];
+  readonly providers: readonly Provider[];
+  readonly models: readonly Model[];
+  readonly providerModels: readonly ProviderModel[];
+  readonly credentials: readonly Credential[];
+  readonly health: AdministratorHealth;
+  readonly retentionDays: number;
 }
-
-async function refreshAfterCommit(
-  message: string,
-  onChanged: () => Promise<void>,
-  onNotice: (notice: Notice) => void,
-): Promise<void> {
-  onNotice({ tone: "success", message });
-  try {
-    await onChanged();
-  } catch (error) {
-    onNotice(committedRefreshNotice(message, error));
-  }
-}
-
-interface SectionItem {
+const routes: readonly {
   readonly id: Section;
   readonly label: string;
   readonly icon: IconName;
-}
-
-const globalSections: readonly SectionItem[] = [
-  { id: "overview", label: "Overview", icon: "grid" },
-  { id: "services", label: "Services & inheritance", icon: "layers" },
-  { id: "credentials", label: "Provider credentials", icon: "key" },
-  { id: "audit", label: "Audit events", icon: "audit" },
-  { id: "exports", label: "Exports", icon: "list" },
+  readonly group: "Manage" | "Observe";
+}[] = [
+  { id: "overview", label: "Overview", icon: "grid", group: "Manage" },
+  { id: "services", label: "Services", icon: "layers", group: "Manage" },
+  { id: "access", label: "Workspaces & keys", icon: "key", group: "Manage" },
+  { id: "providers", label: "Providers", icon: "server", group: "Manage" },
+  { id: "models", label: "Models & prices", icon: "spark", group: "Manage" },
+  { id: "assignments", label: "Assignments", icon: "layers", group: "Manage" },
+  { id: "playground", label: "Playground", icon: "spark", group: "Manage" },
+  { id: "logs", label: "Detailed logs", icon: "list", group: "Observe" },
+  {
+    id: "statistics",
+    label: "Usage & cost",
+    icon: "activity",
+    group: "Observe",
+  },
+  {
+    id: "operations",
+    label: "Activity & health",
+    icon: "health",
+    group: "Observe",
+  },
 ];
 
-const serviceSections: readonly SectionItem[] = [
-  { id: "configuration", label: "Effective configuration", icon: "settings" },
-  { id: "setup", label: "Setup", icon: "health" },
-  { id: "assignments", label: "Assignments", icon: "layers" },
-  { id: "requests", label: "Requests", icon: "list" },
-  { id: "diagnostics", label: "Diagnostics", icon: "health" },
-  { id: "budgets", label: "Budgets", icon: "shield" },
-  { id: "accounting", label: "Usage & cost", icon: "activity" },
-];
-
-const sections = [...globalSections, ...serviceSections];
-const emptyServices: readonly ServiceSummary[] = [];
-const emptyCredentials: readonly Credential[] = [];
-const emptyCatalogEntries: readonly CatalogEntry[] = [];
-type GlobalFailures = Readonly<
-  Partial<Record<"services" | "credentials" | "catalog", string>>
->;
-const emptyGlobalFailures: GlobalFailures = {};
-
-function initialScope(): ScopeSelection {
-  const search = "location" in globalThis ? globalThis.location.search : "";
-  return scopeFromSearch(search);
+function currentSection(): Section {
+  const value =
+    typeof location === "undefined" ? "" : location.pathname.slice(1);
+  return routes.some((route) => route.id === value)
+    ? (value as Section)
+    : "overview";
 }
-
-function toneForState(state: string): "green" | "amber" | "red" | "blue" {
-  if (state === "active" || state === "succeeded" || state === "current") {
+function selectedServiceFromLocation(): string {
+  const search = typeof location === "undefined" ? "" : location.search;
+  return new URLSearchParams(search).get("service") ?? "";
+}
+function displayTime(value: string | null | undefined): string {
+  if (value == null) return "Never";
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime())
+    ? "Unavailable"
+    : parsed.toLocaleString();
+}
+function words(value: string): readonly string[] {
+  return [
+    ...new Set(
+      value.split(",").flatMap((item) => {
+        const trimmed = item.trim();
+        return trimmed === "" ? [] : [trimmed];
+      }),
+    ),
+  ];
+}
+function formText(form: FormData, name: string): string {
+  const value = form.get(name);
+  return typeof value === "string" ? value.trim() : "";
+}
+function tone(value: string): "green" | "amber" | "red" | "blue" {
+  if (
+    ["healthy", "succeeded", "enabled", "updated", "unchanged"].includes(value)
+  )
     return "green";
-  }
-  if (
-    state === "disabled" ||
-    state === "running" ||
-    state === "waiting_for_tool" ||
-    state === "cancel_requested" ||
-    state === "distributing"
-  ) {
+  if (["degraded", "pending", "running", "missing"].includes(value))
     return "amber";
-  }
-  if (
-    state === "failed" ||
-    state === "cancelled" ||
-    state === "interrupted" ||
-    state === "uncertain" ||
-    state === "retired"
-  ) {
-    return "red";
-  }
+  if (["failed", "unavailable", "disabled"].includes(value)) return "red";
   return "blue";
 }
-
-function revisionLabel(revision: string): string {
-  return revision.length > 16
-    ? `${revision.slice(0, 8)}…${revision.slice(-6)}`
-    : revision;
+function correction(error: unknown): {
+  readonly title: string;
+  readonly message: string;
+  readonly correction: string;
+  readonly code?: string;
+} {
+  if (error instanceof AdministrationApiError)
+    return {
+      title: "The operation did not complete",
+      message: error.message,
+      correction:
+        error.details?.reason ??
+        (error.status === 401
+          ? "Enter an active service key and try again."
+          : "Check the selected service, workspace, route, and input."),
+      code: error.code,
+    };
+  return {
+    title: "The operation did not complete",
+    message: errorMessage(error),
+    correction:
+      "Try again. If the problem continues, inspect the Router health summary.",
+  };
 }
 
-function configurationSource(
-  inherited: boolean,
-  sourceLayer: string,
-  ownerScope: string,
-  services: readonly ServiceSummary[],
-): string {
-  if (sourceLayer === "router_default") return "Router default";
-  if (!inherited) return "Set on this service";
-  if (ownerScope === "global") return "Inherited from global administration";
-  const owner = services.find((service) => service.service_id === ownerScope);
-  return owner === undefined
-    ? "Inherited from a parent service"
-    : `Inherited from ${owner.display_name}`;
-}
-
-export function StateMessage({
-  kind,
-  children,
-  onRetry,
-}: {
-  readonly kind: "loading" | "empty" | "error";
-  readonly children: ReactNode;
-  readonly onRetry?: () => void;
-}) {
-  return (
-    <StatePanel
-      kind={kind}
-      title={
-        kind === "error"
-          ? "The selected service is not available"
-          : kind === "loading"
-            ? "Loading service data"
-            : "Select a service"
-      }
-      {...(onRetry === undefined ? {} : { onRetry })}
-    >
-      {children}
-    </StatePanel>
-  );
-}
-
-function EmptyRow({
+function EmptyTable({
   columns,
-  children,
+  text,
 }: {
   readonly columns: number;
-  readonly children: ReactNode;
+  readonly text: string;
 }) {
   return (
     <tr>
-      <td className="empty-cell" colSpan={columns}>
-        {children}
-      </td>
+      <td colSpan={columns}>{text}</td>
     </tr>
   );
 }
-
-function Revision({
-  value,
-  inherited,
+function LoadingPage({
+  title = "Loading administration data",
 }: {
-  readonly value: string;
-  readonly inherited?: boolean;
+  readonly title?: string;
 }) {
   return (
-    <span className="revision" title={value}>
-      {revisionLabel(value)}
-      {inherited ? " · inherited" : ""}
-    </span>
+    <StatePanel kind="loading" title={title}>
+      Wait while the Router reads current state.
+    </StatePanel>
   );
 }
-
-function ScopedReadFailure({
-  title,
+function FailurePage({
   message,
+  onRetry,
 }: {
-  readonly title: string;
   readonly message: string;
+  readonly onRetry: () => void;
 }) {
   return (
-    <StatePanel kind="error" title={title}>
+    <StatePanel
+      kind="error"
+      onRetry={onRetry}
+      title="The administration data is not available"
+    >
       {message}
     </StatePanel>
   );
 }
 
-function CredentialForm({
+function SignIn({
   client,
-  ownerScope,
-  onChanged,
-  onNotice,
+  expired,
 }: {
   readonly client: AdministrationClient;
-  readonly ownerScope: string;
-  readonly onChanged: () => Promise<void>;
-  readonly onNotice: (notice: Notice) => void;
+  readonly expired: boolean;
 }) {
-  const [secret, setSecret] = useState("");
-  const [safeLabel, setSafeLabel] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  async function submit(event: SubmitEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setSubmitting(true);
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  async function signIn() {
+    setBusy(true);
+    setFailure(null);
     try {
-      await client.createCredential({
-        ownerScope,
-        secret,
-        safeLabel,
-      });
-      setSecret("");
-      setSafeLabel("");
+      const path = `${globalThis.location.pathname}${globalThis.location.search}`;
+      globalThis.location.assign(
+        await client.startSession(path.startsWith("/") ? path : "/"),
+      );
     } catch (error) {
-      setSecret("");
-      await recoverAfterMutationFailure(error, onChanged, onNotice);
-      setSubmitting(false);
-      return;
-    }
-    const message = "The write-only OpenRouter credential was stored.";
-    onNotice({
-      tone: "success",
-      message,
-    });
-    try {
-      await onChanged();
-    } catch (error) {
-      onNotice(committedRefreshNotice(message, error));
-    } finally {
-      setSecret("");
-      setSubmitting(false);
+      setFailure(errorMessage(error));
+      setBusy(false);
     }
   }
   return (
-    <form
-      className="configuration-form"
-      onSubmit={(event) => {
-        void submit(event);
-      }}
-    >
-      <h3>Store OpenRouter credential</h3>
-      <p>The secret is write-only. This field clears after each submit.</p>
-      <div className="form-grid">
-        <label>
-          Safe label
-          <input
-            maxLength={200}
-            value={safeLabel}
-            onChange={(event) => {
-              setSafeLabel(event.target.value);
-            }}
-            autoComplete="off"
-          />
-        </label>
-        <label>
-          Provider secret
-          <input
-            required
-            type="password"
-            value={secret}
-            onChange={(event) => {
-              setSecret(event.target.value);
-            }}
-            autoComplete="new-password"
-            spellCheck={false}
-          />
-        </label>
-      </div>
-      <Button
-        type="submit"
-        disabled={submitting || secret === ""}
-        icon={<Icon name="key" size={16} />}
-      >
-        {submitting ? "Storing…" : "Store credential"}
-      </Button>
-    </form>
+    <SessionPage>
+      <SessionCard
+        actions={
+          <Button disabled={busy} onClick={() => void signIn()}>
+            {busy ? "Opening Pocket ID…" : "Continue with Pocket ID"}
+          </Button>
+        }
+        description={
+          failure ??
+          (expired
+            ? "Your local administrator session expired. Sign in again."
+            : "Use an allowlisted Pocket ID identity.")
+        }
+        eyebrow="LLM Router administration"
+        footer="A Pocket ID account does not give Router access. The subject must be on the deployment allowlist."
+        icon={<Icon name="shield" size={25} />}
+        title={expired ? "Your session expired" : "Administrator sign-in"}
+      />
+    </SessionPage>
   );
 }
 
-function CredentialTable({
-  client,
-  values,
-  onChanged,
-  onNotice,
-}: {
-  readonly client: AdministrationClient;
-  readonly values: readonly Credential[];
-  readonly onChanged: () => Promise<void>;
-  readonly onNotice: (notice: Notice) => void;
-}) {
+function Overview({ data }: { readonly data: AppData }) {
+  const cooldowns = data.providerModels.filter((item) => item.cooldown != null);
   return (
-    <div className="table-scroll">
-      <table>
-        <thead>
-          <tr>
-            <th>Label fingerprint</th>
-            <th>Owner</th>
-            <th>State</th>
-            <th>Revision</th>
-            <th>
-              <span className="sr-only">Actions</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {values.length === 0 ? (
-            <EmptyRow columns={5}>
-              No credential metadata is in this authority.
-            </EmptyRow>
-          ) : (
-            values.map((item) => (
-              <CredentialRow
-                key={item.credential_id}
-                client={client}
-                item={item}
-                onChanged={onChanged}
-                onNotice={onNotice}
-              />
-            ))
-          )}
-        </tbody>
-      </table>
+    <div className="administration-page">
+      <PageHeading
+        description="Inspect the current global calling service."
+        eyebrow="Global administration"
+        title="Router overview"
+      />
+      <section className="resource-totals" aria-label="Resource totals">
+        <StatCard
+          icon={<Icon name="server" />}
+          label="Services"
+          value={String(data.services.length)}
+        />
+        <StatCard
+          icon={<Icon name="cloud" />}
+          label="Provider connections"
+          value={String(data.providers.length)}
+        />
+        <StatCard
+          icon={<Icon name="spark" />}
+          label="Provider-models"
+          value={String(data.providerModels.length)}
+        />
+        <StatCard
+          icon={<Icon name="warning" />}
+          label="Current cooldowns"
+          value={String(cooldowns.length)}
+        />
+      </section>
+      <Panel>
+        <PanelHeader
+          description={`Checked ${displayTime(data.health.checked_at)}`}
+          title="Small health summary"
+        />
+        <ul className="health-list">
+          {data.health.components.map((item) => (
+            <li key={item.name}>
+              <span>
+                <strong>{item.name.replaceAll("_", " ")}</strong>
+                {item.message == null ? null : <small>{item.message}</small>}
+              </span>
+              <StatusPill tone={tone(item.status)}>{item.status}</StatusPill>
+            </li>
+          ))}
+        </ul>
+      </Panel>
     </div>
   );
 }
 
-function CredentialRow({
+function AccessPage({
   client,
-  item,
-  onChanged,
+  csrf,
   onNotice,
+  selectedService,
+  setPlaygroundKey,
 }: {
   readonly client: AdministrationClient;
-  readonly item: Credential;
-  readonly onChanged: () => Promise<void>;
-  readonly onNotice: (notice: Notice) => void;
+  readonly csrf: string;
+  readonly onNotice: (tone: "success" | "error", message: string) => void;
+  readonly selectedService: string;
+  readonly setPlaygroundKey: (key: string) => void;
 }) {
-  const [replacementSecret, setReplacementSecret] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  async function change(action: "rotate" | "disable" | "retire") {
-    setBusy(true);
-    const stateMessage =
-      action === "rotate"
-        ? "The credential was replaced."
-        : action === "disable"
-          ? "The credential was disabled."
-          : "The credential was retired.";
-    try {
-      await client.changeCredential(item.credential_id, action, {
-        expectedRevision: item.revision,
-        reason: `${action === "rotate" ? "Replace" : action === "disable" ? "Disable" : "Retire"} the provider credential`,
-        ...(action === "rotate" ? { replacementSecret } : {}),
-      });
-    } catch (error) {
-      setReplacementSecret("");
-      await recoverAfterMutationFailure(error, onChanged, onNotice);
-      setBusy(false);
-      return;
+  const [access, updateAccess] = useReducer(
+    reduceAccessScopeState,
+    selectedService,
+    initialAccessScopeState,
+  );
+  const visibleAccess =
+    access.service === selectedService
+      ? access
+      : initialAccessScopeState(selectedService);
+  const { keys, phase, secret, workspaces } = visibleAccess;
+  const accessLoadGuard = useRef(createScopeLoadGuard());
+  const load = useCallback((): Promise<void> => {
+    const generation = accessLoadGuard.current.begin();
+    if (selectedService === "") {
+      updateAccess({ type: "begin", service: selectedService });
+      return Promise.resolve();
     }
-    setReplacementSecret("");
-    onNotice({ tone: "success", message: stateMessage });
+    updateAccess({ type: "refresh", service: selectedService });
+    return Promise.all([
+      client.workspaces(selectedService),
+      client.keys(selectedService),
+    ])
+      .then(([workspacePage, keyPage]) => {
+        if (!accessLoadGuard.current.isCurrent(generation)) return;
+        updateAccess({
+          type: "success",
+          service: selectedService,
+          keys: keyPage.items,
+          workspaces: workspacePage.items,
+        });
+      })
+      .catch((error: unknown) => {
+        if (!accessLoadGuard.current.isCurrent(generation)) return;
+        updateAccess({ type: "failure", service: selectedService });
+        onNotice("error", errorMessage(error));
+      });
+  }, [client, onNotice, selectedService]);
+  useEffect(() => {
+    const loadGuard = accessLoadGuard.current;
+    updateAccess({ type: "begin", service: selectedService });
+    const timer = globalThis.setTimeout(() => {
+      void load();
+    }, 0);
+    return () => {
+      globalThis.clearTimeout(timer);
+      loadGuard.invalidate();
+    };
+  }, [load, selectedService]);
+  if (selectedService === "")
+    return (
+      <StatePanel kind="empty" title="Select a service">
+        Select one service to manage its workspaces and API keys.
+      </StatePanel>
+    );
+  if (phase === "loading")
+    return <LoadingPage title="Loading service access" />;
+  return (
+    <div className="administration-page">
+      <PageHeading
+        description="Workspaces are accounting labels. Service keys are backend-only bearer credentials."
+        eyebrow={selectedService}
+        title="Workspaces and service keys"
+      />
+      {secret === null ? null : (
+        <section aria-labelledby="one-time-key" className="secret-panel">
+          <h2 id="one-time-key">Copy this key now</h2>
+          <p>
+            The Router will not show it again. Deploy it to the calling-service
+            backend, then clear this panel.
+          </p>
+          <output>{secret}</output>
+          <div>
+            <Button
+              onClick={() => {
+                setPlaygroundKey(secret);
+              }}
+              variant="secondary"
+            >
+              Use in playground
+            </Button>
+            <Button
+              onClick={() => {
+                updateAccess({
+                  type: "clear-secret",
+                  service: selectedService,
+                });
+              }}
+              variant="quiet"
+            >
+              Clear key
+            </Button>
+          </div>
+        </section>
+      )}
+      {phase === "error" ? (
+        <StatePanel kind="error" title="Service access is unavailable">
+          <p>
+            The Router could not load workspaces and keys for this service. No
+            prior service data is shown.
+          </p>
+          <Button onClick={() => void load()}>Try again</Button>
+        </StatePanel>
+      ) : null}
+      {phase === "error" ? null : (
+        <div className="administration-sections">
+          <Panel>
+            <PanelHeader title="Workspaces" />
+            <form
+              className="administration-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const formElement = event.currentTarget;
+                const form = new FormData(formElement);
+                void client
+                  .createWorkspace(
+                    selectedService,
+                    {
+                      api_name: formText(form, "api_name"),
+                      display_name: formText(form, "display_name"),
+                    },
+                    csrf,
+                  )
+                  .then(() => {
+                    formElement.reset();
+                    onNotice("success", "The workspace was created.");
+                    return load();
+                  })
+                  .catch((error: unknown) => {
+                    onNotice("error", errorMessage(error));
+                  });
+              }}
+            >
+              <label>
+                API name
+                <input name="api_name" required />
+              </label>
+              <label>
+                Display name
+                <input name="display_name" required />
+              </label>
+              <Button type="submit">Create workspace</Button>
+            </form>
+            <div className="administration-table-region">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Workspace</th>
+                    <th>Created</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {workspaces.length === 0 ? (
+                    <EmptyTable columns={3} text="No workspaces" />
+                  ) : (
+                    workspaces.map((item) => (
+                      <tr key={item.api_name}>
+                        <th scope="row">
+                          <strong>{item.display_name}</strong>
+                          <small>{item.api_name}</small>
+                        </th>
+                        <td>{displayTime(item.created_at)}</td>
+                        <td>
+                          <Button
+                            onClick={() =>
+                              void client
+                                .deleteWorkspace(
+                                  selectedService,
+                                  item.api_name,
+                                  csrf,
+                                )
+                                .then(() => load())
+                                .catch((error: unknown) => {
+                                  onNotice("error", errorMessage(error));
+                                })
+                            }
+                            variant="quiet"
+                          >
+                            Delete
+                          </Button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Panel>
+          <Panel>
+            <PanelHeader title="Service API keys" />
+            <form
+              className="administration-form service-key-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const formElement = event.currentTarget;
+                const form = new FormData(formElement);
+                void client
+                  .createKey(selectedService, formText(form, "name"), csrf)
+                  .then((created) => {
+                    formElement.reset();
+                    updateAccess({
+                      type: "show-secret",
+                      service: selectedService,
+                      secret: created.secret,
+                    });
+                    onNotice("success", "The service API key was created.");
+                    return load();
+                  })
+                  .catch((error: unknown) => {
+                    onNotice("error", errorMessage(error));
+                  });
+              }}
+            >
+              <label>
+                Key name
+                <input name="name" required />
+              </label>
+              <Button type="submit">Create key</Button>
+            </form>
+            <div className="administration-table-region">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Last use</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {keys.length === 0 ? (
+                    <EmptyTable columns={3} text="No active keys" />
+                  ) : (
+                    keys.map((item) => (
+                      <tr key={item.id}>
+                        <th scope="row">{item.name}</th>
+                        <td>{displayTime(item.last_used_at)}</td>
+                        <td>
+                          <Button
+                            onClick={() =>
+                              void client
+                                .revokeKey(selectedService, item.id, csrf)
+                                .then(() => load())
+                                .catch((error: unknown) => {
+                                  onNotice("error", errorMessage(error));
+                                })
+                            }
+                            variant="quiet"
+                          >
+                            Revoke
+                          </Button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Panel>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProvidersPage({
+  client,
+  csrf,
+  credentials,
+  onNotice,
+  onRefresh,
+  providers,
+}: {
+  readonly client: AdministrationClient;
+  readonly csrf: string;
+  readonly credentials: readonly Credential[];
+  readonly onNotice: (tone: "success" | "error", message: string) => void;
+  readonly onRefresh: () => Promise<void>;
+  readonly providers: readonly Provider[];
+}) {
+  const adapters: readonly ProviderAdapter[] = [
+    "openai",
+    "openai_compatible",
+    "openrouter",
+    "custom",
+    "wavespeed",
+    "ollama",
+    "local_embeddings",
+    "fake",
+  ];
+  async function saveProvider(event: SubmitEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const name = formText(form, "api_name");
+    const endpoint = formText(form, "endpoint");
+    const credential = formText(form, "credential");
+    const value = {
+      api_name: name,
+      display_name: formText(form, "display_name"),
+      adapter: formText(form, "adapter") as ProviderAdapter,
+      enabled: form.get("enabled") === "on",
+      ...(endpoint === "" ? {} : { endpoint }),
+      ...(credential === "" ? {} : { credential_api_name: credential }),
+    };
     try {
-      await onChanged();
+      if (providers.some((item) => item.api_name === name))
+        await client.putProvider(name, value, csrf);
+      else await client.createProvider(value, csrf);
+      formElement.reset();
+      await onRefresh();
+      onNotice("success", "The provider connection was saved.");
     } catch (error) {
-      onNotice(committedRefreshNotice(stateMessage, error));
-    } finally {
-      setReplacementSecret("");
-      setBusy(false);
+      onNotice("error", errorMessage(error));
     }
   }
-
+  async function saveCredential(event: SubmitEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const name = formText(form, "api_name");
+    const secretValue = form.get("secret");
+    const secret = typeof secretValue === "string" ? secretValue : "";
+    try {
+      if (credentials.some((item) => item.api_name === name))
+        await client.replaceCredential(name, secret, csrf);
+      else await client.createCredential(name, secret, csrf);
+      formElement.reset();
+      await onRefresh();
+      onNotice(
+        "success",
+        "The encrypted credential was stored. The value is no longer available.",
+      );
+    } catch (error) {
+      onNotice("error", errorMessage(error));
+    }
+  }
   return (
-    <tr>
-      <td>
-        <strong>{item.fingerprint}</strong>
-        <small>{item.credential_id}</small>
-      </td>
-      <td>{item.owner_scope}</td>
-      <td>
-        <StatusPill tone={toneForState(item.state)}>{item.state}</StatusPill>
-      </td>
-      <td>
-        <Revision value={item.revision} />
-      </td>
-      <td>
-        {item.state === "retired" ? (
-          <span className="muted-action">Read only</span>
-        ) : (
-          <div className="credential-actions">
+    <div className="administration-page">
+      <PageHeading
+        description="Connections and encrypted credentials are global. Credential values are write-only."
+        eyebrow="Global catalog"
+        title="Providers and credentials"
+      />
+      <div className="administration-sections">
+        <Panel>
+          <PanelHeader
+            description="Use an existing API name to replace the complete current connection."
+            title="Provider connection"
+          />
+          <form
+            className="administration-form"
+            onSubmit={(event) => void saveProvider(event)}
+          >
             <label>
-              <span className="sr-only">
-                Replacement secret for {item.fingerprint}
-              </span>
+              API name
+              <input name="api_name" required />
+            </label>
+            <label>
+              Display name
+              <input name="display_name" required />
+            </label>
+            <label>
+              Adapter
+              <select name="adapter">
+                {adapters.map((item) => (
+                  <option key={item}>{item}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Endpoint
               <input
-                type="password"
-                value={replacementSecret}
-                placeholder="Write-only replacement"
-                autoComplete="new-password"
-                spellCheck={false}
-                onChange={(event) => {
-                  setReplacementSecret(event.currentTarget.value);
-                }}
+                name="endpoint"
+                placeholder="Optional exact endpoint"
+                type="url"
               />
             </label>
-            <Button
-              type="button"
-              variant="quiet"
-              disabled={busy || replacementSecret === ""}
-              onClick={() => void change("rotate")}
-            >
-              Replace
-            </Button>
-            {item.state === "active" ? (
-              <Button
-                type="button"
-                variant="quiet"
-                disabled={busy}
-                onClick={() => void change("disable")}
-              >
-                Disable
-              </Button>
-            ) : null}
-            <Button
-              type="button"
-              variant="quiet"
-              disabled={busy}
-              onClick={() => void change("retire")}
-            >
-              Retire
-            </Button>
-          </div>
-        )}
-      </td>
-    </tr>
-  );
-}
-
-function ProviderForm({
-  client,
-  scope,
-  credentials,
-  canBrowseCredentials,
-  expectedRevision,
-  onChanged,
-  onNotice,
-}: {
-  readonly client: AdministrationClient;
-  readonly scope: ScopeSelection;
-  readonly credentials: readonly Credential[];
-  readonly canBrowseCredentials: boolean;
-  readonly expectedRevision: string | null;
-  readonly onChanged: () => Promise<void>;
-  readonly onNotice: (notice: Notice) => void;
-}) {
-  const [displayName, setDisplayName] = useState("OpenRouter");
-  const [credentialId, setCredentialId] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  async function submit(event: SubmitEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setSubmitting(true);
-    try {
-      const result = await client.putProvider(scope, null, {
-        provider_catalog_id: "openai_compatible.v1",
-        display_name: displayName,
-        endpoint: "https://openrouter.ai/api/v1",
-        credential_id: credentialId,
-        state: "active",
-        settings: {
-          schema_name: "adapter.openai_compatible.settings",
-          major_version: 1,
-          document: {
-            profile: "openrouter",
-            supported_operations: ["chat.complete", "chat.stream"],
-          },
-        },
-        expected_revision: expectedRevision,
-        reason: "Create the OpenRouter provider instance",
-        eligible_service_ids: [],
-      });
-      await refreshAfterCommit(
-        `Provider instance published at ${revisionLabel(result.active_revision)} (${result.distribution_state}).`,
-        onChanged,
-        onNotice,
-      );
-    } catch (error) {
-      await recoverAfterMutationFailure(error, onChanged, onNotice);
-    } finally {
-      setSubmitting(false);
-    }
-  }
-  const credentialOptions = credentials.reduce<ReactNode[]>((options, item) => {
-    if (item.state === "active") {
-      options.push(
-        <option key={item.credential_id} value={item.credential_id}>
-          {item.fingerprint}
-        </option>,
-      );
-    }
-    return options;
-  }, []);
-  return (
-    <form
-      className="configuration-form"
-      onSubmit={(event) => {
-        void submit(event);
-      }}
-    >
-      <h3>Add OpenRouter instance</h3>
-      <p>
-        The endpoint and supported operations use the accepted OpenRouter
-        profile.
-      </p>
-      <div className="form-grid">
-        <label>
-          Display name
-          <input
-            required
-            maxLength={200}
-            value={displayName}
-            onChange={(event) => {
-              setDisplayName(event.target.value);
-            }}
-          />
-        </label>
-        <label>
-          {canBrowseCredentials
-            ? "Credential"
-            : "Eligible credential reference ID"}
-          {canBrowseCredentials ? (
-            <select
-              required
-              value={credentialId}
-              onChange={(event) => {
-                setCredentialId(event.target.value);
-              }}
-            >
-              <option value="">Select write-only credential</option>
-              {credentialOptions}
-            </select>
-          ) : (
-            <input
-              required
-              maxLength={200}
-              value={credentialId}
-              onChange={(event) => {
-                setCredentialId(event.target.value);
-              }}
-              autoComplete="off"
-              spellCheck={false}
-            />
-          )}
-        </label>
-      </div>
-      <Button type="submit" disabled={submitting || credentialId === ""}>
-        {submitting ? "Publishing…" : "Publish instance"}
-      </Button>
-    </form>
-  );
-}
-
-function ProviderTable({
-  client,
-  scope,
-  values,
-  services,
-  writable,
-  expectedRevision,
-  onChanged,
-  onNotice,
-}: {
-  readonly client: AdministrationClient;
-  readonly scope: ScopeSelection;
-  readonly values: readonly ProviderInstance[];
-  readonly services: readonly ServiceSummary[];
-  readonly writable: boolean;
-  readonly expectedRevision: string | null;
-  readonly onChanged: () => Promise<void>;
-  readonly onNotice: (notice: Notice) => void;
-}) {
-  async function change(item: ProviderInstance) {
-    try {
-      const nextState = item.state === "active" ? "disabled" : "active";
-      const result = await client.putProvider(
-        scope,
-        item.provider_instance_id,
-        {
-          provider_catalog_id: item.provider_catalog_id,
-          display_name: item.display_name,
-          endpoint: item.endpoint,
-          credential_id: item.credential_id,
-          state: nextState,
-          settings: item.settings,
-          expected_revision: item.active_revision,
-          reason: `${nextState === "active" ? "Restore" : "Disable"} the provider instance`,
-          eligible_service_ids: item.eligible_service_ids,
-        },
-      );
-      await refreshAfterCommit(
-        `Provider instance ${nextState}. Active revision ${revisionLabel(result.active_revision)}.`,
-        onChanged,
-        onNotice,
-      );
-    } catch (error) {
-      await recoverAfterMutationFailure(error, onChanged, onNotice);
-    }
-  }
-  async function override(item: ProviderInstance) {
-    try {
-      await client.putProvider(scope, item.provider_instance_id, {
-        provider_catalog_id: item.provider_catalog_id,
-        display_name: item.display_name,
-        endpoint: item.endpoint,
-        credential_id: item.credential_id,
-        state: item.state,
-        settings: item.settings,
-        expected_revision: expectedRevision,
-        reason: "Override the inherited provider connection for this service",
-        eligible_service_ids: item.eligible_service_ids,
-      });
-      await refreshAfterCommit(
-        "The inherited provider connection was copied to this service.",
-        onChanged,
-        onNotice,
-      );
-    } catch (error) {
-      await recoverAfterMutationFailure(error, onChanged, onNotice);
-    }
-  }
-  return (
-    <div className="table-scroll">
-      <table>
-        <thead>
-          <tr>
-            <th>Provider instance</th>
-            <th>Source</th>
-            <th>State</th>
-            <th>Revision</th>
-            <th>
-              <span className="sr-only">Actions</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {values.length === 0 ? (
-            <EmptyRow columns={5}>
-              No provider connection is available for this service.
-            </EmptyRow>
-          ) : (
-            values.map((item) => (
-              <tr key={item.provider_instance_id}>
-                <td>
-                  <strong>{item.display_name}</strong>
-                </td>
-                <td>
-                  {configurationSource(
-                    item.inherited,
-                    item.source_layer,
-                    item.owner_scope,
-                    services,
-                  )}
-                </td>
-                <td>
-                  <StatusPill tone={toneForState(item.state)}>
-                    {item.state}
-                  </StatusPill>
-                </td>
-                <td>
-                  <Revision
-                    value={item.active_revision}
-                    inherited={item.inherited}
-                  />
-                </td>
-                <td>
-                  {!writable || item.state === "retired" ? (
-                    <span className="muted-action">Read only</span>
-                  ) : item.inherited ? (
-                    <Button variant="quiet" onClick={() => void override(item)}>
-                      Override for this service
-                    </Button>
-                  ) : (
-                    <Button variant="quiet" onClick={() => void change(item)}>
-                      {item.state === "active" ? "Disable" : "Restore"}
-                    </Button>
-                  )}
-                </td>
-              </tr>
-            ))
-          )}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-interface RouteFormState {
-  readonly providerId: string;
-  readonly canonicalModelId: string;
-  readonly wireModel: string;
-  readonly inputPrice: string;
-  readonly outputPrice: string;
-}
-
-const initialRouteForm: RouteFormState = {
-  providerId: "",
-  canonicalModelId: "",
-  wireModel: "",
-  inputPrice: "",
-  outputPrice: "",
-};
-
-const nonNegativeDecimal = /^(0|[1-9][0-9]*)(\.[0-9]+)?$/;
-const mvpRouteCapabilities = ["chat.complete", "chat.stream"] as const;
-
-function RouteForm({
-  client,
-  scope,
-  providers,
-  models,
-  expectedRevision,
-  onChanged,
-  onNotice,
-}: {
-  readonly client: AdministrationClient;
-  readonly scope: ScopeSelection;
-  readonly providers: readonly ProviderInstance[];
-  readonly models: readonly CatalogEntry[];
-  readonly expectedRevision: string | null;
-  readonly onChanged: () => Promise<void>;
-  readonly onNotice: (notice: Notice) => void;
-}) {
-  const [form, updateForm] = useReducer(
-    (state: RouteFormState, update: Partial<RouteFormState>) => ({
-      ...state,
-      ...update,
-    }),
-    initialRouteForm,
-  );
-  const [submitting, setSubmitting] = useState(false);
-  const routeReady =
-    form.providerId !== "" &&
-    models.some(
-      (model) =>
-        model.stable_id === form.canonicalModelId &&
-        model.state === "active" &&
-        mvpRouteCapabilities.every((capability) =>
-          model.capabilities.includes(capability),
-        ),
-    ) &&
-    form.wireModel.trim() !== "" &&
-    nonNegativeDecimal.test(form.inputPrice) &&
-    nonNegativeDecimal.test(form.outputPrice);
-  async function submit(event: SubmitEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!routeReady) return;
-    setSubmitting(true);
-    try {
-      const result = await client.putRoute(scope, null, {
-        provider_instance_id: form.providerId,
-        canonical_model_id: form.canonicalModelId,
-        wire_model: form.wireModel,
-        capabilities: ["chat.complete", "chat.stream"],
-        settings: {
-          schema_name: "adapter.openai_compatible.route",
-          major_version: 1,
-          document: {},
-        },
-        price_authority: {
-          mode: "manual",
-          source_name: null,
-          lookup_identifier: null,
-        },
-        prices: [
-          {
-            unit: "input_token",
-            price: form.inputPrice,
-            currency: "USD",
-            raw_source_value: `${form.inputPrice} USD per 1000000 input tokens`,
-            unit_quantity: "1000000",
-          },
-          {
-            unit: "output_token",
-            price: form.outputPrice,
-            currency: "USD",
-            raw_source_value: `${form.outputPrice} USD per 1000000 output tokens`,
-            unit_quantity: "1000000",
-          },
-        ],
-        synchronization_schedule: "0 0 * * 0",
-        stale_after_seconds: 1209600,
-        state: "active",
-        expected_revision: expectedRevision,
-        reason: "Create the OpenRouter model route",
-        eligible_service_ids: [],
-      });
-      await refreshAfterCommit(
-        `Model route published at ${revisionLabel(result.active_revision)} (${result.distribution_state}).`,
-        onChanged,
-        onNotice,
-      );
-    } catch (error) {
-      await recoverAfterMutationFailure(error, onChanged, onNotice);
-    } finally {
-      setSubmitting(false);
-    }
-  }
-  const providerOptions = providers.reduce<ReactNode[]>((options, item) => {
-    if (item.state === "active") {
-      options.push(
-        <option
-          key={item.provider_instance_id}
-          value={item.provider_instance_id}
-        >
-          {item.display_name}
-        </option>,
-      );
-    }
-    return options;
-  }, []);
-  const modelOptions = models.reduce<ReactNode[]>((options, model) => {
-    if (model.state === "active") {
-      options.push(
-        <option key={model.stable_id} value={model.stable_id}>
-          {model.display_name}
-        </option>,
-      );
-    }
-    return options;
-  }, []);
-  return (
-    <form
-      className="configuration-form"
-      onSubmit={(event) => {
-        void submit(event);
-      }}
-    >
-      <h3>Add provider-model route</h3>
-      <p>
-        Select the named canonical model, then enter the provider model name.
-        Prices are USD per one million tokens.
-      </p>
-      <div className="form-grid form-grid-three">
-        <label>
-          Provider instance
-          <select
-            required
-            value={form.providerId}
-            onChange={(event) => {
-              updateForm({ providerId: event.target.value });
-            }}
-          >
-            <option value="">Select instance</option>
-            {providerOptions}
-          </select>
-        </label>
-        <label>
-          Supported model
-          <select
-            required
-            value={form.canonicalModelId}
-            onChange={(event) => {
-              updateForm({ canonicalModelId: event.target.value });
-            }}
-          >
-            <option value="">Select a named model</option>
-            {modelOptions}
-          </select>
-        </label>
-        <label>
-          Provider model name
-          <input
-            required
-            placeholder="For example, deepseek/deepseek-v4-flash"
-            value={form.wireModel}
-            onChange={(event) => {
-              updateForm({ wireModel: event.target.value });
-            }}
-          />
-        </label>
-        <label>
-          Input price
-          <input
-            required
-            inputMode="decimal"
-            pattern="(0|[1-9][0-9]*)(\.[0-9]+)?"
-            placeholder="Explicit USD price"
-            value={form.inputPrice}
-            onChange={(event) => {
-              updateForm({ inputPrice: event.target.value });
-            }}
-          />
-        </label>
-        <label>
-          Output price
-          <input
-            required
-            inputMode="decimal"
-            pattern="(0|[1-9][0-9]*)(\.[0-9]+)?"
-            placeholder="Explicit USD price"
-            value={form.outputPrice}
-            onChange={(event) => {
-              updateForm({ outputPrice: event.target.value });
-            }}
-          />
-        </label>
-      </div>
-      <Button type="submit" disabled={submitting || !routeReady}>
-        {submitting ? "Publishing…" : "Publish route"}
-      </Button>
-    </form>
-  );
-}
-
-function RouteTable({
-  client,
-  scope,
-  values,
-  services,
-  writable,
-  expectedRevision,
-  onChanged,
-  onNotice,
-}: {
-  readonly client: AdministrationClient;
-  readonly scope: ScopeSelection;
-  readonly values: readonly ProviderModelRoute[];
-  readonly services: readonly ServiceSummary[];
-  readonly writable: boolean;
-  readonly expectedRevision: string | null;
-  readonly onChanged: () => Promise<void>;
-  readonly onNotice: (notice: Notice) => void;
-}) {
-  async function change(item: ProviderModelRoute) {
-    try {
-      const nextState = item.state === "active" ? "disabled" : "active";
-      const result = await client.putRoute(
-        scope,
-        item.provider_model_route_id,
-        {
-          provider_instance_id: item.provider_instance_id,
-          canonical_model_id: item.canonical_model_id,
-          wire_model: item.wire_model,
-          capabilities: item.capabilities,
-          settings: item.settings,
-          price_authority: item.price_authority,
-          prices: item.prices,
-          synchronization_schedule: item.synchronization_schedule,
-          stale_after_seconds: item.stale_after_seconds,
-          state: nextState,
-          expected_revision: item.active_revision,
-          reason: `${nextState === "active" ? "Restore" : "Disable"} the provider-model route`,
-          eligible_service_ids: item.eligible_service_ids,
-        },
-      );
-      await refreshAfterCommit(
-        `Provider-model route ${nextState}. Active revision ${revisionLabel(result.active_revision)}.`,
-        onChanged,
-        onNotice,
-      );
-    } catch (error) {
-      await recoverAfterMutationFailure(error, onChanged, onNotice);
-    }
-  }
-  async function override(item: ProviderModelRoute) {
-    try {
-      await client.putRoute(scope, item.provider_model_route_id, {
-        provider_instance_id: item.provider_instance_id,
-        canonical_model_id: item.canonical_model_id,
-        wire_model: item.wire_model,
-        capabilities: item.capabilities,
-        settings: item.settings,
-        price_authority: item.price_authority,
-        prices: item.prices,
-        synchronization_schedule: item.synchronization_schedule,
-        stale_after_seconds: item.stale_after_seconds,
-        state: item.state,
-        expected_revision: expectedRevision,
-        reason: "Override the inherited model route for this service",
-        eligible_service_ids: item.eligible_service_ids,
-      });
-      await refreshAfterCommit(
-        "The inherited model route was copied to this service.",
-        onChanged,
-        onNotice,
-      );
-    } catch (error) {
-      await recoverAfterMutationFailure(error, onChanged, onNotice);
-    }
-  }
-  return (
-    <div className="table-scroll">
-      <table>
-        <thead>
-          <tr>
-            <th>Model route</th>
-            <th>Source</th>
-            <th>Capabilities</th>
-            <th>State</th>
-            <th>Revision</th>
-            <th>
-              <span className="sr-only">Actions</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {values.length === 0 ? (
-            <EmptyRow columns={6}>
-              No model route is available for this service.
-            </EmptyRow>
-          ) : (
-            values.map((item) => (
-              <tr key={item.provider_model_route_id}>
-                <td>
-                  <strong>{item.wire_model}</strong>
-                </td>
-                <td>
-                  {configurationSource(
-                    item.inherited,
-                    item.source_layer,
-                    item.owner_scope,
-                    services,
-                  )}
-                </td>
-                <td>{item.capabilities.join(", ")}</td>
-                <td>
-                  <StatusPill tone={toneForState(item.state)}>
-                    {item.state}
-                  </StatusPill>
-                </td>
-                <td>
-                  <Revision
-                    value={item.active_revision}
-                    inherited={item.inherited}
-                  />
-                </td>
-                <td>
-                  {!writable || item.state === "retired" ? (
-                    <span className="muted-action">Read only</span>
-                  ) : item.inherited ? (
-                    <Button variant="quiet" onClick={() => void override(item)}>
-                      Override for this service
-                    </Button>
-                  ) : (
-                    <Button variant="quiet" onClick={() => void change(item)}>
-                      {item.state === "active" ? "Disable" : "Restore"}
-                    </Button>
-                  )}
-                </td>
-              </tr>
-            ))
-          )}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function ConfigurationView(props: {
-  readonly client: AdministrationClient;
-  readonly scope: ScopeSelection;
-  readonly snapshot: AdministrationSnapshot;
-  readonly services: readonly ServiceSummary[];
-  readonly models: readonly CatalogEntry[];
-  readonly catalogFailure?: string;
-  readonly catalogLoading: boolean;
-  readonly onChanged: () => Promise<void>;
-  readonly onNotice: (notice: Notice) => void;
-}) {
-  const { client, scope, snapshot, onChanged, onNotice } = props;
-  const expectedRevision = configurationRevisionForScope(snapshot, scope);
-  const eligibleModels = props.models.filter(
-    (model) =>
-      model.state === "active" &&
-      mvpRouteCapabilities.every((capability) =>
-        model.capabilities.includes(capability),
-      ),
-  );
-  const serviceConfigurationWritable =
-    scope.workspaceId === "" && snapshot.failures.state === undefined;
-  return (
-    <div className="panel-stack">
-      <PageHeading
-        eyebrow="Selected service"
-        title="What this service will use"
-        description="See the final provider and model route configuration. Inherited items are read only. Items set on this service can override inherited results."
-      />
-      <Panel className="permission-note">
-        <Icon name="key" />
-        <div>
-          <h2>Provider keys are managed globally</h2>
-          <p>
-            Use Global administration → Provider credentials to store or replace
-            secret values.
-          </p>
-        </div>
-      </Panel>
-      {!serviceConfigurationWritable ? (
-        <Panel className="permission-note">
-          <Icon name="lock" />
-          <div>
-            <h2>Provider configuration stays at service level</h2>
-            <p>
-              This workspace view shows effective provider and route state. Load
-              the service-level scope to create, disable, or restore these
-              items.
-            </p>
-          </div>
-        </Panel>
-      ) : null}
-      <Panel>
-        <PanelHeader
-          kicker="Effective result"
-          title="Provider connections"
-          description="These are the provider connections that this service can use."
-        />
-        {snapshot.failures.providers === undefined ? (
-          <ProviderTable
-            client={client}
-            scope={scope}
-            values={snapshot.providers}
-            services={props.services}
-            writable={serviceConfigurationWritable}
-            expectedRevision={expectedRevision}
-            onChanged={onChanged}
-            onNotice={onNotice}
-          />
-        ) : (
-          <ScopedReadFailure
-            title="Provider connections are not available"
-            message={snapshot.failures.providers}
-          />
-        )}
-      </Panel>
-      <Panel>
-        <PanelHeader
-          kicker="Effective result"
-          title="Model routes"
-          description="These are the models and provider routes that assignments can use."
-        />
-        {snapshot.failures.routes === undefined ? (
-          <RouteTable
-            client={client}
-            scope={scope}
-            values={snapshot.routes}
-            services={props.services}
-            writable={serviceConfigurationWritable}
-            expectedRevision={expectedRevision}
-            onChanged={onChanged}
-            onNotice={onNotice}
-          />
-        ) : (
-          <ScopedReadFailure
-            title="Model routes are not available"
-            message={snapshot.failures.routes}
-          />
-        )}
-      </Panel>
-      {serviceConfigurationWritable &&
-      snapshot.failures.providers === undefined &&
-      snapshot.failures.credentials === undefined ? (
-        <Panel>
-          <PanelHeader
-            kicker="Set on this service"
-            title="Add a provider connection"
-            description="Connect this service to one supported provider endpoint."
-          />
-          <ProviderForm
-            client={client}
-            scope={scope}
-            credentials={snapshot.credentials}
-            canBrowseCredentials={scope.mode === "global"}
-            expectedRevision={expectedRevision}
-            onChanged={onChanged}
-            onNotice={onNotice}
-          />
-        </Panel>
-      ) : null}
-      {serviceConfigurationWritable &&
-      snapshot.failures.providers === undefined &&
-      snapshot.failures.routes === undefined ? (
-        <Panel>
-          <PanelHeader
-            kicker="Set on this service"
-            title="Add a model route"
-            description="Connect a model name to one provider connection."
-          />
-          {props.catalogLoading ? (
-            <p role="status">Supported models are loading.</p>
-          ) : props.catalogFailure !== undefined ? (
-            <ScopedReadFailure
-              title="Supported models are not available"
-              message={props.catalogFailure}
-            />
-          ) : eligibleModels.length === 0 ? (
-            <p>
-              No active model supports both chat completion and streaming. Add
-              or enable a compatible model in the global catalog.
-            </p>
-          ) : (
-            <RouteForm
-              client={client}
-              scope={scope}
-              providers={snapshot.providers}
-              models={eligibleModels}
-              expectedRevision={expectedRevision}
-              onChanged={onChanged}
-              onNotice={onNotice}
-            />
-          )}
-        </Panel>
-      ) : null}
-    </div>
-  );
-}
-
-function AssignmentForm({
-  client,
-  scope,
-  routes,
-  expectedRevision,
-  onChanged,
-  onNotice,
-}: {
-  readonly client: AdministrationClient;
-  readonly scope: ScopeSelection;
-  readonly routes: readonly ProviderModelRoute[];
-  readonly expectedRevision: string | null;
-  readonly onChanged: () => Promise<void>;
-  readonly onNotice: (notice: Notice) => void;
-}) {
-  const [name, setName] = useState("general");
-  const [orderedRoutes, setOrderedRoutes] = useState<readonly string[]>([""]);
-  const [timeout, setTimeoutValue] = useState("30000");
-  const [submitting, setSubmitting] = useState(false);
-  const candidates = orderedRoutes.filter((routeId) => routeId !== "");
-  const hasDuplicate = new Set(candidates).size !== candidates.length;
-  const activeRoutes: ProviderModelRoute[] = [];
-  for (const route of routes) {
-    if (route.state === "active") activeRoutes.push(route);
-  }
-  async function submit(event: SubmitEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setSubmitting(true);
-    try {
-      const result = await client.putAssignment(scope, name, {
-        expected_revision: expectedRevision,
-        state: "active",
-        candidates: candidates.map((provider_model_route_id) => ({
-          provider_model_route_id,
-          attempt_timeout_ms: Number(timeout),
-        })),
-        required_capabilities: ["chat.complete", "chat.stream"],
-        reason: "Publish the ordered MVP fallback chain",
-      });
-      await refreshAfterCommit(
-        `Assignment published at ${revisionLabel(result.active_revision)} (${result.distribution_state}).`,
-        onChanged,
-        onNotice,
-      );
-    } catch (error) {
-      await recoverAfterMutationFailure(error, onChanged, onNotice);
-    } finally {
-      setSubmitting(false);
-    }
-  }
-  return (
-    <form
-      className="configuration-form"
-      onSubmit={(event) => {
-        void submit(event);
-      }}
-    >
-      <h3>Set the model route order</h3>
-      <p>
-        Choose the primary route first. Add fallback routes in the order that
-        Router must try them.
-      </p>
-      <div className="form-grid">
-        <label>
-          Assignment name
-          <input
-            required
-            maxLength={100}
-            value={name}
-            onChange={(event) => {
-              setName(event.target.value);
-            }}
-          />
-        </label>
-        <label>
-          Attempt timeout (ms)
-          <input
-            required
-            type="number"
-            min={100}
-            max={120000}
-            value={timeout}
-            onChange={(event) => {
-              setTimeoutValue(event.target.value);
-            }}
-          />
-        </label>
-      </div>
-      <div className="assignment-route-fields">
-        {orderedRoutes.map((routeId, index) => (
-          <div
-            className="assignment-route-field"
-            key={`route-position-${String(index)}`}
-          >
             <label>
-              {index === 0 ? "Primary route" : `Fallback ${String(index)}`}
-              <select
-                required
-                value={routeId}
-                onChange={(event) => {
-                  const nextRoutes = [...orderedRoutes];
-                  nextRoutes[index] = event.currentTarget.value;
-                  setOrderedRoutes(nextRoutes);
-                }}
-              >
-                <option value="">Choose a model route</option>
-                {activeRoutes.map((route) => (
-                  <option
-                    key={route.provider_model_route_id}
-                    value={route.provider_model_route_id}
-                  >
-                    {route.wire_model} ·{" "}
-                    {route.inherited ? "Inherited" : "Set here"}
+              Credential
+              <select name="credential">
+                <option value="">No credential</option>
+                {credentials.map((item) => (
+                  <option key={item.api_name} value={item.api_name}>
+                    {item.api_name}
                   </option>
                 ))}
               </select>
             </label>
-            {index === 0 ? null : (
-              <Button
-                type="button"
-                variant="quiet"
-                onClick={() => {
-                  setOrderedRoutes(
-                    orderedRoutes.filter(
-                      (_value, position) => position !== index,
-                    ),
-                  );
-                }}
-              >
-                Remove
-              </Button>
-            )}
-          </div>
-        ))}
-        <Button
-          type="button"
-          variant="secondary"
-          disabled={orderedRoutes.length >= routes.length}
-          onClick={() => {
-            setOrderedRoutes((current) => [...current, ""]);
-          }}
-        >
-          Add fallback
-        </Button>
-        {hasDuplicate ? <p role="alert">Choose each route only once.</p> : null}
-      </div>
-      <ol className="fallback-preview" aria-label="Ordered fallback preview">
-        {candidates.map((candidate, index) => (
-          <li key={`${candidate}-${String(index)}`}>
-            <span>{index + 1}</span>
-            <strong>
-              {routes.find(
-                (route) => route.provider_model_route_id === candidate,
-              )?.wire_model ?? "Unknown route"}
-            </strong>
-            {index === 0 ? (
-              <strong>Primary</strong>
+            <label className="checkbox-field">
+              <input defaultChecked name="enabled" type="checkbox" /> Enabled
+            </label>
+            <Button type="submit">Save provider</Button>
+          </form>
+        </Panel>
+        <Panel>
+          <PanelHeader
+            description="Replacement changes the fingerprint and update time."
+            title="Encrypted credentials"
+          />
+          <form
+            className="administration-form"
+            onSubmit={(event) => void saveCredential(event)}
+          >
+            <label>
+              API name
+              <input name="api_name" required />
+            </label>
+            <label>
+              Secret
+              <input
+                autoComplete="new-password"
+                name="secret"
+                required
+                type="password"
+              />
+            </label>
+            <Button type="submit">Store or replace</Button>
+          </form>
+          <ul className="record-list">
+            {credentials.length === 0 ? (
+              <li>No credential metadata</li>
             ) : (
-              <small>Fallback {index}</small>
-            )}
-          </li>
-        ))}
-      </ol>
-      <Button
-        type="submit"
-        disabled={submitting || candidates.length === 0 || hasDuplicate}
-      >
-        {submitting ? "Publishing…" : "Publish chain"}
-      </Button>
-    </form>
-  );
-}
-
-function AssignmentTable({
-  client,
-  scope,
-  values,
-  routes,
-  services,
-  writable,
-  expectedRevision,
-  onChanged,
-  onNotice,
-}: {
-  readonly client: AdministrationClient;
-  readonly scope: ScopeSelection;
-  readonly values: readonly Assignment[];
-  readonly routes: readonly ProviderModelRoute[];
-  readonly services: readonly ServiceSummary[];
-  readonly writable: boolean;
-  readonly expectedRevision: string | null;
-  readonly onChanged: () => Promise<void>;
-  readonly onNotice: (notice: Notice) => void;
-}) {
-  async function change(item: Assignment) {
-    try {
-      const nextState = item.state === "active" ? "disabled" : "active";
-      const result = await client.putAssignment(scope, item.name, {
-        expected_revision: item.active_revision,
-        state: nextState,
-        candidates: item.candidates,
-        required_capabilities: item.required_capabilities,
-        reason: `${nextState === "active" ? "Restore" : "Disable"} the assignment`,
-      });
-      await refreshAfterCommit(
-        `Assignment ${nextState}. Active revision ${revisionLabel(result.active_revision)}.`,
-        onChanged,
-        onNotice,
-      );
-    } catch (error) {
-      await recoverAfterMutationFailure(error, onChanged, onNotice);
-    }
-  }
-  async function override(item: Assignment) {
-    try {
-      await client.putAssignment(scope, item.name, {
-        expected_revision: expectedRevision,
-        state: item.state,
-        candidates: item.candidates,
-        required_capabilities: item.required_capabilities,
-        reason: "Override the inherited assignment for this service",
-      });
-      await refreshAfterCommit(
-        "The complete inherited fallback chain was copied to this service.",
-        onChanged,
-        onNotice,
-      );
-    } catch (error) {
-      await recoverAfterMutationFailure(error, onChanged, onNotice);
-    }
-  }
-  return (
-    <div className="table-scroll">
-      <table>
-        <thead>
-          <tr>
-            <th>Assignment or route</th>
-            <th>Complete ordered chain</th>
-            <th>State</th>
-            <th>Revision</th>
-            <th>
-              <span className="sr-only">Actions</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {values.length === 0 ? (
-            <EmptyRow columns={5}>
-              No assignment is available for this service.
-            </EmptyRow>
-          ) : (
-            values.map((item) => (
-              <tr key={item.name}>
-                <td>
-                  <strong>{item.name}</strong>
-                  <small>
-                    {configurationSource(
-                      item.inherited,
-                      item.source_layer,
-                      item.owner_scope,
-                      services,
-                    )}
-                  </small>
-                </td>
-                <td>
-                  <ol className="table-chain">
-                    {item.candidates.map((candidate, index) => (
-                      <li key={candidate.provider_model_route_id}>
-                        <span>{index + 1}</span>
-                        <div>
-                          <strong>
-                            {routes.find(
-                              (route) =>
-                                route.provider_model_route_id ===
-                                candidate.provider_model_route_id,
-                            )?.wire_model ?? "Unavailable route"}
-                          </strong>
-                          <small>
-                            {index === 0
-                              ? "Primary"
-                              : `Fallback ${String(index)}`}
-                          </small>
-                        </div>
-                      </li>
-                    ))}
-                  </ol>
-                </td>
-                <td>
-                  <StatusPill tone={toneForState(item.state)}>
-                    {item.state}
-                  </StatusPill>
-                </td>
-                <td>
-                  <Revision
-                    value={item.active_revision}
-                    inherited={item.inherited}
-                  />
-                </td>
-                <td>
-                  {!writable || item.state === "retired" ? (
-                    <span className="muted-action">Read only</span>
-                  ) : item.inherited ? (
-                    <Button variant="quiet" onClick={() => void override(item)}>
-                      Override for this service
-                    </Button>
-                  ) : (
-                    <Button variant="quiet" onClick={() => void change(item)}>
-                      {item.state === "active" ? "Disable" : "Restore"}
-                    </Button>
-                  )}
-                </td>
-              </tr>
-            ))
-          )}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function AssignmentsView(props: {
-  readonly client: AdministrationClient;
-  readonly scope: ScopeSelection;
-  readonly snapshot: AdministrationSnapshot;
-  readonly services: readonly ServiceSummary[];
-  readonly onChanged: () => Promise<void>;
-  readonly onNotice: (notice: Notice) => void;
-}) {
-  return (
-    <Panel>
-      <PanelHeader
-        kicker="Immediate publication"
-        title="Assignments and ordered fallbacks"
-        description="An assignment set on this service replaces the complete inherited fallback chain with the order that you choose."
-      />
-      {props.snapshot.failures.assignments === undefined &&
-      props.snapshot.failures.routes === undefined &&
-      props.snapshot.failures.state === undefined ? (
-        <AssignmentForm
-          client={props.client}
-          scope={props.scope}
-          routes={props.snapshot.routes}
-          expectedRevision={configurationRevisionForScope(
-            props.snapshot,
-            props.scope,
-          )}
-          onChanged={props.onChanged}
-          onNotice={props.onNotice}
-        />
-      ) : null}
-      {props.snapshot.failures.assignments === undefined ? (
-        <AssignmentTable
-          client={props.client}
-          scope={props.scope}
-          values={props.snapshot.assignments}
-          routes={props.snapshot.routes}
-          services={props.services}
-          writable={props.snapshot.failures.state === undefined}
-          expectedRevision={configurationRevisionForScope(
-            props.snapshot,
-            props.scope,
-          )}
-          onChanged={props.onChanged}
-          onNotice={props.onNotice}
-        />
-      ) : (
-        <ScopedReadFailure
-          title="Assignments are not available"
-          message={props.snapshot.failures.assignments}
-        />
-      )}
-    </Panel>
-  );
-}
-
-function requestFailureLabel(value: RequestFailureClass): string {
-  const labels: Readonly<Record<RequestFailureClass, string>> = {
-    authentication: "Authentication",
-    policy: "Policy",
-    budget: "Budget",
-    rate_limit: "Rate limit",
-    timeout: "Availability: timeout",
-    transport: "Availability: transport",
-    provider_unavailable: "Availability: provider",
-    invalid_provider_response: "Availability: invalid response",
-    incompatible_request: "Compatibility",
-    cancelled: "Cancellation",
-    uncertain_effect: "Cancellation: uncertain effect",
-    router_internal: "Router internal",
-  };
-  return labels[value];
-}
-
-function attemptDecision(value: RequestAttemptStatus["decision"]): string {
-  switch (value) {
-    case "next_candidate":
-      return "No retry. Router used the next fallback.";
-    case "stop_request":
-      return "No retry or fallback. Router stopped the logical request.";
-    case "commit_boundary":
-      return "No retry or fallback. Router stopped after a committed effect.";
-    case "cancelled":
-      return "No retry or fallback. Router stopped for cancellation.";
-    case "succeeded":
-      return "The attempt succeeded. Router did not use another fallback.";
-    case undefined:
-      return "The Router decision is pending.";
-  }
-}
-
-function RequestTime({ value }: { readonly value: string | undefined }) {
-  return value === undefined ? (
-    <>Not reported</>
-  ) : (
-    <time dateTime={value}>{value}</time>
-  );
-}
-
-function RequestTable({
-  scope,
-  values,
-  onSelect,
-}: {
-  readonly scope: ScopeSelection;
-  readonly values: readonly RequestStatus[];
-  readonly onSelect: (requestId: string) => void;
-}) {
-  return (
-    <div
-      className="table-scroll"
-      role="region"
-      aria-label="Logical requests table"
-      tabIndex={0}
-    >
-      <table>
-        <thead>
-          <tr>
-            <th>Logical request</th>
-            <th>Workspace</th>
-            <th>Assignment</th>
-            <th>State</th>
-            <th>Revision</th>
-            <th>Safe diagnostic</th>
-            <th>Action</th>
-          </tr>
-        </thead>
-        <tbody>
-          {values.length === 0 ? (
-            <EmptyRow columns={7}>
-              No request status is available for this service.
-            </EmptyRow>
-          ) : (
-            values.map((item) => (
-              <tr key={item.request_id}>
-                <td>
-                  <strong>{item.request_id}</strong>
-                </td>
-                <td>
-                  {scope.workspaceId === ""
-                    ? "Service level"
-                    : scope.workspaceId}
-                </td>
-                <td>{item.assignment ?? item.exact_route ?? "Not reported"}</td>
-                <td>
-                  <StatusPill tone={toneForState(item.state)}>
-                    {item.state}
-                  </StatusPill>
-                </td>
-                <td>{item.state_revision}</td>
-                <td>{item.error?.message ?? "No safe diagnostic"}</td>
-                <td>
+              credentials.map((item) => (
+                <li key={item.api_name}>
+                  <span>
+                    <strong>{item.api_name}</strong>
+                    <small>
+                      Fingerprint {item.fingerprint} · Updated{" "}
+                      {displayTime(item.updated_at)}
+                    </small>
+                  </span>
                   <Button
-                    data-request-id={item.request_id}
+                    onClick={() =>
+                      void client
+                        .deleteCredential(item.api_name, csrf)
+                        .then(onRefresh)
+                        .catch((error: unknown) => {
+                          onNotice("error", errorMessage(error));
+                        })
+                    }
                     variant="quiet"
-                    aria-label={`View request ${item.request_id}`}
-                    onClick={() => {
-                      onSelect(item.request_id);
-                    }}
                   >
-                    View request
+                    Delete
                   </Button>
-                </td>
-              </tr>
-            ))
-          )}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function RequestAttemptTable({
-  values,
-}: {
-  readonly values: readonly RequestAttemptStatus[];
-}) {
-  return (
-    <div
-      className="table-scroll"
-      role="region"
-      aria-label="Ordered provider attempts table"
-      tabIndex={0}
-    >
-      <table>
-        <thead>
-          <tr>
-            <th>Order</th>
-            <th>Provider-model route</th>
-            <th>State and time</th>
-            <th>Failure and scope</th>
-            <th>Router decision</th>
-            <th>Usage and price</th>
-          </tr>
-        </thead>
-        <tbody>
-          {values.length === 0 ? (
-            <EmptyRow columns={6}>
-              No provider attempt has started for this logical request.
-            </EmptyRow>
-          ) : (
-            values.map((attempt, index) => (
-              <tr key={attempt.attempt_id}>
-                <td>
-                  <strong>{String(index + 1)}</strong>
-                  <small>{attempt.attempt_id}</small>
-                </td>
-                <td>
-                  <strong>{attempt.provider_model_route_id}</strong>
-                  <small>
-                    Assignment revision {attempt.assignment_revision}
-                  </small>
-                </td>
-                <td>
-                  <StatusPill tone={toneForState(attempt.state)}>
-                    {attempt.state}
-                  </StatusPill>
-                  <small>
-                    Started <RequestTime value={attempt.started_at} />
-                  </small>
-                  <small>
-                    Ended <RequestTime value={attempt.ended_at} />
-                  </small>
-                </td>
-                <td>
-                  {attempt.error === undefined ? (
-                    "No normalized failure"
-                  ) : (
-                    <>
-                      <strong>
-                        {requestFailureLabel(attempt.error.class)}
-                      </strong>
-                      <small>Class: {attempt.error.class}</small>
-                      <small>Scope: {attempt.error.affected_scope}</small>
-                      {attempt.error.safe_provider_code === undefined ? null : (
-                        <small>
-                          Safe provider code: {attempt.error.safe_provider_code}
-                        </small>
-                      )}
-                    </>
-                  )}
-                </td>
-                <td>{attemptDecision(attempt.decision)}</td>
-                <td>
-                  {attempt.usage === undefined || attempt.usage.length === 0 ? (
-                    <span>No usage reported</span>
-                  ) : (
-                    <ul className="request-usage-list">
-                      {attempt.usage.map((usage) => (
-                        <li key={usage.unit}>
-                          {usage.quantity} {usage.unit}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                  <small>
-                    Price version {attempt.price_version ?? "Not reported"}
-                  </small>
-                </td>
-              </tr>
-            ))
-          )}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function RequestDetail({
-  scope,
-  value,
-  onBack,
-  onRefresh,
-}: {
-  readonly scope: ScopeSelection;
-  readonly value: RequestStatus;
-  readonly onBack: () => void;
-  readonly onRefresh: () => void;
-}) {
-  return (
-    <div className="request-detail">
-      <div className="request-detail-actions">
-        <Button variant="secondary" onClick={onBack}>
-          Back to requests
-        </Button>
-        <Button
-          variant="quiet"
-          icon={<Icon name="refresh" size={16} />}
-          onClick={onRefresh}
-        >
-          Refresh detail
-        </Button>
-      </div>
-      <PanelHeader
-        kicker="Content-free request detail"
-        title={value.request_id}
-        description="This detail contains safe status and accounting only. It does not contain prompts, results, tool values, raw provider-error content, credentials, or secrets."
-      />
-      <dl className="request-detail-summary">
-        <div>
-          <dt>Service</dt>
-          <dd>{scope.serviceId}</dd>
-        </div>
-        <div>
-          <dt>Workspace</dt>
-          <dd>
-            {scope.workspaceId === "" ? "Service level" : scope.workspaceId}
-          </dd>
-        </div>
-        <div>
-          <dt>Assignment or diagnostic route</dt>
-          <dd>{value.assignment ?? value.exact_route ?? "Not reported"}</dd>
-        </div>
-        <div>
-          <dt>Configuration revision</dt>
-          <dd>{value.configuration_revision}</dd>
-        </div>
-        <div>
-          <dt>State</dt>
-          <dd>
-            <StatusPill tone={toneForState(value.state)}>
-              {value.state}
-            </StatusPill>
-            <span>Revision {value.state_revision}</span>
-          </dd>
-        </div>
-        <div>
-          <dt>Admitted</dt>
-          <dd>
-            <RequestTime value={value.admitted_at} />
-          </dd>
-        </div>
-        <div>
-          <dt>Last transition</dt>
-          <dd>
-            <RequestTime value={value.last_transition_at} />
-          </dd>
-        </div>
-        <div>
-          <dt>Terminal</dt>
-          <dd>
-            <RequestTime value={value.terminal_at} />
-          </dd>
-        </div>
-        <div>
-          <dt>Partial output</dt>
-          <dd>{value.partial_output ? "Yes" : "No"}</dd>
-        </div>
-        <div>
-          <dt>Committed effect</dt>
-          <dd>{value.committed_effects ? "Yes" : "No"}</dd>
-        </div>
-      </dl>
-      {value.error === undefined || value.error === null ? null : (
-        <section
-          className="request-terminal-error"
-          aria-labelledby="terminal-error-title"
-        >
-          <h3 id="terminal-error-title">Safe terminal diagnostic</h3>
-          <p>
-            {requestFailureLabel(value.error.class)} · {value.error.class} ·
-            scope {value.error.affected_scope}
-          </p>
-          <p>{value.error.message}</p>
-          {value.error.safe_provider_code === undefined ? null : (
-            <p>Safe provider code: {value.error.safe_provider_code}</p>
-          )}
-        </section>
-      )}
-      <section
-        className="request-detail-section"
-        aria-labelledby="attempts-title"
-      >
-        <h3 id="attempts-title">Ordered provider attempts</h3>
-        <RequestAttemptTable values={value.attempts} />
-      </section>
-      <section
-        className="request-detail-section"
-        aria-labelledby="accounting-title"
-      >
-        <h3 id="accounting-title">Bounded logical accounting</h3>
-        <dl className="request-accounting-summary">
-          <div>
-            <dt>Estimated</dt>
-            <dd>
-              {value.accounting.estimated} {value.accounting.currency}
-            </dd>
-          </div>
-          <div>
-            <dt>Reserved</dt>
-            <dd>
-              {value.accounting.reserved} {value.accounting.currency}
-            </dd>
-          </div>
-          <div>
-            <dt>Used</dt>
-            <dd>
-              {value.accounting.used} {value.accounting.currency}
-            </dd>
-          </div>
-          <div>
-            <dt>Corrected total</dt>
-            <dd>
-              {value.accounting.corrected} {value.accounting.currency}
-            </dd>
-          </div>
-        </dl>
-      </section>
-    </div>
-  );
-}
-
-function requestDetailFailure(error: unknown): {
-  readonly title: string;
-  readonly message: string;
-} {
-  if (error instanceof AdministrationApiError && error.status === 404) {
-    return {
-      title: "The logical request is missing",
-      message:
-        "The request is absent, hidden from this scope, or no longer retained.",
-    };
-  }
-  if (error instanceof AdministrationApiError && error.status === 403) {
-    return {
-      title: "The logical request is forbidden",
-      message:
-        "The administrator cannot read this request in the selected service and workspace.",
-    };
-  }
-  return {
-    title: "Request detail is not available",
-    message: errorMessage(error),
-  };
-}
-
-function RequestsView({
-  client,
-  scope,
-  values,
-}: {
-  readonly client: AdministrationClient;
-  readonly scope: ScopeSelection;
-  readonly values: readonly RequestStatus[];
-}) {
-  const [selectedRequestId, setSelectedRequestId] = useState<string | null>(
-    null,
-  );
-  const [detail, setDetail] = useState<RequestStatus | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [detailFailure, setDetailFailure] = useState<{
-    readonly title: string;
-    readonly message: string;
-  } | null>(null);
-  const controller = useRef<AbortController | null>(null);
-  const focusTarget = useRef<HTMLDivElement | null>(null);
-  const returnFocusRequestId = useRef<string | null>(null);
-  const focusAfterInteraction = useRef(false);
-
-  useEffect(
-    () => () => {
-      controller.current?.abort();
-    },
-    [],
-  );
-
-  useEffect(() => {
-    if (!focusAfterInteraction.current) return;
-    if (selectedRequestId === null && returnFocusRequestId.current !== null) {
-      const actions = focusTarget.current?.querySelectorAll<HTMLButtonElement>(
-        "button[data-request-id]",
-      );
-      const selected = Array.from(actions ?? []).find(
-        (element) => element.dataset.requestId === returnFocusRequestId.current,
-      );
-      if (selected !== undefined) {
-        selected.focus();
-        return;
-      }
-    }
-    focusTarget.current?.focus();
-  }, [selectedRequestId, detail, detailFailure, detailLoading]);
-
-  const loadDetail = useCallback(
-    async (requestId: string) => {
-      focusAfterInteraction.current = true;
-      returnFocusRequestId.current = requestId;
-      controller.current?.abort();
-      const nextController = new AbortController();
-      controller.current = nextController;
-      setSelectedRequestId(requestId);
-      setDetail(null);
-      setDetailFailure(null);
-      setDetailLoading(true);
-      try {
-        const value = await client.getRequest(
-          scope,
-          requestId,
-          nextController.signal,
-        );
-        if (!nextController.signal.aborted) setDetail(value);
-      } catch (error) {
-        if (!nextController.signal.aborted) {
-          setDetailFailure(requestDetailFailure(error));
-        }
-      } finally {
-        if (!nextController.signal.aborted) setDetailLoading(false);
-      }
-    },
-    [client, scope],
-  );
-
-  function backToList() {
-    focusAfterInteraction.current = true;
-    controller.current?.abort();
-    setSelectedRequestId(null);
-    setDetail(null);
-    setDetailFailure(null);
-    setDetailLoading(false);
-  }
-
-  let content: ReactNode;
-  if (selectedRequestId === null) {
-    content = (
-      <RequestTable
-        scope={scope}
-        values={values}
-        onSelect={(id) => void loadDetail(id)}
-      />
-    );
-  } else if (detailLoading) {
-    content = (
-      <div className="request-detail-state">
-        <StatePanel kind="loading" title="Loading request detail">
-          The Router is loading safe status for {selectedRequestId}.
-        </StatePanel>
-        <Button variant="secondary" onClick={backToList}>
-          Back to requests
-        </Button>
-      </div>
-    );
-  } else if (detailFailure !== null) {
-    content = (
-      <div className="request-detail-state">
-        <StatePanel
-          kind="error"
-          title={detailFailure.title}
-          onRetry={() => void loadDetail(selectedRequestId)}
-        >
-          {detailFailure.message}
-        </StatePanel>
-        <Button variant="secondary" onClick={backToList}>
-          Back to requests
-        </Button>
-      </div>
-    );
-  } else {
-    content =
-      detail === null ? null : (
-        <RequestDetail
-          scope={scope}
-          value={detail}
-          onBack={backToList}
-          onRefresh={() => void loadDetail(selectedRequestId)}
-        />
-      );
-  }
-
-  return (
-    <div
-      ref={focusTarget}
-      className="request-view"
-      tabIndex={-1}
-      aria-busy={detailLoading}
-      aria-label={
-        selectedRequestId === null
-          ? "Logical request list"
-          : "Logical request detail"
-      }
-    >
-      {content}
-    </div>
-  );
-}
-
-function AccountingView({ summary }: { readonly summary: AccountingSummary }) {
-  return (
-    <div className="panel-stack">
-      <div className="stat-grid">
-        <StatCard
-          icon={<Icon name="list" size={17} />}
-          label="Logical requests"
-          value={String(summary.logical_requests)}
-          note="Selected seven-day range"
-          tone="blue"
-        />
-        <StatCard
-          icon={<Icon name="activity" size={17} />}
-          label="Provider attempts"
-          value={String(summary.attempts)}
-          note="Includes billable failures"
-          tone="purple"
-        />
-        <StatCard
-          icon={<Icon name="audit" size={17} />}
-          label="Bounded cost"
-          value={`${summary.cost} ${summary.currency}`}
-          note={`Corrections ${summary.corrections}`}
-          tone="lime"
-        />
+                </li>
+              ))
+            )}
+          </ul>
+        </Panel>
       </div>
       <Panel>
-        <PanelHeader
-          kicker="Bounded accounting"
-          title="Usage by unit"
-          description={`${summary.from} to ${summary.to}`}
-        />
-        <div className="table-scroll">
+        <PanelHeader title="Current provider connections" />
+        <div className="administration-table-region">
           <table>
             <thead>
               <tr>
-                <th>Usage unit</th>
-                <th>Quantity</th>
+                <th>Connection</th>
+                <th>Adapter</th>
+                <th>Endpoint</th>
+                <th>Credential</th>
+                <th>State</th>
+                <th>Action</th>
               </tr>
             </thead>
             <tbody>
-              {summary.usage.length === 0 ? (
-                <EmptyRow columns={2}>
-                  No usage is recorded in this range.
-                </EmptyRow>
+              {providers.length === 0 ? (
+                <EmptyTable columns={6} text="No providers" />
               ) : (
-                summary.usage.map((item) => (
-                  <tr key={item.unit}>
-                    <td>{item.unit}</td>
-                    <td>{item.quantity}</td>
+                providers.map((item) => (
+                  <tr key={item.api_name}>
+                    <th scope="row">
+                      <strong>{item.display_name}</strong>
+                      <small>{item.api_name}</small>
+                    </th>
+                    <td>{item.adapter}</td>
+                    <td>{item.endpoint ?? "Adapter default"}</td>
+                    <td>{item.credential_api_name ?? "None"}</td>
+                    <td>
+                      <StatusPill tone={item.enabled ? "green" : "red"}>
+                        {item.enabled ? "enabled" : "disabled"}
+                      </StatusPill>
+                    </td>
+                    <td>
+                      <Button
+                        onClick={() =>
+                          void client
+                            .deleteProvider(item.api_name, csrf)
+                            .then(onRefresh)
+                            .catch((error: unknown) => {
+                              onNotice("error", errorMessage(error));
+                            })
+                        }
+                        variant="quiet"
+                      >
+                        Delete
+                      </Button>
+                    </td>
                   </tr>
                 ))
               )}
@@ -2264,3218 +862,2523 @@ function AccountingView({ summary }: { readonly summary: AccountingSummary }) {
   );
 }
 
-interface AuditRange {
-  readonly from: string;
-  readonly to: string;
+function manualPrice(form: FormData): Price | null {
+  return parseManualPrice(
+    formText(form, "currency"),
+    formText(form, "unit_prices"),
+  );
 }
 
-interface AuditLoadState {
-  readonly items: readonly AuditEvent[];
-  readonly nextCursor: string | null;
-  readonly loading: "initial" | "next" | null;
-  readonly failure: string | null;
-}
-
-type AuditLoadAction =
-  | { readonly type: "start"; readonly append: boolean }
-  | {
-      readonly type: "success";
-      readonly append: boolean;
-      readonly items: readonly AuditEvent[];
-      readonly nextCursor: string | null;
-    }
-  | { readonly type: "failure"; readonly message: string }
-  | { readonly type: "finish" }
-  | { readonly type: "invalid_range"; readonly message: string };
-
-function reduceAuditLoad(
-  state: AuditLoadState,
-  action: AuditLoadAction,
-): AuditLoadState {
-  switch (action.type) {
-    case "start":
-      return {
-        ...state,
-        items: action.append ? state.items : [],
-        nextCursor: action.append ? state.nextCursor : null,
-        loading: action.append ? "next" : "initial",
-        failure: null,
-      };
-    case "success":
-      return {
-        ...state,
-        items: action.append ? [...state.items, ...action.items] : action.items,
-        nextCursor: action.nextCursor,
-      };
-    case "failure":
-      return { ...state, failure: action.message };
-    case "finish":
-      return { ...state, loading: null };
-    case "invalid_range":
-      return {
-        items: [],
-        nextCursor: null,
-        loading: null,
-        failure: action.message,
-      };
-  }
-}
-
-function defaultAuditRange(now = new Date()): AuditRange {
-  const to = new Date(Math.floor(now.getTime() / 60_000) * 60_000 + 60_000)
-    .toISOString()
-    .slice(0, 16);
-  const from = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
-    .toISOString()
-    .slice(0, 16);
-  return { from, to };
-}
-
-function auditRangeQuery(range: AuditRange): { from: string; to: string } {
-  const from = new Date(`${range.from}:00.000Z`);
-  const to = new Date(`${range.to}:00.000Z`);
+function modelConstraints(form: FormData) {
+  const dimensions = words(formText(form, "dimensions")).map(Number);
+  const maximumImages = formText(form, "max_input_images");
+  const maximumImageBytes = formText(form, "max_input_image_bytes");
+  const maximumDuration = formText(form, "max_output_duration_seconds");
   if (
-    Number.isNaN(from.getTime()) ||
-    Number.isNaN(to.getTime()) ||
-    from >= to
-  ) {
-    throw new Error("Select a start time that is before the end time.");
-  }
-  return { from: from.toISOString(), to: to.toISOString() };
-}
-
-function auditLabel(value: string): string {
-  return value.replaceAll(/[._:]+/g, " ");
-}
-
-function AuditEventCard({ value }: { readonly value: AuditEvent }) {
-  const details = [
-    ["Resource type", value.safe_detail?.resource_type],
-    ["Resource ID", value.safe_detail?.resource_id],
-    ["Safe error code", value.safe_detail?.safe_error_code],
-  ] as const;
-  return (
-    <li className="audit-event-card">
-      <div className="audit-event-heading">
-        <div>
-          <strong>{auditLabel(value.action)}</strong>
-          <time dateTime={value.occurred_at}>{value.occurred_at}</time>
-        </div>
-        <StatusPill tone={value.outcome === "permitted" ? "green" : "red"}>
-          {value.outcome}
-        </StatusPill>
-      </div>
-      <dl className="audit-event-detail">
-        <div>
-          <dt>Actor</dt>
-          <dd>{value.actor}</dd>
-        </div>
-        <div>
-          <dt>Authority</dt>
-          <dd>{auditLabel(value.scope.authority_class)}</dd>
-        </div>
-        <div>
-          <dt>Service</dt>
-          <dd>{value.scope.service_id ?? "Router-wide"}</dd>
-        </div>
-        <div>
-          <dt>Workspace</dt>
-          <dd>{value.scope.workspace_id ?? "Not applicable"}</dd>
-        </div>
-        <div>
-          <dt>Event ID</dt>
-          <dd>{value.event_id}</dd>
-        </div>
-        {details.map(([name, detail]) =>
-          detail === undefined ? null : (
-            <div key={name}>
-              <dt>{name}</dt>
-              <dd>{detail}</dd>
-            </div>
-          ),
-        )}
-      </dl>
-    </li>
-  );
-}
-
-function exportDateTime(value: Date): string {
-  return value.toISOString().slice(0, 16);
-}
-
-function safeExportOperation(value: ExportOperation): ExportOperation {
+    dimensions.length === 0 &&
+    maximumImages === "" &&
+    maximumImageBytes === "" &&
+    maximumDuration === ""
+  )
+    return undefined;
   return {
-    operation_id: value.operation_id,
-    state: value.state,
-    created_at: value.created_at,
-    expires_at: value.expires_at,
-    ...(value.sha256 === undefined ? {} : { sha256: value.sha256 }),
-    ...(value.safe_error === undefined ? {} : { safe_error: value.safe_error }),
+    ...(dimensions.length === 0 ? {} : { embedding_dimensions: dimensions }),
+    ...(maximumImages === ""
+      ? {}
+      : { max_input_images: Number(maximumImages) }),
+    ...(maximumImageBytes === ""
+      ? {}
+      : { max_input_image_bytes: Number(maximumImageBytes) }),
+    ...(maximumDuration === ""
+      ? {}
+      : { max_output_duration_seconds: Number(maximumDuration) }),
   };
 }
 
-interface ExportFailure {
-  readonly message: string;
-  readonly offline: boolean;
-}
-
-function exportFailure(error: unknown): ExportFailure {
-  return {
-    message: errorMessage(error),
-    offline:
-      error instanceof AdministrationApiError && error.code === "offline",
-  };
-}
-
-interface ExportDraft {
-  readonly dataClass: ExportDataClass;
-  readonly format: ExportFormat;
-  readonly serviceId: string;
-  readonly workspaceId: string;
-  readonly from: string;
-  readonly to: string;
-}
-
-interface ExportViewState {
-  readonly operation: ExportOperation | null;
-  readonly failure: ExportFailure | null;
-  readonly pending: "create" | "status" | "download" | null;
-  readonly lastChecked: string | null;
-  readonly downloadMessage: string | null;
-  readonly retryCreate: ExportCreate | null;
-}
-
-function ExportForm({
-  services,
-  pending,
-  onCreate,
-  onInvalid,
-}: {
-  readonly services: readonly ServiceSummary[];
-  readonly pending: boolean;
-  readonly onCreate: (input: ExportCreate) => void;
-  readonly onInvalid: (message: string) => void;
-}) {
-  const initialDraft = useMemo<ExportDraft>(() => {
-    const now = new Date();
-    const end = new Date(
-      Math.floor(now.getTime() / (60 * 1_000)) * 60 * 1_000 + 60 * 1_000,
-    );
-    const start = new Date(end.getTime() - 60 * 60 * 1000);
-    return {
-      dataClass: "accounting",
-      format: "jsonl",
-      serviceId: "",
-      workspaceId: "",
-      from: exportDateTime(start),
-      to: exportDateTime(end),
-    };
-  }, []);
-  const [draft, updateDraft] = useReducer(
-    (current: ExportDraft, update: Partial<ExportDraft>) => ({
-      ...current,
-      ...update,
-    }),
-    initialDraft,
-  );
-
-  function submit(event: SubmitEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const start = new Date(`${draft.from}Z`);
-    const end = new Date(`${draft.to}Z`);
-    if (
-      Number.isNaN(start.getTime()) ||
-      Number.isNaN(end.getTime()) ||
-      end <= start ||
-      end.getTime() - start.getTime() > 24 * 60 * 60 * 1000
-    ) {
-      onInvalid("Select an ordered UTC range of no more than one day.");
-      return;
-    }
-    if (draft.workspaceId.trim() !== "" && draft.serviceId === "") {
-      onInvalid("Select a service before you enter a workspace identity.");
-      return;
-    }
-    onCreate({
-      dataClass: draft.dataClass,
-      serviceId: draft.serviceId === "" ? null : draft.serviceId,
-      workspaceId:
-        draft.workspaceId.trim() === "" ? null : draft.workspaceId.trim(),
-      from: start.toISOString(),
-      to: end.toISOString(),
-      format: draft.format,
-      idempotencyKey: newLogicalRequestId(),
-    });
-  }
-
+function ConstraintFields() {
   return (
-    <Panel>
-      <PanelHeader
-        kicker="Exact scope"
-        title="Create an export"
-        description="Times use UTC. The maximum range is one day. A service and workspace are optional."
-      />
-      <form className="export-form" onSubmit={submit}>
-        <label>
-          <span>Data class</span>
-          <select
-            value={draft.dataClass}
-            onChange={(event) => {
-              updateDraft({ dataClass: event.target.value as ExportDataClass });
-            }}
-          >
-            <option value="accounting">Accounting</option>
-            <option value="audit">Audit</option>
-            <option value="configuration">Configuration</option>
-          </select>
-        </label>
-        <label>
-          <span>Format</span>
-          <select
-            value={draft.format}
-            onChange={(event) => {
-              updateDraft({ format: event.target.value as ExportFormat });
-            }}
-          >
-            <option value="jsonl">JSON Lines</option>
-            <option value="csv">CSV</option>
-          </select>
-        </label>
-        <label>
-          <span>Service (optional)</span>
-          <select
-            value={draft.serviceId}
-            onChange={(event) => {
-              updateDraft({
-                serviceId: event.target.value,
-                ...(event.target.value === "" ? { workspaceId: "" } : {}),
-              });
-            }}
-          >
-            <option value="">All permitted Router data</option>
-            {services.map((service) => (
-              <option key={service.service_id} value={service.service_id}>
-                {service.display_name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <span>Workspace identity (optional)</span>
-          <input
-            value={draft.workspaceId}
-            disabled={draft.serviceId === ""}
-            maxLength={200}
-            onChange={(event) => {
-              updateDraft({ workspaceId: event.target.value });
-            }}
-          />
-        </label>
-        <label>
-          <span>From (UTC)</span>
-          <input
-            type="datetime-local"
-            value={draft.from}
-            onChange={(event) => {
-              updateDraft({ from: event.target.value });
-            }}
-            required
-          />
-        </label>
-        <label>
-          <span>To (UTC)</span>
-          <input
-            type="datetime-local"
-            value={draft.to}
-            onChange={(event) => {
-              updateDraft({ to: event.target.value });
-            }}
-            required
-          />
-        </label>
-        <div className="export-actions">
-          <Button type="submit" disabled={pending}>
-            {pending ? "Creating export…" : "Create export"}
-          </Button>
-        </div>
-      </form>
-    </Panel>
-  );
-}
-
-export function ExportView({
-  client,
-  services,
-}: {
-  readonly client: AdministrationClient;
-  readonly services: readonly ServiceSummary[];
-}) {
-  const [state, updateState] = useReducer(
-    (current: ExportViewState, update: Partial<ExportViewState>) => ({
-      ...current,
-      ...update,
-    }),
-    {
-      operation: null,
-      failure: null,
-      pending: null,
-      lastChecked: null,
-      downloadMessage: null,
-      retryCreate: null,
-    },
-  );
-  const {
-    operation,
-    failure,
-    pending,
-    lastChecked,
-    downloadMessage,
-    retryCreate,
-  } = state;
-  const downloadName = useRef("llmrouter-export.bin");
-  const results = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (
-      operation === null ||
-      (operation.state !== "queued" && operation.state !== "running")
-    )
-      return;
-    let active = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const controller = new AbortController();
-    const poll = async () => {
-      updateState({ pending: "status" });
-      try {
-        const next = await client.getExport(
-          operation.operation_id,
-          controller.signal,
-        );
-        if (active) {
-          updateState({
-            operation: safeExportOperation(next),
-            failure: null,
-            lastChecked: new Date().toISOString(),
-          });
-          if (next.state === "queued" || next.state === "running") {
-            timer = setTimeout(() => void poll(), 1_000);
-          }
-        }
-      } catch (error) {
-        if (
-          !active ||
-          (error instanceof DOMException && error.name === "AbortError")
-        )
-          return;
-        updateState({ failure: exportFailure(error) });
-      } finally {
-        if (active) updateState({ pending: null });
-      }
-    };
-    timer = setTimeout(() => void poll(), 1_000);
-    return () => {
-      active = false;
-      controller.abort();
-      if (timer !== undefined) clearTimeout(timer);
-    };
-  }, [client, operation]);
-
-  async function create(input: ExportCreate) {
-    updateState({
-      retryCreate: input,
-      pending: "create",
-      failure: null,
-      downloadMessage: null,
-    });
-    try {
-      const next = await client.createExport(input);
-      downloadName.current = `llmrouter-${input.dataClass}-${next.operation_id}.${input.format}`;
-      updateState({
-        operation: safeExportOperation(next),
-        lastChecked: new Date().toISOString(),
-        retryCreate: null,
-      });
-      queueMicrotask(() => results.current?.focus());
-    } catch (error) {
-      updateState({ failure: exportFailure(error) });
-      queueMicrotask(() => results.current?.focus());
-    } finally {
-      updateState({ pending: null });
-    }
-  }
-
-  async function refresh() {
-    if (operation === null) return;
-    updateState({ pending: "status", failure: null });
-    try {
-      const next = await client.getExport(operation.operation_id);
-      updateState({
-        operation: safeExportOperation(next),
-        lastChecked: new Date().toISOString(),
-      });
-    } catch (error) {
-      updateState({ failure: exportFailure(error) });
-    } finally {
-      updateState({ pending: null });
-      queueMicrotask(() => results.current?.focus());
-    }
-  }
-
-  async function download() {
-    if (operation === null) return;
-    updateState({ pending: "download", failure: null, downloadMessage: null });
-    try {
-      const current = await client.getExport(operation.operation_id);
-      updateState({
-        operation: safeExportOperation(current),
-        lastChecked: new Date().toISOString(),
-      });
-      const token = current.redemption_token;
-      const path = current.redemption_path;
-      if (
-        current.state !== "completed" ||
-        token === undefined ||
-        path === undefined
-      ) {
-        throw new Error("The export is not ready for protected download.");
-      }
-      const blob = await client.redeemExport(current.operation_id, path, token);
-      const objectUrl = URL.createObjectURL(blob);
-      try {
-        const anchor = document.createElement("a");
-        anchor.href = objectUrl;
-        anchor.download = downloadName.current;
-        anchor.click();
-      } finally {
-        URL.revokeObjectURL(objectUrl);
-      }
-      updateState({
-        downloadMessage:
-          blob.size === 0
-            ? "The protected export completed with no records."
-            : "The protected download started. Its one-use access is now spent.",
-      });
-    } catch (error) {
-      updateState({ failure: exportFailure(error) });
-    } finally {
-      updateState({ pending: null });
-      queueMicrotask(() => results.current?.focus());
-    }
-  }
-
-  return (
-    <div className="panel-stack export-view">
-      <PageHeading
-        eyebrow="Global administration"
-        title="Protected exports"
-        description="Create a bounded accounting, audit, or safe configuration export. Exports never include captured content, prompts, outputs, tool data, credentials, tokens, or provider bodies."
-      />
-      <ExportForm
-        services={services}
-        pending={pending !== null}
-        onCreate={(input) => {
-          void create(input);
-        }}
-        onInvalid={(message) => {
-          updateState({ failure: { message, offline: false } });
-          queueMicrotask(() => results.current?.focus());
-        }}
-      />
-      <div
-        className="export-result"
-        ref={results}
-        tabIndex={-1}
-        aria-live="polite"
-      >
-        {failure !== null ? (
-          <StatePanel
-            kind="error"
-            title={
-              failure.offline
-                ? "The export status is offline"
-                : "The export operation did not complete"
-            }
-            {...(retryCreate === null && operation === null
-              ? {}
-              : {
-                  onRetry:
-                    retryCreate === null
-                      ? () => {
-                          void refresh();
-                        }
-                      : () => {
-                          void create(retryCreate);
-                        },
-                })}
-          >
-            {failure.message}
-            {retryCreate === null && operation === null
-              ? null
-              : " Use the retry action to keep the current export identity and idempotency key."}
-          </StatePanel>
-        ) : operation === null ? (
-          <StatePanel kind="empty" title="No export operation">
-            Select a class, exact scope, range, and format to create one
-            protected export.
-          </StatePanel>
-        ) : (
-          <Panel>
-            <PanelHeader
-              kicker="Protected operation"
-              title={`Export is ${operation.state}`}
-              description={`Operation ${operation.operation_id}`}
-            />
-            <dl className="export-details">
-              <div>
-                <dt>Created</dt>
-                <dd>{operation.created_at}</dd>
-              </div>
-              <div>
-                <dt>Expires</dt>
-                <dd>{operation.expires_at}</dd>
-              </div>
-              <div>
-                <dt>Last checked</dt>
-                <dd>{lastChecked ?? "Status is stale"}</dd>
-              </div>
-              {operation.sha256 === undefined ? null : (
-                <div>
-                  <dt>SHA-256</dt>
-                  <dd>{operation.sha256}</dd>
-                </div>
-              )}
-            </dl>
-            {operation.safe_error === undefined ? null : (
-              <p>{operation.safe_error}</p>
-            )}
-            {downloadMessage === null ? null : (
-              <p className="export-success">{downloadMessage}</p>
-            )}
-            <div className="export-actions">
-              <Button
-                variant="secondary"
-                disabled={pending !== null}
-                onClick={() => void refresh()}
-              >
-                {pending === "status" ? "Refreshing…" : "Refresh status"}
-              </Button>
-              {operation.state === "completed" ? (
-                <Button
-                  disabled={pending !== null}
-                  onClick={() => void download()}
-                >
-                  {pending === "download"
-                    ? "Preparing download…"
-                    : "Download once"}
-                </Button>
-              ) : null}
-            </div>
-          </Panel>
-        )}
-      </div>
-    </div>
-  );
-}
-
-export function AuditView({
-  client,
-}: {
-  readonly client: AdministrationClient;
-}) {
-  const initialRange = useMemo(() => defaultAuditRange(), []);
-  const [draft, updateDraft] = useReducer(
-    (state: AuditRange, update: Partial<AuditRange>) => ({
-      ...state,
-      ...update,
-    }),
-    initialRange,
-  );
-  const [auditState, dispatchAudit] = useReducer(reduceAuditLoad, {
-    items: [],
-    nextCursor: null,
-    loading: "initial",
-    failure: null,
-  });
-  const { failure, items, loading, nextCursor } = auditState;
-  const controller = useRef<AbortController | null>(null);
-  const range = useRef<AuditRange>(initialRange);
-  const failedCursor = useRef<string | undefined>(undefined);
-  const results = useRef<HTMLDivElement | null>(null);
-  const focusAfterLoad = useRef(false);
-
-  const load = useCallback(
-    async (selectedRange: AuditRange, cursor?: string) => {
-      controller.current?.abort();
-      const nextController = new AbortController();
-      controller.current = nextController;
-      const append = cursor !== undefined;
-      dispatchAudit({ type: "start", append });
-      failedCursor.current = undefined;
-      try {
-        const query = auditRangeQuery(selectedRange);
-        const page = await client.listAuditEvents(
-          { ...query, ...(cursor === undefined ? {} : { cursor }) },
-          nextController.signal,
-        );
-        if (!nextController.signal.aborted) {
-          dispatchAudit({
-            type: "success",
-            append,
-            items: page.items,
-            nextCursor: page.next_cursor,
-          });
-        }
-      } catch (error) {
-        if (!nextController.signal.aborted) {
-          failedCursor.current = cursor;
-          dispatchAudit({
-            type: "failure",
-            message:
-              error instanceof Error &&
-              !(error instanceof AdministrationApiError)
-                ? error.message
-                : errorMessage(error),
-          });
-        }
-      } finally {
-        if (!nextController.signal.aborted) dispatchAudit({ type: "finish" });
-      }
-    },
-    [client],
-  );
-
-  useEffect(() => {
-    const cancelLoad = scheduleAdministrationSessionInspection(() => {
-      void load(range.current);
-    });
-    return () => {
-      cancelLoad();
-      controller.current?.abort();
-    };
-  }, [load]);
-
-  useEffect(() => {
-    if (!focusAfterLoad.current || loading !== null) return;
-    results.current?.focus();
-    focusAfterLoad.current = false;
-  }, [failure, items, loading]);
-
-  function submit(event: SubmitEvent<HTMLFormElement>) {
-    event.preventDefault();
-    focusAfterLoad.current = true;
-    try {
-      auditRangeQuery(draft);
-      range.current = draft;
-      void load(range.current);
-    } catch (error) {
-      controller.current?.abort();
-      controller.current = null;
-      failedCursor.current = undefined;
-      dispatchAudit({
-        type: "invalid_range",
-        message:
-          error instanceof Error ? error.message : "The time range is invalid.",
-      });
-    }
-  }
-
-  let state: ReactNode;
-  if (loading === "initial") {
-    state = (
-      <StatePanel kind="loading" title="Loading audit events">
-        The Router is loading one bounded content-free audit page.
-      </StatePanel>
-    );
-  } else if (failure !== null) {
-    state = (
-      <StatePanel
-        kind="error"
-        title="Audit events are not available"
-        onRetry={() => {
-          focusAfterLoad.current = true;
-          void load(range.current, failedCursor.current);
-        }}
-      >
-        {failure}
-      </StatePanel>
-    );
-  } else if (items.length === 0) {
-    state = (
-      <StatePanel kind="empty" title="No audit events in this range">
-        Change the UTC time range or refresh this page.
-      </StatePanel>
-    );
-  } else {
-    state = (
-      <>
-        <ol className="audit-event-list">
-          {items.map((item) => (
-            <AuditEventCard key={item.event_id} value={item} />
-          ))}
-        </ol>
-        {nextCursor === null ? (
-          <p className="audit-page-end">
-            The complete selected range is shown.
-          </p>
-        ) : (
-          <div className="audit-page-actions">
-            <Button
-              variant="secondary"
-              disabled={loading === "next"}
-              onClick={() => {
-                focusAfterLoad.current = true;
-                void load(range.current, nextCursor);
-              }}
-            >
-              {loading === "next" ? "Loading next page…" : "Load next page"}
-            </Button>
-          </div>
-        )}
-      </>
-    );
-  }
-
-  return (
-    <div className="panel-stack">
-      <PageHeading
-        eyebrow="Global administration"
-        title="Audit events"
-        description="Review safe actions, authority, scope, and outcomes. This page does not return prompts, outputs, tool data, credentials, tokens, cookies, or provider error bodies."
-      />
-      <Panel>
-        <PanelHeader
-          kicker="Bounded discovery"
-          title="Security and administration activity"
-          description="Times use UTC. Each page contains at most 100 events in newest-first order."
+    <>
+      <label>
+        Embedding dimensions
+        <input name="dimensions" placeholder="1536, 3072" />
+      </label>
+      <label>
+        Maximum input images
+        <input max={8} min={1} name="max_input_images" type="number" />
+      </label>
+      <label>
+        Maximum input image bytes
+        <input
+          max={20_971_520}
+          min={1}
+          name="max_input_image_bytes"
+          type="number"
         />
-        <form className="audit-filter" onSubmit={submit}>
-          <label>
-            <span>From (UTC)</span>
-            <input
-              type="datetime-local"
-              value={draft.from}
-              onChange={(event) => {
-                updateDraft({ from: event.currentTarget.value });
-              }}
-              required
-            />
-          </label>
-          <label>
-            <span>To (UTC)</span>
-            <input
-              type="datetime-local"
-              value={draft.to}
-              onChange={(event) => {
-                updateDraft({ to: event.currentTarget.value });
-              }}
-              required
-            />
-          </label>
-          <Button type="submit">Apply range</Button>
-        </form>
-        <div
-          ref={results}
-          className="audit-results"
-          tabIndex={-1}
-          aria-label="Audit event results"
-          aria-live="polite"
-          aria-busy={loading !== null}
-        >
-          {state}
-        </div>
-      </Panel>
-    </div>
-  );
-}
-
-function decimalLessThan(left: string, right: string): boolean {
-  const [leftWhole = "0", leftFraction = ""] = left.split(".");
-  const [rightWhole = "0", rightFraction = ""] = right.split(".");
-  const leftNormalized = leftWhole.replace(/^0+(?=\d)/, "");
-  const rightNormalized = rightWhole.replace(/^0+(?=\d)/, "");
-  if (leftNormalized.length !== rightNormalized.length) {
-    return leftNormalized.length < rightNormalized.length;
-  }
-  if (leftNormalized !== rightNormalized)
-    return leftNormalized < rightNormalized;
-  const width = Math.max(leftFraction.length, rightFraction.length);
-  return leftFraction.padEnd(width, "0") < rightFraction.padEnd(width, "0");
-}
-
-function moneyText(value: {
-  readonly amount: string;
-  readonly currency: string;
-}) {
-  return `${value.amount} ${value.currency}`;
-}
-
-interface BudgetFormState {
-  readonly hardLimit: string;
-  readonly currency: string;
-  readonly warning: string;
-  readonly resetPeriod: "none" | "daily" | "monthly";
-}
-
-function BudgetView({
-  client,
-  scope,
-  summary,
-  onChanged,
-  onNotice,
-}: {
-  readonly client: AdministrationClient;
-  readonly scope: ScopeSelection;
-  readonly summary: BudgetSummary | null;
-  readonly onChanged: () => Promise<void>;
-  readonly onNotice: (notice: Notice) => void;
-}) {
-  const [form, updateForm] = useReducer(
-    (state: BudgetFormState, update: Partial<BudgetFormState>) => ({
-      ...state,
-      ...update,
-    }),
-    {
-      hardLimit: summary?.limit.amount ?? "",
-      currency: summary?.limit.currency ?? "USD",
-      warning: summary?.warning_threshold?.amount ?? "",
-      resetPeriod: summary?.reset_period ?? "none",
-    },
-  );
-  const [submitting, setSubmitting] = useState(false);
-  const valid =
-    nonNegativeDecimal.test(form.hardLimit) &&
-    /^[A-Z]{3}$/.test(form.currency) &&
-    (form.warning === "" ||
-      (nonNegativeDecimal.test(form.warning) &&
-        !decimalLessThan(form.hardLimit, form.warning)));
-  async function submit(event: SubmitEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!valid) return;
-    setSubmitting(true);
-    try {
-      const result = await client.putBudget(scope, {
-        hardLimit: form.hardLimit,
-        currency: form.currency,
-        warningThreshold: form.warning === "" ? null : form.warning,
-        resetPeriod: form.resetPeriod,
-        expectedRevision: summary?.revision ?? "0",
-      });
-      await refreshAfterCommit(
-        `Budget revision ${revisionLabel(result.revision)} is active.`,
-        onChanged,
-        onNotice,
-      );
-    } catch (error) {
-      await recoverAfterMutationFailure(error, onChanged, onNotice);
-    } finally {
-      setSubmitting(false);
-    }
-  }
-  const values =
-    summary === null
-      ? []
-      : [
-          ["Hard limit", moneyText(summary.limit)],
-          [
-            "Warning threshold",
-            summary.warning_threshold === null
-              ? "Not configured"
-              : moneyText(summary.warning_threshold),
-          ],
-          ["Reserved", moneyText(summary.reserved)],
-          ["Used", moneyText(summary.used)],
-          ["Corrected", moneyText(summary.corrected)],
-          ["Remaining", moneyText(summary.remaining)],
-          ["Enforcement", summary.enforcement_state],
-          ["Reset period", summary.reset_period],
-          ["Revision", summary.revision],
-        ];
-  return (
-    <div className="panel-stack">
-      <PageHeading
-        eyebrow={
-          scope.workspaceId === "" ? "Selected service" : "Selected workspace"
-        }
-        title="Budget"
-        description="Set one hard limit in one exact currency. Router does not convert currencies."
-      />
-      <Panel>
-        <PanelHeader
-          kicker="Current enforcement"
-          title={
-            summary === null
-              ? "No limit is configured at this scope"
-              : "Budget summary"
-          }
-          description={
-            summary === null
-              ? "A parent, global, or host ceiling can still enforce a limit. Create a local limit for this exact scope."
-              : "Reservations, use, corrections, and remaining cost use the current budget revision."
-          }
+      </label>
+      <label>
+        Maximum output duration in seconds
+        <input
+          max={86_400}
+          min={1}
+          name="max_output_duration_seconds"
+          type="number"
         />
-        {summary === null ? null : (
-          <dl className="budget-summary" data-state={summary.enforcement_state}>
-            {values.map(([label, value]) => (
-              <div key={label}>
-                <dt>{label}</dt>
-                <dd>{value}</dd>
-              </div>
-            ))}
-          </dl>
-        )}
-      </Panel>
-      <Panel>
-        <PanelHeader
-          kicker="Exact selected scope"
-          title={summary === null ? "Create budget" : "Replace budget limit"}
-          description="This change uses the current revision and takes effect immediately."
-        />
-        <form
-          className="configuration-form"
-          onSubmit={(event) => void submit(event)}
-        >
-          <div className="form-grid form-grid-three">
-            <label>
-              Hard limit
-              <input
-                required
-                inputMode="decimal"
-                pattern="(0|[1-9][0-9]*)(\.[0-9]+)?"
-                value={form.hardLimit}
-                onChange={(event) => {
-                  updateForm({ hardLimit: event.currentTarget.value });
-                }}
-              />
-            </label>
-            <label>
-              Currency
-              <input
-                required
-                pattern="[A-Z]{3}"
-                maxLength={3}
-                disabled={summary !== null}
-                value={form.currency}
-                onChange={(event) => {
-                  updateForm({
-                    currency: event.currentTarget.value.toUpperCase(),
-                  });
-                }}
-              />
-              {summary === null ? null : (
-                <small>
-                  Currency cannot change after this budget is created.
-                </small>
-              )}
-            </label>
-            <label>
-              Warning threshold (optional)
-              <input
-                inputMode="decimal"
-                pattern="(0|[1-9][0-9]*)(\.[0-9]+)?"
-                value={form.warning}
-                onChange={(event) => {
-                  updateForm({ warning: event.currentTarget.value });
-                }}
-              />
-            </label>
-            <label>
-              Reset period
-              <select
-                value={form.resetPeriod}
-                onChange={(event) => {
-                  updateForm({
-                    resetPeriod: event.currentTarget.value as
-                      "none" | "daily" | "monthly",
-                  });
-                }}
-              >
-                <option value="none">No reset</option>
-                <option value="daily">Daily</option>
-                <option value="monthly">Monthly</option>
-              </select>
-            </label>
-          </div>
-          {form.warning !== "" &&
-          decimalLessThan(form.hardLimit, form.warning) ? (
-            <p role="alert">
-              The warning threshold must not exceed the hard limit.
-            </p>
-          ) : null}
-          <Button type="submit" disabled={!valid || submitting}>
-            {submitting ? "Saving…" : "Save budget"}
-          </Button>
-        </form>
-      </Panel>
-    </div>
+      </label>
+    </>
   );
 }
 
-export function StaleRevisionBanner() {
-  return (
-    <div className="stale-banner" role="alert">
-      <Icon name="warning" />
-      <span>
-        <strong>This configuration changed.</strong> Refresh the service, review
-        the active revision, and submit an intentional new change.
-      </span>
-    </div>
-  );
-}
-
-function GlobalOverview({
-  services,
-  onOpenServices,
-  onSelectService,
-}: {
-  readonly services: readonly ServiceSummary[];
-  readonly onOpenServices: () => void;
-  readonly onSelectService: (serviceId: string) => void;
-}) {
-  const activeServices = services.filter(
-    (service) => service.state === "active",
-  );
-  const parentedServices = services.filter(
-    (service) => service.parent_service_id != null,
-  );
-  return (
-    <div className="overview-stack">
-      <PageHeading
-        eyebrow="Global administration"
-        title="Run LLM Router"
-        description="Create services, control what they inherit, and then configure each selected service."
-        actions={
-          <Button
-            icon={<Icon name="plus" size={16} />}
-            onClick={onOpenServices}
-          >
-            Create or manage services
-          </Button>
-        }
-      />
-      <section className="overview-stats" aria-label="Global Router summary">
-        <StatCard
-          icon={<Icon name="server" />}
-          label="Services"
-          value={services.length}
-          note="All retained services"
-          tone="blue"
-        />
-        <StatCard
-          icon={<Icon name="health" />}
-          label="Active services"
-          value={activeServices.length}
-          note="Can accept new work"
-          tone="lime"
-        />
-        <StatCard
-          icon={<Icon name="layers" />}
-          label="Inherited services"
-          value={parentedServices.length}
-          note="Use a parent configuration chain"
-          tone="purple"
-        />
-      </section>
-      <Panel>
-        <PanelHeader
-          kicker="Start here"
-          title={
-            services.length === 0
-              ? "Create your first service"
-              : "Choose what you want to do"
-          }
-          description={
-            services.length === 0
-              ? "A service represents one application that uses Router, such as Xbot or Ontology."
-              : "Global actions do not depend on the selected service. Select a service only when you want to configure or inspect it."
-          }
-        />
-        <div className="global-action-grid">
-          <button type="button" onClick={onOpenServices}>
-            <Icon name="layers" size={20} />
-            <span>
-              <strong>Services and inheritance</strong>
-              <small>
-                Create, rename, organize, disable, restore, or retire services.
-              </small>
-            </span>
-            <Icon name="chevron" size={16} />
-          </button>
-          {activeServices.slice(0, 3).map((service) => (
-            <button
-              type="button"
-              key={service.service_id}
-              onClick={() => {
-                onSelectService(service.service_id);
-              }}
-            >
-              <Icon name="server" size={20} />
-              <span>
-                <strong>Configure {service.display_name}</strong>
-                <small>
-                  Open its setup and effective inherited configuration.
-                </small>
-              </span>
-              <Icon name="chevron" size={16} />
-            </button>
-          ))}
-        </div>
-      </Panel>
-    </div>
-  );
-}
-
-function ServiceSetup({
-  snapshot,
-  bootstrapState,
-  serviceName,
-  onOpen,
-}: {
-  readonly snapshot: AdministrationSnapshot;
-  readonly bootstrapState: ServiceSummary["bootstrap_state"];
-  readonly serviceName: string;
-  readonly onOpen: (section: Section) => void;
-}) {
-  const checks = [
-    {
-      label: "Service access key ready",
-      complete: bootstrapState === "ready",
-      section: "setup" as const,
-    },
-    {
-      label: "Provider connection ready",
-      complete: snapshot.providers.some((item) => item.state === "active"),
-      section: "configuration" as const,
-    },
-    {
-      label: "Model route ready",
-      complete: snapshot.routes.some((item) => item.state === "active"),
-      section: "configuration" as const,
-    },
-    {
-      label: "Assignment ready",
-      complete: snapshot.assignments.some(
-        (item) => item.state === "active" && item.candidates.length > 0,
-      ),
-      section: "assignments" as const,
-    },
-  ];
-  const complete = checks.filter((check) => check.complete).length;
-  return (
-    <div className="overview-stack">
-      <PageHeading
-        eyebrow={`Selected service · ${serviceName}`}
-        title="Setup"
-        description={`${String(complete)} of ${String(checks.length)} required steps are complete. Finish these steps before the service sends model requests.`}
-      />
-      <Panel>
-        <PanelHeader
-          kicker="Required setup"
-          title={`Get ${serviceName} ready`}
-          description="Router checks each result. You do not need to work with internal IDs."
-        />
-        <div className="service-setup-checklist">
-          {checks.map((check, index) => (
-            <div key={check.label} data-complete={check.complete}>
-              <span>
-                {check.complete ? <Icon name="health" size={18} /> : index + 1}
-              </span>
-              <div>
-                <strong>{check.label}</strong>
-                <small>{check.complete ? "Complete" : "Needs attention"}</small>
-              </div>
-              {check.complete ? (
-                <StatusPill tone="green">Ready</StatusPill>
-              ) : (
-                <Button
-                  variant="secondary"
-                  onClick={() => {
-                    onOpen(check.section);
-                  }}
-                >
-                  Set up now
-                </Button>
-              )}
-            </div>
-          ))}
-        </div>
-      </Panel>
-      <Panel>
-        <PanelHeader
-          kicker="Inheritance"
-          title="What this service will use"
-          description="Effective configuration includes eligible parent items. Router labels inherited items and keeps parent records read only here."
-          actions={
-            <Button
-              variant="secondary"
-              onClick={() => {
-                onOpen("configuration");
-              }}
-            >
-              View effective configuration
-            </Button>
-          }
-        />
-      </Panel>
-    </div>
-  );
-}
-
-function AdministratorMobileNavigation({
-  section,
-  selectedService,
-  onOpen,
-}: {
-  readonly section: Section;
-  readonly selectedService: ServiceSummary | undefined;
-  readonly onOpen: (section: Section) => void;
-}) {
-  const serviceSectionActive = serviceSections.some(
-    (item) => item.id === section,
-  );
-  const visibleSections = serviceSectionActive
-    ? serviceSections
-    : globalSections;
-  const switchItem =
-    selectedService === undefined
-      ? []
-      : [
-          serviceSectionActive
-            ? {
-                id: "open-global",
-                label: "Open global tasks",
-                icon: <Icon name="grid" size={18} />,
-                active: false,
-              }
-            : {
-                id: "open-service",
-                label: `Open ${selectedService.display_name} tasks`,
-                icon: <Icon name="server" size={18} />,
-                active: false,
-              },
-        ];
-  return (
-    <MobileNavigation
-      aria-label={
-        serviceSectionActive
-          ? `${selectedService?.display_name ?? "Selected service"} tasks`
-          : "Global administrator tasks"
-      }
-      items={[
-        ...switchItem,
-        ...visibleSections.map((item) => ({
-          id: item.id,
-          label: item.label,
-          icon: <Icon name={item.icon} size={18} />,
-          active: section === item.id,
-        })),
-      ]}
-      onSelect={(id) => {
-        if (id === "open-global") onOpen("overview");
-        else if (id === "open-service") onOpen("configuration");
-        else onOpen(id as Section);
-      }}
-    />
-  );
-}
-
-function MobileServiceSelector({
-  scope,
-  services,
-  onSelect,
-}: {
-  readonly scope: ScopeSelection;
-  readonly services: readonly ServiceSummary[];
-  readonly onSelect: (serviceId: string) => void;
-}) {
-  return (
-    <label className="mobile-service-selector">
-      <span>Service to manage</span>
-      <select
-        value={scope.serviceId}
-        onChange={(event) => {
-          onSelect(event.currentTarget.value);
-        }}
-      >
-        <option value="">No service selected</option>
-        {services.map((service) => (
-          <option key={service.service_id} value={service.service_id}>
-            {service.display_name} · {service.state}
-          </option>
-        ))}
-      </select>
-      <small>Global tasks stay available for all services.</small>
-    </label>
-  );
-}
-
-function DesktopServiceSelector({
-  scope,
-  services,
-  selectedService,
-  onSelect,
-}: {
-  readonly scope: ScopeSelection;
-  readonly services: readonly ServiceSummary[];
-  readonly selectedService: ServiceSummary | undefined;
-  readonly onSelect: (serviceId: string) => void;
-}) {
-  return (
-    <label className="service-selector">
-      <span>Service to manage</span>
-      <select
-        aria-label="Service to manage"
-        value={scope.serviceId}
-        onChange={(event) => {
-          onSelect(event.currentTarget.value);
-        }}
-      >
-        <option value="">No service selected</option>
-        {services.map((service) => (
-          <option key={service.service_id} value={service.service_id}>
-            {service.display_name} · {service.state}
-          </option>
-        ))}
-      </select>
-      <small>
-        {selectedService === undefined
-          ? "Global tasks are available."
-          : "Service tasks apply to this service."}
-      </small>
-    </label>
-  );
-}
-
-function AdministratorSidebarFooter() {
-  return (
-    <div className="sidebar-help">
-      <Icon name="shield" size={16} />
-      <span>
-        <strong>Global administrator</strong>
-        <small>All Router services</small>
-      </span>
-    </div>
-  );
-}
-
-function SelectedServiceState({
-  failure,
-  loading,
-  snapshot,
-  onReload,
-}: {
-  readonly failure: string | null | undefined;
-  readonly loading: boolean | undefined;
-  readonly snapshot: AdministrationSnapshot | null;
-  readonly onReload: () => Promise<void>;
-}) {
-  if (loading) {
-    return (
-      <StateMessage kind="loading">
-        The selected service is loading.
-      </StateMessage>
-    );
-  }
-  if (failure != null) {
-    return (
-      <StateMessage kind="error" onRetry={() => void onReload()}>
-        {failure}
-      </StateMessage>
-    );
-  }
-  return snapshot === null ? (
-    <StateMessage kind="empty">Select a service to use this task.</StateMessage>
-  ) : null;
-}
-
-function GlobalCredentialsView({
-  client,
-  credentials,
-  failure,
-  onChanged,
-  onNotice,
-}: {
-  readonly client: AdministrationClient;
-  readonly credentials: readonly Credential[];
-  readonly failure?: string;
-  readonly onChanged: () => Promise<void>;
-  readonly onNotice: (notice: Notice) => void;
-}) {
-  return (
-    <div className="panel-stack">
-      <PageHeading
-        eyebrow="Global administration"
-        title="Provider credentials"
-        description="Store provider secrets once, then let eligible service configurations reference them without showing the secret value."
-      />
-      <Panel>
-        <PanelHeader
-          kicker="Global secret custody"
-          title="Stored provider credentials"
-          description="Secret values never return to this application."
-        />
-        {failure === undefined ? (
-          <CredentialForm
-            client={client}
-            ownerScope="global"
-            onChanged={onChanged}
-            onNotice={onNotice}
-          />
-        ) : null}
-        {failure === undefined ? null : (
-          <ScopedReadFailure
-            title="Credential metadata is not available"
-            message={failure}
-          />
-        )}
-        {failure === undefined ? (
-          <CredentialTable
-            client={client}
-            values={credentials}
-            onChanged={onChanged}
-            onNotice={onNotice}
-          />
-        ) : null}
-      </Panel>
-    </div>
-  );
-}
-
-export interface AdministrationDashboardProps {
-  readonly client: AdministrationClient;
-  readonly scope: ScopeSelection;
-  readonly snapshot: AdministrationSnapshot | null;
-  readonly initialSection?: Section;
-  readonly failure?: string | null;
-  readonly loading?: boolean;
-  readonly notice: Notice | null;
-  readonly onNotice: (notice: Notice | null) => void;
-  readonly onGlobalReload?: () => Promise<void>;
-  readonly onReload: () => Promise<void>;
-  readonly onScopeChange?: ((scope: ScopeSelection) => void) | undefined;
-  readonly accountActions?: ReactNode;
-  readonly credentials?: readonly Credential[];
-  readonly services?: readonly ServiceSummary[];
-  readonly catalogModels?: readonly CatalogEntry[];
-  readonly catalogLoading?: boolean;
-  readonly globalFailures?: GlobalFailures;
-}
-
-function AdministratorSidebar({
-  scope,
-  services,
-  selectedService,
-  section,
-  onOpen,
-  onSelect,
-}: {
-  readonly scope: ScopeSelection;
-  readonly services: readonly ServiceSummary[];
-  readonly selectedService: ServiceSummary | undefined;
-  readonly section: Section;
-  readonly onOpen: (section: Section) => void;
-  readonly onSelect: (serviceId: string) => void;
-}) {
-  const navigation = (
-    <ApplicationNavigation aria-label="Administrator tasks">
-      <ApplicationNavigationGroup label="Global administration">
-        {globalSections.map((item) => (
-          <NavigationItem
-            key={item.id}
-            active={section === item.id}
-            icon={<Icon name={item.icon} size={18} />}
-            label={item.label}
-            onClick={() => {
-              onOpen(item.id);
-            }}
-          />
-        ))}
-      </ApplicationNavigationGroup>
-      <ApplicationNavigationGroup
-        className="selected-service-navigation"
-        label={selectedService?.display_name ?? "Selected service"}
-      >
-        {serviceSections.map((item) => (
-          <NavigationItem
-            key={item.id}
-            active={section === item.id}
-            disabled={selectedService === undefined}
-            icon={<Icon name={item.icon} size={18} />}
-            label={item.label}
-            onClick={() => {
-              onOpen(item.id);
-            }}
-          />
-        ))}
-      </ApplicationNavigationGroup>
-    </ApplicationNavigation>
-  );
-  return (
-    <ApplicationSidebar
-      className="router-sidebar"
-      brand={
-        <div className="brand">
-          <span>
-            <Icon name="layers" />
-          </span>
-          <div>
-            <strong>LLM Router</strong>
-            <small>Administration</small>
-          </div>
-        </div>
-      }
-      context={
-        <DesktopServiceSelector
-          scope={scope}
-          services={services}
-          selectedService={selectedService}
-          onSelect={onSelect}
-        />
-      }
-      navigation={navigation}
-      footer={<AdministratorSidebarFooter />}
-    />
-  );
-}
-
-function SelectedBudgetSection({
-  client,
-  scope,
-  snapshot,
-  onReload,
-  onNotice,
-}: {
-  readonly client: AdministrationClient;
-  readonly scope: ScopeSelection;
-  readonly snapshot: AdministrationSnapshot;
-  readonly onReload: () => Promise<void>;
-  readonly onNotice: (notice: Notice) => void;
-}) {
-  if (snapshot.failures.state !== undefined || snapshot.state === null) {
-    return (
-      <ScopedReadFailure
-        title="Budget scope is not available"
-        message={
-          snapshot.failures.state ??
-          "The exact service or workspace scope is not available."
-        }
-      />
-    );
-  }
-  if (snapshot.failures.budget !== undefined) {
-    return (
-      <ScopedReadFailure
-        title="Budget is not available"
-        message={snapshot.failures.budget}
-      />
-    );
-  }
-  return (
-    <BudgetView
-      key={JSON.stringify([
-        scope.serviceId,
-        scope.workspaceId,
-        snapshot.budget?.revision ?? null,
-      ])}
-      client={client}
-      scope={scope}
-      summary={snapshot.budget}
-      onChanged={onReload}
-      onNotice={onNotice}
-    />
-  );
-}
-
-type DiagnosticViewState =
-  | "ready"
-  | "submitting"
-  | "refreshing"
-  | "active"
-  | "succeeded"
-  | "failed"
-  | "interrupted"
-  | "cancel_requested"
-  | "cancelled"
-  | "uncertain"
-  | "outcome_uncertain"
-  | "expired"
-  | "forbidden"
-  | "recent_auth"
-  | "read_only"
-  | "stale"
-  | "offline";
-
-interface DiagnosticAttempt {
-  readonly requestId: string;
-  readonly exactRoute: string;
-  readonly reason: string;
-}
-
-interface DiagnosticFormState {
-  readonly routeId: string;
-  readonly reason: string;
-  readonly run: DiagnosticRun | null;
-  readonly status: RequestStatus | null;
-  readonly pending: "submit" | "refresh" | null;
-  readonly failure: DiagnosticViewState | null;
-  readonly recovery: DiagnosticAttempt | null;
-  readonly safeMessage: string | null;
-}
-
-function updateDiagnosticFormState(
-  state: DiagnosticFormState,
-  update: Partial<DiagnosticFormState>,
-): DiagnosticFormState {
-  return { ...state, ...update };
-}
-
-const diagnosticTimestampFormatter = new Intl.DateTimeFormat(undefined, {
-  dateStyle: "medium",
-  timeStyle: "medium",
-});
-
-function formatDiagnosticTimestamp(value: string): string {
-  return diagnosticTimestampFormatter.format(Date.parse(value));
-}
-
-function diagnosticViewState(
-  run: DiagnosticRun | null,
-  status: RequestStatus | null,
-  failure: DiagnosticViewState | null,
-): DiagnosticViewState {
-  if (failure !== null) return failure;
-  if (status !== null) {
-    if (status.state === "succeeded") return "succeeded";
-    if (status.state === "failed") return "failed";
-    if (status.state === "interrupted") return "interrupted";
-    if (status.state === "cancel_requested") return "cancel_requested";
-    if (status.state === "cancelled") return "cancelled";
-    if (status.state === "uncertain") return "uncertain";
-    return "active";
-  }
-  if (run === null) return "ready";
-  return run.state;
-}
-
-function diagnosticPhases(
-  run: DiagnosticRun | null,
-  status: RequestStatus | null,
-): readonly DiagnosticPhase[] {
-  const initialPhases: readonly DiagnosticPhase[] = run?.phases ?? [
-    { name: "authorization", state: "succeeded" },
-    { name: "route_eligibility", state: "succeeded" },
-    { name: "admission", state: "succeeded" },
-    { name: "provider", state: "active" },
-    { name: "accounting", state: "pending" },
-  ];
-  if (status === null) return initialPhases;
-  const terminal = [
-    "succeeded",
-    "failed",
-    "interrupted",
-    "cancelled",
-    "uncertain",
-  ].includes(status.state);
-  const failed = terminal && status.state !== "succeeded";
-  const lastFailedAttempt = [...status.attempts]
-    .reverse()
-    .find((attempt) => attempt.error !== undefined);
-  const failureClass =
-    status.error?.class ??
-    lastFailedAttempt?.error?.class ??
-    (status.state === "cancelled"
-      ? "cancelled"
-      : status.state === "uncertain"
-        ? "uncertain_effect"
-        : undefined);
-  return initialPhases.map((phase) => {
-    if (phase.name === "provider") {
-      return {
-        name: phase.name,
-        state: failed ? "failed" : terminal ? "succeeded" : "active",
-        ...(failureClass === undefined ? {} : { failure_class: failureClass }),
-      };
-    }
-    if (phase.name === "accounting") {
-      return {
-        name: phase.name,
-        state: status.state === "succeeded" ? "succeeded" : "pending",
-      };
-    }
-    return phase;
-  });
-}
-
-function DiagnosticResult({
-  state,
-  title,
-  tone,
-  pending,
-  safeMessage,
-  recovery,
-  run,
-  status,
-  scope,
-  phases,
-  failureClass,
-  focusTarget,
-  onReload,
-  onRefresh,
-  onRetry,
-}: {
-  readonly state: DiagnosticViewState;
-  readonly title: string;
-  readonly tone: "green" | "red" | "blue" | "amber";
-  readonly pending: DiagnosticFormState["pending"];
-  readonly safeMessage: string | null;
-  readonly recovery: DiagnosticAttempt | null;
-  readonly run: DiagnosticRun | null;
-  readonly status: RequestStatus | null;
-  readonly scope: ScopeSelection;
-  readonly phases: readonly DiagnosticPhase[];
-  readonly failureClass: RequestFailureClass | undefined;
-  readonly focusTarget: RefObject<HTMLDivElement | null>;
-  readonly onReload: () => Promise<void>;
-  readonly onRefresh: (requestId: string) => void;
-  readonly onRetry: (attempt: DiagnosticAttempt) => void;
-}) {
-  return (
-    <div
-      ref={focusTarget}
-      className="diagnostic-result-focus"
-      tabIndex={-1}
-      aria-label="Safe diagnostic result"
-    >
-      <Panel className="diagnostic-result" aria-live="polite">
-        <PanelHeader
-          kicker="Content-free result"
-          title={title}
-          description="A read-only grant can inspect current data but cannot run this diagnostic."
-          actions={
-            <StatusPill tone={tone}>{state.replace("_", " ")}</StatusPill>
-          }
-        />
-        {state === "recent_auth" ? (
-          <p>Authenticate with Pocket ID again, then start a new diagnostic.</p>
-        ) : null}
-        {state === "forbidden" || state === "read_only" ? (
-          <p>
-            The current administrator grant does not permit this exact action
-            and scope.
-          </p>
-        ) : null}
-        {state === "outcome_uncertain" && recovery !== null ? (
-          <p>
-            Check the same request identity or retry it. Do not start a new
-            diagnostic until the outcome is known.
-          </p>
-        ) : null}
-        {state === "stale" ? (
-          <Button
-            variant="secondary"
-            disabled={pending !== null}
-            onClick={() => {
-              void onReload();
-            }}
-          >
-            Refresh selected service
-          </Button>
-        ) : null}
-        {safeMessage === null ? null : <p>{safeMessage}</p>}
-        {recovery === null ? null : (
-          <dl className="diagnostic-scope">
-            <div>
-              <dt>Request</dt>
-              <dd>{recovery.requestId}</dd>
-            </div>
-            <div>
-              <dt>Route</dt>
-              <dd>{recovery.exactRoute}</dd>
-            </div>
-          </dl>
-        )}
-        {run === null && status === null ? null : (
-          <>
-            <dl className="diagnostic-scope">
-              <div>
-                <dt>Service</dt>
-                <dd>{run?.service_id ?? scope.serviceId}</dd>
-              </div>
-              <div>
-                <dt>Workspace</dt>
-                <dd>
-                  {run?.workspace_id ??
-                    (scope.workspaceId === ""
-                      ? "Service level"
-                      : scope.workspaceId)}
-                </dd>
-              </div>
-              <div>
-                <dt>Route</dt>
-                <dd>{run?.exact_route ?? status?.exact_route}</dd>
-              </div>
-              <div>
-                <dt>Route revision</dt>
-                <dd>
-                  {run?.route_configuration_revision ??
-                    status?.configuration_revision}
-                </dd>
-              </div>
-              {run === null ? null : (
-                <div>
-                  <dt>Authorization expires</dt>
-                  <dd>
-                    {formatDiagnosticTimestamp(run.authorization_expires_at)}
-                  </dd>
-                </div>
-              )}
-              <div>
-                <dt>Failure class</dt>
-                <dd>{failureClass ?? "None"}</dd>
-              </div>
-            </dl>
-            <ol
-              className="diagnostic-phases"
-              aria-label="Safe diagnostic phases"
-            >
-              {phases.map((phase) => (
-                <li key={phase.name}>
-                  <span>{phase.name.replace("_", " ")}</span>
-                  <StatusPill tone={toneForState(phase.state)}>
-                    {phase.state}
-                  </StatusPill>
-                </li>
-              ))}
-            </ol>
-            <Button
-              variant="secondary"
-              disabled={pending !== null}
-              onClick={() => {
-                const requestId = run?.request_id ?? status?.request_id;
-                if (requestId !== undefined) onRefresh(requestId);
-              }}
-            >
-              {pending === "refresh"
-                ? "Refreshing diagnostic status"
-                : "Refresh diagnostic status"}
-            </Button>
-          </>
-        )}
-        {recovery === null ? null : (
-          <div className="diagnostic-actions">
-            <Button
-              variant="secondary"
-              disabled={pending !== null}
-              onClick={() => {
-                onRefresh(recovery.requestId);
-              }}
-            >
-              Check diagnostic status
-            </Button>
-            <Button
-              disabled={pending !== null}
-              onClick={() => {
-                onRetry(recovery);
-              }}
-            >
-              Retry same diagnostic request
-            </Button>
-          </div>
-        )}
-      </Panel>
-    </div>
-  );
-}
-
-function DiagnosticRouteForm({
-  routes,
-  routeFailure,
-  scopeDescription,
-  routeId,
-  reason,
-  pending,
-  recovery,
-  onRouteChange,
-  onReasonChange,
+function CanonicalModelEditor({
   onSubmit,
 }: {
-  readonly routes: readonly ProviderModelRoute[];
-  readonly routeFailure: string | undefined;
-  readonly scopeDescription: string;
-  readonly routeId: string;
-  readonly reason: string;
-  readonly pending: DiagnosticFormState["pending"];
-  readonly recovery: DiagnosticAttempt | null;
-  readonly onRouteChange: (routeId: string) => void;
-  readonly onReasonChange: (reason: string) => void;
   readonly onSubmit: (event: SubmitEvent<HTMLFormElement>) => void;
 }) {
   return (
     <Panel>
       <PanelHeader
-        kicker="Exact scope"
-        title="Select one eligible route"
-        description={scopeDescription}
+        description="Comma-separate modality, capability, and embedding-dimension values."
+        title="Canonical model"
       />
-      {routeFailure === undefined ? null : (
-        <ScopedReadFailure
-          title="Eligible routes are not available"
-          message={routeFailure}
-        />
-      )}
-      <form className="diagnostic-form" onSubmit={onSubmit}>
+      <form className="administration-form" onSubmit={onSubmit}>
         <label>
-          <span>Provider-model route</span>
-          <select
-            value={routeId}
-            disabled={
-              routes.length === 0 || pending !== null || recovery !== null
-            }
-            onChange={(event) => {
-              onRouteChange(event.currentTarget.value);
-            }}
-          >
-            {routes.length === 0 ? (
-              <option value="">No eligible route</option>
-            ) : null}
-            {routes.map((route) => (
-              <option
-                key={route.provider_model_route_id}
-                value={route.provider_model_route_id}
-              >
-                {route.wire_model} · {route.provider_model_route_id}
+          API name
+          <input name="api_name" required />
+        </label>
+        <label>
+          Display name
+          <input name="display_name" required />
+        </label>
+        <label>
+          Input modalities
+          <input defaultValue="text" name="inputs" required />
+        </label>
+        <label>
+          Output modalities
+          <input defaultValue="text" name="outputs" required />
+        </label>
+        <label>
+          Capabilities
+          <input name="capabilities" placeholder="streaming, reasoning" />
+        </label>
+        <ConstraintFields />
+        <label>
+          Price source
+          <input name="price_source" placeholder="Optional" />
+        </label>
+        <label>
+          Source lookup key
+          <input name="price_lookup_key" placeholder="Required with source" />
+        </label>
+        <PriceFields />
+        <Button type="submit">Save canonical model</Button>
+      </form>
+    </Panel>
+  );
+}
+
+function ProviderModelEditor({
+  models,
+  onSubmit,
+  providers,
+}: {
+  readonly models: readonly Model[];
+  readonly onSubmit: (event: SubmitEvent<HTMLFormElement>) => void;
+  readonly providers: readonly Provider[];
+}) {
+  return (
+    <Panel>
+      <PanelHeader
+        description="Optional capability fields narrow the canonical model."
+        title="Provider-model mapping"
+      />
+      <form className="administration-form" onSubmit={onSubmit}>
+        <label>
+          API name
+          <input name="api_name" required />
+        </label>
+        <label>
+          Provider
+          <select name="provider" required>
+            <option value="">Select provider</option>
+            {providers.map((item) => (
+              <option key={item.api_name} value={item.api_name}>
+                {item.display_name}
               </option>
             ))}
           </select>
         </label>
         <label>
-          <span>Audit reason</span>
-          <input
-            value={reason}
-            maxLength={500}
-            disabled={pending !== null || recovery !== null}
-            onChange={(event) => {
-              onReasonChange(event.currentTarget.value);
-            }}
-          />
+          Canonical model
+          <select name="model" required>
+            <option value="">Select model</option>
+            {models.map((item) => (
+              <option key={item.api_name} value={item.api_name}>
+                {item.display_name}
+              </option>
+            ))}
+          </select>
         </label>
-        <Button
-          type="submit"
-          disabled={
-            routeId === "" ||
-            reason.trim() === "" ||
-            pending !== null ||
-            recovery !== null
-          }
-        >
-          {pending === "submit" ? "Starting diagnostic" : "Run diagnostic"}
-        </Button>
+        <label>
+          Provider wire model
+          <input name="wire_model" required />
+        </label>
+        <label>
+          Input override
+          <input name="inputs" />
+        </label>
+        <label>
+          Output override
+          <input name="outputs" />
+        </label>
+        <label>
+          Capability override
+          <input name="capabilities" />
+        </label>
+        <label>
+          Reasoning mappings
+          <input name="reasoning" placeholder="none=disabled, high=high" />
+        </label>
+        <ConstraintFields />
+        <label>
+          Price source
+          <input name="price_source" placeholder="Optional" />
+        </label>
+        <label>
+          Source lookup key
+          <input name="price_lookup_key" placeholder="Required with source" />
+        </label>
+        <label className="checkbox-field">
+          <input defaultChecked name="enabled" type="checkbox" /> Enabled
+        </label>
+        <PriceFields />
+        <Button type="submit">Save mapping</Button>
       </form>
-      {routes.length === 0 && routeFailure === undefined ? (
-        <StateMessage kind="empty">
-          No active chat route is eligible in this exact scope.
-        </StateMessage>
-      ) : null}
     </Panel>
   );
 }
 
-function DiagnosticsView({
+function ProviderModelTable({
   client,
-  scope,
-  snapshot,
-  onReload,
+  csrf,
+  onNotice,
+  onRefresh,
+  providerModels,
+  setSync,
+  sync,
 }: {
   readonly client: AdministrationClient;
-  readonly scope: ScopeSelection;
-  readonly snapshot: AdministrationSnapshot;
-  readonly onReload: () => Promise<void>;
+  readonly csrf: string;
+  readonly onNotice: (tone: "success" | "error", message: string) => void;
+  readonly onRefresh: () => Promise<void>;
+  readonly providerModels: readonly ProviderModel[];
+  readonly setSync: (value: PriceSyncResult | null) => void;
+  readonly sync: PriceSyncResult | null;
 }) {
-  const routes = snapshot.routes.filter(
-    (route) =>
-      route.state === "active" && route.capabilities.includes("chat.complete"),
-  );
-  const [form, updateForm] = useReducer(updateDiagnosticFormState, {
-    routeId: routes[0]?.provider_model_route_id ?? "",
-    reason: "Verify the selected provider-model route.",
-    run: null,
-    status: null,
-    pending: null,
-    failure: null,
-    recovery: null,
-    safeMessage: null,
-  });
-  const {
-    routeId,
-    reason,
-    run,
-    status,
-    pending,
-    failure,
-    recovery,
-    safeMessage,
-  } = form;
-  const state =
-    pending === "submit"
-      ? "submitting"
-      : pending === "refresh"
-        ? "refreshing"
-        : diagnosticViewState(run, status, failure);
-  const phases =
-    run === null && status === null ? [] : diagnosticPhases(run, status);
-  const failureClass = phases.find(
-    (phase) => phase.failure_class !== undefined,
-  )?.failure_class;
-  const controller = useRef<AbortController | null>(null);
-  const focusTarget = useRef<HTMLDivElement | null>(null);
-  const focusAfterInteraction = useRef(false);
-
-  useEffect(
-    () => () => {
-      controller.current?.abort();
-    },
-    [],
-  );
-
-  useEffect(() => {
-    if (!focusAfterInteraction.current) return;
-    focusAfterInteraction.current = false;
-    focusTarget.current?.focus();
-  }, [state]);
-
-  function mapFailure(error: unknown): DiagnosticViewState {
-    if (!(error instanceof AdministrationApiError)) return "failed";
-    if (error.code === "recent_auth_required") return "recent_auth";
-    if (error.code === "insufficient_scope") return "read_only";
-    if (error.code === "stale_configuration") return "stale";
-    if (error.code === "offline" || error.status === 503) return "offline";
-    if (error.status === 401 || error.status === 403) return "forbidden";
-    return "failed";
-  }
-
-  async function refreshStatus(requestId: string) {
-    controller.current?.abort();
-    const nextController = new AbortController();
-    controller.current = nextController;
-    focusAfterInteraction.current = true;
-    updateForm({ pending: "refresh", failure: null });
-    try {
-      const refreshed = await client.getRequest(
-        scope,
-        requestId,
-        nextController.signal,
-      );
-      if (!nextController.signal.aborted) {
-        focusAfterInteraction.current = true;
-        updateForm({
-          status: refreshed,
-          pending: null,
-          failure: null,
-          recovery: null,
-          safeMessage: refreshed.error?.message ?? null,
-        });
-      }
-    } catch (error) {
-      if (!nextController.signal.aborted) {
-        focusAfterInteraction.current = true;
-        const unavailableRecovery =
-          recovery !== null &&
-          error instanceof AdministrationApiError &&
-          ["not_found", "request_not_found"].includes(error.code);
-        updateForm({
-          failure: unavailableRecovery
-            ? "outcome_uncertain"
-            : mapFailure(error),
-          pending: null,
-          safeMessage: unavailableRecovery
-            ? "No admitted request is available. Retry the same request identity before you start a new diagnostic."
-            : error instanceof AdministrationApiError
-              ? error.message
-              : "The diagnostic status did not load.",
-        });
-      }
-    }
-  }
-
-  async function startDiagnostic(attempt: DiagnosticAttempt) {
-    controller.current?.abort();
-    const nextController = new AbortController();
-    controller.current = nextController;
-    focusAfterInteraction.current = true;
-    updateForm({
-      pending: "submit",
-      failure: null,
-      run: null,
-      status: null,
-      safeMessage: null,
-    });
-    try {
-      const created = await client.runDiagnostic(
-        scope,
-        attempt,
-        nextController.signal,
-      );
-      if (!nextController.signal.aborted) {
-        focusAfterInteraction.current = true;
-        updateForm({
-          run: created,
-          pending: null,
-          failure: null,
-          recovery: null,
-        });
-      }
-    } catch (error) {
-      if (!nextController.signal.aborted) {
-        focusAfterInteraction.current = true;
-        const outcomeUncertain =
-          error instanceof AdministrationApiError && error.outcomeUncertain;
-        updateForm({
-          failure: outcomeUncertain ? "outcome_uncertain" : mapFailure(error),
-          pending: null,
-          recovery: outcomeUncertain ? attempt : null,
-          safeMessage:
-            error instanceof AdministrationApiError
-              ? error.message
-              : "The diagnostic did not start.",
-        });
-      }
-    }
-  }
-
-  async function reloadDiagnosticScope() {
-    controller.current?.abort();
-    focusAfterInteraction.current = true;
-    updateForm({ pending: "refresh" });
-    try {
-      await onReload();
-      focusAfterInteraction.current = true;
-      updateForm({
-        pending: null,
-        failure: null,
-        safeMessage: null,
-      });
-    } catch {
-      focusAfterInteraction.current = true;
-      updateForm({
-        pending: null,
-        failure: "offline",
-        safeMessage: "The selected service did not refresh.",
-      });
-    }
-  }
-
-  function submit(event: SubmitEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (routeId === "" || reason.trim() === "" || recovery !== null) return;
-    void startDiagnostic({
-      requestId: newLogicalRequestId(),
-      exactRoute: routeId,
-      reason: reason.trim(),
-    });
-  }
-
-  const stateTitle = {
-    ready: "Ready to run",
-    submitting: "Diagnostic starting",
-    refreshing: "Diagnostic status refreshing",
-    active: "Diagnostic active",
-    succeeded: "Diagnostic succeeded",
-    failed: "Diagnostic failed",
-    interrupted: "Diagnostic interrupted",
-    cancel_requested: "Diagnostic cancellation requested",
-    cancelled: "Diagnostic cancelled",
-    uncertain: "Diagnostic result uncertain",
-    outcome_uncertain: "Diagnostic admission outcome uncertain",
-    expired: "Diagnostic permission expired",
-    forbidden: "Diagnostic forbidden",
-    recent_auth: "Recent authentication required",
-    read_only: "Read-only administrator grant",
-    stale: "Diagnostic configuration is stale",
-    offline: "Diagnostic service is offline",
-  }[state];
-  const tone =
-    state === "succeeded"
-      ? "green"
-      : [
-            "failed",
-            "interrupted",
-            "cancelled",
-            "uncertain",
-            "outcome_uncertain",
-            "expired",
-            "forbidden",
-            "recent_auth",
-            "read_only",
-            "stale",
-            "offline",
-          ].includes(state)
-        ? "red"
-        : state === "ready"
-          ? "blue"
-          : "amber";
-
   return (
-    <div className="diagnostic-workspace">
+    <Panel>
+      <PanelHeader
+        actions={
+          <Button
+            onClick={() => {
+              void client
+                .synchronizePrices(null, csrf)
+                .then((result) => {
+                  setSync(result);
+                  return onRefresh();
+                })
+                .catch((error: unknown) => {
+                  onNotice("error", errorMessage(error));
+                });
+            }}
+          >
+            <Icon name="refresh" size={16} /> Synchronize now
+          </Button>
+        }
+        description="The daily synchronization runs at 02:00 UTC. Missing or failed values keep the last accepted price."
+        title="Provider-model availability and prices"
+      />
+      {sync === null ? null : (
+        <p className="price-synchronization-status" role="status">
+          Last synchronization:{" "}
+          {sync.items
+            .map((item) => `${item.provider_model_api_name} ${item.outcome}`)
+            .join(" · ") || "No selected price rows"}
+        </p>
+      )}
+      <div className="administration-table-region">
+        <table>
+          <thead>
+            <tr>
+              <th>Provider-model</th>
+              <th>Route</th>
+              <th>Capabilities</th>
+              <th>Constraints</th>
+              <th>Reasoning</th>
+              <th>Price</th>
+              <th>Cooldown</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {providerModels.length === 0 ? (
+              <EmptyTable columns={8} text="No provider-model mappings" />
+            ) : (
+              providerModels.map((item) => (
+                <tr key={item.api_name}>
+                  <th scope="row">{item.api_name}</th>
+                  <td>
+                    {item.provider_api_name} / {item.provider_model_name}
+                  </td>
+                  <td>
+                    {[
+                      ...item.input_modalities,
+                      ...item.output_modalities,
+                      ...item.capabilities,
+                    ].join(", ")}
+                  </td>
+                  <td>
+                    {item.constraints == null
+                      ? "None"
+                      : JSON.stringify(item.constraints)}
+                  </td>
+                  <td>
+                    {item.reasoning_mappings
+                      .map(
+                        (mapping) =>
+                          `${mapping.level}=${mapping.provider_value}`,
+                      )
+                      .join(", ") || "None"}
+                  </td>
+                  <td>
+                    {item.effective_price == null
+                      ? "Unavailable"
+                      : `${item.effective_price.currency} · ${item.effective_price.unit_prices.map((price) => `${price.unit} ${price.amount}`).join(", ")}`}
+                  </td>
+                  <td>
+                    {item.cooldown == null
+                      ? "Ready"
+                      : `${item.cooldown.reason} until ${displayTime(item.cooldown.until)}`}
+                  </td>
+                  <td>
+                    <Button
+                      onClick={() => {
+                        void client
+                          .deleteProviderModel(item.api_name, csrf)
+                          .then(onRefresh)
+                          .catch((error: unknown) => {
+                            onNotice("error", errorMessage(error));
+                          });
+                      }}
+                      variant="quiet"
+                    >
+                      Delete
+                    </Button>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </Panel>
+  );
+}
+
+function CatalogImportPanel({
+  client,
+  csrf,
+  onNotice,
+  onRefresh,
+  preview,
+  providers,
+  setPreview,
+}: {
+  readonly client: AdministrationClient;
+  readonly csrf: string;
+  readonly onNotice: (tone: "success" | "error", message: string) => void;
+  readonly onRefresh: () => Promise<void>;
+  readonly preview: ModelImportPreview | null;
+  readonly providers: readonly Provider[];
+  readonly setPreview: (value: ModelImportPreview | null) => void;
+}) {
+  async function previewCatalog(event: SubmitEvent<HTMLFormElement>) {
+    event.preventDefault();
+    try {
+      setPreview(
+        await client.previewImport(
+          formText(new FormData(event.currentTarget), "provider"),
+          csrf,
+        ),
+      );
+    } catch (error) {
+      onNotice("error", errorMessage(error));
+    }
+  }
+  return (
+    <Panel>
+      <PanelHeader
+        description="Preview makes no change. Select entries before import."
+        title="Catalog import"
+      />
+      <form
+        className="administration-form catalog-preview-request-form"
+        onSubmit={(event) => {
+          void previewCatalog(event);
+        }}
+      >
+        <label>
+          Provider
+          <select name="provider" required>
+            <option value="">Select provider</option>
+            {providers.map((item) => (
+              <option key={item.api_name} value={item.api_name}>
+                {item.display_name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <Button type="submit">Preview catalog</Button>
+      </form>
+      {preview === null ? null : (
+        <form
+          className="catalog-preview"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const selectedKeys = new Set(
+              new FormData(event.currentTarget).getAll("candidate"),
+            );
+            const selected = preview.candidates.flatMap((item) =>
+              selectedKeys.has(item.catalog_key)
+                ? [
+                    {
+                      catalog_key: item.catalog_key,
+                      model_api_name: item.catalog_key
+                        .toLowerCase()
+                        .replaceAll(/[^a-z0-9-]/g, "-")
+                        .slice(0, 63),
+                      provider_model_api_name:
+                        `${preview.provider_api_name}-${item.catalog_key}`
+                          .toLowerCase()
+                          .replaceAll(/[^a-z0-9-]/g, "-")
+                          .slice(0, 63),
+                    },
+                  ]
+                : [],
+            );
+            void client
+              .importModels(preview.provider_api_name, selected, csrf)
+              .then(() => {
+                setPreview(null);
+                return onRefresh();
+              })
+              .catch((error: unknown) => {
+                onNotice("error", errorMessage(error));
+              });
+          }}
+        >
+          <ul>
+            {preview.candidates.length === 0 ? (
+              <li>No catalog entries</li>
+            ) : (
+              preview.candidates.map((item) => (
+                <li key={item.catalog_key}>
+                  <label>
+                    <input
+                      aria-label={`Import ${item.display_name}`}
+                      name="candidate"
+                      type="checkbox"
+                      value={item.catalog_key}
+                    />
+                    <span>
+                      <strong>{item.display_name}</strong>
+                      <small>
+                        {item.provider_model_name} ·{" "}
+                        {[...item.output_modalities, ...item.capabilities].join(
+                          ", ",
+                        )}
+                      </small>
+                    </span>
+                  </label>
+                </li>
+              ))
+            )}
+          </ul>
+          <Button disabled={preview.candidates.length === 0} type="submit">
+            Import selected entries
+          </Button>
+        </form>
+      )}
+    </Panel>
+  );
+}
+
+function CanonicalModelTable({
+  client,
+  csrf,
+  models,
+  onNotice,
+  onRefresh,
+}: {
+  readonly client: AdministrationClient;
+  readonly csrf: string;
+  readonly models: readonly Model[];
+  readonly onNotice: (tone: "success" | "error", message: string) => void;
+  readonly onRefresh: () => Promise<void>;
+}) {
+  return (
+    <Panel>
+      <PanelHeader title="Canonical models" />
+      <div className="administration-table-region">
+        <table>
+          <thead>
+            <tr>
+              <th>Model</th>
+              <th>Inputs</th>
+              <th>Outputs</th>
+              <th>Capabilities</th>
+              <th>Constraints</th>
+              <th>Price</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {models.length === 0 ? (
+              <EmptyTable columns={7} text="No canonical models" />
+            ) : (
+              models.map((item) => (
+                <tr key={item.api_name}>
+                  <th scope="row">
+                    <strong>{item.display_name}</strong>
+                    <small>{item.api_name}</small>
+                  </th>
+                  <td>{item.input_modalities.join(", ")}</td>
+                  <td>{item.output_modalities.join(", ")}</td>
+                  <td>{item.capabilities.join(", ") || "None"}</td>
+                  <td>
+                    {item.constraints == null
+                      ? "None"
+                      : JSON.stringify(item.constraints)}
+                  </td>
+                  <td>
+                    {item.current_price == null
+                      ? "Unavailable"
+                      : `${item.current_price.currency} · ${String(item.current_price.unit_prices.length)} units`}
+                  </td>
+                  <td>
+                    <Button
+                      onClick={() => {
+                        void client
+                          .deleteModel(item.api_name, csrf)
+                          .then(onRefresh)
+                          .catch((error: unknown) => {
+                            onNotice("error", errorMessage(error));
+                          });
+                      }}
+                      variant="quiet"
+                    >
+                      Delete
+                    </Button>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </Panel>
+  );
+}
+
+function ModelsPage({
+  client,
+  csrf,
+  models,
+  onNotice,
+  onRefresh,
+  providerModels,
+  providers,
+}: {
+  readonly client: AdministrationClient;
+  readonly csrf: string;
+  readonly models: readonly Model[];
+  readonly onNotice: (tone: "success" | "error", message: string) => void;
+  readonly onRefresh: () => Promise<void>;
+  readonly providerModels: readonly ProviderModel[];
+  readonly providers: readonly Provider[];
+}) {
+  const [preview, setPreview] = useState<ModelImportPreview | null>(null);
+  const [sync, setSync] = useState<PriceSyncResult | null>(null);
+  async function saveModel(event: SubmitEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const name = formText(form, "api_name");
+    const constraints = modelConstraints(form);
+    let price: Price | null;
+    try {
+      price = manualPrice(form);
+    } catch (error) {
+      onNotice(
+        "error",
+        error instanceof Error ? error.message : "The manual price is invalid.",
+      );
+      return;
+    }
+    const value: ModelWrite = {
+      api_name: name,
+      display_name: formText(form, "display_name"),
+      input_modalities: words(formText(form, "inputs")) as readonly (
+        "text" | "image"
+      )[],
+      output_modalities: words(
+        formText(form, "outputs"),
+      ) as readonly OutputModality[],
+      capabilities: words(
+        formText(form, "capabilities"),
+      ) as readonly ModelCapability[],
+      ...(constraints === undefined ? {} : { constraints }),
+      ...(formText(form, "price_source") === ""
+        ? {}
+        : {
+            price_source: formText(form, "price_source"),
+            price_lookup_key: formText(form, "price_lookup_key"),
+          }),
+      manual_price: price,
+    };
+    try {
+      if (models.some((item) => item.api_name === name))
+        await client.putModel(name, value, csrf);
+      else await client.createModel(value, csrf);
+      formElement.reset();
+      await onRefresh();
+      onNotice("success", "The canonical model was saved.");
+    } catch (error) {
+      onNotice("error", errorMessage(error));
+    }
+  }
+  async function saveMapping(event: SubmitEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const name = formText(form, "api_name");
+    const constraints = modelConstraints(form);
+    let price: Price | null;
+    try {
+      price = manualPrice(form);
+    } catch (error) {
+      onNotice(
+        "error",
+        error instanceof Error ? error.message : "The manual price is invalid.",
+      );
+      return;
+    }
+    const reasoning = words(formText(form, "reasoning")).map((item) => {
+      const [level, providerValue] = item.split("=");
+      return {
+        level: (level ?? "none") as "none",
+        provider_value: providerValue ?? level ?? "none",
+      };
+    });
+    const value: ProviderModelWrite = {
+      api_name: name,
+      provider_api_name: formText(form, "provider"),
+      model_api_name: formText(form, "model"),
+      provider_model_name: formText(form, "wire_model"),
+      enabled: form.get("enabled") === "on",
+      ...(formText(form, "inputs") === ""
+        ? {}
+        : {
+            input_modalities: words(formText(form, "inputs")) as readonly (
+              "text" | "image"
+            )[],
+          }),
+      ...(formText(form, "outputs") === ""
+        ? {}
+        : {
+            output_modalities: words(
+              formText(form, "outputs"),
+            ) as readonly OutputModality[],
+          }),
+      ...(formText(form, "capabilities") === ""
+        ? {}
+        : {
+            capabilities: words(
+              formText(form, "capabilities"),
+            ) as readonly ModelCapability[],
+          }),
+      ...(reasoning.length === 0 ? {} : { reasoning_mappings: reasoning }),
+      ...(constraints === undefined ? {} : { constraints }),
+      ...(formText(form, "price_source") === ""
+        ? {}
+        : {
+            price_source: formText(form, "price_source"),
+            price_lookup_key: formText(form, "price_lookup_key"),
+          }),
+      manual_price: price,
+    };
+    try {
+      if (providerModels.some((item) => item.api_name === name))
+        await client.putProviderModel(name, value, csrf);
+      else await client.createProviderModel(value, csrf);
+      formElement.reset();
+      await onRefresh();
+      onNotice("success", "The provider-model mapping was saved.");
+    } catch (error) {
+      onNotice("error", errorMessage(error));
+    }
+  }
+  return (
+    <div className="administration-page">
       <PageHeading
-        eyebrow="Selected service"
-        title="Safe route diagnostic"
-        description="Run one fixed, content-free probe through normal policy, budget, rate, accounting, and audit controls. Prompts, model output, provider error bodies, credentials, and bearer values do not return to this page."
+        description="Manage canonical capabilities, provider mappings, fixed-decimal prices, and catalog imports."
+        eyebrow="Global catalog"
+        title="Models and prices"
       />
-      <DiagnosticRouteForm
-        routes={routes}
-        routeFailure={snapshot.failures.routes}
-        scopeDescription={`Service ${scope.serviceId} · ${scope.workspaceId === "" ? "Service level" : `Workspace ${scope.workspaceId}`}`}
-        routeId={routeId}
-        reason={reason}
-        pending={pending}
-        recovery={recovery}
-        onRouteChange={(nextRouteId) => {
-          updateForm({ routeId: nextRouteId });
-        }}
-        onReasonChange={(nextReason) => {
-          updateForm({ reason: nextReason });
-        }}
-        onSubmit={submit}
+      <div className="administration-sections">
+        <CanonicalModelEditor
+          onSubmit={(event) => {
+            void saveModel(event);
+          }}
+        />
+        <ProviderModelEditor
+          models={models}
+          onSubmit={(event) => {
+            void saveMapping(event);
+          }}
+          providers={providers}
+        />
+      </div>
+      <ProviderModelTable
+        client={client}
+        csrf={csrf}
+        onNotice={onNotice}
+        onRefresh={onRefresh}
+        providerModels={providerModels}
+        setSync={setSync}
+        sync={sync}
       />
-      <DiagnosticResult
-        state={state}
-        title={stateTitle}
-        tone={tone}
-        pending={pending}
-        safeMessage={safeMessage}
-        recovery={recovery}
-        run={run}
-        status={status}
-        scope={scope}
-        phases={phases}
-        failureClass={failureClass}
-        focusTarget={focusTarget}
-        onReload={reloadDiagnosticScope}
-        onRefresh={(requestId) => {
-          void refreshStatus(requestId);
+      <CatalogImportPanel
+        client={client}
+        csrf={csrf}
+        onNotice={onNotice}
+        onRefresh={onRefresh}
+        preview={preview}
+        providers={providers}
+        setPreview={setPreview}
+      />
+      <CanonicalModelTable
+        client={client}
+        csrf={csrf}
+        models={models}
+        onNotice={onNotice}
+        onRefresh={onRefresh}
+      />
+    </div>
+  );
+}
+function PriceFields() {
+  return (
+    <>
+      <label>
+        Manual price currency
+        <input maxLength={3} name="currency" placeholder="USD" />
+      </label>
+      <label>
+        Typed unit amounts
+        <textarea
+          name="unit_prices"
+          placeholder="input_token=0.001, output_token=0.002"
+          rows={3}
+        />
+        <small>
+          Use unit=amount pairs. Supported units: {usageUnits.join(", ")}.
+        </small>
+      </label>
+    </>
+  );
+}
+
+export function AssignmentsPage({
+  assignments,
+  client,
+  csrf,
+  onNotice,
+  onRefresh,
+  providerModels,
+  selectedService,
+}: {
+  readonly assignments: readonly Assignment[];
+  readonly client: AdministrationClient;
+  readonly csrf: string;
+  readonly onNotice: (tone: "success" | "error", message: string) => void;
+  readonly onRefresh: () => Promise<void>;
+  readonly providerModels: readonly ProviderModel[];
+  readonly selectedService: string;
+}) {
+  const [selected, setSelected] = useState<string | null>(null);
+  const directLocalAssignments = new Set(
+    assignments.flatMap((item) =>
+      item.definition_kind === "direct_chain" &&
+      item.defined_by_service_api_name === selectedService
+        ? [item.api_name]
+        : [],
+    ),
+  );
+  if (selectedService === "")
+    return (
+      <StatePanel kind="empty" title="Select a service">
+        Select one service to inspect and configure its effective assignments.
+      </StatePanel>
+    );
+  const graphItems: readonly ServiceAssignmentItem[] = assignments.map(
+    (item) => ({
+      id: item.api_name,
+      name: item.display_name,
+      source:
+        item.definition_kind === "implicit"
+          ? {
+              kind: "implicit",
+              label: item.defined_by_service_api_name ?? selectedService,
+            }
+          : item.defined_by_service_api_name === selectedService
+            ? { kind: "direct", label: selectedService }
+            : {
+                kind: "inherited",
+                label: item.defined_by_service_api_name ?? "parent service",
+              },
+      candidates: item.effective_chain.map((candidate) => ({
+        id: candidate.provider_model_api_name,
+        label: candidate.provider_model_api_name,
+      })),
+      ...(item.inherits_assignment_api_name == null
+        ? {}
+        : { inheritsFrom: item.inherits_assignment_api_name }),
+      isDefault: item.api_name === "default",
+      lastUsed:
+        item.last_used_at == null
+          ? null
+          : {
+              label: displayTime(item.last_used_at),
+              dateTime: item.last_used_at,
+            },
+      observedRequirements: item.observed_requirements,
+    }),
+  );
+  async function save(event: SubmitEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const mode = formText(form, "mode");
+    const reasoning = formText(form, "reasoning");
+    const displayName = formText(form, "display_name");
+    const value =
+      mode === "inherit"
+        ? {
+            ...(displayName === "" ? {} : { display_name: displayName }),
+            inherits_assignment_api_name: formText(form, "inherits"),
+            ...(reasoning === ""
+              ? {}
+              : { reasoning_level: reasoning as "none" }),
+          }
+        : {
+            ...(displayName === "" ? {} : { display_name: displayName }),
+            direct_chain: words(formText(form, "chain")).map((name) => ({
+              provider_model_api_name: name,
+            })),
+            ...(reasoning === ""
+              ? {}
+              : { reasoning_level: reasoning as "none" }),
+          };
+    try {
+      await client.putAssignment(
+        selectedService,
+        formText(form, "api_name"),
+        value,
+        csrf,
+      );
+      formElement.reset();
+      await onRefresh();
+      onNotice("success", "The assignment was saved.");
+    } catch (error) {
+      onNotice("error", errorMessage(error));
+    }
+  }
+  return (
+    <div className="administration-page">
+      <PageHeading
+        description="The nearest service definition replaces the complete inherited fallback chain."
+        eyebrow={selectedService}
+        title="Assignment graph"
+      />
+      <Panel>
+        <PanelHeader
+          description="Use one inherited assignment name or one ordered comma-separated provider-model chain."
+          title="Create or replace a local assignment"
+        />
+        <form
+          className="administration-form"
+          onSubmit={(event) => void save(event)}
+        >
+          <label>
+            Assignment API name
+            <input name="api_name" required />
+          </label>
+          <label>
+            Display name
+            <input name="display_name" />
+          </label>
+          <label>
+            Definition
+            <select name="mode">
+              <option value="direct">Direct chain</option>
+              <option value="inherit">Inherit assignment</option>
+            </select>
+          </label>
+          <label>
+            Ordered direct chain
+            <input
+              list="provider-model-options"
+              name="chain"
+              placeholder="primary, fallback"
+            />
+            <datalist id="provider-model-options">
+              {providerModels.map((item) => (
+                <option key={item.api_name}>{item.api_name}</option>
+              ))}
+            </datalist>
+          </label>
+          <label>
+            Inherited assignment
+            <input name="inherits" placeholder="default" />
+          </label>
+          <label>
+            Reasoning
+            <select name="reasoning">
+              <option value="">Model default</option>
+              <option>none</option>
+              <option>low</option>
+              <option>medium</option>
+              <option>high</option>
+            </select>
+          </label>
+          <Button type="submit">Save assignment</Button>
+        </form>
+      </Panel>
+      <ServiceAssignmentGraph
+        actionsForAssignment={(item) => {
+          const canDelete = directLocalAssignments.has(item.id);
+          if (!canDelete && item.observedRequirements.length === 0) return null;
+          return (
+            <div className="assignment-actions">
+              {canDelete ? (
+                <Button
+                  onClick={() =>
+                    void client
+                      .deleteAssignment(selectedService, item.id, csrf)
+                      .then(onRefresh)
+                      .catch((error: unknown) => {
+                        onNotice("error", errorMessage(error));
+                      })
+                  }
+                  variant="quiet"
+                >
+                  Delete local definition
+                </Button>
+              ) : null}
+              {item.observedRequirements.map((requirement) => (
+                <Button
+                  key={requirement}
+                  onClick={() =>
+                    void client
+                      .removeRequirement(
+                        selectedService,
+                        item.id,
+                        requirement as ObservedRequirement,
+                        csrf,
+                      )
+                      .then(onRefresh)
+                      .catch((error: unknown) => {
+                        onNotice("error", errorMessage(error));
+                      })
+                  }
+                  variant="quiet"
+                >
+                  Remove {requirement}
+                </Button>
+              ))}
+            </div>
+          );
         }}
-        onRetry={(attempt) => {
-          void startDiagnostic(attempt);
-        }}
+        aria-label={`${selectedService} assignment configuration`}
+        assignments={graphItems}
+        id="router-assignments"
+        onSelectionChange={setSelected}
+        selectedAssignmentId={selected}
       />
     </div>
   );
 }
 
-function OperationalSections({
-  section,
-  client,
-  scope,
-  snapshot,
-  onReload,
+interface PlaygroundPageState {
+  readonly inputImages: readonly PlaygroundImage[];
+  readonly serviceKey: string;
+  readonly workspace: string;
+  readonly tags: string;
+  readonly runState: PlaygroundRunState;
+  readonly value: PlaygroundValue;
+}
+
+interface PlaygroundImage extends RuntimeInputImage {
+  readonly id: string;
+  readonly name: string;
+  readonly detail: string;
+  readonly sizeBytes: number;
+}
+
+async function readInputImage(file: File): Promise<PlaygroundImage> {
+  validateInputImageSelection([], [file]);
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      if (typeof reader.result === "string") resolve(reader.result);
+      else reject(new Error("The image could not be read."));
+    });
+    reader.addEventListener("error", () => {
+      reject(new Error("The image could not be read."));
+    });
+    reader.readAsDataURL(file);
+  });
+  const marker = dataUrl.indexOf(",");
+  return {
+    id: globalThis.crypto.randomUUID(),
+    name: file.name,
+    detail: `${String(Math.ceil(file.size / 1024))} KB`,
+    sizeBytes: file.size,
+    media_type: file.type as RuntimeInputImage["media_type"],
+    data_base64: dataUrl.slice(marker + 1),
+  };
+}
+
+function PlaygroundView({
+  assignments,
+  onNotice,
+  onRun,
+  playground,
+  providerModels,
+  selectedService,
+  updatePlayground,
+  workspaces,
 }: {
-  readonly section: Section;
-  readonly client: AdministrationClient;
-  readonly scope: ScopeSelection;
-  readonly snapshot: AdministrationSnapshot | null;
-  readonly onReload: () => Promise<void>;
+  readonly assignments: readonly Assignment[];
+  readonly onNotice: (tone: "success" | "error", message: string) => void;
+  readonly onRun: (value: PlaygroundValue) => Promise<void>;
+  readonly playground: PlaygroundPageState;
+  readonly providerModels: readonly ProviderModel[];
+  readonly selectedService: string;
+  readonly updatePlayground: (patch: Partial<PlaygroundPageState>) => void;
+  readonly workspaces: readonly Workspace[];
 }) {
-  if (snapshot === null) return null;
-  if (section === "requests") {
-    return (
+  const inputImageQueue = useRef(
+    createInputImageSelectionQueue(playground.inputImages, (inputImages) => {
+      updatePlayground({ inputImages });
+    }),
+  );
+  return (
+    <div className="administration-page">
+      <PageHeading
+        description="Calls use the native service API. The key stays only in this page memory."
+        eyebrow={
+          selectedService === "" ? "No service selected" : selectedService
+        }
+        title="Model and media playground"
+      />
       <Panel>
         <PanelHeader
-          kicker="Content-free status"
-          title="Logical requests"
-          description="This view does not contain prompts, model output, or provider secrets."
+          description="Use a key that belongs to the selected service. The browser does not save it."
+          title="Service call context"
         />
-        {snapshot.failures.requests === undefined ? (
-          <RequestsView
-            key={`${scope.serviceId}:${scope.workspaceId}`}
-            client={client}
-            scope={scope}
-            values={snapshot.requests}
-          />
-        ) : (
-          <ScopedReadFailure
-            title="Request status is not available"
-            message={snapshot.failures.requests}
-          />
-        )}
+        <div className="administration-form">
+          <label>
+            Service API key
+            <input
+              autoComplete="off"
+              onChange={(event) => {
+                updatePlayground({ serviceKey: event.currentTarget.value });
+              }}
+              type="password"
+              value={playground.serviceKey}
+            />
+          </label>
+          <label>
+            Workspace
+            <select
+              onChange={(event) => {
+                updatePlayground({ workspace: event.currentTarget.value });
+              }}
+              value={playground.workspace}
+            >
+              <option value="">Select workspace</option>
+              {workspaces.map((item) => (
+                <option key={item.api_name} value={item.api_name}>
+                  {item.display_name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Tags
+            <input
+              onChange={(event) => {
+                updatePlayground({ tags: event.currentTarget.value });
+              }}
+              placeholder="evaluation, manual"
+              value={playground.tags}
+            />
+          </label>
+        </div>
       </Panel>
-    );
-  }
-  if (section === "diagnostics") {
-    return (
-      <DiagnosticsView
-        key={`${scope.serviceId}:${scope.workspaceId}:${snapshot.configuration_revision ?? "none"}`}
-        client={client}
-        scope={scope}
-        snapshot={snapshot}
-        onReload={onReload}
-      />
-    );
-  }
-  return null;
-}
-
-export function AdministrationDashboard({
-  client,
-  scope,
-  snapshot,
-  initialSection = "overview",
-  failure,
-  loading,
-  notice,
-  onNotice,
-  onGlobalReload,
-  onReload,
-  onScopeChange,
-  accountActions,
-  credentials = emptyCredentials,
-  services = emptyServices,
-  catalogModels = emptyCatalogEntries,
-  catalogLoading = false,
-  globalFailures = emptyGlobalFailures,
-}: AdministrationDashboardProps) {
-  const [section, setSection] = useReducer(
-    (_current: Section, next: Section) => next,
-    initialSection,
-  );
-  const [pendingBootstrap, setPendingBootstrap] = useReducer(
-    (_current: ServiceCreated | null, next: ServiceCreated | null) => next,
-    null,
-  );
-  const page = sections.find((item) => item.id === section) ?? sections.at(0);
-  const selectedService = services.find(
-    (service) => service.service_id === scope.serviceId,
-  );
-  useEffect(() => {
-    if (pendingBootstrap === null) return;
-    const preserveBootstrap = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-    };
-    window.addEventListener("beforeunload", preserveBootstrap);
-    return () => {
-      window.removeEventListener("beforeunload", preserveBootstrap);
-    };
-  }, [pendingBootstrap]);
-  if (page === undefined) return null;
-
-  function openSection(nextSection: Section) {
-    if (pendingBootstrap !== null) {
-      onNotice({
-        tone: "error",
-        message: "Store and confirm the one-time service key before you leave.",
-      });
-      return;
-    }
-    setSection(nextSection);
-  }
-
-  function selectService(serviceId: string, destination?: Section) {
-    if (pendingBootstrap !== null) {
-      onNotice({
-        tone: "error",
-        message:
-          "Store and confirm the one-time service key before you change services.",
-      });
-      return;
-    }
-    onScopeChange?.({ mode: "global", serviceId, workspaceId: "" });
-    if (serviceId === "") setSection("overview");
-    else if (destination !== undefined) setSection(destination);
-  }
-
-  return (
-    <ApplicationShell
-      className="router-application-shell"
-      sidebar={
-        <AdministratorSidebar
-          scope={scope}
-          services={services}
-          selectedService={selectedService}
-          section={section}
-          onOpen={openSection}
-          onSelect={(serviceId) => {
-            selectService(serviceId, "configuration");
-          }}
-        />
-      }
-      mobileNavigation={
-        <AdministratorMobileNavigation
-          section={section}
-          selectedService={selectedService}
-          onOpen={openSection}
-        />
-      }
-      mainProps={{
-        className:
-          section === "services" ? "content service-graph-page" : "content",
-      }}
-      topbar={
-        <ApplicationTopbar
-          className="router-topbar"
-          title={
-            <div className="topbar-title">
-              <span>
-                {serviceSections.some((item) => item.id === section)
-                  ? (selectedService?.display_name ?? "Selected service")
-                  : "Global administration"}
-              </span>
-              <strong>{page.label}</strong>
-            </div>
-          }
-          actions={
-            <div className="topbar-actions">
-              {serviceSections.some((item) => item.id === section) &&
-              selectedService !== undefined ? (
-                <Button
-                  variant="quiet"
-                  icon={<Icon name="refresh" size={16} />}
-                  onClick={() =>
-                    void (
-                      section === "configuration"
-                        ? (onGlobalReload ?? onReload)()
-                        : onReload()
-                    ).catch(() => undefined)
-                  }
-                >
-                  Refresh
-                </Button>
-              ) : null}
-              {pendingBootstrap === null ? (
-                accountActions
-              ) : (
-                <span className="pending-bootstrap-account-note">
-                  Store the one-time key before account actions.
-                </span>
-              )}
-            </div>
-          }
-        />
-      }
-    >
-      <MobileServiceSelector
-        scope={scope}
-        services={services}
-        onSelect={(serviceId) => {
-          selectService(serviceId, "configuration");
+      <OperationPlayground
+        assignmentOptions={assignments.map((item) => ({
+          id: item.api_name,
+          label: item.display_name,
+          detail:
+            item.effective_chain.length === 0
+              ? "Empty effective chain"
+              : `${String(item.effective_chain.length)} candidates`,
+          disabled: item.effective_chain.length === 0,
+        }))}
+        description="Run model, embedding, image, video, and audio operations through an assignment or one exact provider-model."
+        id="router-playground"
+        inputImages={playground.inputImages}
+        onAddInputImages={(files) => {
+          void inputImageQueue.current
+            .add(files, readInputImage)
+            .catch((error: unknown) => {
+              onNotice(
+                "error",
+                error instanceof Error
+                  ? error.message
+                  : "The image could not be read.",
+              );
+            });
         }}
+        onRemoveInputImage={(imageId) => {
+          inputImageQueue.current.remove((image) => image.id === imageId);
+        }}
+        onReset={() => {
+          updatePlayground({ runState: { status: "empty" } });
+        }}
+        onRun={(next) => {
+          void onRun(next);
+        }}
+        onValueChange={(value) => {
+          updatePlayground({ value });
+        }}
+        providerModelOptions={providerModels.flatMap((item) =>
+          item.enabled
+            ? [
+                {
+                  id: item.api_name,
+                  label: item.api_name,
+                  detail: item.provider_model_name,
+                },
+              ]
+            : [],
+        )}
+        runState={playground.runState}
+        title="Operation playground"
+        value={playground.value}
       />
-      {notice?.staleRevision === true ? <StaleRevisionBanner /> : null}
-      {section === "overview" ? (
-        <>
-          {globalFailures.services === undefined ? null : (
-            <ScopedReadFailure
-              title="The service registry is not available"
-              message={globalFailures.services}
-            />
-          )}
-          <GlobalOverview
-            services={services}
-            onOpenServices={() => {
-              openSection("services");
-            }}
-            onSelectService={(serviceId) => {
-              selectService(serviceId, "configuration");
-            }}
-          />
-        </>
-      ) : null}
-      {section === "services" ? (
-        <>
-          {globalFailures.services === undefined ? null : (
-            <ScopedReadFailure
-              title="The service registry is not available"
-              message={globalFailures.services}
-            />
-          )}
-          {globalFailures.services === undefined ? (
-            <ServiceManagement
-              client={client}
-              services={services}
-              selectedServiceId={scope.serviceId}
-              onSelect={(serviceId) => {
-                selectService(serviceId);
-              }}
-              onChanged={onGlobalReload ?? onReload}
-              onContinueSetup={() => {
-                setSection("setup");
-              }}
-              pendingBootstrap={pendingBootstrap}
-              onBootstrapPending={setPendingBootstrap}
-              onSuccess={(message) => {
-                onNotice({ tone: "success", message });
-              }}
-              onError={(message) => {
-                onNotice({ tone: "error", message });
-              }}
-            />
-          ) : null}
-        </>
-      ) : null}
-      {section === "credentials" ? (
-        <GlobalCredentialsView
-          client={client}
-          credentials={credentials}
-          {...(globalFailures.credentials === undefined
-            ? {}
-            : { failure: globalFailures.credentials })}
-          onChanged={onGlobalReload ?? onReload}
-          onNotice={(nextNotice) => {
-            onNotice(nextNotice);
-          }}
-        />
-      ) : null}
-      {section === "audit" ? <AuditView client={client} /> : null}
-      {section === "exports" ? (
-        <ExportView client={client} services={services} />
-      ) : null}
-      {section === "setup" && snapshot !== null ? (
-        <ServiceSetup
-          snapshot={snapshot}
-          bootstrapState={selectedService?.bootstrap_state ?? "missing"}
-          serviceName={selectedService?.display_name ?? "Selected service"}
-          onOpen={openSection}
-        />
-      ) : null}
-      {section === "configuration" && snapshot !== null ? (
-        <ConfigurationView
-          client={client}
-          scope={scope}
-          snapshot={snapshot}
-          services={services}
-          models={catalogModels}
-          catalogLoading={catalogLoading}
-          {...(globalFailures.catalog === undefined
-            ? {}
-            : { catalogFailure: globalFailures.catalog })}
-          onChanged={onReload}
-          onNotice={onNotice}
-        />
-      ) : null}
-      {section === "assignments" && snapshot !== null ? (
-        <AssignmentsView
-          client={client}
-          scope={scope}
-          snapshot={snapshot}
-          services={services}
-          onChanged={onReload}
-          onNotice={onNotice}
-        />
-      ) : null}
-      <OperationalSections
-        section={section}
-        client={client}
-        scope={scope}
-        snapshot={snapshot}
-        onReload={onReload}
-      />
-      {section === "accounting" && snapshot !== null ? (
-        snapshot.accounting === null ? (
-          <ScopedReadFailure
-            title="Accounting is not available"
-            message={
-              snapshot.failures.accounting ??
-              "No accounting summary is available for this scope."
-            }
-          />
-        ) : (
-          <AccountingView summary={snapshot.accounting} />
-        )
-      ) : null}
-      {section === "budgets" && snapshot !== null ? (
-        <SelectedBudgetSection
-          client={client}
-          scope={scope}
-          snapshot={snapshot}
-          onReload={onReload}
-          onNotice={onNotice}
-        />
-      ) : null}
-      {serviceSections.some((item) => item.id === section) ? (
-        <SelectedServiceState
-          failure={failure}
-          loading={loading}
-          snapshot={snapshot}
-          onReload={onReload}
-        />
-      ) : null}
-    </ApplicationShell>
+    </div>
   );
 }
 
-export function PersistentNotice({
-  notice,
-  onDismiss,
+function PlaygroundPage({
+  assignments,
+  initialKey,
+  onNotice,
+  providerModels,
+  selectedService,
+  workspaces,
 }: {
-  readonly notice: Notice | null;
-  readonly onDismiss: () => void;
+  readonly assignments: readonly Assignment[];
+  readonly initialKey: string;
+  readonly onNotice: (tone: "success" | "error", message: string) => void;
+  readonly providerModels: readonly ProviderModel[];
+  readonly selectedService: string;
+  readonly workspaces: readonly Workspace[];
 }) {
-  return notice ? (
-    <Toast
-      className={`notice notice-${notice.tone}`}
-      role={notice.tone === "error" ? "alert" : "status"}
-      onDismiss={onDismiss}
-    >
-      {notice.message}
-    </Toast>
-  ) : null;
+  const [playground, updatePlayground] = useReducer(
+    (state: PlaygroundPageState, patch: Partial<PlaygroundPageState>) => ({
+      ...state,
+      ...patch,
+    }),
+    {
+      inputImages: [],
+      serviceKey: initialKey,
+      workspace: workspaces[0]?.api_name ?? "",
+      tags: "",
+      runState: {
+        status: "empty",
+        message:
+          "Run one operation to see its selected route, latency, usage, cost, and output.",
+      },
+      value: {
+        operation: "model",
+        selection: { kind: "assignment", id: assignments[0]?.api_name ?? "" },
+        input: "",
+        systemPrompt: "",
+        temperature: null,
+        outputLimit: null,
+      },
+    },
+  );
+  const objectUrl = useRef<string | null>(null);
+  useEffect(
+    () => () => {
+      if (objectUrl.current !== null) URL.revokeObjectURL(objectUrl.current);
+    },
+    [],
+  );
+  async function run(next: PlaygroundValue) {
+    if (playground.serviceKey === "" || playground.workspace === "") {
+      updatePlayground({
+        runState: {
+          status: "error",
+          error: {
+            title: "Service access is required",
+            message:
+              "The playground needs one active service key and owned workspace.",
+            correction: "Enter the one-time key and select its workspace.",
+          },
+        },
+      });
+      return;
+    }
+    updatePlayground({
+      runState: {
+        status: "loading",
+        message: "The Router is calling the selected route.",
+      },
+    });
+    const started = performance.now();
+    const selector =
+      next.selection.kind === "assignment"
+        ? { assignment_api_name: next.selection.id }
+        : { provider_model_api_name: next.selection.id };
+    const client = createRuntimeClient(playground.serviceKey);
+    try {
+      if (next.operation === "model") {
+        const result = await client.model(
+          playground.workspace,
+          selector,
+          next.input,
+          next.systemPrompt,
+          playground.inputImages,
+          next.temperature,
+          next.outputLimit,
+          words(playground.tags),
+        );
+        const output =
+          result.output_type === "structured_json"
+            ? {
+                kind: "json" as const,
+                content: result.structured_output_json ?? "",
+              }
+            : {
+                kind: "text" as const,
+                content:
+                  result.content
+                    ?.map((item) =>
+                      item.type === "text"
+                        ? item.text
+                        : `${item.name}(${item.arguments_json})`,
+                    )
+                    .join("\n") ?? "",
+              };
+        updatePlayground({
+          runState: {
+            status: "success",
+            result: {
+              output,
+              selectedRoute: {
+                label: result.provider_model_api_name,
+                detail:
+                  next.selection.kind === "assignment"
+                    ? `Selected by ${next.selection.id}`
+                    : "Exact provider-model",
+              },
+              latencyMs: Math.round(performance.now() - started),
+              usage: result.usage.units.map((item) => ({
+                id: item.unit,
+                label: item.unit,
+                value: item.quantity,
+              })),
+              cost: {
+                amount: result.usage.cost,
+                currency: result.usage.currency,
+              },
+            },
+          },
+        });
+        return;
+      }
+      if (next.operation === "embedding") {
+        const result = await client.embedding(
+          playground.workspace,
+          selector,
+          next.input.split("\n").filter(Boolean),
+          words(playground.tags),
+        );
+        updatePlayground({
+          runState: {
+            status: "success",
+            result: {
+              output: {
+                kind: "embedding",
+                vectorCount: result.embeddings.length,
+                dimensions: result.embeddings[0]?.values.length ?? 0,
+                ...(result.embeddings[0] === undefined
+                  ? {}
+                  : { preview: result.embeddings[0].values.slice(0, 8) }),
+              },
+              selectedRoute: { label: result.provider_model_api_name },
+              latencyMs: Math.round(performance.now() - started),
+              usage: result.usage.units.map((item) => ({
+                id: item.unit,
+                label: item.unit,
+                value: item.quantity,
+              })),
+              cost: {
+                amount: result.usage.cost,
+                currency: result.usage.currency,
+              },
+            },
+          },
+        });
+        return;
+      }
+      const job = await client.createMedia(
+        playground.workspace,
+        selector,
+        next.operation,
+        next.input,
+        next.operation === "audio" ? [] : playground.inputImages,
+        words(playground.tags),
+      );
+      const current = await waitForMediaJob(client, job);
+      if (current.state !== "succeeded")
+        throw new AdministrationApiError(
+          502,
+          current.error?.code ?? "upstream_failed",
+          current.error?.message ?? "The media job did not succeed.",
+          current.error?.details ?? undefined,
+        );
+      const blob = await client.mediaContent(job.id);
+      if (objectUrl.current !== null) URL.revokeObjectURL(objectUrl.current);
+      objectUrl.current = URL.createObjectURL(blob);
+      updatePlayground({
+        runState: {
+          status: "success",
+          result: {
+            output: {
+              kind: next.operation,
+              objectUrl: objectUrl.current,
+              label: `${next.operation} result`,
+              mediaType: blob.type,
+            },
+            selectedRoute: {
+              label: current.provider_model_api_name,
+              detail: `Media job ${current.id}`,
+            },
+            latencyMs: Math.round(performance.now() - started),
+            usage: [],
+            cost: null,
+          },
+        },
+      });
+    } catch (error) {
+      updatePlayground({
+        runState: { status: "error", error: correction(error) },
+      });
+      onNotice("error", errorMessage(error));
+    }
+  }
+  return (
+    <PlaygroundView
+      assignments={assignments}
+      onNotice={onNotice}
+      onRun={run}
+      playground={playground}
+      providerModels={providerModels}
+      selectedService={selectedService}
+      updatePlayground={updatePlayground}
+      workspaces={workspaces}
+    />
+  );
 }
 
-export function AdministrationStateView({
+interface LogsPageState {
+  readonly from: string;
+  readonly to: string;
+  readonly items: readonly RequestLogSummary[];
+  readonly detail: RequestLog | null;
+  readonly phase: "idle" | "loading" | "error";
+}
+
+function LogsPage({
   client,
-  credentials = emptyCredentials,
-  failure,
-  loading,
-  notice,
   onNotice,
-  onGlobalReload,
-  onReload,
-  scope,
-  snapshot,
-  onScopeChange,
-  accountActions,
-  services = emptyServices,
-  catalogModels = emptyCatalogEntries,
-  catalogLoading = false,
-  globalFailures,
 }: {
   readonly client: AdministrationClient;
-  readonly credentials?: readonly Credential[];
-  readonly failure: string | null;
-  readonly loading: boolean;
-  readonly notice: Notice | null;
-  readonly onNotice: (notice: Notice | null) => void;
-  readonly onGlobalReload?: () => Promise<void>;
-  readonly onReload: () => Promise<void>;
-  readonly scope: ScopeSelection;
-  readonly snapshot: AdministrationSnapshot | null;
-  readonly onScopeChange?: ((scope: ScopeSelection) => void) | undefined;
-  readonly accountActions?: ReactNode;
-  readonly services?: readonly ServiceSummary[];
-  readonly catalogModels?: readonly CatalogEntry[];
-  readonly catalogLoading?: boolean;
-  readonly globalFailures?: Readonly<
-    Partial<Record<"services" | "credentials" | "catalog", string>>
-  >;
+  readonly onNotice: (tone: "success" | "error", message: string) => void;
 }) {
+  const [logs, updateLogs] = useReducer(
+    (state: LogsPageState, patch: Partial<LogsPageState>) => ({
+      ...state,
+      ...patch,
+    }),
+    undefined,
+    (): LogsPageState => {
+      const initial = isoRange();
+      return {
+        from: initial.from.slice(0, 16),
+        to: initial.to.slice(0, 16),
+        items: [],
+        detail: null,
+        phase: "idle",
+      };
+    },
+  );
+  const mediaUrl = useRef<string | null>(null);
+  useEffect(
+    () => () => {
+      if (mediaUrl.current !== null) URL.revokeObjectURL(mediaUrl.current);
+    },
+    [],
+  );
+  async function load() {
+    updateLogs({ phase: "loading" });
+    try {
+      const items = (
+        await client.requestLogs(
+          new Date(logs.from).toISOString(),
+          new Date(logs.to).toISOString(),
+        )
+      ).items;
+      updateLogs({ items, phase: "idle" });
+    } catch (error) {
+      updateLogs({ phase: "error" });
+      onNotice("error", errorMessage(error));
+    }
+  }
+  const detail = logs.detail;
   return (
-    <>
-      <AdministrationDashboard
-        client={client}
-        credentials={credentials}
-        failure={failure}
-        loading={loading}
-        scope={scope}
-        snapshot={snapshot}
-        notice={notice}
-        onNotice={onNotice}
-        {...(onGlobalReload === undefined ? {} : { onGlobalReload })}
-        onReload={onReload}
-        onScopeChange={onScopeChange}
-        accountActions={accountActions}
-        services={services}
-        catalogModels={catalogModels}
-        catalogLoading={catalogLoading}
-        {...(globalFailures === undefined ? {} : { globalFailures })}
+    <div className="administration-page">
+      <PageHeading
+        description="Only global administrators can read complete retained model content and media."
+        eyebrow="Best-effort diagnostics"
+        title="Detailed request logs"
       />
-      <PersistentNotice
-        notice={notice}
-        onDismiss={() => {
-          onNotice(null);
-        }}
+      <Panel>
+        <form
+          className="administration-form request-log-filter-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void load();
+          }}
+        >
+          <label>
+            From
+            <input
+              onChange={(event) => {
+                updateLogs({ from: event.currentTarget.value });
+              }}
+              type="datetime-local"
+              value={logs.from}
+            />
+          </label>
+          <label>
+            To
+            <input
+              onChange={(event) => {
+                updateLogs({ to: event.currentTarget.value });
+              }}
+              type="datetime-local"
+              value={logs.to}
+            />
+          </label>
+          <Button type="submit">Load logs</Button>
+        </form>
+        {logs.phase === "loading" ? (
+          <LoadingPage title="Loading detailed logs" />
+        ) : (
+          <div className="administration-table-region">
+            <table>
+              <thead>
+                <tr>
+                  <th>Started</th>
+                  <th>Scope</th>
+                  <th>Kind</th>
+                  <th>Route</th>
+                  <th>Tags</th>
+                  <th>Outcome</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {logs.items.length === 0 ? (
+                  <EmptyTable
+                    columns={7}
+                    text={
+                      logs.phase === "error"
+                        ? "Logs are unavailable"
+                        : "No logs in this range"
+                    }
+                  />
+                ) : (
+                  logs.items.map((item) => (
+                    <tr key={item.id}>
+                      <td>{displayTime(item.started_at)}</td>
+                      <td>
+                        {item.service_api_name} / {item.workspace_api_name}
+                      </td>
+                      <td>{item.kind}</td>
+                      <td>
+                        {item.assignment_api_name ??
+                          item.provider_model_api_name ??
+                          "Unavailable"}
+                      </td>
+                      <td>{item.tags?.join(", ") ?? "None"}</td>
+                      <td>
+                        <StatusPill tone={tone(item.outcome)}>
+                          {item.outcome}
+                        </StatusPill>
+                      </td>
+                      <td>
+                        <Button
+                          onClick={() =>
+                            void client
+                              .requestLog(item.id)
+                              .then((value) => {
+                                updateLogs({ detail: value });
+                              })
+                              .catch((error: unknown) => {
+                                onNotice("error", errorMessage(error));
+                              })
+                          }
+                          variant="quiet"
+                        >
+                          Inspect
+                        </Button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Panel>
+      {detail === null ? null : (
+        <Panel aria-live="polite">
+          <PanelHeader
+            actions={
+              <Button
+                onClick={() => {
+                  updateLogs({ detail: null });
+                }}
+                variant="quiet"
+              >
+                Close
+              </Button>
+            }
+            description={`${detail.summary.service_api_name} / ${detail.summary.workspace_api_name}`}
+            title={`Request ${detail.summary.id}`}
+          />
+          <div className="log-detail">
+            <section>
+              <h3>Request content</h3>
+              <pre>{detail.request_json}</pre>
+            </section>
+            <section>
+              <h3>Response content</h3>
+              <pre>
+                {detail.response_json ?? "Response content is unavailable."}
+              </pre>
+            </section>
+            <section>
+              <h3>Attempts</h3>
+              <ol>
+                {detail.attempts.map((item, index) => (
+                  <li key={`${item.provider_model_api_name}-${String(index)}`}>
+                    <strong>
+                      {item.provider_model_api_name} · {item.outcome}
+                    </strong>
+                    <span>
+                      {item.usage.currency} {item.usage.cost} ·{" "}
+                      {item.usage.units
+                        .map((unit) => `${unit.unit} ${unit.quantity}`)
+                        .join(", ")}
+                    </span>
+                    {item.error == null ? null : (
+                      <span>
+                        {item.error.code}: {item.error.message}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ol>
+            </section>
+            <section>
+              <h3>Retained media</h3>
+              {detail.media == null || detail.media.length === 0 ? (
+                <p>No retained media</p>
+              ) : (
+                <ul>
+                  {detail.media.map((item) => (
+                    <li key={item.id}>
+                      <span>
+                        {item.role} · {item.media_type} ·{" "}
+                        {String(item.size_bytes)} bytes
+                      </span>
+                      <Button
+                        onClick={() =>
+                          void client
+                            .requestLogMedia(detail.summary.id, item.id)
+                            .then((blob) => {
+                              if (mediaUrl.current !== null)
+                                URL.revokeObjectURL(mediaUrl.current);
+                              mediaUrl.current = URL.createObjectURL(blob);
+                              globalThis.open(
+                                mediaUrl.current,
+                                "_blank",
+                                "noopener,noreferrer",
+                              );
+                            })
+                            .catch((error: unknown) => {
+                              onNotice(
+                                "error",
+                                `The retained media is unavailable. ${errorMessage(error)}`,
+                              );
+                            })
+                        }
+                        variant="quiet"
+                      >
+                        Open retained media
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          </div>
+        </Panel>
+      )}
+    </div>
+  );
+}
+
+function StatisticsPage({
+  client,
+  onNotice,
+  services,
+}: {
+  readonly client: AdministrationClient;
+  readonly onNotice: (tone: "success" | "error", message: string) => void;
+  readonly services: readonly Service[];
+}) {
+  const initial = useMemo(() => isoRange(30), []);
+  const [result, setResult] = useState<StatisticsResult | null>(null);
+  async function load(event: SubmitEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const outcome = formText(form, "outcome");
+    try {
+      setResult(
+        await client.statistics({
+          from: new Date(formText(form, "from")).toISOString(),
+          to: new Date(formText(form, "to")).toISOString(),
+          ...(formText(form, "service") === ""
+            ? {}
+            : { service: formText(form, "service") }),
+          ...(formText(form, "workspace") === ""
+            ? {}
+            : { workspace: formText(form, "workspace") }),
+          ...(formText(form, "assignment") === ""
+            ? {}
+            : { assignment: formText(form, "assignment") }),
+          ...(formText(form, "provider_model") === ""
+            ? {}
+            : { provider_model: formText(form, "provider_model") }),
+          ...(outcome === "succeeded" || outcome === "failed"
+            ? { outcome }
+            : {}),
+          ...(formText(form, "tag") === ""
+            ? {}
+            : { tag: formText(form, "tag") }),
+          group_by: form.getAll("group_by").map(String),
+        }),
+      );
+    } catch (error) {
+      onNotice("error", errorMessage(error));
+    }
+  }
+  return (
+    <div className="administration-page">
+      <PageHeading
+        description="Group calls, attempts, typed units, and fixed-decimal cost across at most 366 days."
+        eyebrow="Durable accounting"
+        title="Usage and cost statistics"
       />
-    </>
+      <Panel>
+        <form
+          className="administration-form statistics-form"
+          onSubmit={(event) => void load(event)}
+        >
+          <label>
+            From
+            <input
+              defaultValue={initial.from.slice(0, 16)}
+              name="from"
+              type="datetime-local"
+            />
+          </label>
+          <label>
+            To
+            <input
+              defaultValue={initial.to.slice(0, 16)}
+              name="to"
+              type="datetime-local"
+            />
+          </label>
+          <label>
+            Service
+            <select name="service">
+              <option value="">All services</option>
+              {services.map((item) => (
+                <option key={item.api_name}>{item.api_name}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Workspace
+            <input name="workspace" />
+          </label>
+          <label>
+            Assignment
+            <input name="assignment" placeholder="Name or (exact)" />
+          </label>
+          <label>
+            Provider-model
+            <input name="provider_model" />
+          </label>
+          <label>
+            Outcome
+            <select name="outcome">
+              <option value="">All outcomes</option>
+              <option>succeeded</option>
+              <option>failed</option>
+            </select>
+          </label>
+          <label>
+            Tag
+            <input name="tag" />
+          </label>
+          <fieldset>
+            <legend>Group by</legend>
+            {[
+              "date",
+              "service",
+              "workspace",
+              "assignment",
+              "provider_model",
+              "outcome",
+              "tag",
+            ].map((item) => (
+              <label className="checkbox-field" key={item}>
+                <input name="group_by" type="checkbox" value={item} /> {item}
+              </label>
+            ))}
+          </fieldset>
+          <Button type="submit">Run statistics</Button>
+        </form>
+      </Panel>
+      {result === null ? (
+        <StatePanel kind="empty" title="No statistics query">
+          Choose filters and run the statistics query.
+        </StatePanel>
+      ) : (
+        <Panel>
+          <PanelHeader
+            description={`${displayTime(result.from)} through ${displayTime(result.to)}`}
+            title="Statistics result"
+          />
+          <div className="administration-table-region">
+            <table>
+              <thead>
+                <tr>
+                  <th>Dimensions</th>
+                  <th>Calls</th>
+                  <th>Attempts</th>
+                  <th>Typed usage</th>
+                  <th>Cost</th>
+                </tr>
+              </thead>
+              <tbody>
+                {result.buckets.length === 0 ? (
+                  <EmptyTable columns={5} text="No accounting groups" />
+                ) : (
+                  result.buckets.map((item, index) => (
+                    <tr
+                      key={`${item.currency}-${item.dimensions.join("-")}-${String(index)}`}
+                    >
+                      <th scope="row">
+                        {item.dimensions.join(" / ") || "Total"}
+                      </th>
+                      <td>{item.calls}</td>
+                      <td>{item.attempts}</td>
+                      <td>
+                        {item.units
+                          .map((unit) => `${unit.unit} ${unit.quantity}`)
+                          .join(", ") || "None"}
+                      </td>
+                      <td>
+                        {item.currency} {item.cost}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Panel>
+      )}
+    </div>
+  );
+}
+
+function OperationsPage({
+  client,
+  csrf,
+  health,
+  onNotice,
+  onRefresh,
+  providerModels,
+  retentionDays,
+}: {
+  readonly client: AdministrationClient;
+  readonly csrf: string;
+  readonly health: AdministratorHealth;
+  readonly onNotice: (tone: "success" | "error", message: string) => void;
+  readonly onRefresh: () => Promise<void>;
+  readonly providerModels: readonly ProviderModel[];
+  readonly retentionDays: number;
+}) {
+  const range = useMemo(() => isoRange(7), []);
+  const [activity, setActivity] = useState<readonly ActivityEvent[]>([]);
+  useEffect(() => {
+    void client
+      .activity(range.from, range.to)
+      .then((page) => {
+        setActivity(page.items);
+      })
+      .catch((error: unknown) => {
+        onNotice("error", errorMessage(error));
+      });
+  }, [client, onNotice, range.from, range.to]);
+  const cooldowns = providerModels.filter((item) => item.cooldown != null);
+  return (
+    <div className="administration-page">
+      <PageHeading
+        description="Inspect current health, best-effort cooldowns, retention, and basic configuration activity."
+        eyebrow="Operations"
+        title="Activity and health"
+      />
+      <div className="administration-sections">
+        <Panel>
+          <PanelHeader
+            description={displayTime(health.checked_at)}
+            title="Health components"
+          />
+          <ul className="health-list">
+            {health.components.map((item) => (
+              <li key={item.name}>
+                <span>
+                  <strong>{item.name.replaceAll("_", " ")}</strong>
+                  <small>{item.message ?? "No corrective message"}</small>
+                </span>
+                <StatusPill tone={tone(item.status)}>{item.status}</StatusPill>
+              </li>
+            ))}
+          </ul>
+        </Panel>
+        <Panel>
+          <PanelHeader
+            description="The duration applies to detailed logs, activity, uploaded images, and retained generated media."
+            title="Global retention"
+          />
+          <form
+            className="administration-form retention-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void client
+                .putRetention(
+                  Number(formText(new FormData(event.currentTarget), "days")),
+                  csrf,
+                )
+                .then(onRefresh)
+                .catch((error: unknown) => {
+                  onNotice("error", errorMessage(error));
+                });
+            }}
+          >
+            <label>
+              Duration in whole days
+              <input
+                defaultValue={retentionDays}
+                max={30}
+                min={1}
+                name="days"
+                type="number"
+              />
+            </label>
+            <Button type="submit">Save retention</Button>
+          </form>
+        </Panel>
+      </div>
+      <Panel>
+        <PanelHeader
+          description="Cooldowns are process-local best-effort state and can clear after a restart."
+          title="Current provider-model cooldowns"
+        />
+        <ul className="record-list">
+          {cooldowns.length === 0 ? (
+            <li>No current cooldowns</li>
+          ) : (
+            cooldowns.map((item) => (
+              <li key={item.api_name}>
+                <span>
+                  <strong>{item.api_name}</strong>
+                  <small>
+                    {item.cooldown?.reason} · until{" "}
+                    {displayTime(item.cooldown?.until)}
+                  </small>
+                </span>
+                <StatusPill tone="amber">cooldown</StatusPill>
+              </li>
+            ))
+          )}
+        </ul>
+      </Panel>
+      <Panel>
+        <PanelHeader
+          description="This is a basic activity record. It is not immutable configuration history."
+          title="Configuration activity, last 7 days"
+        />
+        <div className="administration-table-region">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Actor</th>
+                <th>Action</th>
+                <th>Target</th>
+                <th>Result</th>
+              </tr>
+            </thead>
+            <tbody>
+              {activity.length === 0 ? (
+                <EmptyTable columns={5} text="No retained activity" />
+              ) : (
+                activity.map((item) => (
+                  <tr key={item.id}>
+                    <td>{displayTime(item.occurred_at)}</td>
+                    <td>{item.actor_subject}</td>
+                    <td>{item.action}</td>
+                    <td>
+                      {item.resource_type} ·{" "}
+                      {item.resource_api_name ?? item.resource_id}
+                    </td>
+                    <td>
+                      <StatusPill tone={tone(item.result)}>
+                        {item.result}
+                      </StatusPill>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+    </div>
   );
 }
 
 export interface AppProps {
   readonly client?: AdministrationClient;
-  readonly startingScope?: ScopeSelection;
-  readonly accountActions?: ReactNode;
+}
+const defaultAdministrationClient = createAdministrationClient();
+
+interface MainState {
+  readonly assignments: readonly Assignment[];
+  readonly data: AppData | null;
+  readonly failure: string | null;
+  readonly notice: Notice | null;
+  readonly playgroundKey: string;
+  readonly section: Section;
+  readonly selectedService: string;
+  readonly sessionState: {
+    readonly status: "loading" | "active" | "signed-out" | "expired" | "denied";
+    readonly session?: AdministratorSession;
+    readonly message?: string;
+  };
+  readonly workspaces: readonly Workspace[];
 }
 
-interface GlobalAdministrationData {
-  readonly services: readonly ServiceSummary[];
-  readonly credentials: readonly Credential[];
-  readonly catalogModels: readonly CatalogEntry[];
-}
-
-interface GlobalAdministrationState {
-  readonly data: GlobalAdministrationData;
-  readonly failures: GlobalFailures;
-}
-
-export function LocalAdministratorActivation({
-  onActivate,
-}: {
-  readonly onActivate: (secret: string) => Promise<void>;
-}) {
-  const [secret, setSecret] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [failure, setFailure] = useState<string | null>(null);
-  async function submit(event: SubmitEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setSubmitting(true);
-    setFailure(null);
-    try {
-      await onActivate(secret);
-    } catch {
-      setFailure("The local administrator session was not activated.");
-    } finally {
-      setSecret("");
-      setSubmitting(false);
-    }
-  }
-  return (
-    <SessionPage aria-label="Local administrator activation">
-      <SessionCard
-        eyebrow="Localhost only"
-        title="Activate administrator session"
-        description="Enter the generated local administrator secret. The control clears the value after each attempt."
-        actions={
-          <form
-            className="local-activation-form"
-            onSubmit={(event) => void submit(event)}
-          >
-            <label>
-              Local administrator secret
-              <input
-                name="local-administrator-secret"
-                type="password"
-                autoComplete="off"
-                spellCheck="false"
-                value={secret}
-                required
-                minLength={20}
-                onChange={(event) => {
-                  setSecret(event.currentTarget.value);
-                }}
-              />
-            </label>
-            {failure === null ? null : <p role="alert">{failure}</p>}
-            <Button type="submit" disabled={submitting || secret.length < 20}>
-              {submitting ? "Activating…" : "Activate local session"}
-            </Button>
-          </form>
-        }
-      />
-    </SessionPage>
-  );
-}
-
-function ActivatedAdministrationApp({
-  csrfToken,
-  authenticationMode,
-  identityAccountUrl,
-  onSignOut,
-  onRecentAuthentication,
-  sessionAction = "idle",
-}: {
-  readonly csrfToken: string;
-  readonly authenticationMode: "local" | "oidc";
-  readonly identityAccountUrl?: string;
-  readonly onSignOut: () => Promise<void>;
-  readonly onRecentAuthentication: () => Promise<void>;
-  readonly sessionAction?: SessionAction;
-}) {
-  const client = useMemo(
-    () =>
-      createFetchAdministrationClient({
-        csrfToken,
-        onRecentAuthenticationRequired: onRecentAuthentication,
-      }),
-    [csrfToken, onRecentAuthentication],
-  );
-  const accountActions = (
-    <div
-      className="administrator-session-actions"
-      aria-label="Administrator account"
-    >
-      {authenticationMode !== "oidc" ||
-      identityAccountUrl === undefined ? null : (
-        <AccountMenu
-          className="administrator-account"
-          compact
-          avatar="ID"
-          name="Pocket ID account"
-          aria-label="Manage Pocket ID account"
-          onClick={() => {
-            globalThis.location.assign(identityAccountUrl);
-          }}
-        />
-      )}
-      <Button
-        variant="quiet"
-        type="button"
-        disabled={sessionAction.endsWith("_pending")}
-        icon={<Icon name="logout" size={16} />}
-        onClick={() => void onSignOut()}
-      >
-        {sessionAction === "sign_out_pending" ? "Signing out…" : "Sign out"}
-      </Button>
-      {sessionAction === "error" ? (
-        <span role="alert">The administrator action failed. Try again.</span>
-      ) : null}
-      {sessionAction === "recent_pending" ? (
-        <span role="status">Pocket ID verification is opening…</span>
-      ) : null}
-    </div>
-  );
-  return <App client={client} accountActions={accountActions} />;
-}
-
-export type LocalSessionGate =
-  | { readonly state: "checking" }
-  | { readonly state: "required" }
-  | { readonly state: "oidc_required" }
-  | {
-      readonly state: "active";
-      readonly csrfToken: string;
-      readonly authenticationMode: "local" | "oidc";
-      readonly identityAccountUrl?: string;
-    }
-  | { readonly state: "unavailable" }
-  | { readonly state: "failed" };
-
-export function LocalAdministrationGateView({
+function AuthenticatedAdministration({
+  assignments,
+  client,
+  data,
+  failure,
+  loadGlobal,
+  loadScope,
+  navigate,
+  notice,
+  notify,
+  onDismissNotice,
+  onPlaygroundKey,
+  playgroundKey,
+  section,
+  selectService,
+  selectedService,
   session,
-  onActivate,
-  onSignIn,
-  onSignOut,
-  onRecentAuthentication,
-  sessionAction = "idle",
+  workspaces,
 }: {
-  readonly session: LocalSessionGate;
-  readonly onActivate: (secret: string) => Promise<void>;
-  readonly onSignIn?: () => Promise<void>;
-  readonly onSignOut?: () => Promise<void>;
-  readonly onRecentAuthentication?: () => Promise<void>;
-  readonly sessionAction?: SessionAction;
+  readonly assignments: readonly Assignment[];
+  readonly client: AdministrationClient;
+  readonly data: AppData | null;
+  readonly failure: string | null;
+  readonly loadGlobal: () => Promise<void>;
+  readonly loadScope: () => Promise<void>;
+  readonly navigate: (id: string) => void;
+  readonly notice: Notice | null;
+  readonly notify: (tone: "success" | "error", message: string) => void;
+  readonly onDismissNotice: () => void;
+  readonly onPlaygroundKey: (key: string) => void;
+  readonly playgroundKey: string;
+  readonly section: Section;
+  readonly selectService: (value: string) => void;
+  readonly selectedService: string;
+  readonly session: AdministratorSession;
+  readonly workspaces: readonly Workspace[];
 }) {
-  if (session.state === "checking")
-    return (
-      <SessionPage aria-label="Administrator session">
-        <StatePanel kind="loading" title="Checking administrator session">
-          The administrator session state is loading.
-        </StatePanel>
-      </SessionPage>
-    );
-  if (session.state === "required")
-    return <LocalAdministratorActivation onActivate={onActivate} />;
-  if (session.state === "oidc_required")
-    return (
-      <SessionPage aria-label="Administrator sign-in">
-        <SessionCard
-          eyebrow="OpenDLE Identity"
-          title="Administrator sign-in"
-          description="Use your Pocket ID passkey to start a bounded Router session."
-          actions={
-            <Button
-              type="button"
-              disabled={sessionAction.endsWith("_pending")}
-              onClick={() => void onSignIn?.()}
-            >
-              {sessionAction === "sign_in_pending"
-                ? "Opening Pocket ID…"
-                : "Sign in with Pocket ID"}
-            </Button>
-          }
-          feedback={
-            sessionAction === "error" ? (
-              <p role="alert">Pocket ID sign-in did not start. Try again.</p>
-            ) : null
+  const sidebar = (
+    <ApplicationSidebar
+      brand={
+        <div className="application-brand">
+          <span>
+            <Icon name="spark" size={19} />
+          </span>
+          <strong>LLM Router</strong>
+        </div>
+      }
+      context={
+        <WorkspaceSelector
+          avatar={<Icon name="server" />}
+          detail="Global administrator"
+          name={
+            data?.services.find((item) => item.api_name === selectedService)
+              ?.display_name ?? "All services"
           }
         />
-      </SessionPage>
-    );
-  if (session.state === "failed")
-    return (
-      <SessionPage aria-label="Administrator session">
-        <StatePanel kind="error" title="Administrator session is not available">
-          The local administrator session is not available.
-        </StatePanel>
-      </SessionPage>
-    );
-  if (session.state === "active")
-    return (
-      <ActivatedAdministrationApp
-        csrfToken={session.csrfToken}
-        authenticationMode={session.authenticationMode}
-        {...(session.identityAccountUrl === undefined
-          ? {}
-          : { identityAccountUrl: session.identityAccountUrl })}
-        onSignOut={() => onSignOut?.() ?? Promise.resolve()}
-        onRecentAuthentication={() =>
-          onRecentAuthentication?.() ?? Promise.resolve()
-        }
-        sessionAction={sessionAction}
-      />
-    );
-  return <App />;
-}
-
-export function LocalAdministrationApp() {
-  const [session, setSession] = useState<LocalSessionGate>({
-    state: "checking",
-  });
-  const [sessionAction, setSessionAction] = useState<SessionAction>("idle");
-  useEffect(() => {
-    let mounted = true;
-    const cancelInspection = scheduleAdministrationSessionInspection(() => {
-      void inspectLocalAdministratorSession()
-        .then((result) => {
-          if (mounted) setSession(result);
-        })
-        .catch(() => {
-          if (mounted) setSession({ state: "failed" });
-        });
-    });
-    return () => {
-      mounted = false;
-      cancelInspection();
-    };
-  }, []);
-  return (
-    <LocalAdministrationGateView
-      session={session}
-      sessionAction={sessionAction}
-      onActivate={async (secret) => {
-        const csrfToken = await activateLocalAdministrator(secret);
-        setSession({
-          state: "active",
-          csrfToken,
-          authenticationMode: "local",
-        });
-      }}
-      onSignIn={async () => {
-        setSessionAction("sign_in_pending");
-        try {
-          const authorizationUrl = await startPocketIDAdministratorSession(
-            initialTrustedGrantToken,
-          );
-          window.location.assign(authorizationUrl);
-        } catch {
-          setSessionAction("error");
-        }
-      }}
-      onSignOut={async () => {
-        if (session.state !== "active") return;
-        setSessionAction("sign_out_pending");
-        try {
-          await endAdministratorSession(session.csrfToken);
-          setSessionAction("idle");
-          setSession({
-            state:
-              session.authenticationMode === "local"
-                ? "required"
-                : "oidc_required",
-          });
-        } catch {
-          setSessionAction("error");
-        }
-      }}
-      onRecentAuthentication={async () => {
-        setSessionAction("recent_pending");
-        try {
-          const authorizationUrl = await startPocketIDRecentAuthentication();
-          window.location.assign(authorizationUrl);
-        } catch (error) {
-          setSessionAction("error");
-          throw error;
-        }
-      }}
+      }
+      footer={
+        <>
+          <AccountMenu
+            avatar={session.display_name.slice(0, 2).toUpperCase()}
+            detail={`Expires ${displayTime(session.expires_at)}`}
+            name={session.display_name}
+          />
+          <Button
+            onClick={() => {
+              void client
+                .logout(session.csrf_token)
+                .then(() => {
+                  globalThis.location.reload();
+                })
+                .catch((error: unknown) => {
+                  notify("error", errorMessage(error));
+                });
+            }}
+            variant="quiet"
+          >
+            <Icon name="logout" size={16} /> Sign out
+          </Button>
+        </>
+      }
+      navigation={
+        <ApplicationNavigation aria-label="Administration navigation">
+          {(["Manage", "Observe"] as const).map((group) => (
+            <ApplicationNavigationGroup key={group} label={group}>
+              {routes.flatMap((route) =>
+                route.group === group
+                  ? [
+                      <NavigationItem
+                        active={route.id === section}
+                        icon={<Icon name={route.icon} size={17} />}
+                        key={route.id}
+                        label={route.label}
+                        onClick={() => {
+                          navigate(route.id);
+                        }}
+                      />,
+                    ]
+                  : [],
+              )}
+            </ApplicationNavigationGroup>
+          ))}
+        </ApplicationNavigation>
+      }
     />
   );
-}
-
-export function App({
-  client: suppliedClient,
-  startingScope,
-  accountActions,
-}: AppProps = {}) {
-  const client = useMemo(
-    () => suppliedClient ?? createFetchAdministrationClient(),
-    [suppliedClient],
-  );
-  const [scope, setScope] = useState(startingScope ?? initialScope);
-  const [globalState, setGlobalState] = useState<GlobalAdministrationState>({
-    data: {
-      services: emptyServices,
-      credentials: emptyCredentials,
-      catalogModels: [],
-    },
-    failures: emptyGlobalFailures,
-  });
-  const { services, credentials, catalogModels } = globalState.data;
-  const { failures: globalFailures } = globalState;
-  const [snapshot, setSnapshot] = useState<AdministrationSnapshot | null>(null);
-  const [loading, setLoading] = useState(scope.serviceId !== "");
-  const [failure, setFailure] = useReducer(
-    (_current: string | null, next: string | null) => next,
-    null,
-  );
-  const [notice, setNotice] = useReducer(
-    (_current: Notice | null, next: Notice | null) => next,
-    null,
-  );
-  const [catalogLoading, setCatalogLoading] = useReducer(
-    (_current: boolean, next: boolean) => next,
-    true,
-  );
-  const loadGeneration = useRef(0);
-  const globalLoadGeneration = useRef(0);
-  const load = useCallback(
-    async (signal?: AbortSignal) => {
-      if (signal?.aborted) return false;
-      const generation = ++loadGeneration.current;
-      if (scope.serviceId === "") {
-        setSnapshot(null);
-        setLoading(false);
-        setFailure(null);
-        return true;
+  const topbar = (
+    <ApplicationTopbar
+      actions={
+        <div className="administration-topbar-actions">
+          <label>
+            Service
+            <select
+              aria-label="Selected service"
+              onChange={(event) => {
+                selectService(event.currentTarget.value);
+              }}
+              value={selectedService}
+            >
+              <option value="">All services</option>
+              {data?.services.map((item) => (
+                <option key={item.api_name} value={item.api_name}>
+                  {item.display_name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <Button
+            onClick={() => {
+              void Promise.all([loadGlobal(), loadScope()]);
+            }}
+            variant="secondary"
+          >
+            <Icon name="refresh" size={16} /> Refresh
+          </Button>
+        </div>
       }
-      setLoading(true);
-      setFailure(null);
-      setSnapshot(null);
-      try {
-        const nextSnapshot = await client.load(scope, signal);
-        if (generation === loadGeneration.current && !signal?.aborted) {
-          setSnapshot(nextSnapshot);
-        }
-        return true;
-      } catch (error) {
-        if (
-          generation === loadGeneration.current &&
-          !(error instanceof DOMException && error.name === "AbortError")
-        ) {
-          setFailure(errorMessage(error));
-        }
-        return false;
-      } finally {
-        if (generation === loadGeneration.current && !signal?.aborted) {
-          setLoading(false);
-        }
-      }
-    },
-    [client, scope],
+      title={routes.find((item) => item.id === section)?.label}
+    />
   );
-  useEffect(() => {
-    const controller = new AbortController();
-    void Promise.resolve()
-      .then(() => load(controller.signal))
-      .catch(() => undefined);
-    return () => {
-      controller.abort();
-    };
-  }, [load]);
-  const reloadGlobalData = useCallback(
-    async (signal?: AbortSignal) => {
-      if (signal?.aborted) return false;
-      const generation = ++globalLoadGeneration.current;
-      setCatalogLoading(true);
-      const results = await Promise.allSettled([
-        client.listServices(signal),
-        client.listCredentials(signal),
-        client.listCatalog("models", signal),
-      ] as const);
-      const failures: Partial<
-        Record<"services" | "credentials" | "catalog", string>
-      > = {};
-      if (results[0].status === "rejected") {
-        failures.services = errorMessage(results[0].reason);
-      }
-      if (results[1].status === "rejected") {
-        failures.credentials = errorMessage(results[1].reason);
-      }
-      if (results[2].status === "rejected") {
-        failures.catalog = "The supported model catalog is not available.";
-      }
-      if (generation === globalLoadGeneration.current && !signal?.aborted) {
-        setGlobalState((current) => ({
-          failures,
-          data: {
-            services:
-              results[0].status === "fulfilled"
-                ? results[0].value
-                : current.data.services,
-            credentials:
-              results[1].status === "fulfilled"
-                ? results[1].value
-                : current.data.credentials,
-            catalogModels:
-              results[2].status === "fulfilled"
-                ? results[2].value
-                : current.data.catalogModels,
-          },
-        }));
-        setCatalogLoading(false);
-      }
-      return (
-        generation === globalLoadGeneration.current &&
-        !signal?.aborted &&
-        Object.keys(failures).length === 0
-      );
-    },
-    [client],
-  );
-  useEffect(() => {
-    const controller = new AbortController();
-    void Promise.resolve()
-      .then(() => reloadGlobalData(controller.signal))
-      .catch(() => undefined);
-    return () => {
-      controller.abort();
-    };
-  }, [reloadGlobalData]);
-  const reloadAllData = useCallback(async () => {
-    const [globalReady, selectedReady] = await Promise.all([
-      reloadGlobalData(),
-      load(),
-    ]);
-    if (!globalReady || !selectedReady) {
-      throw new Error("Current administrator data did not refresh.");
-    }
-  }, [load, reloadGlobalData]);
-  function applyScope(next: ScopeSelection) {
-    loadGeneration.current += 1;
-    setNotice(null);
-    setSnapshot(null);
-    setFailure(null);
-    setLoading(next.serviceId !== "");
-    setScope(next);
-    const suffix = scopeSearch(next);
-    globalThis.history.replaceState(
-      null,
-      "",
-      suffix === "" ? "?" : `?${suffix}`,
+  let content: ReactNode =
+    data === null ? (
+      failure === null ? (
+        <LoadingPage />
+      ) : (
+        <FailurePage
+          message={failure}
+          onRetry={() => {
+            void loadGlobal();
+          }}
+        />
+      )
+    ) : (
+      <Overview data={data} />
     );
-  }
+  if (data !== null && section === "services")
+    content = (
+      <div className="administration-page">
+        <PageHeading
+          description="Create, move, inspect, and delete services in the one-parent tree."
+          eyebrow="Global administration"
+          title="Services and parent relationships"
+        />
+        <ServiceManagement
+          client={client}
+          csrf={session.csrf_token}
+          onNotice={notify}
+          onRefresh={loadGlobal}
+          onSelect={selectService}
+          selectedService={selectedService}
+          services={data.services}
+        />
+      </div>
+    );
+  if (data !== null && section === "access")
+    content = (
+      <AccessPage
+        client={client}
+        csrf={session.csrf_token}
+        key={selectedService}
+        onNotice={notify}
+        selectedService={selectedService}
+        setPlaygroundKey={onPlaygroundKey}
+      />
+    );
+  if (data !== null && section === "providers")
+    content = (
+      <ProvidersPage
+        client={client}
+        credentials={data.credentials}
+        csrf={session.csrf_token}
+        onNotice={notify}
+        onRefresh={loadGlobal}
+        providers={data.providers}
+      />
+    );
+  if (data !== null && section === "models")
+    content = (
+      <ModelsPage
+        client={client}
+        csrf={session.csrf_token}
+        models={data.models}
+        onNotice={notify}
+        onRefresh={loadGlobal}
+        providerModels={data.providerModels}
+        providers={data.providers}
+      />
+    );
+  if (data !== null && section === "assignments")
+    content = (
+      <AssignmentsPage
+        assignments={assignments}
+        client={client}
+        csrf={session.csrf_token}
+        onNotice={notify}
+        onRefresh={loadScope}
+        providerModels={data.providerModels}
+        selectedService={selectedService}
+      />
+    );
+  if (data !== null && section === "playground")
+    content = (
+      <PlaygroundPage
+        assignments={assignments}
+        initialKey={playgroundKey}
+        key={`${selectedService}:${assignments.map((item) => item.api_name).join(",")}:${workspaces.map((item) => item.api_name).join(",")}`}
+        onNotice={notify}
+        providerModels={data.providerModels}
+        selectedService={selectedService}
+        workspaces={workspaces}
+      />
+    );
+  if (data !== null && section === "logs")
+    content = <LogsPage client={client} onNotice={notify} />;
+  if (data !== null && section === "statistics")
+    content = (
+      <StatisticsPage
+        client={client}
+        onNotice={notify}
+        services={data.services}
+      />
+    );
+  if (data !== null && section === "operations")
+    content = (
+      <OperationsPage
+        client={client}
+        csrf={session.csrf_token}
+        health={data.health}
+        onNotice={notify}
+        onRefresh={loadGlobal}
+        providerModels={data.providerModels}
+        retentionDays={data.retentionDays}
+      />
+    );
   return (
     <ShellErrorBoundary
-      fallbackClassName="fatal-state"
-      fallbackTitle="LLM Router administration is not available"
-      fallbackMessage="Reload the page and review current data before you send another change."
-      resetKey={scope}
+      fallbackMessage="Reload the page. No automatic write was attempted."
+      fallbackTitle="The administration interface stopped"
+      resetKey={section}
     >
-      <AdministrationStateView
-        client={client}
-        credentials={credentials}
-        catalogModels={catalogModels}
-        catalogLoading={catalogLoading}
-        failure={failure}
-        loading={loading}
-        notice={notice}
-        onNotice={setNotice}
-        onGlobalReload={reloadAllData}
-        onReload={async () => {
-          if (!(await load())) {
-            throw new Error("The selected service did not refresh.");
-          }
-        }}
-        scope={scope}
-        snapshot={snapshot}
-        onScopeChange={applyScope}
-        accountActions={accountActions}
-        services={services}
-        globalFailures={globalFailures}
-      />
+      <ApplicationShell
+        mainProps={{ id: "main-content", tabIndex: -1 }}
+        mobileNavigation={
+          <MobileNavigation
+            aria-label="Mobile administration navigation"
+            items={routes.map((route) => ({
+              id: route.id,
+              label: route.label,
+              icon: <Icon name={route.icon} />,
+              active: route.id === section,
+            }))}
+            onSelect={navigate}
+          />
+        }
+        sidebar={sidebar}
+        topbar={topbar}
+      >
+        <div className="administration-content">{content}</div>
+        {notice === null ? null : (
+          <Toast
+            className={`notice-${notice.tone}`}
+            role={notice.tone === "error" ? "alert" : "status"}
+            onDismiss={onDismissNotice}
+          >
+            {notice.message}
+          </Toast>
+        )}
+      </ApplicationShell>
     </ShellErrorBoundary>
+  );
+}
+
+export function App({ client = defaultAdministrationClient }: AppProps) {
+  const [main, update] = useReducer(
+    (state: MainState, patch: Partial<MainState>) => ({ ...state, ...patch }),
+    undefined,
+    (): MainState => ({
+      assignments: [],
+      data: null,
+      failure: null,
+      notice: null,
+      playgroundKey: "",
+      section: currentSection(),
+      selectedService: selectedServiceFromLocation(),
+      sessionState: { status: "loading" },
+      workspaces: [],
+    }),
+  );
+  const {
+    assignments,
+    data,
+    failure,
+    notice,
+    playgroundKey,
+    section,
+    selectedService,
+    sessionState,
+    workspaces,
+  } = main;
+  const notify = useCallback(
+    (nextTone: "success" | "error", message: string) => {
+      update({ notice: { tone: nextTone, message } });
+    },
+    [],
+  );
+  const scopeLoadGuard = useRef(createScopeLoadGuard());
+  const inspectSession = useCallback(async () => {
+    try {
+      update({
+        sessionState: { status: "active", session: await client.session() },
+      });
+    } catch (error) {
+      if (error instanceof AdministrationApiError && error.status === 403)
+        update({ sessionState: { status: "denied", message: error.message } });
+      else update({ sessionState: { status: "signed-out" } });
+    }
+  }, [client]);
+  const loadGlobal = useCallback(async () => {
+    update({ failure: null });
+    try {
+      const [
+        services,
+        providers,
+        models,
+        providerModels,
+        credentials,
+        health,
+        retention,
+      ] = await Promise.all([
+        client.services(),
+        client.providers(),
+        client.models(),
+        client.providerModels(),
+        client.credentials(),
+        client.health(),
+        client.retention(),
+      ]);
+      update({
+        data: {
+          services: services.items,
+          providers: providers.items,
+          models: models.items,
+          providerModels: providerModels.items,
+          credentials: credentials.items,
+          health,
+          retentionDays: retention.duration_days,
+        },
+      });
+      if (
+        selectedService !== "" &&
+        !services.items.some((item) => item.api_name === selectedService)
+      )
+        update({ playgroundKey: "", selectedService: "" });
+    } catch (error) {
+      if (error instanceof AdministrationApiError && error.status === 401) {
+        update({ sessionState: { status: "expired" } });
+        return;
+      }
+      update({ failure: errorMessage(error) });
+    }
+  }, [client, selectedService]);
+  const loadScope = useCallback((): Promise<void> => {
+    const generation = scopeLoadGuard.current.begin();
+    if (selectedService === "") {
+      update({ assignments: [], workspaces: [] });
+      return Promise.resolve();
+    }
+    update({ assignments: [], workspaces: [] });
+    return Promise.all([
+      client.assignments(selectedService),
+      client.workspaces(selectedService),
+    ])
+      .then(([assignmentPage, workspacePage]) => {
+        if (!scopeLoadGuard.current.isCurrent(generation)) return;
+        update({
+          assignments: assignmentPage.items,
+          workspaces: workspacePage.items,
+        });
+      })
+      .catch((error: unknown) => {
+        if (!scopeLoadGuard.current.isCurrent(generation)) return;
+        update({ assignments: [], workspaces: [] });
+        notify("error", errorMessage(error));
+      });
+  }, [client, notify, selectedService]);
+  const sessionExpiresAt = sessionState.session?.expires_at;
+  useEffect(() => {
+    const timer = globalThis.setTimeout(() => {
+      void inspectSession();
+    }, 0);
+    return () => {
+      globalThis.clearTimeout(timer);
+    };
+  }, [inspectSession]);
+  useEffect(() => {
+    const timer = globalThis.setTimeout(() => {
+      if (sessionState.status === "active") void loadGlobal();
+    }, 0);
+    return () => {
+      globalThis.clearTimeout(timer);
+    };
+  }, [loadGlobal, sessionState.status]);
+  useEffect(() => {
+    const timer = globalThis.setTimeout(() => {
+      if (sessionState.status === "active") void loadScope();
+    }, 0);
+    return () => {
+      globalThis.clearTimeout(timer);
+    };
+  }, [loadScope, sessionState.status]);
+  useEffect(() => {
+    if (sessionState.status !== "active" || sessionExpiresAt === undefined)
+      return;
+    return scheduleSessionExpiry(sessionExpiresAt, () => {
+      scopeLoadGuard.current.invalidate();
+      update({
+        assignments: [],
+        data: null,
+        playgroundKey: "",
+        sessionState: { status: "expired" },
+        workspaces: [],
+      });
+    });
+  }, [sessionExpiresAt, sessionState.status]);
+  useEffect(() => {
+    const restoreLocation = () => {
+      scopeLoadGuard.current.invalidate();
+      update({
+        assignments: [],
+        playgroundKey: "",
+        section: currentSection(),
+        selectedService: selectedServiceFromLocation(),
+        workspaces: [],
+      });
+    };
+    globalThis.addEventListener("popstate", restoreLocation);
+    return () => {
+      globalThis.removeEventListener("popstate", restoreLocation);
+    };
+  }, []);
+  function selectService(value: string) {
+    scopeLoadGuard.current.invalidate();
+    update({
+      assignments: [],
+      playgroundKey: "",
+      selectedService: value,
+      workspaces: [],
+    });
+    const url = new URL(globalThis.location.href);
+    if (value === "") url.searchParams.delete("service");
+    else url.searchParams.set("service", value);
+    globalThis.history.replaceState({}, "", `${url.pathname}${url.search}`);
+  }
+  function navigate(id: string) {
+    const next = routes.find((item) => item.id === id)?.id;
+    if (next === undefined) return;
+    update({ section: next });
+    const query =
+      selectedService === ""
+        ? ""
+        : `?service=${encodeURIComponent(selectedService)}`;
+    globalThis.history.pushState({}, "", `/${next}${query}`);
+    globalThis.document.getElementById("main-content")?.focus();
+  }
+  if (sessionState.status === "loading")
+    return (
+      <SessionPage>
+        <LoadingPage title="Checking the administrator session" />
+      </SessionPage>
+    );
+  if (sessionState.status === "signed-out" || sessionState.status === "expired")
+    return (
+      <SignIn client={client} expired={sessionState.status === "expired"} />
+    );
+  if (sessionState.status === "denied")
+    return (
+      <SessionPage>
+        <SessionCard
+          actions={
+            <Button
+              onClick={() => {
+                update({ sessionState: { status: "signed-out" } });
+              }}
+            >
+              Return to sign-in
+            </Button>
+          }
+          description={
+            sessionState.message ??
+            "This Pocket ID subject is not allowed to administer the Router."
+          }
+          eyebrow="Access denied"
+          icon={<Icon name="lock" size={25} />}
+          title="Administrator access is denied"
+        />
+      </SessionPage>
+    );
+  const session = sessionState.session;
+  if (session === undefined) return null;
+  return (
+    <AuthenticatedAdministration
+      assignments={assignments}
+      client={client}
+      data={data}
+      failure={failure}
+      loadGlobal={loadGlobal}
+      loadScope={loadScope}
+      navigate={navigate}
+      notice={notice}
+      notify={notify}
+      onDismissNotice={() => {
+        update({ notice: null });
+      }}
+      onPlaygroundKey={(key) => {
+        update({ playgroundKey: key });
+      }}
+      playgroundKey={playgroundKey}
+      section={section}
+      selectService={selectService}
+      selectedService={selectedService}
+      session={session}
+      workspaces={workspaces}
+    />
   );
 }

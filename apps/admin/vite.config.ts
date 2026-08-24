@@ -15,9 +15,10 @@ export default defineConfig({
 
 function securityHeaders(development: boolean) {
   const inline = development ? " 'unsafe-inline'" : "";
+  const worker = development ? " blob:" : "";
   return {
     "Cache-Control": "no-store",
-    "Content-Security-Policy": `default-src 'self'; script-src 'self'${inline}; style-src 'self'${inline}; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'`,
+    "Content-Security-Policy": `default-src 'self'; script-src 'self'${inline}; worker-src 'self'${worker}; style-src 'self'${inline}; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'`,
     "X-Content-Type-Options": "nosniff",
   };
 }

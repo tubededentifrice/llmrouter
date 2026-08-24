@@ -403,6 +403,13 @@ class ProviderModelWrite(ClosedModel):
     manual_price: Price | None = None
 
 
+class Cooldown(ClosedModel):
+    """One current best-effort provider-model cooldown."""
+
+    until: datetime
+    reason: str = Field(min_length=1, max_length=500)
+
+
 class ProviderModel(ClosedModel):
     """One current expanded provider-model mapping."""
 
@@ -419,6 +426,7 @@ class ProviderModel(ClosedModel):
     price_source: str | None = None
     price_lookup_key: str | None = None
     effective_price: Price | None = None
+    cooldown: Cooldown | None = None
     created_at: datetime
 
 

@@ -80,6 +80,24 @@ class CatalogContext:
         return {"Cookie": f"llmrouter_admin_session={self.session}"}
 
 
+def assert_provider_model_cooldown(context: CatalogContext) -> None:
+    """Check current cooldown data in list and item administrator reads."""
+    executor = cast("Any", context.client.app).state.call_executor
+    for _ in range(3):
+        executor.cooldowns.record_failure("fake-text", "timeout")
+    cooldown_list = context.client.get(
+        "/v1/admin/provider-models", headers=context.read_headers
+    )
+    assert cooldown_list.status_code == HTTPStatus.OK
+    cooldown = cooldown_list.json()["items"][0]["cooldown"]
+    assert cooldown["reason"] == "timeout"
+    assert datetime.fromisoformat(cooldown["until"]) > datetime.now(tz=UTC)
+    cooldown_item = context.client.get(
+        "/v1/admin/provider-models/fake-text", headers=context.read_headers
+    )
+    assert cooldown_item.json()["cooldown"]["reason"] == "timeout"
+
+
 @pytest.fixture
 def catalog_settings(tmp_path: Path) -> Settings:
     """Create separate administrator and provider wrapping keys."""
@@ -584,6 +602,7 @@ def test_global_models_mappings_reasoning_and_service_visibility(
         ).status_code
         == HTTPStatus.CREATED
     )
+    assert_provider_model_cooldown(context)
     with psycopg.connect(catalog_database, row_factory=dict_row) as connection:
         route = resolve_provider_route(
             connection,

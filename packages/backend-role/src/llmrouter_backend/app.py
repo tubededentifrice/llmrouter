@@ -1805,6 +1805,7 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
         response_model_exclude_none=True,
     )
     def admin_list_provider_models(
+        request: Request,
         limit: Annotated[int, Query(ge=1, le=200)] = 50,
         cursor: Annotated[str | None, Query(min_length=1, max_length=500)] = None,
         _actor: AdministratorActor = Depends(administrator_actor),
@@ -1813,8 +1814,14 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
         items, next_cursor = catalog.list_provider_models(
             database, limit=limit, cursor=cursor
         )
+        cooldowns = _provider_model_cooldowns(request)
         return ProviderModelPage(
-            items=[ProviderModel.model_validate(item) for item in items],
+            items=[
+                ProviderModel.model_validate(
+                    {**item, "cooldown": cooldowns.get(item["api_name"])}
+                )
+                for item in items
+            ],
             page=PageInfo(has_more=next_cursor is not None, next_cursor=next_cursor),
         )
 
@@ -1851,13 +1858,15 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
     )
     def admin_get_provider_model(
         provider_model_api_name: ApiNamePath,
+        request: Request,
         _actor: AdministratorActor = Depends(administrator_actor),
         database: psycopg.Connection[Any] = Depends(connection),
     ) -> dict[str, Any]:
         row = catalog.provider_model_by_api_name(database, provider_model_api_name)
         if row is None:
             raise not_found("provider-model")
-        return row
+        cooldown = _provider_model_cooldowns(request).get(provider_model_api_name)
+        return {**row, "cooldown": cooldown}
 
     @application.put(
         "/v1/admin/provider-models/{provider_model_api_name}",
@@ -2885,6 +2894,21 @@ def _call_api_error(error: CallExecutionError) -> ApiError:
         field=error.field,
         reason=error.reason,
     )
+
+
+def _provider_model_cooldowns(request: Request) -> dict[str, dict[str, object]]:
+    """Return current safe cooldown data for administrator catalog reads."""
+    executor: CallExecutor | None = request.app.state.call_executor
+    if executor is None:
+        return {}
+    now = datetime.now(tz=UTC)
+    return {
+        item.provider_model_api_name: {
+            "until": now + timedelta(seconds=item.remaining_seconds),
+            "reason": item.last_failure_class,
+        }
+        for item in executor.cooldowns.snapshots()
+    }
 
 
 def _install_error_handlers(application: FastAPI) -> None:

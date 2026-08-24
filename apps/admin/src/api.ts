@@ -1,1439 +1,1000 @@
-export type AdministrationMode = "global" | "service";
-
-export interface BootstrapScope {
-  readonly audiences: readonly string[];
-  readonly operations: readonly string[];
-  readonly workspace_limit?: "all_service_workspaces" | "explicit_only";
-}
-
-export interface ServiceSummary {
-  readonly service_id: string;
-  readonly display_name: string;
-  readonly parent_service_id?: string | null;
-  readonly state: "active" | "disabled" | "retired";
-  readonly revision: string;
-  readonly bootstrap_state: "ready" | "revoked" | "missing";
-  readonly credential_generation: number | null;
-  readonly prior_generation_expires_at?: string;
-  readonly bootstrap_scope: BootstrapScope | null;
-}
-
-export interface ServiceCreated {
-  readonly service_id: string;
-  readonly state: "active";
-  readonly state_revision: string;
-  readonly bootstrap_secret?: string;
-  readonly bootstrap_secret_available: boolean;
-  readonly credential_generation: 1;
-}
-
-export interface ServiceAdministrationResult {
-  readonly resource_id: string;
-  readonly state: string;
-  readonly revision: string;
-  readonly operation_id: string;
-  readonly bootstrap_secret?: string;
-  readonly prior_generation_expires_at?: string;
-}
-
-export interface ScopeSelection {
-  readonly mode: AdministrationMode;
-  readonly serviceId: string;
-  readonly workspaceId: string;
-}
-
-export function scopeFromSearch(search: string): ScopeSelection {
-  const query = new URLSearchParams(search);
-  const serviceId = query.get("service_id") ?? "";
-  return {
-    mode: "global",
-    serviceId,
-    workspaceId: serviceId === "" ? "" : (query.get("workspace_id") ?? ""),
-  };
-}
-
-export function scopeSearch(scope: ScopeSelection): string {
-  const query = new URLSearchParams();
-  if (scope.serviceId !== "") query.set("service_id", scope.serviceId);
-  if (scope.serviceId !== "" && scope.workspaceId !== "") {
-    query.set("workspace_id", scope.workspaceId);
-  }
-  return query.toString();
-}
-
-export interface ScopedState {
-  readonly kind: "service" | "workspace";
-  readonly service_id: string;
-  readonly workspace_id?: string | null;
-  readonly display_name: string;
-  readonly state: "active" | "disabled" | "retired";
-  readonly revision: string;
-  readonly parent_service_id?: string | null;
-}
-
-export interface Credential {
-  readonly credential_id: string;
-  readonly owner_scope: string;
-  readonly provider_catalog_id: string;
-  readonly state: "active" | "disabled" | "retired";
-  readonly revision: string;
-  readonly created_at: string;
-  readonly fingerprint: string;
-}
-
-export interface RegisteredDocument {
-  readonly schema_name: string;
-  readonly major_version: number;
-  readonly document: Record<string, unknown>;
-}
-
-export interface CatalogEntry {
-  readonly stable_id: string;
-  readonly kind: "provider" | "model";
-  readonly display_name: string;
-  readonly capabilities: readonly string[];
-  readonly state: "active" | "disabled" | "retired";
-  readonly settings: RegisteredDocument | null;
-  readonly active_revision: string;
-}
-
-export interface Money {
-  readonly amount: string;
-  readonly currency: string;
-}
-
-export interface BudgetSummary {
-  readonly scope: "service" | "workspace";
-  readonly limit: Money;
-  readonly warning_threshold: Money | null;
-  readonly reserved: Money;
-  readonly used: Money;
-  readonly corrected: Money;
-  readonly remaining: Money;
-  readonly enforcement_state:
-    "available" | "warning" | "exhausted" | "allowance_unavailable";
-  readonly reset_period: "none" | "daily" | "monthly";
-  readonly revision: string;
-}
-
-export interface BudgetLimitWriteResult {
-  readonly scope: "service" | "workspace";
-  readonly limit: Money;
-  readonly warning_threshold: Money | null;
-  readonly reset_period: "none" | "daily" | "monthly";
-  readonly revision: string;
-  readonly effective_at: string;
-}
-
-export interface ProviderInstance {
-  readonly provider_instance_id: string;
-  readonly owner_scope: string;
-  readonly source_layer: string;
-  readonly provider_catalog_id: string;
-  readonly display_name: string;
-  readonly endpoint: string;
-  readonly credential_id: string;
-  readonly eligible_service_ids: readonly string[];
-  readonly state: "active" | "disabled" | "retired";
-  readonly active_revision: string;
-  readonly inherited: boolean;
-  readonly settings: RegisteredDocument;
-}
-
-export interface PriceComponent {
-  readonly unit: string;
-  readonly price: string;
-  readonly currency: string;
-  readonly raw_source_value: string;
-  readonly unit_quantity: string;
-}
-
-export interface ProviderModelRoute {
-  readonly provider_model_route_id: string;
-  readonly owner_scope: string;
-  readonly source_layer: string;
-  readonly provider_instance_id: string;
-  readonly canonical_model_id: string;
-  readonly wire_model: string;
-  readonly capabilities: readonly string[];
-  readonly eligible_service_ids: readonly string[];
-  readonly settings: RegisteredDocument;
-  readonly price_authority: {
-    readonly mode: "manual" | "source";
-    readonly source_name: string | null;
-    readonly lookup_identifier: string | null;
-  };
-  readonly prices: readonly PriceComponent[];
-  readonly synchronization_schedule: string;
-  readonly stale_after_seconds: number;
-  readonly state: "active" | "disabled" | "retired";
-  readonly active_revision: string;
-  readonly inherited: boolean;
-}
-
-export interface AssignmentCandidate {
-  readonly provider_model_route_id: string;
-  readonly attempt_timeout_ms: number;
-}
-
-export interface Assignment {
-  readonly name: string;
-  readonly owner_scope: string;
-  readonly source_layer: string;
-  readonly state: "active" | "disabled" | "retired";
-  readonly inherited: boolean;
-  readonly active_revision: string;
-  readonly candidates: readonly AssignmentCandidate[];
-  readonly required_capabilities: readonly string[];
-}
-
-export type RequestFailureClass =
-  | "authentication"
-  | "policy"
-  | "budget"
-  | "rate_limit"
-  | "timeout"
-  | "transport"
-  | "provider_unavailable"
-  | "invalid_provider_response"
-  | "incompatible_request"
-  | "cancelled"
-  | "uncertain_effect"
-  | "router_internal";
-
-export type RequestFailureScope =
-  | "attempt"
-  | "provider_model_route"
-  | "provider_instance"
-  | "credential"
-  | "assignment_candidate"
-  | "logical_request";
-
-export interface SafeRequestError {
-  readonly class: RequestFailureClass;
-  readonly affected_scope: RequestFailureScope;
-  readonly message: string;
-  readonly safe_provider_code?: string;
-}
-
-export interface RequestAttemptStatus {
-  readonly attempt_id: string;
-  readonly provider_model_route_id: string;
-  readonly state:
-    "running" | "succeeded" | "failed" | "cancelled" | "uncertain";
-  readonly started_at: string;
-  readonly ended_at?: string;
-  readonly assignment_revision: string;
-  readonly decision?:
-    | "next_candidate"
-    | "stop_request"
-    | "commit_boundary"
-    | "cancelled"
-    | "succeeded";
-  readonly error?: SafeRequestError;
-  readonly usage?: readonly {
-    readonly unit: string;
-    readonly quantity: string;
-  }[];
-  readonly price_version?: string;
-}
-
-export interface RequestAccounting {
-  readonly estimated: string;
-  readonly reserved: string;
-  readonly used: string;
-  readonly corrected: string;
-  readonly currency: string;
-}
-
-export interface RequestStatus {
-  readonly request_id: string;
-  readonly assignment?: string;
-  readonly exact_route?: string;
-  readonly state:
-    | "admitted"
-    | "running"
-    | "waiting_for_tool"
-    | "succeeded"
-    | "failed"
-    | "interrupted"
-    | "cancel_requested"
-    | "cancelled"
-    | "uncertain";
-  readonly state_revision: number;
-  readonly admitted_at: string;
-  readonly last_transition_at: string;
-  readonly terminal_at?: string;
-  readonly partial_output: boolean;
-  readonly committed_effects: boolean;
-  readonly configuration_revision: string;
-  readonly attempts: readonly RequestAttemptStatus[];
-  readonly accounting: RequestAccounting;
-  readonly error?: SafeRequestError | null;
-}
-
-export type DiagnosticPhaseName =
-  | "authorization"
-  | "route_eligibility"
-  | "admission"
-  | "provider"
-  | "accounting";
-
-export interface DiagnosticPhase {
-  readonly name: DiagnosticPhaseName;
-  readonly state: "pending" | "active" | "succeeded" | "failed";
-  readonly failure_class?: RequestFailureClass;
-}
-
-export interface DiagnosticRun {
-  readonly request_id: string;
-  readonly service_id: string;
-  readonly workspace_id: string | null;
-  readonly exact_route: string;
-  readonly route_configuration_revision: string;
-  readonly authorization_expires_at: string;
-  readonly state: "active" | "succeeded" | "failed" | "expired";
-  readonly phases: readonly DiagnosticPhase[];
-  readonly failure_class?: RequestFailureClass;
-  readonly status_url: string;
-}
-
-export interface AccountingSummary {
-  readonly from: string;
-  readonly to: string;
-  readonly currency: string;
-  readonly logical_requests: number;
-  readonly attempts: number;
-  readonly usage: readonly {
-    readonly unit: string;
-    readonly quantity: string;
-  }[];
-  readonly cost: string;
-  readonly corrections: string;
-}
-
-export interface AuditSafeDetail {
-  readonly resource_type?: string;
-  readonly resource_id?: string;
-  readonly reason?: string;
-  readonly safe_error_code?: string;
-}
-
-export interface AuditEvent {
-  readonly event_id: string;
-  readonly occurred_at: string;
-  readonly actor: string;
-  readonly action: string;
-  readonly outcome: "permitted" | "denied";
-  readonly scope: {
-    readonly authority_class: "service" | "global_administrator" | "system";
-    readonly service_id?: string;
-    readonly workspace_id?: string;
-  };
-  readonly safe_detail?: AuditSafeDetail;
-}
-
-export interface AuditPage {
-  readonly items: readonly AuditEvent[];
-  readonly next_cursor: string | null;
-}
-
-export type ExportDataClass = "accounting" | "audit" | "configuration";
-export type ExportFormat = "jsonl" | "csv";
-export type ExportState =
-  "queued" | "running" | "completed" | "failed" | "expired";
-
-export interface ExportOperation {
-  readonly operation_id: string;
-  readonly state: ExportState;
-  readonly created_at: string;
-  readonly expires_at: string;
-  readonly redemption_path?: string;
-  readonly redemption_token?: string;
-  readonly redemption_expires_at?: string;
-  readonly sha256?: string;
-  readonly safe_error?: string;
-}
-
-export interface ExportCreate {
-  readonly dataClass: ExportDataClass;
-  readonly serviceId: string | null;
-  readonly workspaceId: string | null;
-  readonly from: string;
-  readonly to: string;
-  readonly format: ExportFormat;
-  readonly idempotencyKey: string;
-}
-
-export interface AdministrationSnapshot {
-  readonly state: ScopedState | null;
-  readonly credentials: readonly Credential[];
-  readonly providers: readonly ProviderInstance[];
-  readonly routes: readonly ProviderModelRoute[];
-  readonly assignments: readonly Assignment[];
-  readonly requests: readonly RequestStatus[];
-  readonly accounting: AccountingSummary | null;
-  readonly budget: BudgetSummary | null;
-  readonly configuration_revision: string | null;
-  readonly failures: Readonly<
-    Partial<
-      Record<
-        | "state"
-        | "credentials"
-        | "providers"
-        | "routes"
-        | "assignments"
-        | "requests"
-        | "accounting"
-        | "budget",
-        string
-      >
-    >
-  >;
-}
-
-export function configurationRevisionForScope(
-  snapshot: AdministrationSnapshot,
-  scope: ScopeSelection,
-): string | null {
-  if (snapshot.configuration_revision !== null) {
-    return snapshot.configuration_revision;
-  }
-  const sourceLayer =
-    scope.workspaceId === "" ? scope.serviceId : scope.workspaceId;
-  const effectiveItems = [
-    ...snapshot.providers,
-    ...snapshot.routes,
-    ...snapshot.assignments,
-  ];
-  return (
-    effectiveItems.find(
-      (item) => !item.inherited && item.source_layer === sourceLayer,
-    )?.active_revision ?? null
-  );
-}
-
-export interface ConfigurationWriteResult {
-  readonly resource_id: string;
-  readonly active_revision: string;
-  readonly distribution_state: string;
-  readonly operation_id: string;
-}
-
-interface Page<T> {
+export type HealthStatus = "healthy" | "degraded" | "unavailable";
+export type Outcome = "succeeded" | "failed";
+export type InputModality = "text" | "image";
+export type OutputModality =
+  "text" | "structured_json" | "embedding" | "image" | "video" | "audio";
+export type ModelCapability = "tool_calling" | "streaming" | "reasoning";
+export type ReasoningLevel = "none" | "low" | "medium" | "high";
+export type UsageUnit =
+  | "input_token"
+  | "output_token"
+  | "cached_input_token"
+  | "image"
+  | "video_second"
+  | "audio_second"
+  | "request"
+  | "provider_unit";
+export interface Page<T> {
   readonly items: readonly T[];
-  readonly next_cursor: string | null;
-  readonly configuration_revision?: string | null;
-}
-
-interface ApiErrorDocument {
-  readonly error?: {
-    readonly code?: string;
-    readonly message?: string;
-    readonly request_id?: string;
-    readonly retryable?: boolean;
+  readonly page: {
+    readonly has_more: boolean;
+    readonly next_cursor?: string | null;
   };
+}
+export interface AdministratorSession {
+  readonly subject: string;
+  readonly display_name: string;
+  readonly expires_at: string;
+  readonly csrf_token: string;
+}
+export interface Service {
+  readonly api_name: string;
+  readonly display_name: string;
+  readonly parent_service_api_name?: string | null;
+  readonly created_at: string;
+}
+export interface Workspace {
+  readonly api_name: string;
+  readonly display_name: string;
+  readonly created_at: string;
+}
+export interface ServiceKey {
+  readonly id: string;
+  readonly name: string;
+  readonly created_at: string;
+  readonly last_used_at?: string | null;
+}
+export interface ServiceKeyCreated {
+  readonly key: ServiceKey;
+  readonly secret: string;
+}
+export interface AssignmentCandidate {
+  readonly provider_model_api_name: string;
+}
+export type ObservedRequirement =
+  | "text_input"
+  | "image_input"
+  | "text_output"
+  | "structured_json_output"
+  | "tool_calling"
+  | "streaming"
+  | "reasoning"
+  | "embedding_output"
+  | "image_output"
+  | "video_output"
+  | "audio_output";
+export interface Assignment {
+  readonly api_name: string;
+  readonly display_name: string;
+  readonly definition_kind:
+    "implicit" | "inherited_assignment" | "direct_chain";
+  readonly defined_by_service_api_name?: string | null;
+  readonly inherits_assignment_api_name?: string | null;
+  readonly direct_chain?: readonly AssignmentCandidate[] | null;
+  readonly effective_chain: readonly AssignmentCandidate[];
+  readonly reasoning_level?: ReasoningLevel | null;
+  readonly observed_requirements: readonly ObservedRequirement[];
+  readonly last_used_at?: string | null;
+  readonly created_at?: string | null;
+}
+export interface AssignmentWrite {
+  readonly display_name?: string;
+  readonly inherits_assignment_api_name?: string;
+  readonly direct_chain?: readonly AssignmentCandidate[];
+  readonly reasoning_level?: ReasoningLevel | null;
+}
+export type ProviderAdapter =
+  | "openai"
+  | "openai_compatible"
+  | "openrouter"
+  | "custom"
+  | "wavespeed"
+  | "ollama"
+  | "local_embeddings"
+  | "fake";
+export interface ProviderWrite {
+  readonly api_name: string;
+  readonly display_name: string;
+  readonly adapter: ProviderAdapter;
+  readonly endpoint?: string | null;
+  readonly credential_api_name?: string | null;
+  readonly enabled: boolean;
+}
+export interface Provider extends ProviderWrite {
+  readonly created_at: string;
+}
+export interface ModelConstraints {
+  readonly embedding_dimensions?: readonly number[] | null;
+  readonly max_input_images?: number | null;
+  readonly max_input_image_bytes?: number | null;
+  readonly max_output_duration_seconds?: number | null;
+}
+export interface UnitPrice {
+  readonly unit: UsageUnit;
+  readonly amount: string;
+}
+export interface Price {
+  readonly currency: string;
+  readonly unit_prices: readonly UnitPrice[];
+  readonly source?: string | null;
+  readonly synchronized_at?: string | null;
+}
+export interface ModelWrite {
+  readonly api_name: string;
+  readonly display_name: string;
+  readonly input_modalities: readonly InputModality[];
+  readonly output_modalities: readonly OutputModality[];
+  readonly capabilities: readonly ModelCapability[];
+  readonly constraints?: ModelConstraints | null;
+  readonly price_source?: string | null;
+  readonly price_lookup_key?: string | null;
+  readonly manual_price?: Price | null;
+}
+export interface Model extends Omit<ModelWrite, "manual_price"> {
+  readonly current_price?: Price | null;
+  readonly created_at: string;
+}
+export interface ReasoningMapping {
+  readonly level: ReasoningLevel;
+  readonly provider_value: string;
+}
+export interface Cooldown {
+  readonly until: string;
+  readonly reason: string;
+}
+export interface ProviderModelWrite {
+  readonly api_name: string;
+  readonly provider_api_name: string;
+  readonly model_api_name: string;
+  readonly provider_model_name: string;
+  readonly enabled: boolean;
+  readonly input_modalities?: readonly InputModality[] | null;
+  readonly output_modalities?: readonly OutputModality[] | null;
+  readonly capabilities?: readonly ModelCapability[] | null;
+  readonly constraints?: ModelConstraints | null;
+  readonly reasoning_mappings?: readonly ReasoningMapping[] | null;
+  readonly price_source?: string | null;
+  readonly price_lookup_key?: string | null;
+  readonly manual_price?: Price | null;
+}
+export interface ProviderModel {
+  readonly api_name: string;
+  readonly provider_api_name: string;
+  readonly model_api_name: string;
+  readonly provider_model_name: string;
+  readonly enabled: boolean;
+  readonly input_modalities: readonly InputModality[];
+  readonly output_modalities: readonly OutputModality[];
+  readonly capabilities: readonly ModelCapability[];
+  readonly constraints?: ModelConstraints | null;
+  readonly reasoning_mappings: readonly ReasoningMapping[];
+  readonly price_source?: string | null;
+  readonly price_lookup_key?: string | null;
+  readonly effective_price?: Price | null;
+  readonly cooldown?: Cooldown | null;
+  readonly created_at: string;
+}
+export interface Credential {
+  readonly api_name: string;
+  readonly fingerprint: string;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+export interface ModelImportCandidate {
+  readonly catalog_key: string;
+  readonly display_name: string;
+  readonly provider_model_name: string;
+  readonly input_modalities: readonly InputModality[];
+  readonly output_modalities: readonly OutputModality[];
+  readonly capabilities: readonly ModelCapability[];
+  readonly constraints?: ModelConstraints | null;
+}
+export interface ModelImportPreview {
+  readonly provider_api_name: string;
+  readonly candidates: readonly ModelImportCandidate[];
+}
+export interface ModelImportSelection {
+  readonly catalog_key: string;
+  readonly model_api_name: string;
+  readonly provider_model_api_name: string;
+}
+export interface ModelImportResult {
+  readonly models: readonly Model[];
+  readonly provider_models: readonly ProviderModel[];
+}
+export interface PriceSyncItem {
+  readonly provider_model_api_name: string;
+  readonly outcome: "updated" | "unchanged" | "missing" | "failed";
+  readonly price?: Price | null;
+  readonly message?: string | null;
+}
+export interface PriceSyncResult {
+  readonly attempted_at: string;
+  readonly items: readonly PriceSyncItem[];
+}
+export interface UsageItem {
+  readonly unit: UsageUnit;
+  readonly quantity: string;
+}
+export interface Usage {
+  readonly units: readonly UsageItem[];
+  readonly cost: string;
+  readonly currency: string;
+}
+export interface StatisticsBucket {
+  readonly dimensions: readonly string[];
+  readonly calls: number;
+  readonly attempts: number;
+  readonly units: readonly UsageItem[];
+  readonly cost: string;
+  readonly currency: string;
+}
+export interface StatisticsResult {
+  readonly from: string;
+  readonly to: string;
+  readonly group_by: readonly string[];
+  readonly buckets: readonly StatisticsBucket[];
+}
+export interface ActivityEvent {
+  readonly id: string;
+  readonly actor_subject: string;
+  readonly action: string;
+  readonly resource_type: string;
+  readonly service_api_name?: string | null;
+  readonly resource_api_name?: string | null;
+  readonly resource_id?: string | null;
+  readonly result: Outcome;
+  readonly occurred_at: string;
+}
+export interface RequestLogSummary {
+  readonly id: string;
+  readonly service_api_name: string;
+  readonly workspace_api_name: string;
+  readonly assignment_api_name?: string | null;
+  readonly provider_model_api_name?: string | null;
+  readonly kind: "model" | "embedding" | "media";
+  readonly outcome: Outcome;
+  readonly tags?: readonly string[] | null;
+  readonly started_at: string;
+}
+export interface SafeError {
+  readonly code: string;
+  readonly message: string;
+  readonly details?: {
+    readonly field?: string;
+    readonly reason?: string;
+  } | null;
+}
+export interface RequestAttempt {
+  readonly provider_model_api_name: string;
+  readonly outcome: Outcome;
+  readonly started_at: string;
+  readonly completed_at?: string | null;
+  readonly usage: Usage;
+  readonly applied_prices: Price;
+  readonly response_json?: string | null;
+  readonly error?: SafeError | null;
+}
+export interface LogMedia {
+  readonly id: string;
+  readonly media_type: string;
+  readonly role: "input" | "output";
+  readonly size_bytes: number;
+}
+export interface RequestLog {
+  readonly summary: RequestLogSummary;
+  readonly request_json: string;
+  readonly response_json?: string | null;
+  readonly attempts: readonly RequestAttempt[];
+  readonly media?: readonly LogMedia[] | null;
+}
+export interface AdministratorHealth {
+  readonly status: HealthStatus;
+  readonly checked_at: string;
+  readonly components: readonly {
+    readonly name: string;
+    readonly status: HealthStatus;
+    readonly message?: string | null;
+  }[];
+}
+export interface MediaJob {
+  readonly id: string;
+  readonly workspace_api_name: string;
+  readonly provider_model_api_name: string;
+  readonly kind: "image" | "video" | "audio";
+  readonly state: "pending" | "running" | "succeeded" | "failed";
+  readonly content?: {
+    readonly media_type: string;
+    readonly size_bytes: number;
+  } | null;
+  readonly error?: SafeError | null;
+  readonly created_at: string;
+  readonly completed_at?: string | null;
+}
+export interface ModelCallResult {
+  readonly output_type: "standard" | "structured_json";
+  readonly provider_model_api_name: string;
+  readonly content?: readonly (
+    | { readonly type: "text"; readonly text: string }
+    | {
+        readonly type: "tool_call";
+        readonly id: string;
+        readonly name: string;
+        readonly arguments_json: string;
+      }
+  )[];
+  readonly structured_output_json?: string;
+  readonly usage: Usage;
+}
+export interface EmbeddingResult {
+  readonly provider_model_api_name: string;
+  readonly embeddings: readonly {
+    readonly index: number;
+    readonly values: readonly number[];
+  }[];
+  readonly usage: Usage;
 }
 
 export class AdministrationApiError extends Error {
-  public readonly code: string;
-  public readonly requestId: string | null;
-  public readonly status: number;
-  public readonly staleRevision: boolean;
-  public readonly outcomeUncertain: boolean;
-
-  public constructor(
+  constructor(
+    readonly status: number,
+    readonly code: string,
     message: string,
-    options: {
-      readonly code: string;
-      readonly requestId: string | null;
-      readonly status: number;
-      readonly outcomeUncertain?: boolean;
-    },
+    readonly details?: { readonly field?: string; readonly reason?: string },
   ) {
     super(message);
     this.name = "AdministrationApiError";
-    this.code = options.code;
-    this.requestId = options.requestId;
-    this.status = options.status;
-    this.staleRevision =
-      options.status === 409 && options.code.includes("revision");
-    this.outcomeUncertain = options.outcomeUncertain ?? false;
+  }
+}
+type Fetcher = typeof fetch;
+export const clientDeadlineMilliseconds = {
+  administration: 60_000,
+  mediaAdmission: 60_000,
+  mediaContent: 130_000,
+  mediaStatus: 30_000,
+  runtimeCall: 16 * 60_000,
+} as const;
+
+interface ClientDeadline {
+  readonly milliseconds: number;
+  readonly message: string;
+  readonly reason: string;
+}
+
+async function withClientDeadline<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+  deadline: ClientDeadline,
+  callerSignal?: AbortSignal | null,
+): Promise<T> {
+  const controller = new AbortController();
+  const signal =
+    callerSignal === undefined || callerSignal === null
+      ? controller.signal
+      : AbortSignal.any([callerSignal, controller.signal]);
+  let timer: ReturnType<typeof globalThis.setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = globalThis.setTimeout(() => {
+      reject(
+        new AdministrationApiError(408, "client_timeout", deadline.message, {
+          reason: deadline.reason,
+        }),
+      );
+      controller.abort();
+    }, deadline.milliseconds);
+  });
+  try {
+    return await Promise.race([operation(signal), timeout]);
+  } finally {
+    if (timer !== undefined) globalThis.clearTimeout(timer);
   }
 }
 
-export interface AdministrationClient {
-  listServices(signal?: AbortSignal): Promise<readonly ServiceSummary[]>;
-  listCredentials(signal?: AbortSignal): Promise<readonly Credential[]>;
-  listCatalog(
-    kind: "providers" | "models",
-    signal?: AbortSignal,
-  ): Promise<readonly CatalogEntry[]>;
-  listAuditEvents(
-    range: {
-      readonly from: string;
-      readonly to: string;
-      readonly cursor?: string;
-    },
-    signal?: AbortSignal,
-  ): Promise<AuditPage>;
-  createExport(input: ExportCreate): Promise<ExportOperation>;
-  getExport(
-    operationId: string,
-    signal?: AbortSignal,
-  ): Promise<ExportOperation>;
-  redeemExport(
-    operationId: string,
-    redemptionPath: string,
-    redemptionToken: string,
-  ): Promise<Blob>;
-  createService(input: {
-    readonly displayName: string;
-    readonly parentServiceId: string | null;
-    readonly bootstrapScope: BootstrapScope;
-  }): Promise<ServiceCreated>;
-  putService(
-    serviceId: string,
-    input: {
-      readonly expectedRevision: string;
-      readonly reason: string;
-      readonly displayName?: string;
-      readonly newParentServiceId?: string | null;
-    },
-  ): Promise<ServiceAdministrationResult>;
-  changeService(
-    serviceId: string,
-    action: "disable" | "restore" | "retire",
-    input: { readonly expectedRevision: string; readonly reason: string },
-  ): Promise<ServiceAdministrationResult>;
-  load(
-    scope: ScopeSelection,
-    signal?: AbortSignal,
-  ): Promise<AdministrationSnapshot>;
-  getRequest(
-    scope: ScopeSelection,
-    requestId: string,
-    signal?: AbortSignal,
-  ): Promise<RequestStatus>;
-  runDiagnostic(
-    scope: ScopeSelection,
-    input: {
-      readonly requestId: string;
-      readonly exactRoute: string;
-      readonly reason: string;
-    },
-    signal?: AbortSignal,
-  ): Promise<DiagnosticRun>;
-  createCredential(input: {
-    readonly ownerScope: string;
-    readonly secret: string;
-    readonly safeLabel: string;
-  }): Promise<Credential>;
-  changeCredential(
-    credentialId: string,
-    action: "rotate" | "disable" | "retire",
-    input: {
-      readonly expectedRevision: string;
-      readonly reason: string;
-      readonly replacementSecret?: string;
-    },
-  ): Promise<Credential>;
-  putProvider(
-    scope: ScopeSelection,
-    id: string | null,
-    input: Record<string, unknown>,
-  ): Promise<ConfigurationWriteResult>;
-  putRoute(
-    scope: ScopeSelection,
-    id: string | null,
-    input: Record<string, unknown>,
-  ): Promise<ConfigurationWriteResult>;
-  putAssignment(
-    scope: ScopeSelection,
-    name: string,
-    input: Record<string, unknown>,
-  ): Promise<ConfigurationWriteResult>;
-  putBudget(
-    scope: ScopeSelection,
-    input: {
-      readonly hardLimit: string;
-      readonly currency: string;
-      readonly warningThreshold: string | null;
-      readonly resetPeriod: "none" | "daily" | "monthly";
-      readonly expectedRevision: string;
-    },
-  ): Promise<BudgetLimitWriteResult>;
-}
+const administrationDeadline: ClientDeadline = {
+  milliseconds: clientDeadlineMilliseconds.administration,
+  message: "The Router did not respond before the browser deadline.",
+  reason:
+    "The browser stopped waiting. Refresh the affected data before you retry a write.",
+};
+const runtimeCallDeadline: ClientDeadline = {
+  milliseconds: clientDeadlineMilliseconds.runtimeCall,
+  message: "The runtime call did not finish before the browser deadline.",
+  reason:
+    "The Router can still complete the call. Check the detailed logs before you submit the same work again.",
+};
+const mediaAdmissionDeadline: ClientDeadline = {
+  milliseconds: clientDeadlineMilliseconds.mediaAdmission,
+  message: "The media-job request did not finish before the browser deadline.",
+  reason:
+    "The Router can still create a media job. Do not submit the same work again until you confirm the first request state.",
+};
+const mediaStatusDeadline: ClientDeadline = {
+  milliseconds: clientDeadlineMilliseconds.mediaStatus,
+  message: "The media-job status did not load before the browser deadline.",
+  reason: "Query the same media-job status again. Do not create a new job.",
+};
+const mediaContentDeadline: ClientDeadline = {
+  milliseconds: clientDeadlineMilliseconds.mediaContent,
+  message: "The media content did not load before the browser deadline.",
+  reason: "Download the same media-job content again. Do not create a new job.",
+};
 
-export interface FetchAdministrationClientOptions {
-  readonly baseUrl?: string;
-  readonly csrfToken?: string;
-  readonly fetcher?: typeof fetch;
-  readonly now?: () => Date;
-  readonly onRecentAuthenticationRequired?: () => Promise<void>;
-}
-
-const jsonHeaders = { "Content-Type": "application/json" } as const;
-
-export type LocalAdministratorSession =
-  | {
-      readonly state: "active";
-      readonly csrfToken: string;
-      readonly authenticationMode: "local" | "oidc";
-      readonly identityAccountUrl?: string;
-    }
-  | { readonly state: "required" }
-  | { readonly state: "oidc_required" }
-  | { readonly state: "unavailable" };
-
-export function scheduleAdministrationSessionInspection(
-  inspect: () => void,
-  schedule: (callback: () => void) => void = queueMicrotask,
-): () => void {
-  let active = true;
-  schedule(() => {
-    if (active) inspect();
-  });
-  return () => {
-    active = false;
-  };
-}
-
-export async function inspectLocalAdministratorSession(
-  fetcher: typeof fetch = globalThis.fetch.bind(globalThis),
-  origin: string = typeof window === "undefined"
-    ? "http://127.0.0.1:5174"
-    : window.location.origin,
-): Promise<LocalAdministratorSession> {
-  let localAvailable = false;
-  if (origin === "http://127.0.0.1:5174") {
-    let capability: Response;
-    try {
-      capability = await fetcher("/v1/admin/local-session", {
-        method: "HEAD",
-        credentials: "same-origin",
-        cache: "no-store",
-      });
-    } catch {
-      return { state: "unavailable" };
-    }
-    localAvailable = capability.ok;
+async function parseError(response: Response): Promise<AdministrationApiError> {
+  let value: unknown;
+  try {
+    value = await response.json();
+  } catch {
+    value = null;
   }
-  const response = await fetcher("/v1/admin/session", {
-    credentials: "same-origin",
-    cache: "no-store",
-  });
-  if (response.status === 404) return { state: "unavailable" };
-  if (response.status === 401)
-    return { state: localAvailable ? "required" : "oidc_required" };
-  if (!response.ok)
-    throw new AdministrationApiError(
-      "The local administrator session is not available.",
-      {
-        code: "local_session_unavailable",
-        requestId: null,
-        status: response.status,
-      },
+  const candidate =
+    typeof value === "object" && value !== null && "error" in value
+      ? (value as { error?: unknown }).error
+      : null;
+  if (typeof candidate === "object" && candidate !== null) {
+    const body = candidate as {
+      code?: unknown;
+      message?: unknown;
+      details?: unknown;
+    };
+    return new AdministrationApiError(
+      response.status,
+      typeof body.code === "string" ? body.code : "internal_error",
+      typeof body.message === "string"
+        ? body.message
+        : "The Router could not complete the operation.",
+      typeof body.details === "object" && body.details !== null
+        ? body.details
+        : undefined,
     );
-  const document = (await response.json()) as {
-    readonly csrf_token?: unknown;
-    readonly authentication_mode?: unknown;
-    readonly identity_account_url?: unknown;
-  };
-  if (
-    typeof document.csrf_token !== "string" ||
-    document.csrf_token.length < 20
-  )
-    throw new AdministrationApiError(
-      "The local administrator session is not available.",
-      { code: "local_session_invalid", requestId: null, status: 500 },
-    );
-  const mode = document.authentication_mode === "oidc" ? "oidc" : "local";
-  return {
-    state: "active",
-    csrfToken: document.csrf_token,
-    authenticationMode: mode,
-    ...(typeof document.identity_account_url === "string"
-      ? { identityAccountUrl: document.identity_account_url }
-      : {}),
-  };
+  }
+  return new AdministrationApiError(
+    response.status,
+    response.status === 401 ? "authentication_required" : "internal_error",
+    response.status === 401
+      ? "Your administrator session is not active."
+      : "The Router could not complete the operation.",
+  );
 }
-
-export async function startPocketIDAdministratorSession(
-  trustedGrantToken?: string,
-  fetcher: typeof fetch = globalThis.fetch.bind(globalThis),
-): Promise<string> {
-  return startPocketIDSession("login", trustedGrantToken, fetcher);
-}
-
-export async function startPocketIDRecentAuthentication(
-  fetcher: typeof fetch = globalThis.fetch.bind(globalThis),
-): Promise<string> {
-  return startPocketIDSession("recent_authentication", undefined, fetcher);
-}
-
-async function startPocketIDSession(
-  purpose: "login" | "recent_authentication",
-  trustedGrantToken: string | undefined,
-  fetcher: typeof fetch,
-): Promise<string> {
-  const response = await fetcher("/v1/admin/session-starts", {
-    method: "POST",
-    credentials: "same-origin",
-    cache: "no-store",
-    headers: jsonHeaders,
-    body: JSON.stringify({
-      purpose,
-      return_path: "/",
-      ...(trustedGrantToken === undefined
-        ? {}
-        : { trusted_grant_token: trustedGrantToken }),
-    }),
-  });
-  if (!response.ok)
-    throw new AdministrationApiError("Pocket ID sign-in did not start.", {
-      code: "administrator_sign_in_failed",
-      requestId: null,
-      status: response.status,
-    });
-  const document = (await response.json()) as {
-    readonly authorization_url?: unknown;
-  };
-  if (typeof document.authorization_url !== "string")
-    throw new AdministrationApiError("Pocket ID sign-in did not start.", {
-      code: "administrator_sign_in_invalid",
-      requestId: null,
-      status: 500,
-    });
-  return document.authorization_url;
-}
-
-export function consumeTrustedGrantToken(
-  location: Pick<Location, "hash" | "pathname" | "search"> = window.location,
-  history: Pick<History, "replaceState"> = window.history,
-): string | undefined {
-  const fragment = location.hash;
-  if (fragment === "") return undefined;
-  history.replaceState({}, "", `${location.pathname}${location.search}`);
-  const parameters = new URLSearchParams(fragment.slice(1));
-  const values = parameters.getAll("token");
-  if (
-    [...parameters.keys()].some((key) => key !== "token") ||
-    values.length !== 1 ||
-    !/^[A-Za-z0-9_-]{43}$/.test(values[0] ?? "")
-  )
-    return undefined;
-  return values[0];
-}
-
-export async function endAdministratorSession(
-  csrfToken: string,
-  fetcher: typeof fetch = globalThis.fetch.bind(globalThis),
-): Promise<void> {
-  const response = await fetcher("/v1/admin/session", {
-    method: "DELETE",
-    credentials: "same-origin",
-    cache: "no-store",
-    headers: { "X-CSRF-Token": csrfToken },
-  });
-  if (!response.ok)
-    throw new AdministrationApiError("Administrator sign-out failed.", {
-      code: "administrator_sign_out_failed",
-      requestId: null,
-      status: response.status,
-    });
-}
-
-export async function activateLocalAdministrator(
-  secret: string,
-  fetcher: typeof fetch = globalThis.fetch.bind(globalThis),
-): Promise<string> {
-  const response = await fetcher("/v1/admin/local-session", {
-    method: "POST",
-    credentials: "same-origin",
-    cache: "no-store",
-    headers: jsonHeaders,
-    body: JSON.stringify({ secret }),
-  });
-  if (!response.ok)
-    throw new AdministrationApiError(
-      "The local administrator session was not activated.",
-      {
-        code: "local_administrator_activation_failed",
-        requestId: null,
-        status: response.status,
-      },
-    );
-  const document = (await response.json()) as {
-    readonly authenticated?: unknown;
-    readonly csrf_token?: unknown;
-  };
-  if (
-    document.authenticated !== true ||
-    typeof document.csrf_token !== "string" ||
-    document.csrf_token.length < 20
-  )
-    throw new AdministrationApiError(
-      "The local administrator session was not activated.",
-      { code: "local_session_invalid", requestId: null, status: 500 },
-    );
-  return document.csrf_token;
-}
-
-function randomKey(): string {
-  return globalThis.crypto.randomUUID();
-}
-
-export function newLogicalRequestId(
-  milliseconds: number = Date.now(),
-  randomBytes: Uint8Array = globalThis.crypto.getRandomValues(
-    new Uint8Array(10),
-  ),
+function query(
+  values: Record<string, string | readonly string[] | null | undefined>,
 ): string {
-  if (
-    !Number.isSafeInteger(milliseconds) ||
-    milliseconds < 0 ||
-    milliseconds > 0xffffffffffff ||
-    randomBytes.length !== 10
-  ) {
-    throw new Error("The logical request identity input is invalid.");
-  }
-  const bytes = new Uint8Array(16);
-  let time = milliseconds;
-  for (let index = 5; index >= 0; index -= 1) {
-    bytes[index] = time % 256;
-    time = Math.floor(time / 256);
-  }
-  bytes.set(randomBytes, 6);
-  if (randomBytes.every((value) => value === 0)) bytes[15] = 1;
-  bytes[6] = ((bytes.at(6) ?? 0) & 0x0f) | 0x70;
-  bytes[8] = ((bytes.at(8) ?? 0) & 0x3f) | 0x80;
-  const hex = [...bytes].map((value) => value.toString(16).padStart(2, "0"));
-  return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex.slice(6, 8).join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10).join("")}`;
+  const result = new URLSearchParams();
+  for (const [name, value] of Object.entries(values))
+    if (value !== null && value !== undefined && typeof value !== "string")
+      for (const item of value) result.append(name, item);
+    else if (typeof value === "string" && value !== "") result.set(name, value);
+  const encoded = result.toString();
+  return encoded === "" ? "" : `?${encoded}`;
 }
-
-export function createFetchAdministrationClient({
-  baseUrl = "",
-  csrfToken: suppliedCsrfToken,
-  fetcher = globalThis.fetch.bind(globalThis),
-  now = () => new Date(),
-  onRecentAuthenticationRequired,
-}: FetchAdministrationClientOptions = {}): AdministrationClient {
-  let csrfToken = suppliedCsrfToken ?? null;
-  let recentAuthentication: Promise<void> | null = null;
-
+const encode = encodeURIComponent;
+export interface StatisticsFilters {
+  readonly from: string;
+  readonly to: string;
+  readonly service?: string;
+  readonly workspace?: string;
+  readonly assignment?: string;
+  readonly provider_model?: string;
+  readonly outcome?: Outcome;
+  readonly tag?: string;
+  readonly group_by?: readonly string[];
+}
+export interface AdministrationClient {
+  session(): Promise<AdministratorSession>;
+  startSession(returnTo: string): Promise<string>;
+  logout(csrf: string): Promise<void>;
+  services(): Promise<Page<Service>>;
+  createService(
+    value: {
+      api_name: string;
+      display_name: string;
+      parent_service_api_name: string | null;
+    },
+    csrf: string,
+  ): Promise<Service>;
+  updateService(
+    name: string,
+    value: { display_name: string; parent_service_api_name: string | null },
+    csrf: string,
+  ): Promise<Service>;
+  deleteService(name: string, csrf: string): Promise<void>;
+  workspaces(service: string): Promise<Page<Workspace>>;
+  createWorkspace(
+    service: string,
+    value: { api_name: string; display_name: string },
+    csrf: string,
+  ): Promise<Workspace>;
+  deleteWorkspace(
+    service: string,
+    workspace: string,
+    csrf: string,
+  ): Promise<void>;
+  keys(service: string): Promise<Page<ServiceKey>>;
+  createKey(
+    service: string,
+    name: string,
+    csrf: string,
+  ): Promise<ServiceKeyCreated>;
+  revokeKey(service: string, keyId: string, csrf: string): Promise<void>;
+  assignments(service: string): Promise<Page<Assignment>>;
+  putAssignment(
+    service: string,
+    name: string,
+    value: AssignmentWrite,
+    csrf: string,
+  ): Promise<Assignment>;
+  deleteAssignment(service: string, name: string, csrf: string): Promise<void>;
+  removeRequirement(
+    service: string,
+    name: string,
+    requirement: ObservedRequirement,
+    csrf: string,
+  ): Promise<void>;
+  providers(): Promise<Page<Provider>>;
+  createProvider(value: ProviderWrite, csrf: string): Promise<Provider>;
+  putProvider(
+    name: string,
+    value: ProviderWrite,
+    csrf: string,
+  ): Promise<Provider>;
+  deleteProvider(name: string, csrf: string): Promise<void>;
+  models(): Promise<Page<Model>>;
+  createModel(value: ModelWrite, csrf: string): Promise<Model>;
+  putModel(name: string, value: ModelWrite, csrf: string): Promise<Model>;
+  deleteModel(name: string, csrf: string): Promise<void>;
+  providerModels(): Promise<Page<ProviderModel>>;
+  createProviderModel(
+    value: ProviderModelWrite,
+    csrf: string,
+  ): Promise<ProviderModel>;
+  putProviderModel(
+    name: string,
+    value: ProviderModelWrite,
+    csrf: string,
+  ): Promise<ProviderModel>;
+  deleteProviderModel(name: string, csrf: string): Promise<void>;
+  credentials(): Promise<Page<Credential>>;
+  createCredential(
+    name: string,
+    secret: string,
+    csrf: string,
+  ): Promise<Credential>;
+  replaceCredential(
+    name: string,
+    secret: string,
+    csrf: string,
+  ): Promise<Credential>;
+  deleteCredential(name: string, csrf: string): Promise<void>;
+  previewImport(provider: string, csrf: string): Promise<ModelImportPreview>;
+  importModels(
+    provider: string,
+    selections: readonly ModelImportSelection[],
+    csrf: string,
+  ): Promise<ModelImportResult>;
+  synchronizePrices(
+    names: readonly string[] | null,
+    csrf: string,
+  ): Promise<PriceSyncResult>;
+  activity(from: string, to: string): Promise<Page<ActivityEvent>>;
+  statistics(filters: StatisticsFilters): Promise<StatisticsResult>;
+  requestLogs(from: string, to: string): Promise<Page<RequestLogSummary>>;
+  requestLog(id: string): Promise<RequestLog>;
+  requestLogMedia(id: string, mediaId: string): Promise<Blob>;
+  retention(): Promise<{ readonly duration_days: number }>;
+  putRetention(
+    days: number,
+    csrf: string,
+  ): Promise<{ readonly duration_days: number }>;
+  health(): Promise<AdministratorHealth>;
+}
+export function createAdministrationClient(
+  fetcher: Fetcher = fetch,
+): AdministrationClient {
+  const listLimit = 200;
+  const maximumListPages = 100;
+  const maximumListItems = listLimit * maximumListPages;
+  async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const headers = new Headers(init.headers);
+    headers.set("Accept", "application/json");
+    if (init.body !== undefined)
+      headers.set("Content-Type", "application/json");
+    return withClientDeadline(
+      async (signal) => {
+        const response = await fetcher(path, {
+          ...init,
+          cache: "no-store",
+          credentials: "same-origin",
+          headers,
+          signal,
+        });
+        if (!response.ok) throw await parseError(response);
+        if (response.status === 204) return undefined as T;
+        return (await response.json()) as T;
+      },
+      administrationDeadline,
+      init.signal,
+    );
+  }
+  const write = <T>(
+    path: string,
+    method: "POST" | "PUT" | "DELETE",
+    csrf: string,
+    body?: unknown,
+  ) =>
+    request<T>(path, {
+      method,
+      headers: { "X-CSRF-Token": csrf },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+  const invalidListResponse = (reason: string) =>
+    new AdministrationApiError(
+      502,
+      "invalid_response",
+      "The Router returned an invalid list response.",
+      { reason },
+    );
+  async function allPages<T>(
+    path: string,
+    filters: Record<string, string | readonly string[] | null | undefined> = {},
+  ): Promise<Page<T>> {
+    const items: T[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+    for (let pageIndex = 0; pageIndex < maximumListPages; pageIndex += 1) {
+      const response: unknown = await request(
+        `${path}${query({ ...filters, limit: String(listLimit), cursor })}`,
+      );
+      if (
+        typeof response !== "object" ||
+        response === null ||
+        !("items" in response) ||
+        !Array.isArray(response.items) ||
+        !("page" in response) ||
+        typeof response.page !== "object" ||
+        response.page === null ||
+        !("has_more" in response.page) ||
+        typeof response.page.has_more !== "boolean" ||
+        ("next_cursor" in response.page &&
+          response.page.next_cursor !== null &&
+          typeof response.page.next_cursor !== "string")
+      )
+        throw invalidListResponse(
+          "The list page does not match the native cursor contract.",
+        );
+      const current = response as Page<T>;
+      if (current.items.length > listLimit)
+        throw invalidListResponse(
+          `The list page exceeds the requested ${String(listLimit)} item limit.`,
+        );
+      items.push(...current.items);
+      if (items.length > maximumListItems)
+        throw invalidListResponse(
+          `The list exceeds the ${String(maximumListItems)} item safety limit. Narrow the scope and try again.`,
+        );
+      if (items.length === maximumListItems && current.page.has_more)
+        throw invalidListResponse(
+          `The list reaches the ${String(maximumListItems)} item safety limit and has more items. Narrow the scope and try again.`,
+        );
+      if (!current.page.has_more)
+        return {
+          items,
+          page: { has_more: false, next_cursor: null },
+        };
+      const nextCursor = current.page.next_cursor;
+      if (nextCursor === undefined || nextCursor === null || nextCursor === "")
+        throw invalidListResponse(
+          "The list says that more items exist, but it has no next cursor.",
+        );
+      if (seenCursors.has(nextCursor))
+        throw invalidListResponse(
+          "The list repeated a cursor and could not make progress.",
+        );
+      seenCursors.add(nextCursor);
+      cursor = nextCursor;
+    }
+    throw invalidListResponse(
+      `The list exceeds the ${String(maximumListPages)} page safety limit. Narrow the scope and try again.`,
+    );
+  }
+  return {
+    session: () => request("/v1/admin/session"),
+    async startSession(returnTo) {
+      const result = await request<{ authorization_url: string }>(
+        "/v1/admin/session/start",
+        { method: "POST", body: JSON.stringify({ return_to: returnTo }) },
+      );
+      return result.authorization_url;
+    },
+    logout: (csrf) => write("/v1/admin/session", "DELETE", csrf),
+    services: () => allPages("/v1/admin/services"),
+    createService: (value, csrf) =>
+      write("/v1/admin/services", "POST", csrf, value),
+    updateService: (name, value, csrf) =>
+      write(`/v1/admin/services/${encode(name)}`, "PUT", csrf, value),
+    deleteService: (name, csrf) =>
+      write(`/v1/admin/services/${encode(name)}`, "DELETE", csrf),
+    workspaces: (service) =>
+      allPages(`/v1/admin/services/${encode(service)}/workspaces`),
+    createWorkspace: (service, value, csrf) =>
+      write(
+        `/v1/admin/services/${encode(service)}/workspaces`,
+        "POST",
+        csrf,
+        value,
+      ),
+    deleteWorkspace: (service, workspace, csrf) =>
+      write(
+        `/v1/admin/services/${encode(service)}/workspaces/${encode(workspace)}`,
+        "DELETE",
+        csrf,
+      ),
+    keys: (service) => allPages(`/v1/admin/services/${encode(service)}/keys`),
+    createKey: (service, name, csrf) =>
+      write(`/v1/admin/services/${encode(service)}/keys`, "POST", csrf, {
+        name,
+      }),
+    revokeKey: (service, id, csrf) =>
+      write(
+        `/v1/admin/services/${encode(service)}/keys/${encode(id)}`,
+        "DELETE",
+        csrf,
+      ),
+    assignments: (service) =>
+      allPages(`/v1/admin/services/${encode(service)}/assignments`),
+    putAssignment: (service, name, value, csrf) =>
+      write(
+        `/v1/admin/services/${encode(service)}/assignments/${encode(name)}`,
+        "PUT",
+        csrf,
+        value,
+      ),
+    deleteAssignment: (service, name, csrf) =>
+      write(
+        `/v1/admin/services/${encode(service)}/assignments/${encode(name)}`,
+        "DELETE",
+        csrf,
+      ),
+    removeRequirement: (service, name, requirement, csrf) =>
+      write(
+        `/v1/admin/services/${encode(service)}/assignments/${encode(name)}/observed-requirements/${encode(requirement)}`,
+        "DELETE",
+        csrf,
+      ),
+    providers: () => allPages("/v1/admin/providers"),
+    createProvider: (value, csrf) =>
+      write("/v1/admin/providers", "POST", csrf, value),
+    putProvider: (name, value, csrf) =>
+      write(`/v1/admin/providers/${encode(name)}`, "PUT", csrf, value),
+    deleteProvider: (name, csrf) =>
+      write(`/v1/admin/providers/${encode(name)}`, "DELETE", csrf),
+    models: () => allPages("/v1/admin/models"),
+    createModel: (value, csrf) =>
+      write("/v1/admin/models", "POST", csrf, value),
+    putModel: (name, value, csrf) =>
+      write(`/v1/admin/models/${encode(name)}`, "PUT", csrf, value),
+    deleteModel: (name, csrf) =>
+      write(`/v1/admin/models/${encode(name)}`, "DELETE", csrf),
+    providerModels: () => allPages("/v1/admin/provider-models"),
+    createProviderModel: (value, csrf) =>
+      write("/v1/admin/provider-models", "POST", csrf, value),
+    putProviderModel: (name, value, csrf) =>
+      write(`/v1/admin/provider-models/${encode(name)}`, "PUT", csrf, value),
+    deleteProviderModel: (name, csrf) =>
+      write(`/v1/admin/provider-models/${encode(name)}`, "DELETE", csrf),
+    credentials: () => allPages("/v1/admin/credentials"),
+    createCredential: (name, secret, csrf) =>
+      write("/v1/admin/credentials", "POST", csrf, { api_name: name, secret }),
+    replaceCredential: (name, secret, csrf) =>
+      write(`/v1/admin/credentials/${encode(name)}`, "PUT", csrf, {
+        api_name: name,
+        secret,
+      }),
+    deleteCredential: (name, csrf) =>
+      write(`/v1/admin/credentials/${encode(name)}`, "DELETE", csrf),
+    previewImport: (provider, csrf) =>
+      write("/v1/admin/model-imports/preview", "POST", csrf, {
+        provider_api_name: provider,
+      }),
+    importModels: (provider, selections, csrf) =>
+      write("/v1/admin/model-imports", "POST", csrf, {
+        provider_api_name: provider,
+        selections,
+      }),
+    synchronizePrices: (names, csrf) =>
+      write("/v1/admin/prices/synchronize", "POST", csrf, {
+        provider_model_api_names: names,
+      }),
+    activity: (from, to) => allPages("/v1/admin/activity", { from, to }),
+    statistics: (filters) =>
+      request(
+        `/v1/admin/statistics${query({ from: filters.from, to: filters.to, service: filters.service, workspace: filters.workspace, assignment: filters.assignment, provider_model: filters.provider_model, outcome: filters.outcome, tag: filters.tag, group_by: filters.group_by })}`,
+      ),
+    requestLogs: (from, to) => allPages("/v1/admin/request-logs", { from, to }),
+    requestLog: (id) => request(`/v1/admin/request-logs/${encode(id)}`),
+    async requestLogMedia(id, mediaId) {
+      return withClientDeadline(async (signal) => {
+        const response = await fetcher(
+          `/v1/admin/request-logs/${encode(id)}/media/${encode(mediaId)}/content`,
+          { cache: "no-store", credentials: "same-origin", signal },
+        );
+        if (!response.ok) throw await parseError(response);
+        return response.blob();
+      }, mediaContentDeadline);
+    },
+    retention: () => request("/v1/admin/settings/log-retention"),
+    putRetention: (days, csrf) =>
+      write("/v1/admin/settings/log-retention", "PUT", csrf, {
+        duration_days: days,
+      }),
+    health: () => request("/v1/admin/health"),
+  };
+}
+export interface RuntimeClient {
+  model(
+    workspace: string,
+    selector:
+      { assignment_api_name: string } | { provider_model_api_name: string },
+    prompt: string,
+    systemPrompt: string,
+    inputImages: readonly RuntimeInputImage[],
+    temperature: number | null,
+    outputLimit: number | null,
+    tags: readonly string[],
+  ): Promise<ModelCallResult>;
+  embedding(
+    workspace: string,
+    selector:
+      { assignment_api_name: string } | { provider_model_api_name: string },
+    inputs: readonly string[],
+    tags: readonly string[],
+  ): Promise<EmbeddingResult>;
+  createMedia(
+    workspace: string,
+    selector:
+      { assignment_api_name: string } | { provider_model_api_name: string },
+    kind: "image" | "video" | "audio",
+    prompt: string,
+    inputImages: readonly RuntimeInputImage[],
+    tags: readonly string[],
+  ): Promise<MediaJob>;
+  mediaJob(id: string): Promise<MediaJob>;
+  mediaContent(id: string): Promise<Blob>;
+}
+export interface RuntimeInputImage {
+  readonly media_type: "image/jpeg" | "image/png" | "image/webp";
+  readonly data_base64: string;
+}
+export function createRuntimeClient(
+  serviceKey: string,
+  fetcher: Fetcher = fetch,
+): RuntimeClient {
   async function request<T>(
     path: string,
     init: RequestInit = {},
-    mutation = false,
+    deadline: ClientDeadline = runtimeCallDeadline,
   ): Promise<T> {
-    if (mutation && csrfToken === null) {
-      const session = await request<{ readonly csrf_token: string }>(
-        "/v1/admin/session",
-      );
-      csrfToken = session.csrf_token;
-    }
     const headers = new Headers(init.headers);
-    if (init.body !== undefined && !headers.has("Content-Type")) {
-      headers.set("Content-Type", jsonHeaders["Content-Type"]);
-    }
-    if (mutation) {
-      headers.set("X-CSRF-Token", csrfToken ?? "");
-      if (!headers.has("Idempotency-Key")) {
-        headers.set("Idempotency-Key", randomKey());
-      }
-    }
-    let response: Response;
-    try {
-      response = await fetcher(`${baseUrl}${path}`, {
-        ...init,
-        credentials: "same-origin",
-        headers,
-      });
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") {
-        throw error;
-      }
-      throw new AdministrationApiError(
-        mutation
-          ? "The connection failed during the change. The outcome is uncertain. Refresh current data before you try another change."
-          : "The administration service is offline.",
-        {
-          code: "offline",
-          requestId: null,
-          status: 0,
-          outcomeUncertain: mutation,
-        },
-      );
-    }
-    if (!response.ok) {
-      let document: ApiErrorDocument = {};
-      try {
-        document = (await response.json()) as ApiErrorDocument;
-      } catch {
-        // The safe generic error below does not expose an upstream response.
-      }
-      if (
-        document.error?.code === "recent_auth_required" &&
-        onRecentAuthenticationRequired !== undefined
-      ) {
-        if (recentAuthentication === null) {
-          const attempt = onRecentAuthenticationRequired();
-          recentAuthentication = attempt;
-          try {
-            await attempt;
-          } catch (error) {
-            if (recentAuthentication === attempt) recentAuthentication = null;
-            throw error;
-          }
-        } else {
-          await recentAuthentication;
-        }
-      }
-      throw new AdministrationApiError(
-        document.error?.message ??
-          "The administration request did not complete. No unsafe detail is available.",
-        {
-          code: document.error?.code ?? "administration_request_failed",
-          requestId: document.error?.request_id ?? null,
-          status: response.status,
-        },
-      );
-    }
-    return (await response.json()) as T;
-  }
-
-  async function requestExportBytes(
-    path: string,
-    redemptionToken: string,
-  ): Promise<Blob> {
-    if (csrfToken === null) {
-      const session = await request<{ readonly csrf_token: string }>(
-        "/v1/admin/session",
-      );
-      csrfToken = session.csrf_token;
-    }
-    let response: Response;
-    try {
-      response = await fetcher(`${baseUrl}${path}`, {
-        method: "POST",
-        credentials: "same-origin",
-        cache: "no-store",
-        headers: {
-          "Content-Type": "application/json",
-          "X-CSRF-Token": csrfToken,
-        },
-        body: JSON.stringify({ redemption_token: redemptionToken }),
-      });
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") {
-        throw error;
-      }
-      throw new AdministrationApiError(
-        "The connection failed during download. The one-use result is uncertain. Get current status before you try again.",
-        {
-          code: "offline",
-          requestId: null,
-          status: 0,
-          outcomeUncertain: true,
-        },
-      );
-    }
-    if (!response.ok) {
-      let document: ApiErrorDocument = {};
-      try {
-        document = (await response.json()) as ApiErrorDocument;
-      } catch {
-        // The safe generic error below does not expose an upstream response.
-      }
-      if (
-        document.error?.code === "recent_auth_required" &&
-        onRecentAuthenticationRequired !== undefined
-      ) {
-        await onRecentAuthenticationRequired();
-      }
-      throw new AdministrationApiError(
-        document.error?.message ??
-          "The protected download did not complete. No unsafe detail is available.",
-        {
-          code: document.error?.code ?? "administration_request_failed",
-          requestId: document.error?.request_id ?? null,
-          status: response.status,
-        },
-      );
-    }
-    if (
-      response.headers.get("Content-Type") !== "application/octet-stream" ||
-      response.headers.get("Cache-Control") !== "no-store" ||
-      response.headers.get("Referrer-Policy") !== "no-referrer" ||
-      response.headers.get("X-Content-Type-Options") !== "nosniff"
-    ) {
-      throw new AdministrationApiError(
-        "The protected download response was invalid.",
-        { code: "invalid_response", requestId: null, status: 502 },
-      );
-    }
-    return response.blob();
-  }
-
-  function servicePath(
-    scope: ScopeSelection,
-    suffix: string,
-    includeWorkspace = false,
-  ): string {
-    const separator = suffix.indexOf("?");
-    const suffixPath = separator === -1 ? suffix : suffix.slice(0, separator);
-    const suffixQuery = separator === -1 ? "" : suffix.slice(separator + 1);
-    const query = new URLSearchParams(suffixQuery);
-    if (includeWorkspace && scope.workspaceId !== "") {
-      query.set("workspace_id", scope.workspaceId);
-    }
-    const encodedService = encodeURIComponent(scope.serviceId);
-    const serialized = query.toString();
-    return `/v1/admin/services/${encodedService}/${suffixPath}${serialized === "" ? "" : `?${serialized}`}`;
-  }
-
-  function configurationPath(
-    scope: ScopeSelection,
-    collection: string,
-    id: string | null,
-    includeWorkspace = false,
-  ): string {
-    const base = servicePath(scope, collection, includeWorkspace);
-    if (id === null) return base;
-    const separator = base.indexOf("?");
-    const path = separator === -1 ? base : base.slice(0, separator);
-    const query = separator === -1 ? "" : base.slice(separator);
-    return `${path}/${encodeURIComponent(id)}${query}`;
-  }
-
-  // The caller supplies T because the closed HTTP contract owns each item shape.
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
-  async function allPages<T>(
-    initialPath: string,
-    signal?: AbortSignal,
-  ): Promise<{
-    readonly items: readonly T[];
-    readonly configurationRevision: string | null | undefined;
-  }> {
-    const items: T[] = [];
-    const cursors = new Set<string>();
-    let configurationRevision: string | null | undefined;
-    let path = initialPath;
-    for (let pageNumber = 0; pageNumber < 100; pageNumber += 1) {
-      const value = await request<Page<T>>(
-        path,
-        signal === undefined ? {} : { signal },
-      );
-      if (value.configuration_revision !== undefined) {
-        if (
-          configurationRevision !== undefined &&
-          value.configuration_revision !== configurationRevision
-        ) {
-          throw new AdministrationApiError(
-            "The configuration changed while its list was loading. Refresh and try again.",
-            {
-              code: "configuration_revision_conflict",
-              requestId: null,
-              status: 409,
-            },
-          );
-        }
-        configurationRevision = value.configuration_revision;
-      }
-      items.push(...value.items);
-      if (value.next_cursor === null) return { items, configurationRevision };
-      if (cursors.has(value.next_cursor)) {
-        throw new AdministrationApiError(
-          "The administration list did not complete. Try again.",
-          { code: "invalid_pagination", requestId: null, status: 502 },
-        );
-      }
-      cursors.add(value.next_cursor);
-      const next = new URL(path, "http://administration.local");
-      next.searchParams.set("cursor", value.next_cursor);
-      path = `${next.pathname}${next.search}`;
-    }
-    throw new AdministrationApiError(
-      "The administration list is too large to load safely.",
-      { code: "pagination_limit", requestId: null, status: 502 },
+    headers.set("Accept", "application/json");
+    headers.set("Authorization", `Bearer ${serviceKey}`);
+    return withClientDeadline(
+      async (signal) => {
+        const response = await fetcher(path, {
+          ...init,
+          cache: "no-store",
+          credentials: "omit",
+          headers,
+          signal,
+        });
+        if (!response.ok) throw await parseError(response);
+        return (await response.json()) as T;
+      },
+      deadline,
+      init.signal,
     );
   }
-
+  const post = <T>(
+    path: string,
+    body: unknown,
+    deadline = runtimeCallDeadline,
+  ) =>
+    request<T>(
+      path,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+      deadline,
+    );
   return {
-    listServices(signal) {
-      return allPages<ServiceSummary>("/v1/admin/services", signal).then(
-        (result) => result.items,
-      );
-    },
-
-    listCredentials(signal) {
-      return allPages<Credential>("/v1/admin/credentials", signal).then(
-        (result) => result.items,
-      );
-    },
-
-    listCatalog(kind, signal) {
-      return allPages<CatalogEntry>(`/v1/admin/catalog/${kind}`, signal).then(
-        (result) => result.items,
-      );
-    },
-
-    listAuditEvents(range, signal) {
-      const query = new URLSearchParams({ from: range.from, to: range.to });
-      if (range.cursor !== undefined) query.set("cursor", range.cursor);
-      return request<AuditPage>(
-        `/v1/admin/audit-events?${query.toString()}`,
-        signal === undefined ? {} : { signal },
-      );
-    },
-
-    createExport(input) {
-      return request<ExportOperation>(
-        "/v1/admin/exports",
+    model: (
+      workspace,
+      selector,
+      prompt,
+      systemPrompt,
+      inputImages,
+      temperature,
+      outputLimit,
+      tags,
+    ) =>
+      post("/v1/model-calls", {
+        workspace_api_name: workspace,
+        selector,
+        messages: [
+          ...(systemPrompt === ""
+            ? []
+            : [{ role: "system", content: systemPrompt }]),
+          {
+            role: "user",
+            content: [
+              { type: "text", text: prompt },
+              ...inputImages.map((image) => ({
+                type: "image",
+                media_type: image.media_type,
+                data_base64: image.data_base64,
+              })),
+            ],
+          },
+        ],
+        ...(temperature === null ? {} : { temperature }),
+        ...(outputLimit === null ? {} : { output_limit: outputLimit }),
+        ...(tags.length === 0 ? {} : { tags }),
+      }),
+    embedding: (workspace, selector, inputs, tags) =>
+      post("/v1/embeddings", {
+        workspace_api_name: workspace,
+        selector,
+        inputs,
+        ...(tags.length === 0 ? {} : { tags }),
+      }),
+    createMedia: (workspace, selector, kind, prompt, inputImages, tags) =>
+      post(
+        "/v1/media-jobs",
         {
-          method: "POST",
-          headers: { "Idempotency-Key": input.idempotencyKey },
-          body: JSON.stringify({
-            data_class: input.dataClass,
-            service_id: input.serviceId,
-            workspace_id: input.workspaceId,
-            from: input.from,
-            to: input.to,
-            format: input.format,
-          }),
+          workspace_api_name: workspace,
+          selector,
+          kind,
+          prompt,
+          ...(inputImages.length === 0
+            ? {}
+            : {
+                input_images: inputImages.map((image) => ({
+                  media_type: image.media_type,
+                  data_base64: image.data_base64,
+                  type: "image",
+                })),
+              }),
+          ...(tags.length === 0 ? {} : { tags }),
         },
-        true,
-      );
-    },
-
-    getExport(operationId, signal) {
-      return request<ExportOperation>(
-        `/v1/admin/exports/${encodeURIComponent(operationId)}`,
-        signal === undefined ? {} : { signal },
-      );
-    },
-
-    redeemExport(operationId, redemptionPath, redemptionToken) {
-      const expected = `/v1/admin/exports/${encodeURIComponent(operationId)}/redeem`;
-      let exactSameOriginBase = baseUrl === "";
-      if (!exactSameOriginBase && typeof globalThis.location !== "undefined") {
-        try {
-          const resolved = new URL(
-            `${baseUrl}${expected}`,
-            globalThis.location.origin,
-          );
-          exactSameOriginBase =
-            resolved.origin === globalThis.location.origin &&
-            `${resolved.pathname}${resolved.search}${resolved.hash}` ===
-              expected;
-        } catch {
-          exactSameOriginBase = false;
-        }
-      }
-      if (redemptionPath !== expected || !exactSameOriginBase) {
-        throw new AdministrationApiError(
-          "The protected download path was invalid.",
-          { code: "invalid_response", requestId: null, status: 502 },
-        );
-      }
-      return requestExportBytes(expected, redemptionToken);
-    },
-
-    createService(input) {
-      return request<ServiceCreated>(
-        "/v1/admin/services",
-        {
-          method: "POST",
-          body: JSON.stringify({
-            display_name: input.displayName,
-            parent_service_id: input.parentServiceId,
-            bootstrap_scope: input.bootstrapScope,
-          }),
-        },
-        true,
-      );
-    },
-
-    putService(serviceId, input) {
-      return request<ServiceAdministrationResult>(
-        `/v1/admin/services/${encodeURIComponent(serviceId)}`,
-        {
-          method: "PUT",
-          body: JSON.stringify({
-            expected_revision: input.expectedRevision,
-            reason: input.reason,
-            ...(input.displayName === undefined
-              ? {}
-              : { display_name: input.displayName }),
-            ...(input.newParentServiceId === undefined
-              ? {}
-              : { new_parent_service_id: input.newParentServiceId }),
-          }),
-        },
-        true,
-      );
-    },
-
-    changeService(serviceId, action, input) {
-      return request<ServiceAdministrationResult>(
-        `/v1/admin/services/${encodeURIComponent(serviceId)}/${action}`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            expected_revision: input.expectedRevision,
-            reason: input.reason,
-          }),
-        },
-        true,
-      );
-    },
-
-    async load(scope, signal) {
-      const end = now();
-      const start = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);
-      const accountingQuery = new URLSearchParams({
-        from: start.toISOString(),
-        to: end.toISOString(),
-      });
-      if (scope.workspaceId !== "") {
-        accountingQuery.set("workspace_id", scope.workspaceId);
-      }
-      const serviceBase = `/v1/admin/services/${encodeURIComponent(scope.serviceId)}`;
-      const budgetPath = servicePath(scope, "budgets", true);
-      const results = await Promise.allSettled([
-        request<ScopedState>(
-          servicePath(scope, "state", true),
-          signal === undefined ? {} : { signal },
-        ),
-        scope.mode === "global" && scope.workspaceId === ""
-          ? allPages<Credential>("/v1/admin/credentials", signal)
-          : Promise.resolve({ items: [], configurationRevision: undefined }),
-        allPages<ProviderInstance>(
-          servicePath(scope, "provider-instances"),
+        mediaAdmissionDeadline,
+      ),
+    mediaJob: (id) =>
+      request(`/v1/media-jobs/${encode(id)}`, {}, mediaStatusDeadline),
+    async mediaContent(id) {
+      return withClientDeadline(async (signal) => {
+        const response = await fetcher(`/v1/media-jobs/${encode(id)}/content`, {
+          cache: "no-store",
+          credentials: "omit",
+          headers: { Authorization: `Bearer ${serviceKey}` },
           signal,
-        ),
-        allPages<ProviderModelRoute>(
-          servicePath(scope, "provider-model-routes"),
-          signal,
-        ),
-        allPages<Assignment>(servicePath(scope, "assignments", true), signal),
-        allPages<RequestStatus>(
-          servicePath(scope, "model-requests", true),
-          signal,
-        ),
-        request<AccountingSummary>(
-          `${serviceBase}/accounting/summary?${accountingQuery.toString()}`,
-          signal === undefined ? {} : { signal },
-        ),
-        request<BudgetSummary>(
-          budgetPath,
-          signal === undefined ? {} : { signal },
-        ).catch((error: unknown) => {
-          if (error instanceof AdministrationApiError && error.status === 404) {
-            return null;
-          }
-          throw error;
-        }),
-      ] as const);
-      const names = [
-        "state",
-        "credentials",
-        "providers",
-        "routes",
-        "assignments",
-        "requests",
-        "accounting",
-        "budget",
-      ] as const;
-      const failures: Partial<Record<(typeof names)[number], string>> = {};
-      for (const [index, settled] of results.entries()) {
-        const result: PromiseSettledResult<unknown> = settled;
-        const name = names[index];
-        if (name === undefined) {
-          throw new Error("The selected administration read is invalid.");
-        }
-        if (result.status !== "rejected") continue;
-        if (
-          result.reason instanceof DOMException &&
-          result.reason.name === "AbortError"
-        ) {
-          throw result.reason;
-        }
-        failures[name] =
-          name === "accounting" &&
-          result.reason instanceof AdministrationApiError &&
-          result.reason.status === 400
-            ? "Accounting is not available because this scope has no configured currency."
-            : errorMessage(result.reason);
-      }
-      const state = results[0].status === "fulfilled" ? results[0].value : null;
-      const credentials =
-        results[1].status === "fulfilled" ? results[1].value.items : [];
-      const providers =
-        results[2].status === "fulfilled" ? results[2].value.items : [];
-      const routes =
-        results[3].status === "fulfilled" ? results[3].value.items : [];
-      const assignments =
-        results[4].status === "fulfilled" ? results[4].value.items : [];
-      const requests =
-        results[5].status === "fulfilled" ? results[5].value.items : [];
-      const accounting =
-        results[6].status === "fulfilled" ? results[6].value : null;
-      const budget =
-        results[7].status === "fulfilled" ? results[7].value : null;
-      if (
-        state === null &&
-        results[7].status === "fulfilled" &&
-        results[7].value === null
-      ) {
-        failures.budget =
-          "The budget scope is not available because the exact service or workspace did not load.";
-      }
-      const configurationRevisions = [
-        results[2],
-        results[3],
-        results[4],
-      ].flatMap((result) =>
-        result.status === "fulfilled" &&
-        result.value.configurationRevision != null
-          ? [result.value.configurationRevision]
-          : [],
-      );
-      const configurationRevision = configurationRevisions[0] ?? null;
-      if (
-        configurationRevisions.some(
-          (revision) => revision !== configurationRevision,
-        )
-      ) {
-        failures.providers =
-          "The configuration changed while selected data was loading. Refresh the service.";
-        failures.routes = failures.providers;
-        failures.assignments = failures.providers;
-      }
-      return {
-        state,
-        credentials,
-        providers,
-        routes,
-        assignments,
-        requests,
-        accounting,
-        budget,
-        configuration_revision: configurationRevision,
-        failures,
-      };
-    },
-
-    getRequest(scope, requestId, signal) {
-      return request<RequestStatus>(
-        servicePath(
-          scope,
-          `model-requests/${encodeURIComponent(requestId)}`,
-          true,
-        ),
-        signal === undefined ? {} : { signal },
-      );
-    },
-
-    runDiagnostic(scope, input, signal) {
-      return request<DiagnosticRun>(
-        servicePath(scope, "diagnostics", true),
-        {
-          method: "POST",
-          headers: { "Idempotency-Key": input.requestId },
-          body: JSON.stringify({
-            request_id: input.requestId,
-            exact_route: input.exactRoute,
-            reason: input.reason,
-          }),
-          ...(signal === undefined ? {} : { signal }),
-        },
-        true,
-      );
-    },
-
-    createCredential(input) {
-      return request<Credential>(
-        "/v1/admin/credentials",
-        {
-          method: "POST",
-          body: JSON.stringify({
-            owner_scope: input.ownerScope,
-            provider_catalog_id: "openai_compatible.v1",
-            secret: input.secret,
-            safe_label: input.safeLabel === "" ? null : input.safeLabel,
-          }),
-        },
-        true,
-      );
-    },
-
-    changeCredential(credentialId, action, input) {
-      return request<Credential>(
-        `/v1/admin/credentials/${encodeURIComponent(credentialId)}/${action}`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            expected_revision: input.expectedRevision,
-            reason: input.reason,
-            ...(input.replacementSecret === undefined
-              ? {}
-              : { replacement_secret: input.replacementSecret }),
-          }),
-        },
-        true,
-      );
-    },
-
-    putProvider(scope, id, input) {
-      return request<ConfigurationWriteResult>(
-        configurationPath(scope, "provider-instances", id),
-        { method: id === null ? "POST" : "PUT", body: JSON.stringify(input) },
-        true,
-      );
-    },
-
-    putRoute(scope, id, input) {
-      return request<ConfigurationWriteResult>(
-        configurationPath(scope, "provider-model-routes", id),
-        { method: id === null ? "POST" : "PUT", body: JSON.stringify(input) },
-        true,
-      );
-    },
-
-    putAssignment(scope, name, input) {
-      return request<ConfigurationWriteResult>(
-        configurationPath(scope, "assignments", name, true),
-        { method: "PUT", body: JSON.stringify(input) },
-        true,
-      );
-    },
-
-    putBudget(scope, input) {
-      return request<BudgetLimitWriteResult>(
-        servicePath(scope, "budgets", true),
-        {
-          method: "PUT",
-          body: JSON.stringify({
-            hard_limit: input.hardLimit,
-            currency: input.currency,
-            warning_threshold: input.warningThreshold,
-            reset_period: input.resetPeriod,
-            expected_revision: input.expectedRevision,
-          }),
-        },
-        true,
-      );
+        });
+        if (!response.ok) throw await parseError(response);
+        return response.blob();
+      }, mediaContentDeadline);
     },
   };
 }
-
 export function errorMessage(error: unknown): string {
-  if (error instanceof AdministrationApiError) {
-    const request =
-      error.requestId === null ? "" : ` Request ${error.requestId}.`;
-    return `${error.message}${request}`;
-  }
-  return "The administration request did not complete. No unsafe detail is available.";
+  if (error instanceof AdministrationApiError)
+    return error.details?.reason === undefined
+      ? error.message
+      : `${error.message} ${error.details.reason}`;
+  return "The Router could not complete the operation. Try again.";
+}
+export function isoRange(
+  days = 7,
+  now = new Date(),
+): { readonly from: string; readonly to: string } {
+  return {
+    from: new Date(now.getTime() - days * 86_400_000).toISOString(),
+    to: now.toISOString(),
+  };
 }

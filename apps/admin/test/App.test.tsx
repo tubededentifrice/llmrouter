@@ -1,2422 +1,491 @@
-/// <reference types="node" />
-
 import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
-// React Test Renderer supplies a reducer interaction test without a browser DOM.
-import {
-  act,
-  create,
-  type ReactTestInstance,
-  type ReactTestRenderer,
-} from "react-test-renderer";
-import { describe, expect, it, vi } from "vitest";
-import {
-  AdministrationDashboard,
-  AdministrationStateView,
-  App,
-  AuditView,
-  ExportView,
-  LocalAdministrationGateView,
-  LocalAdministratorActivation,
-  StaleRevisionBanner,
-  StateMessage,
-  type AppProps,
-} from "../src/App.js";
-import { recoverAfterMutationFailure } from "../src/mutationRecovery.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { App, AssignmentsPage } from "../src/App.js";
 import { ServiceManagement } from "../src/ServiceManagement.js";
-import {
-  AdministrationApiError,
-  configurationRevisionForScope,
-  scopeFromSearch,
-  scopeSearch,
-  scheduleAdministrationSessionInspection,
-  type AdministrationClient,
-  type AdministrationSnapshot,
-  type AuditPage,
-  type RequestStatus,
-  type ScopeSelection,
-  type ServiceSummary,
+import { AdministrationApiError } from "../src/api.js";
+import type {
+  AdministrationClient,
+  Assignment,
+  MediaJob,
+  Service,
 } from "../src/api.js";
+import {
+  createScopeLoadGuard,
+  initialAccessScopeState,
+  reduceAccessScopeState,
+} from "../src/accessState.js";
+import {
+  createInputImageSelectionQueue,
+  parseManualPrice,
+  validateInputImageSelection,
+} from "../src/formContracts.js";
+import { scheduleSessionExpiry } from "../src/sessionExpiry.js";
+import { waitForMediaJob } from "../src/mediaPolling.js";
 
-(
-  globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
-).IS_REACT_ACT_ENVIRONMENT = true;
+const emptyPage = { items: [], page: { has_more: false, next_cursor: null } };
 
-const globalScope: ScopeSelection = {
-  mode: "global",
-  serviceId: "0198a080-0000-7000-8000-000000000001",
-  workspaceId: "0198a080-0000-7000-8000-000000000002",
-};
-const serviceLevelScope: ScopeSelection = {
-  ...globalScope,
-  workspaceId: "",
-};
-const registeredService: ServiceSummary = {
-  service_id: serviceLevelScope.serviceId,
-  display_name: "Test service",
-  state: "active",
-  revision: "service-revision-one",
-  bootstrap_state: "ready",
-  credential_generation: 1,
-  bootstrap_scope: {
-    audiences: ["data_plane"],
-    operations: ["model.create"],
-  },
-};
-const catalogModels = [
+function client(): AdministrationClient {
+  return {
+    session: vi.fn().mockResolvedValue({
+      subject: "subject",
+      display_name: "Admin",
+      expires_at: "2026-08-25T00:00:00Z",
+      csrf_token: "csrf",
+    }),
+    startSession: vi.fn(),
+    logout: vi.fn(),
+    services: vi.fn().mockResolvedValue(emptyPage),
+    createService: vi.fn(),
+    updateService: vi.fn(),
+    deleteService: vi.fn(),
+    workspaces: vi.fn().mockResolvedValue(emptyPage),
+    createWorkspace: vi.fn(),
+    deleteWorkspace: vi.fn(),
+    keys: vi.fn().mockResolvedValue(emptyPage),
+    createKey: vi.fn(),
+    revokeKey: vi.fn(),
+    assignments: vi.fn().mockResolvedValue(emptyPage),
+    putAssignment: vi.fn(),
+    deleteAssignment: vi.fn(),
+    removeRequirement: vi.fn(),
+    providers: vi.fn().mockResolvedValue(emptyPage),
+    createProvider: vi.fn(),
+    putProvider: vi.fn(),
+    deleteProvider: vi.fn(),
+    models: vi.fn().mockResolvedValue(emptyPage),
+    createModel: vi.fn(),
+    putModel: vi.fn(),
+    deleteModel: vi.fn(),
+    providerModels: vi.fn().mockResolvedValue(emptyPage),
+    createProviderModel: vi.fn(),
+    putProviderModel: vi.fn(),
+    deleteProviderModel: vi.fn(),
+    credentials: vi.fn().mockResolvedValue(emptyPage),
+    createCredential: vi.fn(),
+    replaceCredential: vi.fn(),
+    deleteCredential: vi.fn(),
+    previewImport: vi.fn(),
+    importModels: vi.fn(),
+    synchronizePrices: vi.fn(),
+    activity: vi.fn().mockResolvedValue(emptyPage),
+    statistics: vi.fn(),
+    requestLogs: vi.fn().mockResolvedValue(emptyPage),
+    requestLog: vi.fn(),
+    requestLogMedia: vi.fn(),
+    retention: vi.fn().mockResolvedValue({ duration_days: 7 }),
+    putRetention: vi.fn(),
+    health: vi.fn().mockResolvedValue({
+      status: "healthy",
+      checked_at: "2026-08-24T00:00:00Z",
+      components: [],
+    }),
+  };
+}
+
+const services: readonly Service[] = [
   {
-    stable_id: "deepseek-v4-flash",
-    kind: "model" as const,
-    display_name: "DeepSeek V4 Flash",
-    capabilities: ["chat.complete", "chat.stream"],
-    state: "active" as const,
-    settings: null,
-    active_revision: "catalog-revision-1",
+    api_name: "root",
+    display_name: "Root",
+    parent_service_api_name: null,
+    created_at: "2026-08-24T00:00:00Z",
+  },
+  {
+    api_name: "child",
+    display_name: "Child",
+    parent_service_api_name: "root",
+    created_at: "2026-08-24T00:00:00Z",
   },
 ];
-const styles = readFileSync(
-  new URL("../src/styles.css", import.meta.url),
-  "utf8",
-);
 
-function deferred<T>(): {
-  readonly promise: Promise<T>;
-  readonly resolve: (value: T) => void;
-  readonly reject: (reason: unknown) => void;
-} {
-  let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((next, fail) => {
-    resolve = next;
-    reject = fail;
+describe("accepted administration composition", () => {
+  it("uses the shared assignment and playground components", () => {
+    const source = readFileSync(
+      new URL("../src/App.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(source).toContain("ServiceAssignmentGraph");
+    expect(source).toContain("OperationPlayground");
+    expect(source).toContain("Model and media playground");
   });
-  return { promise, resolve, reject };
-}
 
-// React Test Renderer supplies the node tree for reducer interaction tests.
-// eslint-disable-next-line @typescript-eslint/no-deprecated
-function renderedText(item: ReactTestInstance): string {
-  return item.children
-    .map((child) => (typeof child === "string" ? child : renderedText(child)))
-    .join("");
-}
+  it("does not restore removed product surfaces", () => {
+    const source = readFileSync(
+      new URL("../src/App.tsx", import.meta.url),
+      "utf8",
+    );
+    for (const removed of [
+      "Budgets",
+      "Trusted grant",
+      "Recent authentication",
+      "Configuration revision",
+      "ExportView",
+      "Recovery",
+    ])
+      expect(source).not.toContain(removed);
+  });
 
-const snapshot: AdministrationSnapshot = {
-  state: {
-    kind: "workspace",
-    service_id: globalScope.serviceId,
-    workspace_id: globalScope.workspaceId,
-    display_name: "Test workspace",
-    state: "active",
-    revision: "0198a080-0000-7000-8000-000000000003",
-  },
-  credentials: [
-    {
-      credential_id: "credential-1",
-      owner_scope: globalScope.serviceId,
-      provider_catalog_id: "openai_compatible.v1",
-      state: "active",
-      revision: "credential-revision-1",
-      created_at: "2026-08-20T00:00:00Z",
-      fingerprint: "safe-fingerprint",
-    },
-  ],
-  providers: [
-    {
-      provider_instance_id: "provider-1",
-      owner_scope: globalScope.serviceId,
-      source_layer: serviceLevelScope.serviceId,
-      provider_catalog_id: "openai_compatible.v1",
-      display_name: "OpenRouter",
-      endpoint: "https://openrouter.ai/api/v1",
-      credential_id: "credential-1",
-      eligible_service_ids: [],
-      state: "active",
-      active_revision: "provider-revision-1",
-      inherited: false,
-      settings: {
-        schema_name: "adapter.openai_compatible.settings",
-        major_version: 1,
-        document: {
-          profile: "openrouter",
-          supported_operations: ["chat.complete", "chat.stream"],
+  it("shows the service graph and the equivalent accessible list", () => {
+    const markup = renderToStaticMarkup(
+      <ServiceManagement
+        client={client()}
+        csrf="csrf"
+        onNotice={vi.fn()}
+        onRefresh={vi.fn()}
+        onSelect={vi.fn()}
+        selectedService="root"
+        services={services}
+      />,
+    );
+    expect(markup).toContain("Service tree canvas");
+    expect(markup).toContain("Accessible service list");
+    expect(markup).toContain("Root");
+    expect(markup).toContain("Child");
+    expect(markup).toContain("Move or delete each child");
+  });
+
+  it("starts in a session loading state", () => {
+    const administration = client();
+    const markup = renderToStaticMarkup(<App client={administration} />);
+    expect(markup).toContain("Checking the administrator session");
+  });
+
+  it("uses semantic CSS class names", () => {
+    const styles = readFileSync(
+      new URL("../src/styles.css", import.meta.url),
+      "utf8",
+    );
+    expect(styles).toContain(".administration-form");
+    expect(styles).toContain(".health-list");
+    expect(styles).not.toMatch(/\.(?:mt|mb|px|py|flex|grid)-\d/);
+    for (const layoutHelper of [
+      ".page-stack",
+      ".two-column",
+      ".compact-form",
+      ".range-form",
+      ".stack-form",
+      ".table-scroll",
+      ".inline-actions",
+    ])
+      expect(styles).not.toContain(layoutHelper);
+  });
+
+  it("keeps assignment actions equal to the selected service ownership", () => {
+    const assignments: readonly Assignment[] = [
+      {
+        api_name: "local",
+        display_name: "Local direct",
+        definition_kind: "direct_chain",
+        defined_by_service_api_name: "child",
+        direct_chain: [],
+        effective_chain: [],
+        observed_requirements: ["text_input"],
+      },
+      {
+        api_name: "inherited",
+        display_name: "Inherited assignment",
+        definition_kind: "inherited_assignment",
+        defined_by_service_api_name: "parent",
+        inherits_assignment_api_name: "local",
+        effective_chain: [],
+        observed_requirements: ["streaming"],
+      },
+      {
+        api_name: "default",
+        display_name: "Implicit default",
+        definition_kind: "implicit",
+        defined_by_service_api_name: "child",
+        effective_chain: [],
+        observed_requirements: ["reasoning"],
+      },
+    ];
+    const markup = renderToStaticMarkup(
+      <AssignmentsPage
+        assignments={assignments}
+        client={client()}
+        csrf="csrf"
+        onNotice={vi.fn()}
+        onRefresh={vi.fn()}
+        providerModels={[]}
+        selectedService="child"
+      />,
+    );
+    expect(markup.match(/Delete local definition/g)).toHaveLength(1);
+    expect(markup).toContain("Remove text_input");
+    expect(markup).toContain("Remove streaming");
+    expect(markup).toContain("Remove reasoning");
+    expect(markup).toContain(
+      "The list contains the same records and actions as the graph.",
+    );
+  });
+});
+
+describe("service access isolation", () => {
+  it("clears prior scope data and its one-time secret before a failed load", () => {
+    const first = reduceAccessScopeState(initialAccessScopeState("first"), {
+      type: "success",
+      service: "first",
+      keys: [
+        {
+          id: "key-one",
+          name: "First key",
+          created_at: "2026-08-24T00:00:00Z",
         },
-      },
-    },
-  ],
-  routes: [
-    {
-      provider_model_route_id: "route-1",
-      owner_scope: globalScope.serviceId,
-      source_layer: serviceLevelScope.serviceId,
-      provider_instance_id: "provider-1",
-      canonical_model_id: "deepseek-v4-flash",
-      wire_model: "deepseek/deepseek-v4-flash",
-      capabilities: ["chat.complete", "chat.stream"],
-      eligible_service_ids: [],
-      settings: {
-        schema_name: "adapter.openai_compatible.route",
-        major_version: 1,
-        document: {},
-      },
-      price_authority: {
-        mode: "manual",
-        source_name: null,
-        lookup_identifier: null,
-      },
-      prices: [],
-      synchronization_schedule: "0 0 * * 0",
-      stale_after_seconds: 1209600,
-      state: "active",
-      active_revision: "route-revision-1",
-      inherited: false,
-    },
-  ],
-  assignments: [
-    {
-      name: "general",
-      owner_scope: globalScope.serviceId,
-      source_layer: globalScope.workspaceId,
-      state: "active",
-      inherited: false,
-      active_revision: "assignment-revision-1",
-      candidates: [
-        { provider_model_route_id: "route-1", attempt_timeout_ms: 30000 },
       ],
-      required_capabilities: ["chat.complete", "chat.stream"],
-    },
-  ],
-  requests: [
-    {
-      request_id: "request-1",
-      assignment: "general",
-      state: "succeeded",
-      state_revision: 4,
-      admitted_at: "2026-08-20T00:00:00Z",
-      last_transition_at: "2026-08-20T00:00:02Z",
-      terminal_at: "2026-08-20T00:00:02Z",
-      partial_output: false,
-      committed_effects: false,
-      configuration_revision: "configuration-revision-1",
-      attempts: [],
-      accounting: {
-        estimated: "0.0001",
-        reserved: "0.0001",
-        used: "0.0001",
-        corrected: "0.0001",
-        currency: "USD",
-      },
-    },
-  ],
-  accounting: {
-    from: "2026-08-13T00:00:00Z",
-    to: "2026-08-20T00:00:00Z",
-    currency: "USD",
-    logical_requests: 1,
-    attempts: 1,
-    usage: [{ unit: "input_token", quantity: "4" }],
-    cost: "0.0001",
-    corrections: "0",
-  },
-  budget: {
-    scope: "workspace",
-    limit: { amount: "25", currency: "USD" },
-    warning_threshold: { amount: "20", currency: "USD" },
-    reserved: { amount: "1", currency: "USD" },
-    used: { amount: "4", currency: "USD" },
-    corrected: { amount: "-0.5", currency: "USD" },
-    remaining: { amount: "20.5", currency: "USD" },
-    enforcement_state: "available",
-    reset_period: "monthly",
-    revision: "3",
-  },
-  configuration_revision: null,
-  failures: {},
-};
-
-const client: AdministrationClient = {
-  listServices: vi.fn(),
-  listCredentials: vi.fn(),
-  listCatalog: vi.fn(),
-  listAuditEvents: vi.fn().mockResolvedValue({ items: [], next_cursor: null }),
-  createExport: vi.fn(),
-  getExport: vi.fn(),
-  redeemExport: vi.fn(),
-  createService: vi.fn(),
-  putService: vi.fn(),
-  changeService: vi.fn(),
-  load: vi.fn(),
-  getRequest: vi.fn(),
-  runDiagnostic: vi.fn(),
-  createCredential: vi.fn(),
-  changeCredential: vi.fn(),
-  putProvider: vi.fn(),
-  putRoute: vi.fn(),
-  putAssignment: vi.fn(),
-  putBudget: vi.fn(),
-};
-
-function dashboard(
-  section:
-    | "overview"
-    | "services"
-    | "credentials"
-    | "audit"
-    | "setup"
-    | "configuration"
-    | "assignments"
-    | "requests"
-    | "diagnostics"
-    | "budgets"
-    | "accounting",
-  scope = serviceLevelScope,
-): string {
-  return renderToStaticMarkup(
-    <AdministrationDashboard
-      client={client}
-      initialSection={section}
-      notice={null}
-      onNotice={vi.fn()}
-      onReload={vi.fn()}
-      scope={scope}
-      services={[registeredService]}
-      catalogModels={catalogModels}
-      snapshot={snapshot}
-    />,
-  );
-}
-
-describe("administration app states", () => {
-  it("keeps the exact workspace through the administration URL", () => {
-    const search = scopeSearch(globalScope);
-    expect(search).toContain(`service_id=${globalScope.serviceId}`);
-    expect(search).toContain(`workspace_id=${globalScope.workspaceId}`);
-    expect(scopeFromSearch(`?${search}`)).toEqual(globalScope);
-  });
-
-  it("removes a workspace when its service is absent", () => {
-    expect(scopeFromSearch("?workspace_id=orphan-workspace")).toEqual({
-      mode: "global",
-      serviceId: "",
-      workspaceId: "",
+      workspaces: [
+        {
+          api_name: "first-workspace",
+          display_name: "First workspace",
+          created_at: "2026-08-24T00:00:00Z",
+        },
+      ],
+    });
+    const withSecret = reduceAccessScopeState(first, {
+      type: "show-secret",
+      service: "first",
+      secret: "first-service-secret",
+    });
+    const second = reduceAccessScopeState(withSecret, {
+      type: "begin",
+      service: "second",
+    });
+    const failed = reduceAccessScopeState(second, {
+      type: "failure",
+      service: "second",
+    });
+    expect(failed).toEqual({
+      keys: [],
+      phase: "error",
+      secret: null,
+      service: "second",
+      workspaces: [],
     });
     expect(
-      scopeSearch({
-        mode: "global",
-        serviceId: "",
-        workspaceId: "orphan-workspace",
+      reduceAccessScopeState(failed, {
+        type: "success",
+        service: "first",
+        keys: first.keys,
+        workspaces: first.workspaces,
       }),
-    ).toBe("");
+    ).toBe(failed);
   });
 
-  it("does not rotate the session proof from a temporary Strict Mode effect", () => {
-    const callbacks: (() => void)[] = [];
-    const inspect = vi.fn();
-    const cancel = scheduleAdministrationSessionInspection(
-      inspect,
-      (callback) => {
-        callbacks.push(callback);
-      },
-    );
-    cancel();
-    callbacks[0]?.();
-    expect(inspect).not.toHaveBeenCalled();
+  it("rejects a late completion after the selected scope changes", () => {
+    const guard = createScopeLoadGuard();
+    const first = guard.begin();
+    expect(guard.isCurrent(first)).toBe(true);
+    guard.invalidate();
+    expect(guard.isCurrent(first)).toBe(false);
+    const second = guard.begin();
+    expect(guard.isCurrent(second)).toBe(true);
+  });
+});
 
-    scheduleAdministrationSessionInspection(inspect, (callback) => {
-      callbacks.push(callback);
+describe("media job polling", () => {
+  it("stops at the poll bound without claiming a provider failure", async () => {
+    const pending: MediaJob = {
+      id: "safe-job-id",
+      workspace_api_name: "workspace",
+      provider_model_api_name: "image-route",
+      kind: "image",
+      state: "pending",
+      created_at: "2026-08-24T00:00:00Z",
+    };
+    const mediaJob = vi.fn().mockResolvedValue(pending);
+    const wait = vi.fn().mockResolvedValue(undefined);
+    const error: unknown = await waitForMediaJob(
+      { mediaJob },
+      pending,
+      2,
+      wait,
+    ).catch((caught: unknown) => caught);
+    expect(error).toMatchObject({
+      code: "media_job_poll_timeout",
+      message: "Media job safe-job-id is still pending.",
+      status: 408,
     });
-    callbacks[1]?.();
-    expect(inspect).toHaveBeenCalledOnce();
-  });
-
-  it("uses one write-only local administrator control", () => {
-    const html = renderToStaticMarkup(
-      <LocalAdministratorActivation onActivate={vi.fn()} />,
+    expect(error).not.toMatchObject({ code: "upstream_failed" });
+    expect(mediaJob).toHaveBeenCalledTimes(2);
+    expect(wait).toHaveBeenCalledTimes(2);
+    expect(error).toBeInstanceOf(AdministrationApiError);
+    if (!(error instanceof AdministrationApiError)) throw error;
+    expect(error.details?.reason).toBe(
+      "The playground stopped polling job safe-job-id. The job can still complete. Do not submit the same work again. Query /v1/media-jobs/safe-job-id with the same service key.",
     );
-    expect(html).toContain("Activate administrator session");
-    expect(html).toContain('type="password"');
-    expect(html).toContain('autoComplete="off"');
-    expect(html).toContain('value=""');
-    expect(html).not.toContain("localStorage");
   });
+});
 
-  it("keeps the normal app when local activation capability is absent", () => {
-    const unavailable = renderToStaticMarkup(
-      <LocalAdministrationGateView
-        session={{ state: "unavailable" }}
-        onActivate={vi.fn()}
-      />,
-    );
-    const required = renderToStaticMarkup(
-      <LocalAdministrationGateView
-        session={{ state: "required" }}
-        onActivate={vi.fn()}
-      />,
-    );
-    expect(unavailable).toContain("Run LLM Router");
-    expect(unavailable).not.toContain("Activate administrator session");
-    expect(required).toContain("Activate administrator session");
-  });
+describe("playground image boundaries", () => {
+  const image = (size: number, type = "image/png") => ({ size, type });
 
-  it("shows bounded Pocket ID action progress and retry errors", () => {
-    const pending = renderToStaticMarkup(
-      <LocalAdministrationGateView
-        session={{ state: "oidc_required" }}
-        sessionAction="sign_in_pending"
-        onActivate={vi.fn()}
-      />,
-    );
-    const failed = renderToStaticMarkup(
-      <LocalAdministrationGateView
-        session={{ state: "oidc_required" }}
-        sessionAction="error"
-        onActivate={vi.fn()}
-      />,
-    );
-    expect(pending).toContain("Opening Pocket ID…");
-    expect(pending).toContain("disabled");
-    expect(failed).toContain("Pocket ID sign-in did not start. Try again.");
-  });
-
-  it("shows global tasks before a service is selected", () => {
-    const html = renderToStaticMarkup(<App client={client} />);
-    expect(html).toContain("Run LLM Router");
-    expect(html).toContain("Create your first service");
-    expect(html).toContain("Service to manage");
-    expect(html).not.toContain("Exact administration scope");
-    expect(html).toContain('aria-current="page"');
-    expect(html).toContain("Global administrator tasks");
-    expect(html).toContain("Overview");
-    expect(html).toContain("Audit events");
-    expect(html).toContain("Exports");
-    expect(html).toContain("mobile-service-selector");
-  });
-
-  /* eslint-disable @typescript-eslint/no-deprecated -- This renderer verifies export operation state changes. */
-  it("creates and polls a bounded protected export without rendering custody", async () => {
-    vi.useFakeTimers();
-    const createExport = vi
-      .fn<AdministrationClient["createExport"]>()
-      .mockResolvedValue({
-        operation_id: "signed-operation",
-        state: "queued",
-        created_at: "2026-08-23T10:00:00Z",
-        expires_at: "2026-08-23T11:00:00Z",
-      });
-    const getExport = vi
-      .fn<AdministrationClient["getExport"]>()
-      .mockResolvedValueOnce({
-        operation_id: "signed-operation",
-        state: "running",
-        created_at: "2026-08-23T10:00:00Z",
-        expires_at: "2026-08-23T11:00:00Z",
-      })
-      .mockResolvedValueOnce({
-        operation_id: "signed-operation",
-        state: "completed",
-        created_at: "2026-08-23T10:00:00Z",
-        expires_at: "2026-08-23T11:00:00Z",
-        redemption_path: "/v1/admin/exports/signed-operation/redeem",
-        redemption_token: "private-redemption-token".padEnd(43, "x"),
-        redemption_expires_at: "2026-08-23T10:05:00Z",
-        sha256: "a".repeat(64),
-      });
-    let renderer!: ReactTestRenderer;
-    act(() => {
-      renderer = create(
-        <ExportView
-          client={{ ...client, createExport, getExport }}
-          services={[registeredService]}
-        />,
+  it("accepts the exact file-count and byte boundaries", () => {
+    expect(() => {
+      validateInputImageSelection(
+        Array.from({ length: 7 }, () => ({ sizeBytes: 1 })),
+        [image(1)],
       );
+    }).not.toThrow();
+    expect(() => {
+      validateInputImageSelection(
+        [{ sizeBytes: 31_457_280 }],
+        [image(20_971_520)],
+      );
+    }).not.toThrow();
+  });
+
+  it("rejects too many, empty, oversized, and unsupported images", () => {
+    expect(() => {
+      validateInputImageSelection(
+        Array.from({ length: 8 }, () => ({ sizeBytes: 1 })),
+        [image(1)],
+      );
+    }).toThrow("no more than 8");
+    expect(() => {
+      validateInputImageSelection([], [image(0)]);
+    }).toThrow("at least 1 byte");
+    expect(() => {
+      validateInputImageSelection([], [image(20_971_521)]);
+    }).toThrow("20,971,520 bytes or smaller");
+    expect(() => {
+      validateInputImageSelection([], [image(1, "image/gif")]);
+    }).toThrow("JPEG, PNG, or WebP");
+  });
+
+  it("rejects a combined byte count above the exact boundary", () => {
+    expect(() => {
+      validateInputImageSelection(
+        [{ sizeBytes: 31_457_281 }],
+        [image(20_971_520)],
+      );
+    }).toThrow("52,428,800 bytes or less");
+  });
+
+  it("serializes concurrent selections without losing an accepted batch", async () => {
+    interface Item {
+      readonly id: string;
+      readonly sizeBytes: number;
+    }
+    const changes: (readonly Item[])[] = [];
+    let releaseFirst: (() => void) | undefined;
+    const firstRead = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
     });
-    expect(renderedText(renderer.root)).toContain("No export operation");
-    await act(async () => {
-      (
-        renderer.root.findByType("form").props.onSubmit as (event: {
-          preventDefault(): void;
-        }) => void
-      )({
-        preventDefault: vi.fn(),
-      });
-      await Promise.resolve();
-      await Promise.resolve();
+    const queue = createInputImageSelectionQueue<Item>([], (items) => {
+      changes.push(items);
     });
-    expect(createExport).toHaveBeenCalledOnce();
-    const submittedRangeEnd = createExport.mock.calls[0]?.[0].to;
-    expect(submittedRangeEnd).toBeDefined();
-    expect(new Date(submittedRangeEnd ?? 0).getTime()).toBeGreaterThan(
-      Date.now(),
+    const first = queue.add([image(1)], async () => {
+      await firstRead;
+      return { id: "first", sizeBytes: 1 };
+    });
+    const second = queue.add([image(1)], () =>
+      Promise.resolve({ id: "second", sizeBytes: 1 }),
     );
-    expect(renderedText(renderer.root)).toContain("Export is queued");
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1_000);
-    });
-    expect(renderedText(renderer.root)).toContain("Export is running");
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1_000);
-    });
-    expect(getExport).toHaveBeenCalledTimes(2);
-    expect(renderedText(renderer.root)).toContain("Export is completed");
-    expect(renderedText(renderer.root)).toContain("Download once");
-    expect(renderedText(renderer.root)).not.toContain(
-      "private-redemption-token",
+    await Promise.resolve();
+    expect(changes).toEqual([]);
+    releaseFirst?.();
+    await expect(first).resolves.toHaveLength(1);
+    await expect(second).resolves.toHaveLength(2);
+    expect(changes.at(-1)?.map((item) => item.id)).toEqual(["first", "second"]);
+  });
+
+  it("applies count and total-byte limits after each queued batch", async () => {
+    const queue = createInputImageSelectionQueue(
+      Array.from({ length: 6 }, (_, index) => ({
+        id: `existing-${String(index)}`,
+        sizeBytes: 1,
+      })),
+      vi.fn(),
     );
-    act(() => {
-      renderer.unmount();
+    let releaseFirst: (() => void) | undefined;
+    const firstRead = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
     });
+    const first = queue.add([image(20_971_520)], async () => {
+      await firstRead;
+      return { id: "first", sizeBytes: 20_971_520 };
+    });
+    const second = queue.add([image(20_971_520), image(20_971_520)], () =>
+      Promise.resolve({ id: "second", sizeBytes: 20_971_520 }),
+    );
+    releaseFirst?.();
+    await expect(first).resolves.toHaveLength(7);
+    await expect(second).rejects.toThrow("no more than 8");
+
+    const totalQueue = createInputImageSelectionQueue(
+      [{ id: "existing", sizeBytes: 10_485_761 }],
+      vi.fn(),
+    );
+    const accepted = totalQueue.add([image(20_971_520)], () =>
+      Promise.resolve({ id: "accepted", sizeBytes: 20_971_520 }),
+    );
+    const rejected = totalQueue.add([image(20_971_521 - 1)], () =>
+      Promise.resolve({ id: "rejected", sizeBytes: 20_971_520 }),
+    );
+    await expect(accepted).resolves.toHaveLength(2);
+    await expect(rejected).rejects.toThrow("52,428,800 bytes or less");
+  });
+});
+
+describe("manual typed prices", () => {
+  it("builds one exact price with the complete current unit set", () => {
+    expect(
+      parseManualPrice(
+        "usd",
+        "input_token=0.001, output_token=0.002, cached_input_token=0.0005, image=1, video_second=0.1, audio_second=0.05, request=0.01, provider_unit=2",
+      ),
+    ).toEqual({
+      currency: "USD",
+      unit_prices: [
+        { unit: "input_token", amount: "0.001" },
+        { unit: "output_token", amount: "0.002" },
+        { unit: "cached_input_token", amount: "0.0005" },
+        { unit: "image", amount: "1" },
+        { unit: "video_second", amount: "0.1" },
+        { unit: "audio_second", amount: "0.05" },
+        { unit: "request", amount: "0.01" },
+        { unit: "provider_unit", amount: "2" },
+      ],
+    });
+  });
+
+  it("uses both empty fields only to clear a manual price", () => {
+    expect(parseManualPrice("", "")).toBeNull();
+    expect(() => parseManualPrice("", "request=1")).toThrow(
+      "three-letter currency",
+    );
+    expect(() => parseManualPrice("USD", "")).toThrow(
+      "at least one typed unit amount",
+    );
+    expect(() => parseManualPrice("USD", "request=")).toThrow(
+      "fixed-decimal amount",
+    );
+  });
+});
+
+describe("absolute session expiry", () => {
+  afterEach(() => {
     vi.useRealTimers();
   });
-  /* eslint-enable @typescript-eslint/no-deprecated */
 
-  /* eslint-disable @typescript-eslint/no-deprecated -- This renderer verifies uncertain export retry identity. */
-  it("keeps one export idempotency key after an uncertain offline result", async () => {
-    const createExport = vi
-      .fn<AdministrationClient["createExport"]>()
-      .mockRejectedValueOnce(
-        new AdministrationApiError("The administration service is offline.", {
-          code: "offline",
-          requestId: null,
-          status: 0,
-          outcomeUncertain: true,
-        }),
-      )
-      .mockResolvedValueOnce({
-        operation_id: "signed-operation",
-        state: "queued",
-        created_at: "2026-08-23T10:00:00Z",
-        expires_at: "2026-08-23T11:00:00Z",
-      });
-    let renderer!: ReactTestRenderer;
-    act(() => {
-      renderer = create(
-        <ExportView
-          client={{ ...client, createExport }}
-          services={[registeredService]}
-        />,
-      );
-    });
-    await act(async () => {
-      (
-        renderer.root.findByType("form").props.onSubmit as (event: {
-          preventDefault(): void;
-        }) => void
-      )({ preventDefault: vi.fn() });
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    expect(renderedText(renderer.root)).toContain("export status is offline");
-    const firstKey = createExport.mock.calls[0]?.[0].idempotencyKey;
-    const retry = renderer.root
-      .findAllByType("button")
-      .find((item) => renderedText(item).includes("Try again"));
-    if (retry === undefined) throw new Error("Export retry did not render.");
-    await act(async () => {
-      (retry.props.onClick as () => void)();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    expect(createExport).toHaveBeenCalledTimes(2);
-    expect(createExport.mock.calls[1]?.[0].idempotencyKey).toBe(firstKey);
-    act(() => {
-      renderer.unmount();
-    });
-  });
-  /* eslint-enable @typescript-eslint/no-deprecated */
-
-  /* eslint-disable @typescript-eslint/no-deprecated -- This renderer verifies audit page state changes. */
-  it("shows audit loading, safe events, and stable next-page controls", async () => {
-    const first = deferred<AuditPage>();
-    const listAuditEvents = vi
-      .fn<AdministrationClient["listAuditEvents"]>()
-      .mockImplementationOnce(() => first.promise)
-      .mockResolvedValueOnce({
-        items: [
-          {
-            event_id: "event-two",
-            occurred_at: "2026-08-19T12:00:00Z",
-            actor: "system:router",
-            action: "administrator.session.create",
-            outcome: "denied",
-            scope: { authority_class: "system" },
-            safe_detail: { safe_error_code: "insufficient_scope" },
-          },
-        ],
-        next_cursor: null,
-      });
-    const auditClient = { ...client, listAuditEvents };
-    let renderer!: ReactTestRenderer;
-    act(() => {
-      renderer = create(<AuditView client={auditClient} />);
-    });
-    await act(async () => {
-      await Promise.resolve();
-    });
-    expect(renderedText(renderer.root)).toContain("Loading audit events");
-
-    await act(async () => {
-      first.resolve({
-        items: [
-          {
-            event_id: "event-one",
-            occurred_at: "2026-08-20T12:00:00Z",
-            actor: "administrator:actor-one",
-            action: "service.manage",
-            outcome: "permitted",
-            scope: {
-              authority_class: "global_administrator",
-              service_id: "service-one",
-              workspace_id: "workspace-one",
-            },
-            safe_detail: {
-              resource_type: "service",
-              resource_id: "service-one",
-              reason: "private operator reason",
-            },
-          },
-        ],
-        next_cursor: "stable-next-cursor",
-      });
-      await first.promise;
-      await Promise.resolve();
-    });
-    expect(renderedText(renderer.root)).toContain("service manage");
-    expect(renderedText(renderer.root)).not.toContain(
-      "private operator reason",
-    );
-    expect(renderedText(renderer.root)).toContain("Load next page");
-    const next = renderer.root
-      .findAllByType("button")
-      .find((item) => renderedText(item).includes("Load next page"));
-    if (next === undefined) throw new Error("Audit next page did not render.");
-    await act(async () => {
-      (next.props.onClick as () => void)();
-      await Promise.resolve();
-    });
-    expect(renderedText(renderer.root)).toContain(
-      "administrator session create",
-    );
-    expect(renderedText(renderer.root)).toContain(
-      "The complete selected range is shown.",
-    );
-    expect(listAuditEvents.mock.calls[1]?.[0]).toMatchObject({
-      cursor: "stable-next-cursor",
-    });
-    act(() => {
-      renderer.unmount();
-    });
+  it("expires at the exact local deadline without a request", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-24T12:00:00.000Z"));
+    const expired = vi.fn();
+    const cancel = scheduleSessionExpiry("2026-08-24T12:00:01.000Z", expired);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(expired).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(expired).toHaveBeenCalledOnce();
+    cancel();
   });
 
-  it("shows audit failure, retry, and empty states", async () => {
-    const listAuditEvents = vi
-      .fn<AdministrationClient["listAuditEvents"]>()
-      .mockRejectedValueOnce(
-        new AdministrationApiError("The administration service is offline.", {
-          code: "offline",
-          requestId: null,
-          status: 0,
-        }),
-      )
-      .mockResolvedValueOnce({ items: [], next_cursor: null });
-    let renderer!: ReactTestRenderer;
-    await act(async () => {
-      renderer = create(<AuditView client={{ ...client, listAuditEvents }} />);
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    expect(renderedText(renderer.root)).toContain(
-      "Audit events are not available",
-    );
-    const retry = renderer.root
-      .findAllByType("button")
-      .find((item) => renderedText(item).includes("Try again"));
-    if (retry === undefined) throw new Error("Audit retry did not render.");
-    await act(async () => {
-      (retry.props.onClick as () => void)();
-      await Promise.resolve();
-    });
-    expect(renderedText(renderer.root)).toContain(
-      "No audit events in this range",
-    );
-    act(() => {
-      renderer.unmount();
-    });
-  });
-
-  it("keeps an invalid audit range after an older request finishes", async () => {
-    const first = deferred<AuditPage>();
-    const listAuditEvents = vi
-      .fn<AdministrationClient["listAuditEvents"]>()
-      .mockReturnValue(first.promise);
-    let renderer!: ReactTestRenderer;
-    act(() => {
-      renderer = create(<AuditView client={{ ...client, listAuditEvents }} />);
-    });
-    await act(async () => {
-      await Promise.resolve();
-    });
-    const inputs = renderer.root.findAllByType("input");
-    const endInput = inputs[1];
-    if (endInput === undefined) throw new Error("Audit end input is absent.");
-    act(() => {
-      (endInput.props.onChange as (event: unknown) => void)({
-        currentTarget: { value: "2020-01-01T00:00" },
-      });
-    });
-    act(() => {
-      (
-        renderer.root.findByType("form").props.onSubmit as (event: {
-          preventDefault(): void;
-        }) => void
-      )({ preventDefault: vi.fn() });
-    });
-    expect(listAuditEvents.mock.calls[0]?.[1]?.aborted).toBe(true);
-    expect(renderedText(renderer.root)).toContain(
-      "Select a start time that is before the end time.",
-    );
-
-    await act(async () => {
-      first.resolve({ items: [], next_cursor: null });
-      await first.promise;
-      await Promise.resolve();
-    });
-    expect(renderedText(renderer.root)).toContain(
-      "Select a start time that is before the end time.",
-    );
-    act(() => {
-      renderer.unmount();
-    });
-  });
-  /* eslint-enable @typescript-eslint/no-deprecated */
-
-  it("shows registered service names in the scope control", () => {
-    const html = renderToStaticMarkup(
-      <AdministrationDashboard
-        client={client}
-        notice={null}
-        onNotice={vi.fn()}
-        onReload={vi.fn()}
-        onScopeChange={vi.fn()}
-        scope={{ mode: "global", serviceId: "", workspaceId: "" }}
-        services={[
-          {
-            service_id: "service-one",
-            display_name: "Xbot",
-            state: "active",
-            revision: "service-revision-one",
-            bootstrap_state: "ready",
-            credential_generation: 1,
-            bootstrap_scope: { audiences: [], operations: [] },
-          },
-        ]}
-        snapshot={null}
-      />,
-    );
-    expect(html).toContain("No service selected");
-    expect(html).toContain("Xbot · active");
-    expect(html).not.toContain('placeholder="Service UUID"');
-  });
-
-  it("keeps global navigation visible while a service loads", () => {
-    const props: AppProps = { client, startingScope: globalScope };
-    const html = renderToStaticMarkup(<App {...props} />);
-    expect(html).toContain("Global administration");
-    expect(html).toContain("Services &amp; inheritance");
-    expect(html).toContain("Run LLM Router");
-  });
-
-  it("shows safe error and stale revision recovery states", () => {
-    const errorHtml = renderToStaticMarkup(
-      <StateMessage kind="error">
-        The administration service is offline. No change was sent.
-      </StateMessage>,
-    );
-    const staleHtml = renderToStaticMarkup(<StaleRevisionBanner />);
-    expect(errorHtml).toContain('role="alert"');
-    expect(errorHtml).toContain("No change was sent");
-    expect(staleHtml).toContain("This configuration changed");
-    expect(staleHtml).toContain("review the active revision");
-  });
-
-  it("refreshes current data after an uncertain or stale mutation failure", async () => {
-    const onChanged = vi.fn(() => Promise.resolve());
-    const onNotice = vi.fn();
-    const uncertain = new AdministrationApiError(
-      "The outcome is uncertain. Refresh current data.",
-      {
-        code: "offline",
-        requestId: null,
-        status: 0,
-        outcomeUncertain: true,
-      },
-    );
-    await recoverAfterMutationFailure(uncertain, onChanged, onNotice);
-    expect(onChanged).toHaveBeenCalledOnce();
-    expect(onNotice).toHaveBeenCalledWith({
-      tone: "error",
-      message: "The outcome is uncertain. Refresh current data.",
-      staleRevision: false,
-    });
-
-    onChanged.mockClear();
-    onNotice.mockClear();
-    await recoverAfterMutationFailure(
-      new AdministrationApiError("Read the current active revision.", {
-        code: "configuration_revision_conflict",
-        requestId: "safe-request-1",
-        status: 409,
-      }),
-      onChanged,
-      onNotice,
-    );
-    expect(onChanged).toHaveBeenCalledOnce();
-    expect(onNotice).toHaveBeenCalledWith({
-      tone: "error",
-      message: "Read the current active revision. Request safe-request-1.",
-      staleRevision: true,
-    });
-  });
-
-  it("does not refresh after a certain mutation rejection", async () => {
-    const onChanged = vi.fn(() => Promise.resolve());
-    const onNotice = vi.fn();
-    await recoverAfterMutationFailure(
-      new AdministrationApiError("The request is invalid.", {
-        code: "invalid_request",
-        requestId: null,
-        status: 422,
-      }),
-      onChanged,
-      onNotice,
-    );
-    expect(onChanged).not.toHaveBeenCalled();
-    expect(onNotice).toHaveBeenCalledOnce();
-  });
-
-  it("keeps both safe errors when mutation recovery does not refresh", async () => {
-    const onNotice = vi.fn();
-    await recoverAfterMutationFailure(
-      new AdministrationApiError("The outcome is uncertain.", {
-        code: "offline",
-        requestId: null,
-        status: 0,
-        outcomeUncertain: true,
-      }),
-      vi.fn(() =>
-        Promise.reject(
-          new AdministrationApiError("The administration service is offline.", {
-            code: "offline",
-            requestId: null,
-            status: 0,
-          }),
-        ),
-      ),
-      onNotice,
-    );
-    expect(onNotice).toHaveBeenLastCalledWith({
-      tone: "error",
-      message:
-        "The outcome is uncertain. Current data did not refresh. The administration service is offline.",
-      staleRevision: false,
-    });
-  });
-
-  it("keeps focus and phone table behavior in the app stylesheet", () => {
-    expect(styles).toContain(":focus-visible");
-    expect(styles).toContain("clip-path: inset(50%)");
-    expect(styles).toContain("overflow-x: auto");
-    expect(styles).toContain("@media (max-width: 600px)");
-    expect(styles).toContain("grid-template-columns: 1fr");
-    expect(styles).toMatch(
-      /\.audit-event-detail\s*{[^}]*grid-template-columns: 1fr/s,
-    );
-    expect(styles).toMatch(/\.content\s*{[^}]*width: 100%/s);
-    expect(styles).not.toContain("width: min(1240px");
-    expect(styles).toMatch(/\.service-graph-page\s*{[^}]*padding: 12px/s);
-    expect(styles).not.toMatch(
-      /\.service-management \.od-graph-node\s*{[^}]*display: none/s,
-    );
-  });
-
-  it("keeps a credential success notice through reload and remounts an empty secret", () => {
-    const success = {
-      tone: "success" as const,
-      message: "The write-only OpenRouter credential was stored.",
-    };
-    const loadingHtml = renderToStaticMarkup(
-      <AdministrationStateView
-        client={client}
-        failure={null}
-        loading
-        notice={success}
-        onNotice={vi.fn()}
-        onReload={vi.fn()}
-        scope={serviceLevelScope}
-        snapshot={snapshot}
-      />,
-    );
-    const reloadedHtml = renderToStaticMarkup(
-      <AdministrationStateView
-        client={client}
-        failure={null}
-        loading={false}
-        notice={success}
-        onNotice={vi.fn()}
-        onReload={vi.fn()}
-        scope={serviceLevelScope}
-        snapshot={snapshot}
-      />,
-    );
-    expect(loadingHtml).toContain("Run LLM Router");
-    expect(loadingHtml).toContain(success.message);
-    expect(reloadedHtml).toContain(success.message);
-    expect(dashboard("credentials")).toContain(
-      'type="password" autoComplete="new-password" spellCheck="false" value=""',
-    );
-  });
-
-  it("selects the active revision from the exact configuration layer", () => {
-    expect(configurationRevisionForScope(snapshot, serviceLevelScope)).toBe(
-      "provider-revision-1",
-    );
-    expect(configurationRevisionForScope(snapshot, globalScope)).toBe(
-      "assignment-revision-1",
-    );
-  });
-});
-
-describe("protected administration dashboard", () => {
-  it("shows names first and the effective service configuration", () => {
-    const html = dashboard("configuration");
-    expect(html).toContain("What this service will use");
-    expect(html).toContain("Provider keys are managed globally");
-    expect(html).not.toContain(`>${globalScope.serviceId}<`);
-    expect(html).not.toContain('type="password"');
-    expect(html).toContain("safe-fingerprint");
-    expect(html).toContain("deepseek/deepseek-v4-flash");
-    expect(html).not.toContain("Provider secret value");
-  });
-
-  it("offers direct local overrides for inherited effective values", () => {
-    const inheritedSnapshot: AdministrationSnapshot = {
-      ...snapshot,
-      providers: snapshot.providers.map((item) => ({
-        ...item,
-        inherited: true,
-        owner_scope: "parent-service",
-      })),
-      routes: snapshot.routes.map((item) => ({
-        ...item,
-        inherited: true,
-        owner_scope: "parent-service",
-      })),
-      assignments: snapshot.assignments.map((item) => ({
-        ...item,
-        inherited: true,
-        owner_scope: "parent-service",
-      })),
-    };
-    const configurationHtml = renderToStaticMarkup(
-      <AdministrationDashboard
-        client={client}
-        initialSection="configuration"
-        notice={null}
-        onNotice={vi.fn()}
-        onReload={vi.fn()}
-        scope={serviceLevelScope}
-        services={[registeredService]}
-        snapshot={inheritedSnapshot}
-      />,
-    );
-    const assignmentHtml = renderToStaticMarkup(
-      <AdministrationDashboard
-        client={client}
-        initialSection="assignments"
-        notice={null}
-        onNotice={vi.fn()}
-        onReload={vi.fn()}
-        scope={serviceLevelScope}
-        services={[registeredService]}
-        snapshot={inheritedSnapshot}
-      />,
-    );
-    expect(configurationHtml.match(/Override for this service/g)).toHaveLength(
-      2,
-    );
-    expect(assignmentHtml).toContain("Override for this service");
-  });
-
-  it("uses a named supported model and explicit prices before route publication", () => {
-    const html = dashboard("configuration");
-    expect(html).toContain("Supported model");
-    expect(html).toContain("DeepSeek V4 Flash");
-    expect(html).not.toContain("Canonical model UUID");
-    expect(html).toContain("Provider model name");
-    expect(html).toContain("deepseek/deepseek-v4-flash");
-    expect(
-      html.match(/placeholder="Explicit USD price" value=""/g),
-    ).toHaveLength(2);
-    expect(html).toContain(
-      'disabled="" class="od-button od-button-primary" type="submit">Publish route',
-    );
-  });
-
-  it("blocks model-route writes when catalog discovery fails", () => {
-    const html = renderToStaticMarkup(
-      <AdministrationDashboard
-        client={client}
-        initialSection="configuration"
-        notice={null}
-        onNotice={vi.fn()}
-        onReload={vi.fn()}
-        scope={serviceLevelScope}
-        services={[registeredService]}
-        catalogModels={catalogModels}
-        globalFailures={{ catalog: "The catalog read failed." }}
-        snapshot={snapshot}
-      />,
-    );
-    expect(html).toContain("Supported models are not available");
-    expect(html).toContain("The catalog read failed.");
-    expect(html).not.toContain("Publish route");
-  });
-
-  it("distinguishes loading and empty supported-model catalogs", () => {
-    const noEligibleModelMessage =
-      "No active model supports both chat completion and streaming. Add or enable a compatible model in the global catalog.";
-    const loadingHtml = renderToStaticMarkup(
-      <AdministrationDashboard
-        client={client}
-        initialSection="configuration"
-        notice={null}
-        onNotice={vi.fn()}
-        onReload={vi.fn()}
-        scope={serviceLevelScope}
-        services={[registeredService]}
-        catalogLoading
-        snapshot={snapshot}
-      />,
-    );
-    const emptyHtml = renderToStaticMarkup(
-      <AdministrationDashboard
-        client={client}
-        initialSection="configuration"
-        notice={null}
-        onNotice={vi.fn()}
-        onReload={vi.fn()}
-        scope={serviceLevelScope}
-        services={[registeredService]}
-        snapshot={snapshot}
-      />,
-    );
-    const inactiveHtml = renderToStaticMarkup(
-      <AdministrationDashboard
-        client={client}
-        initialSection="configuration"
-        notice={null}
-        onNotice={vi.fn()}
-        onReload={vi.fn()}
-        scope={serviceLevelScope}
-        services={[registeredService]}
-        catalogModels={catalogModels.map((model) => ({
-          ...model,
-          state: "disabled" as const,
-        }))}
-        snapshot={snapshot}
-      />,
-    );
-    const limitedHtml = renderToStaticMarkup(
-      <AdministrationDashboard
-        client={client}
-        initialSection="configuration"
-        notice={null}
-        onNotice={vi.fn()}
-        onReload={vi.fn()}
-        scope={serviceLevelScope}
-        services={[registeredService]}
-        catalogModels={catalogModels.map((model) => ({
-          ...model,
-          capabilities: ["chat.complete"],
-        }))}
-        snapshot={snapshot}
-      />,
-    );
-    expect(loadingHtml).toContain("Supported models are loading");
-    expect(loadingHtml).not.toContain("Publish route");
-    expect(emptyHtml).toContain(noEligibleModelMessage);
-    expect(emptyHtml).not.toContain("Publish route");
-    expect(inactiveHtml).toContain(noEligibleModelMessage);
-    expect(inactiveHtml).not.toContain("Publish route");
-    expect(limitedHtml).toContain(noEligibleModelMessage);
-    expect(limitedHtml).not.toContain("Publish route");
-  });
-
-  /* eslint-disable @typescript-eslint/no-deprecated -- This renderer verifies the configuration refresh callback. */
-  it("retries global catalog data from Configuration Refresh", async () => {
-    const onGlobalReload = vi.fn(() => Promise.resolve());
-    const onReload = vi.fn(() => Promise.resolve());
-    let renderer!: ReactTestRenderer;
-    act(() => {
-      renderer = create(
-        <AdministrationDashboard
-          client={client}
-          initialSection="configuration"
-          notice={null}
-          onNotice={vi.fn()}
-          onGlobalReload={onGlobalReload}
-          onReload={onReload}
-          scope={serviceLevelScope}
-          services={[registeredService]}
-          catalogModels={catalogModels}
-          snapshot={snapshot}
-        />,
-      );
-    });
-    const refresh = renderer.root
-      .findAllByType("button")
-      .find((item) => renderedText(item).trim() === "Refresh");
-    if (refresh === undefined) throw new Error("Refresh did not render.");
-    await act(async () => {
-      (refresh.props.onClick as () => void)();
-      await Promise.resolve();
-    });
-    expect(onGlobalReload).toHaveBeenCalledOnce();
-    expect(onReload).not.toHaveBeenCalled();
-    act(() => {
-      renderer.unmount();
-    });
-  });
-  /* eslint-enable @typescript-eslint/no-deprecated */
-
-  /* eslint-disable @typescript-eslint/no-deprecated -- This renderer verifies asynchronous reload ordering. */
-  it("does not let an old global reload replace a newer result", async () => {
-    const oldServices = deferred<readonly ServiceSummary[]>();
-    const oldCredentials = deferred<readonly []>();
-    const oldModels = deferred<typeof catalogModels>();
-    const newService = { ...registeredService, display_name: "New service" };
-    const baseModel = catalogModels[0];
-    if (baseModel === undefined) throw new Error("The model fixture is empty.");
-    const oldModel = [{ ...baseModel, display_name: "Old model" }];
-    const newModel = [{ ...baseModel, display_name: "New model" }];
-    const listCatalog = vi
-      .fn()
-      .mockResolvedValueOnce(catalogModels)
-      .mockImplementationOnce(() => oldModels.promise)
-      .mockResolvedValue(newModel);
-    const reloadClient: AdministrationClient = {
-      ...client,
-      listServices: vi
-        .fn()
-        .mockResolvedValueOnce([registeredService])
-        .mockImplementationOnce(() => oldServices.promise)
-        .mockResolvedValue([newService]),
-      listCredentials: vi
-        .fn()
-        .mockResolvedValueOnce([])
-        .mockImplementationOnce(() => oldCredentials.promise)
-        .mockResolvedValue([]),
-      listCatalog,
-      load: vi.fn().mockResolvedValue(snapshot),
-    };
-    let renderer!: ReactTestRenderer;
-    await act(async () => {
-      renderer = create(
-        <App client={reloadClient} startingScope={serviceLevelScope} />,
-      );
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    const configuration = renderer.root
-      .findAllByType("button")
-      .find((item) => renderedText(item).includes("Effective configuration"));
-    if (configuration === undefined) {
-      throw new Error("Configuration navigation did not render.");
-    }
-    act(() => {
-      (configuration.props.onClick as () => void)();
-    });
-    const refresh = renderer.root
-      .findAllByType("button")
-      .find((item) => renderedText(item).trim() === "Refresh");
-    if (refresh === undefined) throw new Error("Refresh did not render.");
-    await act(async () => {
-      (refresh.props.onClick as () => void)();
-      await Promise.resolve();
-    });
-    await act(async () => {
-      (refresh.props.onClick as () => void)();
-      await Promise.resolve();
-    });
-    expect(renderedText(renderer.root)).toContain("New model");
-    oldServices.resolve([
-      { ...registeredService, display_name: "Old service" },
-    ]);
-    oldCredentials.resolve([]);
-    oldModels.resolve(oldModel);
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    expect(renderedText(renderer.root)).toContain("New model");
-    expect(renderedText(renderer.root)).not.toContain("Old model");
-    expect(listCatalog).toHaveBeenCalledTimes(3);
-    expect(listCatalog).toHaveBeenNthCalledWith(
-      1,
-      "models",
-      expect.any(AbortSignal),
-    );
-    expect(listCatalog).toHaveBeenNthCalledWith(2, "models", undefined);
-    expect(listCatalog).toHaveBeenNthCalledWith(3, "models", undefined);
-    act(() => {
-      renderer.unmount();
-    });
-  });
-  /* eslint-enable @typescript-eslint/no-deprecated */
-
-  it("uses semantic keyboard controls and a table alternative", () => {
-    const html = dashboard("assignments");
-    expect(html).toContain('aria-label="Administrator tasks"');
-    expect(html).toContain('aria-current="page"');
-    expect(html).toContain("<button");
-    expect(html).toContain("<table>");
-    expect(html).toContain("Complete ordered chain");
-    expect(html).toContain("Primary");
-  });
-
-  it("puts effective configuration before setup for a selected service", () => {
-    const html = dashboard("configuration");
-    expect(html.indexOf("Effective configuration")).toBeLessThan(
-      html.indexOf(">Setup<"),
-    );
-    expect(html).toContain("Open global tasks");
-  });
-
-  it("shows content-free request status and bounded accounting", () => {
-    const requestHtml = dashboard("requests");
-    const workspaceRequestHtml = dashboard("requests", globalScope);
-    const accountingHtml = dashboard("accounting");
-    expect(requestHtml).toContain("Content-free status");
-    expect(requestHtml).toContain("request-1");
-    expect(requestHtml).toContain('aria-label="Logical requests table"');
-    expect(requestHtml).toContain('tabindex="0"');
-    expect(requestHtml).not.toContain("model output value");
-    expect(workspaceRequestHtml).toContain(globalScope.workspaceId);
-    expect(workspaceRequestHtml).not.toContain("Service level");
-    expect(accountingHtml).toContain("Bounded accounting");
-    expect(accountingHtml).toContain("0.0001 USD");
-    expect(accountingHtml).toContain("input_token");
-  });
-
-  it("shows one exact content-free diagnostic workflow", () => {
-    const html = dashboard("diagnostics", globalScope);
-    expect(html).toContain("Safe route diagnostic");
-    expect(html).toContain(globalScope.serviceId);
-    expect(html).toContain(globalScope.workspaceId);
-    expect(html).toContain("deepseek/deepseek-v4-flash");
-    expect(html).toContain("Ready to run");
-    expect(html).toContain("read-only grant");
-    expect(html).not.toContain("PRIVATE MODEL OUTPUT");
-    expect(html).not.toContain("Reply only with OK");
-  });
-
-  it("offers an active non-streaming chat route for the fixed diagnostic", () => {
-    const diagnosticSnapshot = {
-      ...snapshot,
-      routes: snapshot.routes.map((route) => ({
-        ...route,
-        capabilities: ["chat.complete"],
-      })),
-    };
-    const html = renderToStaticMarkup(
-      <AdministrationDashboard
-        client={client}
-        initialSection="diagnostics"
-        notice={null}
-        onNotice={vi.fn()}
-        onReload={vi.fn()}
-        scope={globalScope}
-        services={[registeredService]}
-        snapshot={diagnosticSnapshot}
-      />,
-    );
-    expect(html).toContain("deepseek/deepseek-v4-flash");
-    expect(html).not.toContain("No active chat route is eligible");
-  });
-
-  /* eslint-disable @typescript-eslint/no-deprecated -- This renderer verifies the complete diagnostic interaction. */
-  it("runs and refreshes one safe diagnostic without a bearer value", async () => {
-    const runDiagnostic = vi.fn().mockResolvedValue({
-      request_id: "0198a080-0000-7000-8000-000000000032",
-      service_id: globalScope.serviceId,
-      workspace_id: globalScope.workspaceId,
-      exact_route: "route-1",
-      route_configuration_revision: "route-revision-1",
-      authorization_expires_at: "2099-08-23T07:05:00Z",
-      state: "active",
-      phases: [
-        { name: "authorization", state: "succeeded" },
-        { name: "route_eligibility", state: "succeeded" },
-        { name: "admission", state: "succeeded" },
-        { name: "provider", state: "active" },
-        { name: "accounting", state: "pending" },
-      ],
-      status_url: "/v1/model-requests/0198a080-0000-7000-8000-000000000032",
-    });
-    const getRequest = vi.fn().mockResolvedValue({
-      ...snapshot.requests[0],
-      request_id: "0198a080-0000-7000-8000-000000000032",
-      assignment: undefined,
-      exact_route: "route-1",
-      state: "succeeded",
-    });
-    let renderer!: ReactTestRenderer;
-    act(() => {
-      renderer = create(
-        <AdministrationDashboard
-          client={{ ...client, runDiagnostic, getRequest }}
-          initialSection="diagnostics"
-          notice={null}
-          onNotice={vi.fn()}
-          onReload={vi.fn()}
-          scope={globalScope}
-          services={[registeredService]}
-          snapshot={snapshot}
-        />,
-      );
-    });
-    const form = renderer.root.findByType("form");
-    await act(async () => {
-      (form.props.onSubmit as (event: { preventDefault(): void }) => void)({
-        preventDefault: vi.fn(),
-      });
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    expect(runDiagnostic).toHaveBeenCalledWith(
-      globalScope,
-      expect.objectContaining({ exactRoute: "route-1" }),
-      expect.any(AbortSignal),
-    );
-    expect(renderedText(renderer.root)).toContain("Diagnostic active");
-    expect(renderedText(renderer.root)).toContain("route-revision-1");
-    expect(renderedText(renderer.root)).not.toContain("Reply only with OK");
-
-    const refresh = renderer.root
-      .findAllByType("button")
-      .find(
-        (item) => renderedText(item).trim() === "Refresh diagnostic status",
-      );
-    if (refresh === undefined) throw new Error("Diagnostic refresh is absent.");
-    await act(async () => {
-      (refresh.props.onClick as () => void)();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    expect(getRequest).toHaveBeenCalledWith(
-      globalScope,
-      "0198a080-0000-7000-8000-000000000032",
-      expect.any(AbortSignal),
-    );
-    expect(renderedText(renderer.root)).toContain("Diagnostic succeeded");
-    act(() => {
-      renderer.unmount();
-    });
-  });
-  /* eslint-enable @typescript-eslint/no-deprecated */
-
-  /* eslint-disable @typescript-eslint/no-deprecated -- This renderer verifies diagnostic result state and focus. */
-  it("keeps one admitted diagnostic active after its used permission expires", async () => {
-    const runDiagnostic = vi.fn().mockResolvedValue({
-      request_id: "0198a080-0000-7000-8000-000000000032",
-      service_id: globalScope.serviceId,
-      workspace_id: globalScope.workspaceId,
-      exact_route: "route-1",
-      route_configuration_revision: "route-revision-1",
-      authorization_expires_at: "2020-08-23T07:05:00Z",
-      state: "active",
-      phases: [],
-      status_url: "/v1/model-requests/0198a080-0000-7000-8000-000000000032",
-    });
-    let renderer!: ReactTestRenderer;
-    act(() => {
-      renderer = create(
-        <AdministrationDashboard
-          client={{ ...client, runDiagnostic }}
-          initialSection="diagnostics"
-          notice={null}
-          onNotice={vi.fn()}
-          onReload={vi.fn()}
-          scope={globalScope}
-          services={[registeredService]}
-          snapshot={snapshot}
-        />,
-      );
-    });
-    const form = renderer.root.findByType("form");
-    await act(async () => {
-      (form.props.onSubmit as (event: { preventDefault(): void }) => void)({
-        preventDefault: vi.fn(),
-      });
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    expect(renderedText(renderer.root)).toContain("Diagnostic active");
-    expect(renderedText(renderer.root)).not.toContain(
-      "Diagnostic permission expired",
-    );
-    act(() => {
-      renderer.unmount();
-    });
-  });
-
-  it("moves focus through diagnostic actions and aborts an old scope", () => {
-    const pending =
-      deferred<Awaited<ReturnType<AdministrationClient["runDiagnostic"]>>>();
-    let runSignal: AbortSignal | undefined;
-    const runDiagnostic = vi.fn<AdministrationClient["runDiagnostic"]>(
-      (_scope, _input, signal) => {
-        runSignal = signal;
-        return pending.promise;
-      },
-    );
-    const resultFocus = vi.fn();
-    let renderer!: ReactTestRenderer;
-    act(() => {
-      renderer = create(
-        <AdministrationDashboard
-          client={{ ...client, runDiagnostic }}
-          initialSection="diagnostics"
-          notice={null}
-          onNotice={vi.fn()}
-          onReload={vi.fn()}
-          scope={globalScope}
-          services={[registeredService]}
-          snapshot={snapshot}
-        />,
-        {
-          createNodeMock(element) {
-            const props = element.props as Record<string, unknown>;
-            if (
-              element.type === "div" &&
-              props.className === "diagnostic-result-focus"
-            ) {
-              return { focus: resultFocus };
-            }
-            return null;
-          },
-        },
-      );
-    });
-    const form = renderer.root.findByType("form");
-    act(() => {
-      (form.props.onSubmit as (event: { preventDefault(): void }) => void)({
-        preventDefault: vi.fn(),
-      });
-    });
-    expect(renderedText(renderer.root)).toContain("Diagnostic starting");
-    expect(resultFocus).toHaveBeenCalledOnce();
-    expect(runSignal?.aborted).toBe(false);
-
-    const changedScope = {
-      ...globalScope,
-      workspaceId: "0198a080-0000-7000-8000-000000000099",
-    };
-    if (snapshot.state === null) throw new Error("Snapshot state is absent.");
-    const currentState = snapshot.state;
-    act(() => {
-      renderer.update(
-        <AdministrationDashboard
-          client={{ ...client, runDiagnostic }}
-          initialSection="diagnostics"
-          notice={null}
-          onNotice={vi.fn()}
-          onReload={vi.fn()}
-          scope={changedScope}
-          services={[registeredService]}
-          snapshot={{
-            ...snapshot,
-            state: {
-              ...currentState,
-              workspace_id: changedScope.workspaceId,
-            },
-          }}
-        />,
-      );
-    });
-    expect(runSignal?.aborted).toBe(true);
-    expect(renderedText(renderer.root)).toContain("Ready to run");
-    act(() => {
-      renderer.unmount();
-    });
-  });
-
-  it("reuses one request identity after an uncertain diagnostic admission", async () => {
-    const runDiagnostic = vi
-      .fn<AdministrationClient["runDiagnostic"]>()
-      .mockRejectedValueOnce(
-        new AdministrationApiError(
-          "The connection failed during the change. The outcome is uncertain.",
-          {
-            code: "offline",
-            requestId: null,
-            status: 0,
-            outcomeUncertain: true,
-          },
-        ),
-      )
-      .mockResolvedValueOnce({
-        request_id: "0198a080-0000-7000-8000-000000000032",
-        service_id: globalScope.serviceId,
-        workspace_id: globalScope.workspaceId,
-        exact_route: "route-1",
-        route_configuration_revision: "route-revision-1",
-        authorization_expires_at: "2099-08-23T07:05:00Z",
-        state: "active",
-        phases: [],
-        status_url: "/v1/model-requests/request-one",
-      });
-    let renderer!: ReactTestRenderer;
-    act(() => {
-      renderer = create(
-        <AdministrationDashboard
-          client={{ ...client, runDiagnostic }}
-          initialSection="diagnostics"
-          notice={null}
-          onNotice={vi.fn()}
-          onReload={vi.fn()}
-          scope={globalScope}
-          services={[registeredService]}
-          snapshot={snapshot}
-        />,
-      );
-    });
-    const form = renderer.root.findByType("form");
-    await act(async () => {
-      (form.props.onSubmit as (event: { preventDefault(): void }) => void)({
-        preventDefault: vi.fn(),
-      });
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    const firstIdentity = runDiagnostic.mock.calls[0]?.[1].requestId;
-    expect(firstIdentity).toBeDefined();
-    expect(renderedText(renderer.root)).toContain(
-      "Diagnostic admission outcome uncertain",
-    );
-    expect(renderedText(renderer.root)).toContain(firstIdentity);
-    const retry = renderer.root
-      .findAllByType("button")
-      .find(
-        (item) => renderedText(item).trim() === "Retry same diagnostic request",
-      );
-    if (retry === undefined) throw new Error("Diagnostic retry is absent.");
-    await act(async () => {
-      (retry.props.onClick as () => void)();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    expect(runDiagnostic.mock.calls[1]?.[1].requestId).toBe(firstIdentity);
-    expect(renderedText(renderer.root)).toContain("Diagnostic active");
-    act(() => {
-      renderer.unmount();
-    });
-  });
-
-  it.each([
-    ["cancel_requested", "Diagnostic cancellation requested"],
-    ["cancelled", "Diagnostic cancelled"],
-    ["interrupted", "Diagnostic interrupted"],
-    ["uncertain", "Diagnostic result uncertain"],
-  ] as const)("shows the exact %s diagnostic state", async (state, title) => {
-    const runDiagnostic = vi.fn().mockResolvedValue({
-      request_id: "0198a080-0000-7000-8000-000000000032",
-      service_id: globalScope.serviceId,
-      workspace_id: globalScope.workspaceId,
-      exact_route: "route-1",
-      route_configuration_revision: "route-revision-1",
-      authorization_expires_at: "2099-08-23T07:05:00Z",
-      state: "active",
-      phases: [
-        { name: "authorization", state: "succeeded" },
-        { name: "route_eligibility", state: "succeeded" },
-        { name: "admission", state: "succeeded" },
-        { name: "provider", state: "active" },
-        { name: "accounting", state: "pending" },
-      ],
-      status_url: "/v1/model-requests/request-one",
-    });
-    const getRequest = vi.fn().mockResolvedValue({
-      ...snapshot.requests[0],
-      request_id: "0198a080-0000-7000-8000-000000000032",
-      exact_route: "route-1",
-      state,
-    });
-    let renderer!: ReactTestRenderer;
-    act(() => {
-      renderer = create(
-        <AdministrationDashboard
-          client={{ ...client, runDiagnostic, getRequest }}
-          initialSection="diagnostics"
-          notice={null}
-          onNotice={vi.fn()}
-          onReload={vi.fn()}
-          scope={globalScope}
-          services={[registeredService]}
-          snapshot={snapshot}
-        />,
-      );
-    });
-    await act(async () => {
-      (
-        renderer.root.findByType("form").props.onSubmit as (event: {
-          preventDefault(): void;
-        }) => void
-      )({ preventDefault: vi.fn() });
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    const refresh = renderer.root
-      .findAllByType("button")
-      .find(
-        (item) => renderedText(item).trim() === "Refresh diagnostic status",
-      );
-    if (refresh === undefined) throw new Error("Diagnostic refresh is absent.");
-    await act(async () => {
-      (refresh.props.onClick as () => void)();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    expect(renderedText(renderer.root)).toContain(title);
-    expect(renderedText(renderer.root)).toContain("accountingpending");
-    act(() => {
-      renderer.unmount();
-    });
-  });
-
-  it("shows a safe stale diagnostic refresh action", async () => {
-    const onReload = vi.fn().mockResolvedValue(undefined);
-    const runDiagnostic = vi.fn().mockRejectedValue(
-      new AdministrationApiError("The active configuration is stale.", {
-        code: "stale_configuration",
-        requestId: "request-one",
-        status: 503,
-      }),
-    );
-    let renderer!: ReactTestRenderer;
-    act(() => {
-      renderer = create(
-        <AdministrationDashboard
-          client={{ ...client, runDiagnostic }}
-          initialSection="diagnostics"
-          notice={null}
-          onNotice={vi.fn()}
-          onReload={onReload}
-          scope={globalScope}
-          services={[registeredService]}
-          snapshot={snapshot}
-        />,
-      );
-    });
-    await act(async () => {
-      (
-        renderer.root.findByType("form").props.onSubmit as (event: {
-          preventDefault(): void;
-        }) => void
-      )({ preventDefault: vi.fn() });
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    expect(renderedText(renderer.root)).toContain(
-      "Diagnostic configuration is stale",
-    );
-    const refresh = renderer.root
-      .findAllByType("button")
-      .find((item) => renderedText(item).trim() === "Refresh selected service");
-    if (refresh === undefined) throw new Error("Stale refresh is absent.");
-    await act(async () => {
-      (refresh.props.onClick as () => void)();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    expect(onReload).toHaveBeenCalledOnce();
-    expect(renderedText(renderer.root)).toContain("Ready to run");
-    act(() => {
-      renderer.unmount();
-    });
-  });
-
-  /* eslint-enable @typescript-eslint/no-deprecated */
-
-  /* eslint-disable @typescript-eslint/no-deprecated -- This renderer verifies the complete request-detail interaction. */
-  it("selects, refreshes, and closes a safe ordered request detail", async () => {
-    const failureClasses = [
-      "authentication",
-      "policy",
-      "budget",
-      "rate_limit",
-      "timeout",
-      "transport",
-      "provider_unavailable",
-      "invalid_provider_response",
-      "incompatible_request",
-      "cancelled",
-      "uncertain_effect",
-      "router_internal",
-    ] as const;
-    const safeDetail = {
-      request_id: "request-1",
-      assignment: "general",
-      state: "failed",
-      state_revision: 9,
-      admitted_at: "2026-08-20T00:00:00Z",
-      last_transition_at: "2026-08-20T00:00:12Z",
-      terminal_at: "2026-08-20T00:00:12Z",
-      partial_output: false,
-      committed_effects: false,
-      configuration_revision: "configuration-revision-7",
-      error: {
-        class: "router_internal",
-        affected_scope: "logical_request",
-        message: "The logical request stopped safely.",
-      },
-      attempts: failureClasses.map((failureClass, index) => ({
-        attempt_id: `attempt-${String(index + 1)}`,
-        provider_model_route_id: `route-${String(index + 1)}`,
-        state: "failed" as const,
-        started_at: `2026-08-20T00:00:${String(index).padStart(2, "0")}Z`,
-        ended_at: `2026-08-20T00:00:${String(index + 1).padStart(2, "0")}Z`,
-        assignment_revision: "assignment-revision-7",
-        decision:
-          index === 0 ? ("next_candidate" as const) : ("stop_request" as const),
-        error: {
-          class: failureClass,
-          affected_scope:
-            failureClass === "authentication"
-              ? ("credential" as const)
-              : ("attempt" as const),
-          message: "The provider attempt did not complete.",
-          ...(failureClass === "authentication"
-            ? { safe_provider_code: "SAFE_AUTH_CODE" }
-            : {}),
-        },
-        usage: [{ unit: "input_token", quantity: "4" }],
-        price_version: "price-revision-1",
-      })),
-      accounting: {
-        estimated: "0.01",
-        reserved: "0.01",
-        used: "0.008",
-        corrected: "0.009",
-        currency: "USD",
-      },
-      result: { outputs: [{ type: "text", text: "PRIVATE MODEL OUTPUT" }] },
-      tool_calls: [{ input: "PRIVATE TOOL INPUT" }],
-      credential: "PRIVATE CREDENTIAL",
-    } as unknown as RequestStatus;
-    const getRequest = vi.fn().mockResolvedValue(safeDetail);
-    const detailClient: AdministrationClient = { ...client, getRequest };
-    let renderer!: ReactTestRenderer;
-    act(() => {
-      renderer = create(
-        <AdministrationDashboard
-          client={detailClient}
-          initialSection="requests"
-          notice={null}
-          onNotice={vi.fn()}
-          onReload={vi.fn()}
-          scope={globalScope}
-          services={[registeredService]}
-          snapshot={snapshot}
-        />,
-      );
-    });
-    const view = renderer.root
-      .findAllByType("button")
-      .find((item) => renderedText(item).trim() === "View request");
-    if (view === undefined)
-      throw new Error("Request detail action did not render.");
-    await act(async () => {
-      (view.props.onClick as () => void)();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    const detailText = renderedText(renderer.root);
-    expect(detailText).toContain(globalScope.serviceId);
-    expect(detailText).toContain(globalScope.workspaceId);
-    expect(detailText).toContain("configuration-revision-7");
-    expect(detailText).toContain("No retry. Router used the next fallback.");
-    expect(detailText).toContain("Router stopped the logical request");
-    expect(detailText).toContain("SAFE_AUTH_CODE");
-    expect(detailText).toContain("0.009 USD");
-    for (const failureClass of failureClasses) {
-      expect(detailText).toContain(failureClass);
-    }
-    expect(detailText).not.toContain("PRIVATE MODEL OUTPUT");
-    expect(detailText).not.toContain("PRIVATE TOOL INPUT");
-    expect(detailText).not.toContain("PRIVATE CREDENTIAL");
-
-    const refresh = renderer.root
-      .findAllByType("button")
-      .find((item) => renderedText(item).trim() === "Refresh detail");
-    if (refresh === undefined)
-      throw new Error("Detail refresh did not render.");
-    await act(async () => {
-      (refresh.props.onClick as () => void)();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    expect(getRequest).toHaveBeenCalledTimes(2);
-    expect(getRequest).toHaveBeenLastCalledWith(
-      globalScope,
-      "request-1",
-      expect.any(AbortSignal),
-    );
-
-    const back = renderer.root
-      .findAllByType("button")
-      .find((item) => renderedText(item).trim() === "Back to requests");
-    if (back === undefined)
-      throw new Error("Detail back action did not render.");
-    act(() => {
-      (back.props.onClick as () => void)();
-    });
-    expect(renderedText(renderer.root)).toContain("View request");
-    act(() => {
-      renderer.unmount();
-    });
-  });
-
-  it.each([
-    [404, "The logical request is missing"],
-    [403, "The logical request is forbidden"],
-    [500, "Request detail is not available"],
-  ])(
-    "shows an explicit request-detail read state for HTTP %i",
-    async (status, title) => {
-      const pending = deferred<RequestStatus>();
-      const detailClient: AdministrationClient = {
-        ...client,
-        getRequest: vi.fn(() => pending.promise),
-      };
-      let renderer!: ReactTestRenderer;
-      act(() => {
-        renderer = create(
-          <AdministrationDashboard
-            client={detailClient}
-            initialSection="requests"
-            notice={null}
-            onNotice={vi.fn()}
-            onReload={vi.fn()}
-            scope={globalScope}
-            services={[registeredService]}
-            snapshot={snapshot}
-          />,
-        );
-      });
-      const view = renderer.root
-        .findAllByType("button")
-        .find((item) => renderedText(item).trim() === "View request");
-      if (view === undefined)
-        throw new Error("Request detail action did not render.");
-      act(() => {
-        (view.props.onClick as () => void)();
-      });
-      expect(renderedText(renderer.root)).toContain("Loading request detail");
-      await act(async () => {
-        pending.reject(
-          new AdministrationApiError("The safe read failed.", {
-            code: status === 404 ? "request_not_found" : "insufficient_scope",
-            requestId: null,
-            status,
-          }),
-        );
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-      expect(renderedText(renderer.root)).toContain(title);
-      expect(renderedText(renderer.root)).toContain("Back to requests");
-      act(() => {
-        renderer.unmount();
-      });
-    },
-  );
-
-  it("moves focus through request-detail states and back to its row", async () => {
-    const pending = deferred<RequestStatus>();
-    const readFailure = new AdministrationApiError("The safe read failed.", {
-      code: "request_read_failed",
-      requestId: null,
-      status: 500,
-    });
-    const getRequest = vi
-      .fn()
-      .mockImplementationOnce(() => pending.promise)
-      .mockRejectedValueOnce(readFailure);
-    const detailFocus = vi.fn();
-    const requestActionFocus = vi.fn();
-    const request = snapshot.requests[0];
-    if (request === undefined)
-      throw new Error("The request fixture is absent.");
-    let renderer!: ReactTestRenderer;
-    act(() => {
-      renderer = create(
-        <AdministrationDashboard
-          client={{ ...client, getRequest }}
-          initialSection="requests"
-          notice={null}
-          onNotice={vi.fn()}
-          onReload={vi.fn()}
-          scope={globalScope}
-          services={[registeredService]}
-          snapshot={snapshot}
-        />,
-        {
-          createNodeMock(element) {
-            const props = element.props as Record<string, unknown>;
-            if (element.type === "div" && props.className === "request-view") {
-              return {
-                focus: detailFocus,
-                querySelectorAll: () => [
-                  {
-                    dataset: { requestId: "request-1" },
-                    focus: requestActionFocus,
-                  },
-                ],
-              };
-            }
-            return null;
-          },
-        },
-      );
-    });
-    const view = renderer.root
-      .findAllByType("button")
-      .find((item) => renderedText(item).trim() === "View request");
-    if (view === undefined) throw new Error("Request detail action is absent.");
-    act(() => {
-      (view.props.onClick as () => void)();
-    });
-    expect(renderedText(renderer.root)).toContain("Loading request detail");
-    expect(renderedText(renderer.root)).toContain("Back to requests");
-    expect(detailFocus).toHaveBeenCalledTimes(1);
-
-    await act(async () => {
-      pending.resolve(request);
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    expect(renderedText(renderer.root)).toContain("Ordered provider attempts");
-    expect(detailFocus).toHaveBeenCalledTimes(2);
-
-    const refresh = renderer.root
-      .findAllByType("button")
-      .find((item) => renderedText(item).trim() === "Refresh detail");
-    if (refresh === undefined) throw new Error("Detail refresh is absent.");
-    await act(async () => {
-      (refresh.props.onClick as () => void)();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    expect(renderedText(renderer.root)).toContain(
-      "Request detail is not available",
-    );
-    expect(detailFocus).toHaveBeenCalledTimes(3);
-
-    const back = renderer.root
-      .findAllByType("button")
-      .find((item) => renderedText(item).trim() === "Back to requests");
-    if (back === undefined) throw new Error("Detail back action is absent.");
-    act(() => {
-      (back.props.onClick as () => void)();
-    });
-    expect(requestActionFocus).toHaveBeenCalledOnce();
-    act(() => {
-      renderer.unmount();
-    });
-  });
-
-  it("aborts and removes request detail when the exact scope changes", async () => {
-    const oldRead = deferred<RequestStatus>();
-    const getRequest = vi.fn<AdministrationClient["getRequest"]>();
-    getRequest.mockReturnValue(oldRead.promise);
-    const oldClient: AdministrationClient = { ...client, getRequest };
-    const existingRequest = snapshot.requests[0];
-    if (existingRequest === undefined) {
-      throw new Error("The request fixture is absent.");
-    }
-    const newScope: ScopeSelection = {
-      mode: "global",
-      serviceId: "0198a080-0000-7000-8000-000000000099",
-      workspaceId: "0198a080-0000-7000-8000-000000000098",
-    };
-    const newSnapshot: AdministrationSnapshot = {
-      ...snapshot,
-      state: {
-        kind: "workspace",
-        service_id: newScope.serviceId,
-        workspace_id: newScope.workspaceId,
-        display_name: "New workspace",
-        state: "active",
-        revision: "new-scope-revision",
-      },
-      requests: [
-        {
-          ...existingRequest,
-          request_id: "request-new-scope",
-        },
-      ],
-    };
-    const view = (scope: ScopeSelection, value: AdministrationSnapshot) => (
-      <AdministrationDashboard
-        client={oldClient}
-        initialSection="requests"
-        notice={null}
-        onNotice={vi.fn()}
-        onReload={vi.fn()}
-        scope={scope}
-        services={[registeredService]}
-        snapshot={value}
-      />
-    );
-    let renderer!: ReactTestRenderer;
-    act(() => {
-      renderer = create(view(globalScope, snapshot));
-    });
-    const open = renderer.root
-      .findAllByType("button")
-      .find((item) => renderedText(item).trim() === "View request");
-    if (open === undefined) throw new Error("Request detail action is absent.");
-    act(() => {
-      (open.props.onClick as () => void)();
-    });
-    const oldSignal = getRequest.mock.calls[0]?.[2];
-    expect(oldSignal).toBeInstanceOf(AbortSignal);
-    expect(oldSignal?.aborted).toBe(false);
-
-    act(() => {
-      renderer.update(view(newScope, newSnapshot));
-    });
-    expect(oldSignal?.aborted).toBe(true);
-    expect(renderedText(renderer.root)).toContain("request-new-scope");
-    expect(renderedText(renderer.root)).not.toContain("Loading request detail");
-    await act(async () => {
-      oldRead.resolve(existingRequest);
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    expect(renderedText(renderer.root)).toContain("request-new-scope");
-    expect(renderedText(renderer.root)).not.toContain("request-1");
-    act(() => {
-      renderer.unmount();
-    });
-  });
-  /* eslint-enable @typescript-eslint/no-deprecated */
-
-  it("shows all exact budget totals and the current revision", () => {
-    const html = dashboard("budgets");
-    expect(html).toContain("Budget summary");
-    expect(html).toContain("Hard limit");
-    expect(html).toContain("25 USD");
-    expect(html).toContain("Warning threshold");
-    expect(html).toContain("Reserved");
-    expect(html).toContain("Used");
-    expect(html).toContain("Corrected");
-    expect(html).toContain("-0.5 USD");
-    expect(html).toContain("Remaining");
-    expect(html).toContain("Enforcement");
-    expect(html).toContain("Reset period");
-    expect(html).toContain("monthly");
-    expect(html).toContain("Revision");
-  });
-
-  /* eslint-disable @typescript-eslint/no-deprecated -- The Director requires this renderer for the reducer interaction regression. */
-  it("resets budget form state when the exact scope changes at one revision", () => {
-    const serviceSnapshot: AdministrationSnapshot = {
-      ...snapshot,
-      state: {
-        kind: "service",
-        service_id: serviceLevelScope.serviceId,
-        display_name: "Test service",
-        state: "active",
-        revision: "service-state-revision",
-      },
-      budget: {
-        scope: "service",
-        limit: { amount: "100", currency: "USD" },
-        warning_threshold: { amount: "80", currency: "USD" },
-        reserved: { amount: "1", currency: "USD" },
-        used: { amount: "4", currency: "USD" },
-        corrected: { amount: "0", currency: "USD" },
-        remaining: { amount: "95", currency: "USD" },
-        enforcement_state: "available",
-        reset_period: "monthly",
-        revision: "7",
-      },
-    };
-    const workspaceSnapshot: AdministrationSnapshot = {
-      ...snapshot,
-      budget: {
-        scope: "workspace",
-        limit: { amount: "20", currency: "EUR" },
-        warning_threshold: { amount: "15", currency: "EUR" },
-        reserved: { amount: "2", currency: "EUR" },
-        used: { amount: "3", currency: "EUR" },
-        corrected: { amount: "0", currency: "EUR" },
-        remaining: { amount: "15", currency: "EUR" },
-        enforcement_state: "available",
-        reset_period: "daily",
-        revision: "7",
-      },
-    };
-    const dashboardProps = {
-      client,
-      initialSection: "budgets" as const,
-      notice: null,
-      onNotice: vi.fn(),
-      onReload: vi.fn(),
-      services: [registeredService],
-    };
-    let renderer!: ReactTestRenderer;
-    act(() => {
-      renderer = create(
-        <AdministrationDashboard
-          {...dashboardProps}
-          scope={serviceLevelScope}
-          snapshot={serviceSnapshot}
-        />,
-      );
-    });
-    const labeledControl = (
-      label: string,
-      elementType: "input" | "select",
-    ): ReactTestInstance => {
-      const labelElement = renderer.root
-        .findAllByType("label")
-        .find((item) =>
-          item.children.some(
-            (child) => typeof child === "string" && child.includes(label),
-          ),
-        );
-      const control = labelElement?.findByType(elementType);
-      if (control === undefined) {
-        throw new Error(`The ${label} control did not render.`);
-      }
-      return control;
-    };
-    const hardLimit = labeledControl("Hard limit", "input");
-    if (hardLimit.props.value !== "100")
-      throw new Error("The service hard limit input did not render.");
-    const changeHardLimit = hardLimit.props.onChange as (event: {
-      readonly currentTarget: { readonly value: string };
-    }) => void;
-    act(() => {
-      changeHardLimit({ currentTarget: { value: "999" } });
-    });
-    expect(labeledControl("Hard limit", "input").props.value).toBe("999");
-
-    act(() => {
-      renderer.update(
-        <AdministrationDashboard
-          {...dashboardProps}
-          scope={globalScope}
-          snapshot={workspaceSnapshot}
-        />,
-      );
-    });
-    expect(labeledControl("Hard limit", "input").props.value).toBe("20");
-    expect(labeledControl("Currency", "input").props.value).toBe("EUR");
-    expect(labeledControl("Currency", "input").props.disabled).toBe(true);
-    expect(renderedText(renderer.root)).toContain(
-      "Currency cannot change after this budget is created.",
-    );
-    expect(labeledControl("Warning threshold", "input").props.value).toBe("15");
-    expect(labeledControl("Reset period", "select").props.value).toBe("daily");
-    act(() => {
-      renderer.unmount();
-    });
-  });
-  /* eslint-enable @typescript-eslint/no-deprecated */
-
-  it("blocks a budget write when the exact scope state failed", () => {
-    const failedScope = {
-      ...snapshot,
-      state: null,
-      budget: null,
-      failures: { state: "The workspace is not available." },
-    };
-    const html = renderToStaticMarkup(
-      <AdministrationDashboard
-        client={client}
-        initialSection="budgets"
-        notice={null}
-        onNotice={vi.fn()}
-        onReload={vi.fn()}
-        scope={globalScope}
-        services={[registeredService]}
-        catalogModels={catalogModels}
-        snapshot={failedScope}
-      />,
-    );
-    expect(html).toContain("Budget scope is not available");
-    expect(html).toContain("The workspace is not available");
-    expect(html).not.toContain("Save budget");
-  });
-
-  it("keeps provider secret custody out of the service view", () => {
-    const serviceScope: ScopeSelection = {
-      ...serviceLevelScope,
-      mode: "service",
-    };
-    const html = dashboard("configuration", serviceScope);
-    expect(html).toContain("Provider keys are managed globally");
-    expect(html).not.toContain("Store OpenRouter credential");
-    expect(html).toContain("Eligible credential reference ID");
-    expect(html).not.toContain("Exact administration scope");
-  });
-
-  it("keeps service-owned provider changes out of a workspace view", () => {
-    const html = dashboard("configuration", globalScope);
-    expect(html).toContain("Provider configuration stays at service level");
-    expect(html).not.toContain("Add OpenRouter instance");
-    expect(html).not.toContain("Add provider-model route");
-    expect(html).toContain("Read only");
-  });
-
-  it("shows clear empty table states", () => {
-    const empty = { ...snapshot, assignments: [], requests: [] };
-    const assignmentHtml = renderToStaticMarkup(
-      <AdministrationDashboard
-        client={client}
-        initialSection="assignments"
-        notice={null}
-        onNotice={vi.fn()}
-        onReload={vi.fn()}
-        scope={globalScope}
-        snapshot={empty}
-      />,
-    );
-    const requestHtml = renderToStaticMarkup(
-      <AdministrationDashboard
-        client={client}
-        initialSection="requests"
-        notice={null}
-        onNotice={vi.fn()}
-        onReload={vi.fn()}
-        scope={globalScope}
-        snapshot={empty}
-      />,
-    );
-    expect(assignmentHtml).toContain(
-      "No assignment is available for this service",
-    );
-    expect(requestHtml).toContain(
-      "No request status is available for this service",
-    );
-  });
-});
-
-describe("service management", () => {
-  it("shows root creation in a full graph workspace", () => {
-    const html = renderToStaticMarkup(
-      <ServiceManagement
-        client={client}
-        services={[]}
-        selectedServiceId=""
-        onSelect={vi.fn()}
-        onChanged={vi.fn()}
-        onContinueSetup={vi.fn()}
-        pendingBootstrap={null}
-        onBootstrapPending={vi.fn()}
-        onSuccess={vi.fn()}
-        onError={vi.fn()}
-      />,
-    );
-    expect(html).toContain("od-graph-workspace");
-    expect(html).toContain("Create the first root service");
-    expect(html).toContain("No parent · start a new service chain");
-    expect(html).toContain('name="display_name"');
-  });
-
-  it("shows multiple roots and their inheritance edges", () => {
-    const firstRoot: ServiceSummary = {
-      ...registeredService,
-      service_id: "root-one",
-      display_name: "Platform",
-      parent_service_id: null,
-    };
-    const secondRoot: ServiceSummary = {
-      ...registeredService,
-      service_id: "root-two",
-      display_name: "Experiments",
-      parent_service_id: null,
-    };
-    const child: ServiceSummary = {
-      ...registeredService,
-      service_id: "child-one",
-      display_name: "Xbot",
-      parent_service_id: firstRoot.service_id,
-    };
-    const html = renderToStaticMarkup(
-      <ServiceManagement
-        client={client}
-        services={[firstRoot, secondRoot, child]}
-        selectedServiceId={firstRoot.service_id}
-        onSelect={vi.fn()}
-        onChanged={vi.fn()}
-        onContinueSetup={vi.fn()}
-        pendingBootstrap={null}
-        onBootstrapPending={vi.fn()}
-        onSuccess={vi.fn()}
-        onError={vi.fn()}
-      />,
-    );
-    expect(html).toContain("3 services · 3 active · 2 roots");
-    expect(html.match(/od-graph-node-eyebrow">Root service/g)).toHaveLength(2);
-    expect(html).toContain("od-graph-edge-line");
-    expect(html).not.toContain("Service hierarchy list");
-    expect(html).toContain('draggable="true"');
-    expect(html).toContain("Create child");
-  });
-
-  it("keeps malformed cycles visible as separate roots", () => {
-    const first: ServiceSummary = {
-      ...registeredService,
-      service_id: "cycle-one",
-      display_name: "First service",
-      parent_service_id: "cycle-two",
-    };
-    const second: ServiceSummary = {
-      ...registeredService,
-      service_id: "cycle-two",
-      display_name: "Second service",
-      parent_service_id: "cycle-one",
-    };
-    const html = renderToStaticMarkup(
-      <ServiceManagement
-        client={client}
-        services={[first, second]}
-        selectedServiceId=""
-        onSelect={vi.fn()}
-        onChanged={vi.fn()}
-        onContinueSetup={vi.fn()}
-        pendingBootstrap={null}
-        onBootstrapPending={vi.fn()}
-        onSuccess={vi.fn()}
-        onError={vi.fn()}
-      />,
-    );
-    expect(html).toContain("First service");
-    expect(html).toContain("Second service");
-  });
-
-  it("shows a named parent chain and keeps technical IDs secondary", () => {
-    const parent: ServiceSummary = {
-      ...registeredService,
-      service_id: "parent-service",
-      display_name: "Shared platform",
-    };
-    const child: ServiceSummary = {
-      ...registeredService,
-      service_id: "child-service",
-      display_name: "Xbot",
-      parent_service_id: parent.service_id,
-    };
-    const html = renderToStaticMarkup(
-      <ServiceManagement
-        client={client}
-        services={[parent, child]}
-        selectedServiceId={child.service_id}
-        onSelect={vi.fn()}
-        onChanged={vi.fn()}
-        onContinueSetup={vi.fn()}
-        pendingBootstrap={null}
-        onBootstrapPending={vi.fn()}
-        onSuccess={vi.fn()}
-        onError={vi.fn()}
-      />,
-    );
-    expect(html).toContain("Shared platform → Xbot");
-    expect(html).toContain(
-      "inherits eligible configuration from Shared platform",
-    );
-    expect(html).toContain("Technical details");
-  });
-
-  it("describes the first key as model access only", () => {
-    const html = renderToStaticMarkup(
-      <ServiceManagement
-        client={client}
-        services={[]}
-        selectedServiceId=""
-        onSelect={vi.fn()}
-        onChanged={vi.fn()}
-        onContinueSetup={vi.fn()}
-        pendingBootstrap={null}
-        onBootstrapPending={vi.fn()}
-        onSuccess={vi.fn()}
-        onError={vi.fn()}
-      />,
-    );
-    expect(html).toContain("Machine access: model calls only");
-    expect(html).toContain("cannot run agents, use tools");
-  });
-
-  it("keeps disabled and retired services visible", () => {
-    const disabled: ServiceSummary = {
-      ...registeredService,
-      service_id: "disabled-service",
-      display_name: "Disabled service",
-      state: "disabled",
-    };
-    const retired: ServiceSummary = {
-      ...registeredService,
-      service_id: "retired-service",
-      display_name: "Retired service",
-      state: "retired",
-    };
-    const html = renderToStaticMarkup(
-      <ServiceManagement
-        client={client}
-        services={[disabled, retired]}
-        selectedServiceId={disabled.service_id}
-        onSelect={vi.fn()}
-        onChanged={vi.fn()}
-        onContinueSetup={vi.fn()}
-        pendingBootstrap={null}
-        onBootstrapPending={vi.fn()}
-        onSuccess={vi.fn()}
-        onError={vi.fn()}
-      />,
-    );
-    expect(html).toContain("Disabled service");
-    expect(html).toContain("Retired service");
-  });
-
-  it("keeps a pending one-time key visible until confirmation", () => {
-    const html = renderToStaticMarkup(
-      <ServiceManagement
-        client={client}
-        services={[registeredService]}
-        selectedServiceId={registeredService.service_id}
-        onSelect={vi.fn()}
-        onChanged={vi.fn()}
-        onContinueSetup={vi.fn()}
-        pendingBootstrap={{
-          service_id: registeredService.service_id,
-          state: "active",
-          state_revision: "1",
-          bootstrap_secret: "one-time-key",
-          bootstrap_secret_available: true,
-          credential_generation: 1,
-        }}
-        onBootstrapPending={vi.fn()}
-        onSuccess={vi.fn()}
-        onError={vi.fn()}
-      />,
-    );
-    expect(html).toContain("Store this key now");
-    expect(html).toContain("one-time-key");
-    expect(html).toContain("I stored it · open setup");
+  it("cancels the local expiry transition safely", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-24T12:00:00.000Z"));
+    const expired = vi.fn();
+    const cancel = scheduleSessionExpiry("2026-08-24T12:00:01.000Z", expired);
+    cancel();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(expired).not.toHaveBeenCalled();
   });
 });
