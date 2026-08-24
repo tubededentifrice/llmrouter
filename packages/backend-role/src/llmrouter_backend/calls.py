@@ -13,7 +13,7 @@ import uuid
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from time import monotonic
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
@@ -86,6 +86,7 @@ _FAILURE_CLASSES = _COOLDOWN_FAILURES | frozenset(
 _MAXIMUM_REQUEST_JSON_BYTES = 2 * 1024 * 1024
 _MAXIMUM_OUTPUT_JSON_BYTES = 5_000_000
 _MAXIMUM_EMBEDDING_INPUTS = 32
+_COST_DECIMAL_PRECISION = 112
 _USAGE_UNITS = frozenset(
     {
         "input_token",
@@ -302,20 +303,27 @@ type ProviderEvent = ProviderOutput | ProviderCompleted
 
 
 class ProviderFailureError(Exception):
-    """Report one classified provider failure without provider response text."""
+    """Report one safe failure and mark a possible provider-side write uncertain."""
 
     def __init__(
         self,
         failure_class: ProviderFailureClass,
         *,
         usage: tuple[UsageAmount, ...] = (),
+        phase: CallFailurePhase = CallFailurePhase.BEFORE_VISIBLE_OUTPUT,
     ) -> None:
         if failure_class not in _FAILURE_CLASSES:
             raise ValueError("The provider failure class is invalid.")
         if len({item.unit for item in usage}) != len(usage):
             raise ValueError("Provider failure usage units must be unique.")
+        if phase not in {
+            CallFailurePhase.BEFORE_VISIBLE_OUTPUT,
+            CallFailurePhase.UNCERTAIN,
+        }:
+            raise ValueError("The provider failure phase is invalid.")
         self.failure_class = failure_class
         self.usage = usage
+        self.phase = phase
         super().__init__("The provider attempt failed.")
 
 
@@ -482,6 +490,7 @@ class _AttemptError(Exception):
     visible: bool
     started_at: datetime
     completed_at: datetime
+    phase: CallFailurePhase = CallFailurePhase.BEFORE_VISIBLE_OUTPUT
 
 
 class _AttemptCancelled(BaseException):
@@ -495,6 +504,7 @@ class _FrozenCandidate:
     price: AttemptPriceSnapshot
     adapter: ProviderAdapter | None
     credential: str | None
+    usage_units: frozenset[str]
     admission_failure: ProviderFailureClass | None = None
 
 
@@ -675,6 +685,13 @@ class CallExecutor:
                             "upstream_failed",
                             "The provider stream was interrupted.",
                             phase=CallFailurePhase.AFTER_VISIBLE_OUTPUT,
+                        )
+                        break
+                    if attempt_failure.phase is CallFailurePhase.UNCERTAIN:
+                        failure = CallExecutionError(
+                            "upstream_failed",
+                            "The provider result state is uncertain.",
+                            phase=CallFailurePhase.UNCERTAIN,
                         )
                         break
                     continue
@@ -899,15 +916,20 @@ class CallExecutor:
             return None
         adapter = self._adapters.get(route.adapter)
         if adapter is None:
-            return _FrozenCandidate(route, price, None, None, "unavailable")
+            return _FrozenCandidate(
+                route, price, None, None, frozenset(), "unavailable"
+            )
+        usage_units = frozenset(adapter.usage_units)
         price_units = {item.unit for item in price.unit_prices}
-        if not adapter.usage_units <= price_units:
+        if not usage_units <= price_units:
             return None
         try:
             credential = self._credential(connection, route)
         except ApiError, RuntimeError, ValueError:
-            return _FrozenCandidate(route, price, adapter, None, "authentication")
-        return _FrozenCandidate(route, price, adapter, credential)
+            return _FrozenCandidate(
+                route, price, adapter, None, usage_units, "authentication"
+            )
+        return _FrozenCandidate(route, price, adapter, credential, usage_units)
 
     @staticmethod
     def _record_accounting_and_close(
@@ -939,6 +961,7 @@ class CallExecutor:
         price = candidate.price
         started_at = self._now()
         outputs: list[ProviderOutput] = []
+        tool_call_ids: set[str] = set()
         output_bytes = 0
         visible = False
         usage: tuple[UsageAmount, ...] | None = None
@@ -980,7 +1003,7 @@ class CallExecutor:
                     # Retain every bounded provider event even when semantic
                     # validation rejects it and normal fallback continues.
                     try:
-                        _validate_output(request, event, outputs)
+                        _validate_output(request, event, outputs, tool_call_ids)
                     finally:
                         outputs.append(event)
                     if request.streaming and event.kind in {"text_delta", "tool_call"}:
@@ -1005,16 +1028,42 @@ class CallExecutor:
                 )
             ) from None
         except TimeoutError:
-            failure = ProviderFailureError("timeout")
+            failure = ProviderFailureError(
+                "timeout",
+                usage=usage or (),
+                phase=_implicit_failure_phase(request),
+            )
         except ProviderFailureError as error:
-            failure = error
+            failure = (
+                ProviderFailureError(
+                    "invalid_response",
+                    usage=usage,
+                    phase=(
+                        CallFailurePhase.UNCERTAIN
+                        if error.phase is CallFailurePhase.UNCERTAIN
+                        else _implicit_failure_phase(request)
+                    ),
+                )
+                if usage is not None
+                else error
+            )
         except ValueError:
-            failure = ProviderFailureError("invalid_response")
+            failure = ProviderFailureError(
+                "invalid_response",
+                usage=usage or (),
+                phase=_implicit_failure_phase(request),
+            )
         except Exception:
-            failure = ProviderFailureError("transport")
+            failure = ProviderFailureError(
+                "transport",
+                usage=usage or (),
+                phase=_implicit_failure_phase(request),
+            )
         else:
             if usage is None:
-                failure = ProviderFailureError("invalid_response")
+                failure = ProviderFailureError(
+                    "invalid_response", phase=_implicit_failure_phase(request)
+                )
             else:
                 try:
                     _validate_completion(
@@ -1022,10 +1071,14 @@ class CallExecutor:
                         outputs,
                         usage,
                         price,
-                        adapter.usage_units,
+                        candidate.usage_units,
                     )
                 except ValueError:
-                    failure = ProviderFailureError("invalid_response", usage=usage)
+                    failure = ProviderFailureError(
+                        "invalid_response",
+                        usage=usage,
+                        phase=_implicit_failure_phase(request),
+                    )
                 else:
                     return _AttemptResult(
                         route,
@@ -1035,15 +1088,19 @@ class CallExecutor:
                         started_at,
                         self._now(),
                     )
-        if not _usage_is_declared(failure.usage, adapter.usage_units):
-            self._report_usage_declaration_breach(route, failure.usage, adapter)
+        if not _usage_is_declared(failure.usage, candidate.usage_units):
+            self._report_usage_declaration_breach(
+                route, failure.usage, candidate.usage_units
+            )
             raise CallExecutionError(
                 "internal_error",
                 "The Router could not determine the complete provider cost.",
                 phase=CallFailurePhase.UNCERTAIN,
             )
         if not _usage_is_priced(failure.usage, price):
-            self._report_usage_declaration_breach(route, failure.usage, adapter)
+            self._report_usage_declaration_breach(
+                route, failure.usage, candidate.usage_units
+            )
             raise CallExecutionError(
                 "internal_error",
                 "The Router could not determine the complete provider cost.",
@@ -1055,7 +1112,7 @@ class CallExecutor:
     def _report_usage_declaration_breach(
         route: ProviderRoute,
         usage: Sequence[UsageAmount],
-        adapter: ProviderAdapter,
+        declared_usage_units: frozenset[str],
     ) -> None:
         # Accounting rejects an unpriced unit. Store no false complete cost,
         # and make this internal adapter invariant breach visible to operators.
@@ -1064,7 +1121,7 @@ class CallExecutor:
             "reported units=%s; declared units=%s",
             route.provider_model_api_name,
             sorted({item.unit for item in usage}),
-            sorted(adapter.usage_units),
+            sorted(declared_usage_units),
         )
 
     def _raise_attempt_failure(
@@ -1083,6 +1140,7 @@ class CallExecutor:
             visible,
             started_at,
             self._now(),
+            failure.phase,
         )
 
     def _credential(
@@ -1107,6 +1165,7 @@ def _validate_output(
     request: CallRequest,
     event: ProviderOutput,
     current: Sequence[ProviderOutput],
+    tool_call_ids: set[str],
 ) -> None:
     value = _load_json(event.content_json)
     if event.kind in {"text_delta", "tool_call"}:
@@ -1119,6 +1178,10 @@ def _validate_output(
                 raise ValueError("The call did not require tool output.")
             if not _valid_tool_call(value):
                 raise ValueError("A tool call is invalid.")
+            tool_call_id = cast("str", cast("dict[str, object]", value)["id"])
+            if tool_call_id in tool_call_ids:
+                raise ValueError("A tool call identity cannot occur more than once.")
+            tool_call_ids.add(tool_call_id)
         return
     if request.streaming:
         raise ValueError("A streaming attempt emitted a buffered result.")
@@ -1244,6 +1307,13 @@ def _usage_is_priced(usage: Sequence[UsageAmount], price: AttemptPriceSnapshot) 
     return {item.unit for item in usage} <= rates
 
 
+def _implicit_failure_phase(request: CallRequest) -> CallFailurePhase:
+    """Prevent replacement work when a media side effect can be uncertain."""
+    if request.kind == "media":
+        return CallFailurePhase.UNCERTAIN
+    return CallFailurePhase.BEFORE_VISIBLE_OUTPUT
+
+
 def _usage_is_declared(
     usage: Sequence[UsageAmount], declared_usage_units: frozenset[str]
 ) -> bool:
@@ -1252,7 +1322,9 @@ def _usage_is_declared(
 
 def _usage_cost(usage: Sequence[UsageAmount], price: AttemptPriceSnapshot) -> Decimal:
     rates = {item.unit: item.amount for item in price.unit_prices}
-    return sum((item.quantity * rates[item.unit] for item in usage), Decimal(0))
+    with localcontext() as context:
+        context.prec = _COST_DECIMAL_PRECISION
+        return sum((item.quantity * rates[item.unit] for item in usage), Decimal(0))
 
 
 def _api_call_error(error: ApiError) -> CallExecutionError:

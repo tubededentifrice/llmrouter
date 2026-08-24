@@ -8,6 +8,7 @@ import json
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
 from time import monotonic
 from typing import TYPE_CHECKING, Any, cast
@@ -846,6 +847,43 @@ def test_unexpected_tool_output_fails_before_visible_output(
     assert delivered == []
 
 
+def test_stream_tool_call_id_is_unique_without_fallback(
+    call_context: CallContext,
+) -> None:
+    """Stop after a provider repeats one visible tool-call identity."""
+    tool = ProviderOutput(
+        "tool_call",
+        '{"type":"tool_call","id":"one","name":"lookup","arguments_json":"{}"}',
+    )
+    adapter = ScriptedAdapter(
+        {
+            "text-a": [[tool, tool, _completed()]],
+            "text-b": [[tool, _completed()]],
+        }
+    )
+    delivered: list[ProviderOutput] = []
+
+    async def write(event: ProviderOutput) -> None:
+        delivered.append(event)
+
+    with pytest.raises(CallExecutionError) as failed:
+        asyncio.run(
+            call_context.executor(adapter).execute(
+                call_context.actors["alpha"],
+                _text_request(
+                    AssignmentSelector("workflow"),
+                    streaming=True,
+                    excluded=("plain",),
+                    capabilities=frozenset({"tool_calling"}),
+                ),
+                write_visible_output=write,
+            )
+        )
+    assert failed.value.phase is CallFailurePhase.AFTER_VISIBLE_OUTPUT
+    assert adapter.calls == ["text-a"]
+    assert delivered == [tool]
+
+
 def test_incomplete_declared_price_skips_provider_work(
     call_context: CallContext,
 ) -> None:
@@ -961,6 +999,7 @@ def test_admission_atomically_freezes_route_price_and_credential(
             )
         )
         await started.wait()
+        adapter.usage_units = frozenset({"input_token"})
         await asyncio.to_thread(replace_catalog)
         release.set()
         return await task
@@ -1021,6 +1060,216 @@ def test_cooldown_uses_exact_three_failure_rolling_window_and_restart_reset() ->
         )
     assert sum(results) == 1
     assert concurrent.is_active("text-b")
+
+
+@pytest.mark.parametrize(
+    ("failure_class", "counts"),
+    [
+        ("authentication", True),
+        ("rate_limited", True),
+        ("timeout", True),
+        ("transport", True),
+        ("unavailable", True),
+        ("invalid_response", True),
+        ("refusal", False),
+        ("incompatible", False),
+        ("interrupted", False),
+        ("upstream_failed", False),
+    ],
+)
+def test_cooldown_counting_property_for_each_failure_class(
+    failure_class: str, *, counts: bool
+) -> None:
+    """Count exactly the required safe failure classes for a cooldown."""
+    cooldowns = ProviderCooldowns(clock=lambda: 10.0)
+    results = [
+        cooldowns.record_failure("text-a", cast("Any", failure_class)) for _ in range(3)
+    ]
+    assert results == ([False, False, True] if counts else [False] * 3)
+    assert cooldowns.is_active("text-a") is counts
+
+
+def test_uncertain_media_write_stops_fallback_and_records_one_attempt(
+    call_context: CallContext,
+) -> None:
+    """Do not create replacement media after an uncertain provider write."""
+    with psycopg.connect(call_context.database_url) as connection:
+        connection.execute(
+            """INSERT INTO router.provider_models
+                   (api_name, provider_id, model_id, provider_model_name,
+                    enabled, input_modalities, output_modalities,
+                    capabilities, constraints, reasoning_mappings)
+               SELECT 'media-b', provider_id, model_id, 'media-b', enabled,
+                      input_modalities, output_modalities, capabilities,
+                      constraints, reasoning_mappings
+               FROM router.provider_models WHERE api_name = 'media'"""
+        )
+        connection.execute(
+            """INSERT INTO router.assignment_candidates
+                   (assignment_id, position, provider_model_id)
+               SELECT assignment.id, 1, mapping.id
+               FROM router.assignment_definitions AS assignment
+               JOIN router.services AS service ON service.id = assignment.service_id
+               JOIN router.provider_models AS mapping ON mapping.api_name = 'media-b'
+               WHERE service.api_name = 'alpha'
+                 AND assignment.api_name = 'media'"""
+        )
+    adapter = ScriptedAdapter(
+        {
+            "media": [[RuntimeError("private uncertain provider state")]],
+            "media-b": [
+                [
+                    ProviderOutput(
+                        "media",
+                        '{"media_type":"image/png","size_bytes":8}',
+                    ),
+                    _completed(),
+                ]
+            ],
+        }
+    )
+    request = CallRequest(
+        "main",
+        AssignmentSelector("media"),
+        "media",
+        CallRequirements(frozenset({"text"}), "image"),
+        '{"kind":"image","prompt":"safe"}',
+    )
+    with pytest.raises(CallExecutionError) as failed:
+        asyncio.run(
+            call_context.executor(adapter).execute(
+                call_context.actors["alpha"], request
+            )
+        )
+    assert failed.value.code == "upstream_failed"
+    assert failed.value.phase is CallFailurePhase.UNCERTAIN
+    assert adapter.calls == ["media"]
+    assert "private uncertain provider state" not in str(failed.value)
+    with psycopg.connect(call_context.database_url, row_factory=dict_row) as connection:
+        attempts = connection.execute(
+            """SELECT provider_model_api_name, outcome, failure_class
+               FROM router.raw_accounting_attempts"""
+        ).fetchall()
+        assert attempts == [
+            {
+                "provider_model_api_name": "media",
+                "outcome": "failed",
+                "failure_class": "transport",
+            }
+        ]
+
+
+def test_explicit_uncertainty_wins_after_reported_usage(
+    call_context: CallContext,
+) -> None:
+    """Keep an explicit uncertain phase after an invalid completion sequence."""
+    adapter = ScriptedAdapter(
+        {
+            "text-a": [
+                [
+                    ProviderCompleted(_usage()),
+                    ProviderFailureError("transport", phase=CallFailurePhase.UNCERTAIN),
+                ]
+            ],
+            "text-b": [[_standard(), _completed()]],
+        }
+    )
+    with pytest.raises(CallExecutionError) as failed:
+        asyncio.run(
+            call_context.executor(adapter).execute(
+                call_context.actors["alpha"],
+                _text_request(AssignmentSelector("workflow"), excluded=("plain",)),
+            )
+        )
+    assert failed.value.phase is CallFailurePhase.UNCERTAIN
+    assert adapter.calls == ["text-a"]
+    with psycopg.connect(call_context.database_url, row_factory=dict_row) as connection:
+        attempt = connection.execute(
+            """SELECT usage, cost, failure_class
+               FROM router.raw_accounting_attempts"""
+        ).fetchone()
+        assert attempt == {
+            "usage": [{"unit": "request", "quantity": "1"}],
+            "cost": Decimal("0.25"),
+            "failure_class": "invalid_response",
+        }
+
+
+def test_response_log_accepts_the_complete_contract_bound(
+    call_context: CallContext,
+) -> None:
+    """Keep a valid response that is larger than the former database bound."""
+    response_json = json.dumps("x" * 9_999_998)
+    assert len(response_json) == 10_000_000
+    log_id = diagnostics.write_detailed_log_best_effort(
+        call_context.database_url,
+        None,
+        diagnostics.DetailedLogWrite(
+            service_id=call_context.service_ids["alpha"],
+            workspace_id=call_context.workspace_ids["alpha"],
+            kind="model",
+            outcome="succeeded",
+            request_json="{}",
+            response_json=response_json,
+            attempts=(),
+            started_at=datetime.now(tz=UTC),
+        ),
+    )
+    assert log_id is not None
+    with psycopg.connect(call_context.database_url) as connection:
+        assert connection.execute(
+            "SELECT char_length(response_json) FROM router.request_logs WHERE id = %s",
+            (log_id,),
+        ).fetchone() == (len(response_json),)
+
+
+def test_attempt_cost_keeps_all_supported_decimal_precision(
+    call_context: CallContext,
+) -> None:
+    """Keep one exact immutable cost without Decimal rounding."""
+    quantity = Decimal("12345678901234567890.123456789012345678")
+    expected = Decimal("12.345678901234567890123456789012345678")
+    with psycopg.connect(call_context.database_url) as connection:
+        price = _price()
+        cast("list[dict[str, str]]", price["unit_prices"])[0]["amount"] = (
+            "0.000000000000000001"
+        )
+        connection.execute(
+            """UPDATE router.canonical_models
+               SET manual_price = %s::jsonb WHERE api_name = 'text'""",
+            (json.dumps(price),),
+        )
+    adapter = ScriptedAdapter(
+        {
+            "text-a": [
+                [
+                    _standard(),
+                    ProviderCompleted((accounting.UsageAmount("request", quantity),)),
+                ]
+            ]
+        },
+        usage_units=frozenset({"request"}),
+    )
+    result = asyncio.run(
+        call_context.executor(adapter).execute(
+            call_context.actors["alpha"],
+            _text_request(ExactModelSelector("text-a")),
+        )
+    )
+    assert result.cost == expected
+    with psycopg.connect(call_context.database_url, row_factory=dict_row) as connection:
+        attempt = connection.execute(
+            """SELECT cost FROM router.raw_accounting_attempts
+               WHERE call_id = %s""",
+            (result.call_id,),
+        ).fetchone()
+        log = connection.execute(
+            "SELECT attempts FROM router.request_logs WHERE id = %s",
+            (result.call_id,),
+        ).fetchone()
+        assert attempt == {"cost": expected}
+        assert log is not None
+        assert log["attempts"][0]["usage"]["cost"] == format(expected, "f")
 
 
 def test_dependency_timeout_concurrency_and_accounting_rollback(
@@ -1250,6 +1499,7 @@ def test_provider_attempt_timeout_is_safe_and_falls_back(
             self.calls.append(request.route.provider_model_api_name)
             self.credentials.append(request.credential)
             if request.route.provider_model_api_name == "text-a":
+                yield ProviderCompleted(_usage())
                 await asyncio.sleep(2)
                 return
             yield _standard()
@@ -1267,6 +1517,17 @@ def test_provider_attempt_timeout_is_safe_and_falls_back(
     )
     assert result.provider_model_api_name == "text-b"
     assert adapter.calls == ["text-a", "text-b"]
+    with psycopg.connect(call_context.database_url, row_factory=dict_row) as connection:
+        attempts = connection.execute(
+            """SELECT provider_model_api_name, usage, cost, failure_class
+               FROM router.raw_accounting_attempts ORDER BY position"""
+        ).fetchall()
+        assert attempts[0] == {
+            "provider_model_api_name": "text-a",
+            "usage": [{"unit": "request", "quantity": "1"}],
+            "cost": Decimal("0.25"),
+            "failure_class": "timeout",
+        }
 
 
 def test_detailed_log_rows_reject_mutation(call_context: CallContext) -> None:

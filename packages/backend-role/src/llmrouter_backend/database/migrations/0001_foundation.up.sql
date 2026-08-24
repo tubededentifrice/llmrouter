@@ -248,7 +248,7 @@ CREATE TABLE router.request_logs (
     outcome text NOT NULL CHECK (outcome IN ('succeeded', 'failed')),
     tags jsonb NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(tags) = 'array'),
     request_json text NOT NULL CHECK (char_length(request_json) <= 5000000),
-    response_json text CHECK (char_length(response_json) <= 5000000),
+    response_json text CHECK (char_length(response_json) <= 10000000),
     attempts jsonb NOT NULL DEFAULT '[]'::jsonb
         CHECK (jsonb_typeof(attempts) = 'array'
                AND jsonb_array_length(attempts) <= 16),

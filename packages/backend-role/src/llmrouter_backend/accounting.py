@@ -7,7 +7,7 @@ import json
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, localcontext
 from time import monotonic
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
@@ -37,6 +37,7 @@ _CATALOG_WRITE_LOCK = 4_993_044_345_823
 _PRICE_SYNCHRONIZATION_LOCK = 4_993_044_345_825
 _ROLLUP_LOCK_NAMESPACE = 4_993_044
 _MAXIMUM_DECIMAL = Decimal("99999999999999999999.999999999999999999")
+_COST_DECIMAL_PRECISION = 112
 _OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 _MAXIMUM_SOURCE_BYTES = 10_000_000
 _SOURCE_OPERATION_TIMEOUT_SECONDS = 10.0
@@ -585,11 +586,14 @@ def _record_call_accounting(
         missing = sorted({item.unit for item in attempt.usage} - rates.keys())
         if missing:
             raise ValueError("The applied price does not cover all reported usage.")
-        cost = sum(
-            (item.quantity * rates[item.unit] for item in attempt.usage),
-            start=Decimal(0),
-        )
-        if abs(cost) > _MAXIMUM_DECIMAL * _MAXIMUM_DECIMAL:
+        with localcontext() as context:
+            context.prec = _COST_DECIMAL_PRECISION
+            cost = sum(
+                (item.quantity * rates[item.unit] for item in attempt.usage),
+                start=Decimal(0),
+            )
+            maximum_cost = _MAXIMUM_DECIMAL * _MAXIMUM_DECIMAL
+        if abs(cost) > maximum_cost:
             raise ValueError("The attempt cost is outside its safe range.")
         usage = [
             {"unit": item.unit, "quantity": _decimal_text(item.quantity)}
