@@ -38,7 +38,11 @@ REMOVED_MIGRATION_NAMES = re.compile(
     r"routing_success_commit_boundary)"
 )
 ACTIVE_REFERENCE_PATHS = {
+    "apps/admin/src",
+    "apps/admin/vite.config.ts",
     "docker-compose.dev.yml",
+    "package.json",
+    "packages/backend-role/pyproject.toml",
     "packages/backend-role/src/llmrouter_backend",
     "scripts/local-development-migrate.py",
     "scripts/local-development.sh",
@@ -48,7 +52,10 @@ FORBIDDEN_REFERENCE = re.compile(
     r"PostgresAdmissionRepository|BudgetAllowance|LocalCanonicalSpool|"
     r"agent[-_ ]runs?|EmbedSession|ConfigurationRevision|"
     r"configuration[-_ ]publication|request[-_ ]recovery|runtime[-_ ]roles?|"
-    r"token[-_ ]exchange|tool[-_ ]gateway|frame[-_ ]origin)",
+    r"token[-_ ]exchange|tool[-_ ]gateway|frame[-_ ]origin|"
+    r"hosted[-_ ]service|administrator[-_ ]grant|service[-_ ]grant|"
+    r"openai[-_ ]caller|"
+    r"@application\.(?:post|get)\(\s*[\"']/v1/(?:chat/completions|responses))",
     re.IGNORECASE,
 )
 

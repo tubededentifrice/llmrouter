@@ -129,19 +129,40 @@ def test_backend_reset_gate_rejects_a_removed_script(
         module.main()
 
 
+@pytest.mark.parametrize(
+    "source",
+    [
+        "request_recovery = True\n",
+        "hosted_service = True\n",
+        '@application.post("/v1/chat/completions")\n',
+    ],
+)
 def test_backend_reset_gate_rejects_a_removed_runtime_reference(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    source: str,
 ) -> None:
     """Fail when an active source restores a removed runtime protocol."""
     module = _backend_reset_module()
     probe = tmp_path / "probe.py"
-    probe.write_text("request_recovery = True\n", encoding="utf-8")
+    probe.write_text(source, encoding="utf-8")
     monkeypatch.setattr(module, "REPOSITORY_ROOT", tmp_path)
     monkeypatch.setattr(module, "REMOVED_PATHS", set())
     monkeypatch.setattr(module, "ACTIVE_REFERENCE_PATHS", {"probe.py"})
     with pytest.raises(SystemExit, match="removed backend surface"):
         module.main()
+
+
+def test_backend_reset_gate_scans_active_host_surfaces() -> None:
+    """Keep the administrator host and dependency manifests in the reset gate."""
+    module = _backend_reset_module()
+    assert {
+        "apps/admin/src",
+        "apps/admin/vite.config.ts",
+        "docker-compose.dev.yml",
+        "package.json",
+        "packages/backend-role/pyproject.toml",
+    } <= module.ACTIVE_REFERENCE_PATHS
 
 
 def test_node_check_installs_the_locked_dependency_tree() -> None:

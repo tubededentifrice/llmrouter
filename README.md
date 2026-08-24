@@ -84,6 +84,19 @@ Repository checks use:
 ./scripts/check-repository.sh
 ```
 
+The complete offline product proof resets the local database, uses only the
+fake provider adapter, verifies the native SDK and harness, and tests restart
+and selected dependency failures. It does not call a paid provider. Run it
+only when it is safe to delete the local PostgreSQL and object-storage volumes:
+
+```bash
+./scripts/local-development.sh prove
+```
+
+The proof checks the Pocket ID discovery, redirect, PKCE, session, and denial
+code through the automated identity suite. It does not complete the human
+passkey callback.
+
 ## Work process
 
 Use the repository `director` skill for autonomous Beads delivery. Keep

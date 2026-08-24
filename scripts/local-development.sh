@@ -225,8 +225,12 @@ main() {
     logs)
       compose logs --follow --tail 100
       ;;
+    prove)
+      [[ "$#" == "1" ]] || fail "The prove action does not accept arguments."
+      exec "${repository_root}/scripts/prove-simplified-product.sh"
+      ;;
     *)
-      fail "Usage: ./scripts/local-development.sh {start|stop|reset|status|logs}"
+      fail "Usage: ./scripts/local-development.sh {start|stop|reset|status|logs|prove}"
       ;;
   esac
 }
