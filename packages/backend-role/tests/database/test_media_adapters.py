@@ -33,7 +33,7 @@ from .provider_adapter_conformance import (
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-_PRICED_UNITS = frozenset({"image", "video_second", "audio_second"})
+_PRICED_UNITS = frozenset({"image"})
 
 
 class OversizedJsonStream(httpx.AsyncByteStream):
@@ -93,17 +93,10 @@ def _request(kind: str = "image", *, image: bool = False) -> ProviderAttemptRequ
     )
 
 
-@pytest.mark.parametrize(
-    ("kind", "content_type", "body", "unit"),
-    [
-        ("image", "image/png", b"\x89PNG\r\n\x1a\npng-result", "image"),
-        ("video", "video/mp4", b"\x00\x00\x00\x18ftypisomvideo", "video_second"),
-        ("audio", "audio/mpeg", b"ID3audio-result", "audio_second"),
-    ],
-)
-def test_wavespeed_submits_polls_and_downloads_one_bounded_result(
-    kind: str, content_type: str, body: bytes, unit: str
-) -> None:
+def test_wavespeed_submits_polls_and_downloads_one_bounded_result() -> None:
+    kind = "image"
+    content_type = "image/png"
+    body = b"\x89PNG\r\n\x1a\npng-result"
     calls: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -142,7 +135,7 @@ def test_wavespeed_submits_polls_and_downloads_one_bounded_result(
     )
     request = _request(kind)
     captured = asyncio.run(capture_attempt(adapter, request))
-    case = SuccessCase(kind, ("media",), frozenset({unit}))
+    case = SuccessCase(kind, ("media",), frozenset({"image"}))
 
     assert_success(adapter, request, captured, case, priced_usage_units=_PRICED_UNITS)
     assert len(calls) == 3
@@ -151,40 +144,27 @@ def test_wavespeed_submits_polls_and_downloads_one_bounded_result(
     assert output.media_body == body
     completion = captured.events[1]
     assert isinstance(completion, ProviderCompleted)
-    assert {item.unit for item in completion.usage} == {unit}
+    assert {item.unit for item in completion.usage} == {"image"}
     assert all(call.headers["accept-encoding"] == "identity" for call in calls)
 
 
-def test_wavespeed_encodes_input_images_without_exposing_control_values() -> None:
-    submitted: dict[str, object] = {}
+def test_wavespeed_rejects_input_images_before_provider_work() -> None:
+    requests = 0
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.method == "POST":
-            submitted.update(json.loads(request.content))
-            return httpx.Response(
-                200,
-                json={
-                    "data": {
-                        "status": "completed",
-                        "outputs": ["https://cdn.wavespeed.ai/result.png"],
-                    }
-                },
-                headers={"Content-Type": "application/json"},
-            )
-        return httpx.Response(
-            200,
-            content=b"\x89PNG\r\n\x1a\nresult",
-            headers={"Content-Type": "image/png"},
-        )
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return httpx.Response(500)
 
     adapter = WaveSpeedMediaAdapter(
         httpx.MockTransport(handler), poll_interval_seconds=0
     )
     captured = asyncio.run(capture_attempt(adapter, _request(image=True)))
 
-    assert captured.failure is None
-    assert submitted["images"] == ["data:image/png;base64,aW5wdXQtaW1hZ2U="]
-    assert "private-control-value" not in json.dumps(submitted)
+    assert captured.failure is not None
+    assert captured.failure.failure_class == "incompatible"
+    assert captured.failure.phase is CallFailurePhase.BEFORE_VISIBLE_OUTPUT
+    assert requests == 0
 
 
 @pytest.mark.parametrize(
@@ -268,29 +248,77 @@ def test_wavespeed_rejects_redirects_and_untrusted_result_hosts_after_submit() -
     assert requests == 1
 
 
-def test_wavespeed_rejects_video_without_provider_duration() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.host == "api.wavespeed.ai":
-            return httpx.Response(
-                200,
-                json={
-                    "data": {
-                        "status": "completed",
-                        "outputs": ["https://storage.wavespeed.ai/result.mp4"],
-                    }
-                },
-                headers={"Content-Type": "application/json"},
-            )
-        return httpx.Response(
-            200,
-            content=b"\x00\x00\x00\x18ftypisomvideo",
-            headers={"Content-Type": "video/mp4"},
-        )
+@pytest.mark.parametrize("kind", ["video", "audio"])
+def test_wavespeed_rejects_unsupported_output_kinds_before_provider_work(
+    kind: str,
+) -> None:
+    requests = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return httpx.Response(500)
 
     adapter = WaveSpeedMediaAdapter(
         httpx.MockTransport(handler), poll_interval_seconds=0
     )
-    request = _request("video")
+    request = _request(kind)
+    captured = asyncio.run(capture_attempt(adapter, request))
+
+    assert captured.failure is not None
+    assert captured.failure.failure_class == "incompatible"
+    assert captured.failure.phase is CallFailurePhase.BEFORE_VISIBLE_OUTPUT
+    assert requests == 0
+
+
+def test_wavespeed_rejects_a_changed_prediction_identity() -> None:
+    requests = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        prediction_id = "task-1" if requests == 1 else "task-2"
+        status = "processing" if requests == 1 else "completed"
+        return httpx.Response(
+            200,
+            json={"data": {"id": prediction_id, "status": status}},
+            headers={"Content-Type": "application/json"},
+        )
+
+    request = _request()
+    adapter = WaveSpeedMediaAdapter(
+        httpx.MockTransport(handler), poll_interval_seconds=0
+    )
+    captured = asyncio.run(capture_attempt(adapter, request))
+
+    assert_failure(
+        adapter,
+        request,
+        captured,
+        _failure_case("invalid_response", CallFailurePhase.UNCERTAIN),
+        priced_usage_units=_PRICED_UNITS,
+    )
+    assert requests == 2
+
+
+def test_wavespeed_rejects_a_failed_provider_code_in_a_success_response() -> None:
+    adapter = WaveSpeedMediaAdapter(
+        httpx.MockTransport(
+            lambda _request: httpx.Response(
+                200,
+                json={
+                    "code": 500,
+                    "data": {
+                        "status": "completed",
+                        "outputs": ["https://cdn.wavespeed.ai/result.png"],
+                    },
+                },
+                headers={"Content-Type": "application/json"},
+            )
+        ),
+        poll_interval_seconds=0,
+    )
+    request = _request()
     captured = asyncio.run(capture_attempt(adapter, request))
 
     assert_failure(

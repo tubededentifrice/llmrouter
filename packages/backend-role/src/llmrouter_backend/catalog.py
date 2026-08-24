@@ -84,8 +84,8 @@ _ADAPTER_CAPABILITIES: dict[
         frozenset({"tool_calling", "streaming", "reasoning"}),
     ),
     "wavespeed": (
-        frozenset({"text", "image"}),
-        frozenset({"image", "video", "audio"}),
+        frozenset({"text"}),
+        frozenset({"image"}),
         frozenset(),
     ),
     "ollama": (
@@ -145,13 +145,10 @@ _CATALOGS: dict[str, tuple[ModelImportCandidate, ...]] = {
             catalog_key="wavespeed-image",
             display_name="WaveSpeed image model",
             provider_model_name="wavespeed-ai/flux-dev",
-            input_modalities=["text", "image"],
+            input_modalities=["text"],
             output_modalities=["image"],
             capabilities=[],
-            constraints=ModelConstraints(
-                max_input_images=8,
-                max_input_image_bytes=20 * 1024 * 1024,
-            ),
+            constraints=ModelConstraints(),
         ),
     ),
     "fake": (

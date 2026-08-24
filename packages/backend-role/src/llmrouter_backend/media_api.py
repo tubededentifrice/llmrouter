@@ -57,6 +57,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
 _DATABASE_OPTIONS = "-c statement_timeout=2000 -c lock_timeout=500"
+_DATABASE_CONNECT_TIMEOUT_SECONDS = 2
 _CATALOG_WRITE_LOCK = 4_993_044_345_823
 _MAXIMUM_MEDIA_BYTES = 1024 * 1024 * 1024
 _API_NAME_PATTERN = r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$"
@@ -175,8 +176,9 @@ def create_media_job(
     connection: psycopg.Connection[Any] | None = None
     uploaded: list[str] = []
     try:
-        call = internal_media_call(body)
+        call = _validated_internal_media_call(body)
         snapshot = _read_media_admission_snapshot(database_url, actor, call)
+        retained_objects = _required_object_store(object_store)
         job_id = uuid.uuid4()
         created_at = datetime.now(tz=UTC)
         payload: dict[str, object] = body.model_dump(
@@ -185,8 +187,6 @@ def create_media_job(
         payload["input_media_ids"] = []
         media_rows: list[tuple[object, ...]] = []
         for image in call.media:
-            if object_store is None:
-                raise ObjectStoreError
             media_id = uuid.uuid4()
             object_key = _object_key(
                 created_at,
@@ -196,7 +196,7 @@ def create_media_job(
                 media_id,
             )
             uploaded.append(object_key)
-            object_store.put(object_key, image.body, image.media_type)
+            retained_objects.put(object_key, image.body, image.media_type)
             media_rows.append(
                 (
                     media_id,
@@ -211,7 +211,10 @@ def create_media_job(
             )
             cast("list[str]", payload["input_media_ids"]).append(str(media_id))
         connection = psycopg.connect(
-            database_url, row_factory=dict_row, options=_DATABASE_OPTIONS
+            database_url,
+            connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
+            row_factory=dict_row,
+            options=_DATABASE_OPTIONS,
         )
         current = _resolve_media_admission(connection, actor, call)
         if current != snapshot:
@@ -270,6 +273,25 @@ def create_media_job(
         "state": "pending",
         "created_at": created_at,
     }
+
+
+def _validated_internal_media_call(body: MediaJobRequest) -> CallRequest:
+    try:
+        return internal_media_call(body)
+    except ValueError:
+        raise invalid_request(
+            "body", "The media job does not match the deployment bounds."
+        ) from None
+
+
+def _required_object_store(object_store: ObjectStore | None) -> ObjectStore:
+    if object_store is None:
+        raise ApiError(
+            500,
+            "internal_error",
+            "The Router could not retain generated media.",
+        )
+    return object_store
 
 
 def get_media_job(
@@ -431,16 +453,25 @@ def _read_media_admission_snapshot(
     database_url: str, actor: ServiceActor, call: CallRequest
 ) -> _MediaAdmissionSnapshot:
     with psycopg.connect(
-        database_url, row_factory=dict_row, options=_DATABASE_OPTIONS
+        database_url,
+        connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
+        row_factory=dict_row,
+        options=_DATABASE_OPTIONS,
     ) as connection:
         try:
-            return _resolve_media_admission(connection, actor, call)
+            return _resolve_media_admission(
+                connection, actor, call, commit_assignment_evidence=True
+            )
         finally:
             connection.rollback()
 
 
 def _resolve_media_admission(
-    connection: psycopg.Connection[Any], actor: ServiceActor, call: CallRequest
+    connection: psycopg.Connection[Any],
+    actor: ServiceActor,
+    call: CallRequest,
+    *,
+    commit_assignment_evidence: bool = False,
 ) -> _MediaAdmissionSnapshot:
     workspace = connection.execute(
         """SELECT id FROM router.workspaces
@@ -463,7 +494,7 @@ def _resolve_media_admission(
             embedding_dimension=None,
             input_image_sizes=requirements.input_image_sizes,
             output_duration_seconds=None,
-            commit_evidence=False,
+            commit_evidence=commit_assignment_evidence,
         )
         route_state: tuple[object, ...] = (
             "assignment",
@@ -508,7 +539,10 @@ def _assignment_route_state(resolved: ResolvedAssignment) -> tuple[object, ...]:
 
 def _claim_job(database_url: str) -> dict[str, Any] | None:
     with psycopg.connect(
-        database_url, row_factory=dict_row, options=_DATABASE_OPTIONS
+        database_url,
+        connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
+        row_factory=dict_row,
+        options=_DATABASE_OPTIONS,
     ) as connection:
         connection.execute(
             """UPDATE router.media_jobs
@@ -567,7 +601,10 @@ def _call_from_claimed_job(
         if len(parsed_ids) != len(set(parsed_ids)):
             raise ValueError
         with psycopg.connect(
-            database_url, row_factory=dict_row, options=_DATABASE_OPTIONS
+            database_url,
+            connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
+            row_factory=dict_row,
+            options=_DATABASE_OPTIONS,
         ) as connection:
             rows = connection.execute(
                 """SELECT media_objects.id, object_key, media_type, size_bytes,
@@ -637,7 +674,10 @@ def _complete_job(
     try:
         object_store.put(object_key, body, cast("str", metadata["media_type"]))
         with psycopg.connect(
-            database_url, row_factory=dict_row, options=_DATABASE_OPTIONS
+            database_url,
+            connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
+            row_factory=dict_row,
+            options=_DATABASE_OPTIONS,
         ) as connection:
             row = connection.execute(
                 """UPDATE router.media_jobs
@@ -686,7 +726,11 @@ def _fail_job(database_url: str, job_id: uuid.UUID, code: str, message: str) -> 
     }
     safe_code = code if code in safe_codes else "upstream_failed"
     safe_message = message[:1000] if code in safe_codes else "The media job failed."
-    with psycopg.connect(database_url, options=_DATABASE_OPTIONS) as connection:
+    with psycopg.connect(
+        database_url,
+        connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
+        options=_DATABASE_OPTIONS,
+    ) as connection:
         connection.execute(
             """UPDATE router.media_jobs
                SET state = 'failed', payload = '{}'::jsonb,
@@ -752,7 +796,11 @@ def _delete_or_queue(
     except Exception:
         _LOGGER.warning("A retained media object needs queued deletion.")
     try:
-        with psycopg.connect(database_url, options=_DATABASE_OPTIONS) as connection:
+        with psycopg.connect(
+            database_url,
+            connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
+            options=_DATABASE_OPTIONS,
+        ) as connection:
             connection.execute(
                 """INSERT INTO router.object_deletion_queue
                        (object_key, failure_count, failure_class, last_attempt_at)

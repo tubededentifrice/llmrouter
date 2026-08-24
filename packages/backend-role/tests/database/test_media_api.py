@@ -421,6 +421,62 @@ def test_media_contract_rejects_removed_surfaces_and_rolls_back_storage_failure(
         assert connection.execute(
             "SELECT count(*) FROM router.media_jobs"
         ).fetchone() == (0,)
+        assert connection.execute(
+            """SELECT observed_requirements FROM router.assignment_usage
+               WHERE service_id = (
+                   SELECT id FROM router.services WHERE api_name = 'alpha'
+               ) AND api_name = 'media'"""
+        ).fetchone() == (["image_input", "image_output", "text_input"],)
+
+
+def test_media_job_rejects_an_unavailable_object_store_before_provider_work(
+    media_api_context: MediaApiContext,
+) -> None:
+    context = media_api_context
+    cast("Any", context.client.app).state.object_store = None
+
+    response = context.client.post(
+        "/v1/media-jobs",
+        json=_request(),
+        headers=context.headers("alpha"),
+    )
+
+    assert response.status_code == HTTPStatus.INTERNAL_SERVER_ERROR
+    assert response.json()["error"]["code"] == "internal_error"
+    with psycopg.connect(context.database_url) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM router.media_jobs"
+        ).fetchone() == (0,)
+        assert connection.execute(
+            """SELECT observed_requirements FROM router.assignment_usage
+               WHERE service_id = (
+                   SELECT id FROM router.services WHERE api_name = 'alpha'
+               ) AND api_name = 'media'"""
+        ).fetchone() == (["image_output", "text_input"],)
+
+
+def test_media_job_rejects_the_deployment_json_bound_as_invalid_input(
+    media_api_context: MediaApiContext,
+) -> None:
+    context = media_api_context
+    request = _request()
+    request["prompt"] = "\U0001f642" * 525_000
+
+    response = context.client.post(
+        "/v1/media-jobs",
+        json=request,
+        headers=context.headers("alpha"),
+    )
+
+    assert response.status_code == HTTPStatus.BAD_REQUEST
+    assert response.json()["error"]["code"] == "invalid_request"
+    with psycopg.connect(context.database_url) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM router.media_jobs"
+        ).fetchone() == (0,)
+        assert connection.execute(
+            "SELECT count(*) FROM router.assignment_usage"
+        ).fetchone() == (0,)
 
 
 @pytest.mark.parametrize("cleanup_mode", ["delete", "queue"])

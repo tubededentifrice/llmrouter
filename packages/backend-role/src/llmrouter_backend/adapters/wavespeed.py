@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import re
 from decimal import Decimal
@@ -27,8 +26,6 @@ from llmrouter_backend.calls import (
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Mapping
 
-    from llmrouter_backend.models import UsageUnit
-
 _ENDPOINT = "https://api.wavespeed.ai/api/v3"
 _TIMEOUT = httpx.Timeout(30.0, connect=10.0, read=30.0, write=30.0, pool=10.0)
 _MAXIMUM_JSON_BYTES = 1024 * 1024
@@ -46,12 +43,6 @@ _MEDIA_TYPES = frozenset(
         "image/jpeg",
         "image/png",
         "image/webp",
-        "video/mp4",
-        "video/webm",
-        "audio/mpeg",
-        "audio/mp4",
-        "audio/ogg",
-        "audio/wav",
     }
 )
 
@@ -59,13 +50,13 @@ _MEDIA_TYPES = frozenset(
 class WaveSpeedMediaAdapter:
     """Use one fixed WaveSpeed origin without retries or trusted result URLs."""
 
-    usage_units = frozenset({"image", "video_second", "audio_second"})
+    usage_units = frozenset({"image"})
 
     def __init__(
         self,
         transport: httpx.AsyncBaseTransport | None = None,
         *,
-        poll_interval_seconds: float = 1.0,
+        poll_interval_seconds: float = 2.0,
     ) -> None:
         if (
             isinstance(poll_interval_seconds, bool)
@@ -80,18 +71,21 @@ class WaveSpeedMediaAdapter:
         """Declare only units for the selected media kind."""
         if operation.kind != "media":
             return frozenset()
-        unit = {
-            "image": "image",
-            "video": "video_second",
-            "audio": "audio_second",
-        }.get(operation.requirements.required_output)
-        return frozenset({unit}) if unit is not None else frozenset()
+        return (
+            frozenset({"image"})
+            if operation.requirements.required_output == "image"
+            else frozenset()
+        )
 
     async def attempt(
         self, request: ProviderAttemptRequest, /
     ) -> AsyncIterator[ProviderOutput | ProviderCompleted]:
         """Submit once, poll one accepted task, and download one bounded result."""
-        if request.route.adapter != "wavespeed" or request.kind != "media":
+        if (
+            request.route.adapter != "wavespeed"
+            or request.kind != "media"
+            or request.requirements.required_output != "image"
+        ):
             raise _failure("incompatible")
         if request.route.endpoint is not None:
             raise _failure("incompatible")
@@ -130,15 +124,18 @@ class WaveSpeedMediaAdapter:
                 if payload is None:
                     raise ValueError
                 data = _result_data(payload)
+                prediction_id: str | None = None
                 while data["status"] in {"created", "pending", "processing", "running"}:
-                    prediction_id = data.get("id")
+                    current_id = data.get("id")
                     if (
-                        not isinstance(prediction_id, str)
-                        or _PREDICTION_ID.fullmatch(prediction_id) is None
+                        not isinstance(current_id, str)
+                        or _PREDICTION_ID.fullmatch(current_id) is None
+                        or (prediction_id is not None and current_id != prediction_id)
                     ):
                         raise _failure(
                             "invalid_response", phase=CallFailurePhase.UNCERTAIN
                         )
+                    prediction_id = current_id
                     if self._poll_interval_seconds:
                         await asyncio.sleep(self._poll_interval_seconds)
                     status, payload = await _json_request(
@@ -156,9 +153,16 @@ class WaveSpeedMediaAdapter:
                     if payload is None:
                         raise ValueError
                     data = _result_data(payload)
+                    if data.get("id") != prediction_id:
+                        raise _failure(
+                            "invalid_response", phase=CallFailurePhase.UNCERTAIN
+                        )
                 if data["status"] != "completed":
                     raise _failure(
-                        "refusal" if data["status"] == "failed" else "invalid_response",
+                        "refusal"
+                        if data["status"]
+                        in {"failed", "cancelled", "timeout", "deleted"}
+                        else "invalid_response",
                         phase=CallFailurePhase.UNCERTAIN,
                     )
                 output_url = _one_output_url(data)
@@ -206,26 +210,13 @@ def _submission_body(request: ProviderAttemptRequest) -> dict[str, object]:
         or kind != request.requirements.required_output
     ):
         raise ValueError
-    images = []
-    if tuple(len(media.body) for media in request.input_media) != (
-        request.requirements.input_image_sizes
+    if (
+        request.requirements.required_inputs != frozenset({"text"})
+        or request.requirements.input_image_sizes
+        or request.input_media
     ):
         raise ValueError
-    if request.requirements.required_output == "audio" and request.input_media:
-        raise ValueError
-    for media in request.input_media:
-        if media.role != "input" or media.media_type not in {
-            "image/jpeg",
-            "image/png",
-            "image/webp",
-        }:
-            raise ValueError
-        images.append(
-            f"data:{media.media_type};base64,{base64.b64encode(media.body).decode('ascii')}"
-        )
     body: dict[str, object] = {"prompt": prompt}
-    if images:
-        body["images"] = images
     return body
 
 
@@ -269,6 +260,9 @@ async def _json_response(response: httpx.Response) -> Mapping[str, object]:
 def _result_data(payload: Mapping[str, object]) -> dict[str, object]:
     if not set(payload) <= {"code", "message", "data"}:
         raise ValueError
+    code = payload.get("code")
+    if code is not None and (type(code) is not int or code != 200):
+        raise ValueError
     data = payload.get("data")
     if not isinstance(data, dict):
         raise ValueError
@@ -280,6 +274,9 @@ def _result_data(payload: Mapping[str, object]) -> dict[str, object]:
         "running",
         "completed",
         "failed",
+        "cancelled",
+        "timeout",
+        "deleted",
     }:
         raise ValueError
     return cast("dict[str, object]", data)
@@ -346,19 +343,11 @@ async def _download_result(
 
 
 def _usage(
-    request: ProviderAttemptRequest, data: Mapping[str, object]
+    request: ProviderAttemptRequest, _data: Mapping[str, object]
 ) -> tuple[UsageAmount, ...]:
-    output = request.requirements.required_output
-    unit = {"image": "image", "video": "video_second", "audio": "audio_second"}[output]
-    if output == "image":
-        return (UsageAmount(cast("UsageUnit", unit), Decimal(1)),)
-    raw_duration = data.get("duration")
-    if not isinstance(raw_duration, int | float) or isinstance(raw_duration, bool):
+    if request.requirements.required_output != "image":
         raise ValueError
-    quantity = Decimal(str(raw_duration))
-    if not quantity.is_finite() or not 0 < quantity <= 86_400:
-        raise ValueError
-    return (UsageAmount(cast("UsageUnit", unit), quantity),)
+    return (UsageAmount("image", Decimal(1)),)
 
 
 def _authorization(value: str) -> str:
@@ -453,8 +442,4 @@ def _media_signature_matches(media_type: str, body: bytes) -> bool:
         return body.startswith(prefixes[media_type])
     if media_type == "image/webp":
         return len(body) >= 12 and body.startswith(b"RIFF") and body[8:12] == b"WEBP"
-    if media_type in {"video/mp4", "audio/mp4"}:
-        return len(body) >= 12 and body[4:8] == b"ftyp"
-    if media_type == "audio/wav":
-        return len(body) >= 12 and body.startswith(b"RIFF") and body[8:12] == b"WAVE"
     return False

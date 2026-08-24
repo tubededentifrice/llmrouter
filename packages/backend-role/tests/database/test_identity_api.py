@@ -507,8 +507,9 @@ def test_workspace_delete_cascades_and_blocks_late_media_results(
         assert workspace_row is not None
         workspace = workspace_row[0]
         job_row = connection.execute(
-            """INSERT INTO router.media_jobs (service_id, workspace_id)
-               VALUES (%s, %s) RETURNING id, state""",
+            """INSERT INTO router.media_jobs
+                   (service_id, workspace_id, provider_model_api_name)
+               VALUES (%s, %s, 'example') RETURNING id, state""",
             (service, workspace),
         ).fetchone()
         assert job_row is not None
@@ -519,8 +520,19 @@ def test_workspace_delete_cascades_and_blocks_late_media_results(
             connection.transaction(),
         ):
             connection.execute(
-                """INSERT INTO router.media_jobs (service_id, workspace_id, state)
-                   VALUES (%s, %s, 'queued')""",
+                """INSERT INTO router.media_jobs
+                       (service_id, workspace_id, provider_model_api_name, state)
+                   VALUES (%s, %s, 'example', 'queued')""",
+                (service, workspace),
+            )
+        with (
+            pytest.raises(psycopg.errors.CheckViolation),
+            connection.transaction(),
+        ):
+            connection.execute(
+                """INSERT INTO router.media_jobs
+                       (service_id, workspace_id, provider_model_api_name, payload)
+                   VALUES (%s, %s, 'example', '[]'::jsonb)""",
                 (service, workspace),
             )
         connection.execute(

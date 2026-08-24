@@ -404,12 +404,11 @@ CREATE TABLE router.media_jobs (
     workspace_id uuid NOT NULL,
     state text NOT NULL DEFAULT 'pending'
         CHECK (state IN ('pending', 'running', 'succeeded', 'failed')),
-    provider_model_api_name text CHECK (
-        provider_model_api_name ~ '^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$'
-    ),
+    provider_model_api_name router.api_name NOT NULL,
     kind text NOT NULL DEFAULT 'image' CHECK (kind IN ('image', 'video', 'audio')),
     payload jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (
-        octet_length(payload::text) BETWEEN 2 AND 2097152
+        jsonb_typeof(payload) = 'object'
+        AND octet_length(payload::text) BETWEEN 2 AND 2097152
     ),
     error_code text CHECK (char_length(error_code) BETWEEN 1 AND 200),
     error_message text CHECK (char_length(error_message) BETWEEN 1 AND 1000),
