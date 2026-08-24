@@ -1,13 +1,14 @@
 """Create the one LLM Router web application."""
-# ruff: noqa: B008, C901, EM101, FAST002, PLR0913, PLR0917, PLR2004, TC002, TC003
+# ruff: noqa: B008, C901, EM101, FAST002, PLR0913, PLR0917, PLR2004, TC002, TC003, TRY003
 
 from __future__ import annotations
 
 import asyncio
 import hmac
+import json
 import os
 import uuid
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncGenerator, AsyncIterator, Iterator
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
@@ -17,13 +18,20 @@ import httpx
 import psycopg
 from fastapi import Depends, FastAPI, Path, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from psycopg.rows import dict_row
 from pydantic import ValidationError
 from starlette.exceptions import HTTPException as StarletteHttpException
 from starlette.middleware.base import RequestResponseEndpoint
 
 from llmrouter_backend import accounting, assignments, catalog
+from llmrouter_backend.adapters import FakeAdapter
+from llmrouter_backend.calls import (
+    CallExecutionError,
+    CallExecutor,
+    CallResult,
+    ProviderOutput,
+)
 from llmrouter_backend.config import Settings
 from llmrouter_backend.database import migration_plan
 from llmrouter_backend.diagnostics import (
@@ -41,6 +49,13 @@ from llmrouter_backend.errors import (
     conflict,
     invalid_request,
     not_found,
+)
+from llmrouter_backend.model_api import (
+    ModelCallRequest,
+    ModelCallResult,
+    internal_model_call,
+    model_call_result,
+    result_usage,
 )
 from llmrouter_backend.models import (
     ActivityEvent,
@@ -134,6 +149,7 @@ if TYPE_CHECKING:
 _DATABASE_CONNECT_TIMEOUT_SECONDS = 2
 _DATABASE_STATEMENT_TIMEOUT_MILLISECONDS = 2_000
 _DATABASE_LOCK_TIMEOUT_MILLISECONDS = 500
+_MAXIMUM_MODEL_HTTP_BODY_BYTES = 70 * 1024 * 1024
 _ACCOUNTING_SCHEDULE_LOCK = 4_993_044_345_824
 _ADMINISTRATOR_COOKIE = "llmrouter_admin_session"
 _OIDC_FLOW_COOKIE = "llmrouter_admin_oidc_flow"
@@ -166,6 +182,7 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
     object_store: ObjectStore | None = None,
     price_sources: dict[str, PriceSource] | None = None,
     openrouter_price_transport: httpx.BaseTransport | None = None,
+    call_executor: CallExecutor | None = None,
 ) -> FastAPI:
     """Create one application with optional fixed runtime dependencies."""
     settings_value = settings or Settings.from_environment()
@@ -206,6 +223,24 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
         else accounting.default_price_sources(openrouter_price_transport)
     )
     application.state.price_sources = price_source_values
+    configured_call_database_url = database_url or os.environ.get(
+        "LLMROUTER_DATABASE_URL"
+    )
+    credential_keys = (
+        catalog.ProviderCredentialKeys.load(settings_value)
+        if settings_value.provider_credential_wrapping_key_file is not None
+        else None
+    )
+    application.state.call_executor = call_executor or (
+        CallExecutor(
+            database_url=configured_call_database_url,
+            adapters={"fake": FakeAdapter()},
+            credential_keys=credential_keys,
+            object_store=object_store_value,
+        )
+        if configured_call_database_url is not None
+        else None
+    )
     _install_error_handlers(application)
 
     @application.middleware("http")
@@ -213,8 +248,8 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
         request: Request, call_next: RequestResponseEndpoint
     ) -> Response:
         response = await call_next(request)
-        if request.url.path.startswith("/v1/admin/") or request.url.path.startswith(
-            "/v1/service-keys"
+        if request.url.path.startswith(
+            ("/v1/admin/", "/v1/service-keys", "/v1/model-calls", "/v1/model-streams")
         ):
             response.headers["Cache-Control"] = "no-store"
         return response
@@ -243,18 +278,44 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
     def retained_objects(request: Request) -> ObjectStore | None:
         return cast("ObjectStore | None", request.app.state.object_store)
 
+    def model_executor(request: Request) -> CallExecutor:
+        executor = cast("CallExecutor | None", request.app.state.call_executor)
+        if executor is None:
+            raise ApiError(
+                500,
+                "internal_error",
+                "The Router could not complete the operation.",
+            )
+        return executor
+
     def service_actor(
         request: Request,
         database: psycopg.Connection[Any] = Depends(connection),
         controls: ControlKeys = Depends(control_keys),
     ) -> ServiceActor:
-        authorization = _single_header(request, "authorization")
-        if authorization is None or not authorization.startswith("Bearer "):
-            raise authentication_required()
-        bearer = authorization.removeprefix("Bearer ")
-        if not bearer or bearer.strip() != bearer or len(bearer) > 500:
-            raise authentication_required()
-        return authenticate_service_key(database, bearer, controls)
+        return _authenticate_service_request(request, database, controls)
+
+    def call_service_actor(
+        request: Request,
+        controls: ControlKeys = Depends(control_keys),
+    ) -> ServiceActor:
+        """Authenticate without an idle database connection during provider work."""
+        configured_url = request.app.state.database_url or os.environ.get(
+            "LLMROUTER_DATABASE_URL"
+        )
+        if configured_url is None:
+            raise ApiError(
+                500,
+                "internal_error",
+                "The Router could not complete the operation.",
+            )
+        with psycopg.connect(
+            configured_url,
+            connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
+            row_factory=dict_row,
+            options=_database_timeout_options(),
+        ) as database:
+            return _authenticate_service_request(request, database, controls)
 
     def administrator_actor(
         request: Request,
@@ -493,6 +554,78 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
             ),
         )
         return Response(status_code=HTTPStatus.NO_CONTENT)
+
+    @application.post(
+        "/v1/model-calls",
+        response_model=ModelCallResult,
+        response_model_exclude_none=True,
+    )
+    async def service_model_call(
+        request: Request,
+        actor: ServiceActor = Depends(call_service_actor),
+        executor: CallExecutor = Depends(model_executor),
+    ) -> ModelCallResult:
+        """Make one synchronous native model call."""
+        body = await _model_call_body(request)
+        try:
+            call = internal_model_call(body, streaming=False)
+        except ValueError as error:
+            raise invalid_request(
+                "body", "The model call does not match the contract."
+            ) from error
+        try:
+            result = await executor.execute(actor, call)
+        except CallExecutionError as error:
+            raise _call_api_error(error) from error
+        return model_call_result(result)
+
+    @application.post("/v1/model-streams", response_model=None)
+    async def service_model_stream(
+        request: Request,
+        actor: ServiceActor = Depends(call_service_actor),
+        executor: CallExecutor = Depends(model_executor),
+    ) -> StreamingResponse:
+        """Start one native SSE model stream after route admission commits."""
+        body = await _model_call_body(request)
+        try:
+            call = internal_model_call(body, streaming=True)
+        except ValueError as error:
+            raise invalid_request(
+                "body", "The model stream does not match the contract."
+            ) from error
+        queue: asyncio.Queue[tuple[str, dict[str, object]]] = asyncio.Queue(maxsize=16)
+
+        async def start(provider_model_api_name: str) -> None:
+            await queue.put(
+                ("start", {"provider_model_api_name": provider_model_api_name})
+            )
+
+        async def write(output: ProviderOutput) -> None:
+            await queue.put(_stream_output(output))
+
+        execution = asyncio.create_task(
+            executor.execute(
+                actor,
+                call,
+                write_visible_output=write,
+                start_visible_output=start,
+            )
+        )
+        try:
+            first = await _first_stream_event(queue, execution)
+        except BaseException:
+            execution.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await execution
+            raise
+        return StreamingResponse(
+            _model_stream_body(first, queue, execution),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-store",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     @application.get(
         "/v1/statistics",
@@ -1914,6 +2047,79 @@ def _require_browser_write(
         raise ApiError(403, "permission_denied", "The browser write is not permitted.")
 
 
+def _authenticate_service_request(
+    request: Request,
+    database: psycopg.Connection[Any],
+    controls: ControlKeys,
+) -> ServiceActor:
+    """Authenticate one exact bearer without retaining or logging its value."""
+    authorization = _single_header(request, "authorization")
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise authentication_required()
+    bearer = authorization.removeprefix("Bearer ")
+    if not bearer or bearer.strip() != bearer or len(bearer) > 500:
+        raise authentication_required()
+    return authenticate_service_key(database, bearer, controls)
+
+
+async def _model_call_body(request: Request) -> ModelCallRequest:
+    """Read and validate one bounded closed JSON model-call body."""
+    content_types = request.headers.getlist("content-type")
+    if len(content_types) != 1:
+        raise invalid_request("body", "The body must use application/json.")
+    media_type = [part.strip().lower() for part in content_types[0].split(";")]
+    if (
+        not media_type
+        or media_type[0] != "application/json"
+        or len(media_type) > 2
+        or (len(media_type) == 2 and media_type[1] != "charset=utf-8")
+    ):
+        raise invalid_request("body", "The body must use application/json.")
+    encodings = request.headers.getlist("content-encoding")
+    if encodings and encodings != ["identity"]:
+        raise invalid_request("body", "The body encoding is not supported.")
+    lengths = request.headers.getlist("content-length")
+    if lengths and (
+        len(lengths) != 1
+        or not lengths[0].isdigit()
+        or int(lengths[0]) > _MAXIMUM_MODEL_HTTP_BODY_BYTES
+    ):
+        raise invalid_request("body", "The model-call body is too large.")
+    raw = bytearray()
+    async for chunk in request.stream():
+        if len(raw) + len(chunk) > _MAXIMUM_MODEL_HTTP_BODY_BYTES:
+            raise invalid_request("body", "The model-call body is too large.")
+        raw.extend(chunk)
+    if not raw:
+        raise invalid_request("body", "The model-call body is required.")
+    try:
+        value = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_object_without_duplicate_fields,
+            parse_constant=_reject_json_constant,
+        )
+        return ModelCallRequest.model_validate(value)
+    except UnicodeDecodeError, ValueError, RecursionError, ValidationError:
+        raise invalid_request(
+            "body", "The model call does not match the contract."
+        ) from None
+
+
+def _object_without_duplicate_fields(
+    pairs: list[tuple[str, object]],
+) -> dict[str, object]:
+    value: dict[str, object] = {}
+    for name, item in pairs:
+        if name in value:
+            raise ValueError("A JSON object field occurs more than once.")
+        value[name] = item
+    return value
+
+
+def _reject_json_constant(_value: str) -> object:
+    raise ValueError("A JSON number must be finite.")
+
+
 def _single_header(request: Request, name: str) -> str | None:
     values = request.headers.getlist(name)
     if not values:
@@ -2114,6 +2320,127 @@ def _database_timeout_options() -> str:
     return (
         f"-c statement_timeout={_DATABASE_STATEMENT_TIMEOUT_MILLISECONDS} "
         f"-c lock_timeout={_DATABASE_LOCK_TIMEOUT_MILLISECONDS}"
+    )
+
+
+async def _first_stream_event(
+    queue: asyncio.Queue[tuple[str, dict[str, object]]],
+    execution: asyncio.Task[CallResult],
+) -> tuple[str, dict[str, object]]:
+    """Wait for committed stream output or return a normal pre-output error."""
+    received = asyncio.create_task(queue.get())
+    await asyncio.wait((received, execution), return_when=asyncio.FIRST_COMPLETED)
+    if received.done():
+        return received.result()
+    if not queue.empty():
+        received.cancel()
+        with suppress(asyncio.CancelledError):
+            await received
+        return queue.get_nowait()
+    received.cancel()
+    with suppress(asyncio.CancelledError):
+        await received
+    try:
+        result = execution.result()
+    except CallExecutionError as error:
+        raise _call_api_error(error) from error
+    return (
+        "start",
+        {"provider_model_api_name": result.provider_model_api_name},
+    )
+
+
+async def _model_stream_body(
+    first: tuple[str, dict[str, object]],
+    queue: asyncio.Queue[tuple[str, dict[str, object]]],
+    execution: asyncio.Task[CallResult],
+) -> AsyncGenerator[bytes]:
+    """Yield exact SSE events and cancel only connection-lifetime provider work."""
+    try:
+        yield _sse_event(*first)
+        while not execution.done() or not queue.empty():
+            if not queue.empty():
+                yield _sse_event(*queue.get_nowait())
+                continue
+            received = asyncio.create_task(queue.get())
+            await asyncio.wait(
+                (received, execution), return_when=asyncio.FIRST_COMPLETED
+            )
+            if received.done():
+                yield _sse_event(*received.result())
+            else:
+                received.cancel()
+                with suppress(asyncio.CancelledError):
+                    await received
+        try:
+            result = execution.result()
+        except CallExecutionError as error:
+            yield _sse_event("error", _call_api_error(error).envelope())
+            return
+        except ApiError as error:
+            yield _sse_event("error", error.envelope())
+            return
+        except Exception:  # noqa: BLE001 - The stream must expose only a safe error.
+            public = ApiError(
+                500,
+                "internal_error",
+                "The Router could not complete the operation.",
+            )
+            yield _sse_event("error", public.envelope())
+            return
+        yield _sse_event(
+            "completed",
+            {
+                "provider_model_api_name": result.provider_model_api_name,
+                "usage": result_usage(result),
+            },
+        )
+    finally:
+        if not execution.done():
+            execution.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await execution
+
+
+def _stream_output(output: ProviderOutput) -> tuple[str, dict[str, object]]:
+    """Compose one validated visible provider event."""
+    value = json.loads(output.content_json)
+    if output.kind == "text_delta" and isinstance(value, str):
+        return "text_delta", {"delta": value}
+    if output.kind == "tool_call" and isinstance(value, dict):
+        return "tool_call", {"tool_call": value}
+    raise RuntimeError("A model stream produced an invalid visible event.")
+
+
+def _sse_event(event: str, value: dict[str, object]) -> bytes:
+    """Encode one bounded single-line UTF-8 server-sent event."""
+    data = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    return f"event: {event}\ndata: {data}\n\n".encode()
+
+
+def _call_api_error(error: CallExecutionError) -> ApiError:
+    """Map one safe engine failure to its stable HTTP status."""
+    status_codes = {
+        "authentication_required": HTTPStatus.UNAUTHORIZED,
+        "permission_denied": HTTPStatus.FORBIDDEN,
+        "invalid_request": HTTPStatus.BAD_REQUEST,
+        "not_found": HTTPStatus.NOT_FOUND,
+        "conflict": HTTPStatus.CONFLICT,
+        "assignment_cycle": HTTPStatus.CONFLICT,
+        "provider_unavailable": HTTPStatus.SERVICE_UNAVAILABLE,
+        "upstream_failed": HTTPStatus.BAD_GATEWAY,
+        "content_unavailable": HTTPStatus.NOT_FOUND,
+        "rate_limited": HTTPStatus.TOO_MANY_REQUESTS,
+        "internal_error": HTTPStatus.INTERNAL_SERVER_ERROR,
+    }
+    return ApiError(
+        int(status_codes.get(error.code, HTTPStatus.INTERNAL_SERVER_ERROR)),
+        error.code if error.code in status_codes else "internal_error",
+        str(error)
+        if error.code in status_codes
+        else "The Router could not complete the operation.",
+        field=error.field,
+        reason=error.reason,
     )
 
 

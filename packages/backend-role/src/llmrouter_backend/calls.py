@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import math
@@ -61,8 +62,9 @@ type ProviderFailureClass = Literal[
 type OutputKind = Literal[
     "text_delta", "tool_call", "standard", "structured_json", "embedding", "media"
 ]
-type OutputValidator = Callable[[object], bool]
+type OutputValidator = Callable[[object], bool | Awaitable[bool]]
 type VisibleOutputWriter = Callable[[ProviderOutput], Awaitable[None]]
+type VisibleOutputStart = Callable[[str], Awaitable[None]]
 
 _API_NAME = re.compile(r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _INPUTS = frozenset({"text", "image"})
@@ -614,6 +616,7 @@ class CallExecutor:
         request: CallRequest,
         *,
         write_visible_output: VisibleOutputWriter | None = None,
+        start_visible_output: VisibleOutputStart | None = None,
     ) -> CallResult:
         """Run one connection-lifetime call for one authenticated service."""
         if not isinstance(actor, ServiceActor):
@@ -639,7 +642,9 @@ class CallExecutor:
                 )
             self._active += 1
         try:
-            return await self._execute(actor, request, write_visible_output)
+            return await self._execute(
+                actor, request, write_visible_output, start_visible_output
+            )
         finally:
             async with self._active_lock:
                 self._active -= 1
@@ -649,6 +654,7 @@ class CallExecutor:
         actor: ServiceActor,
         request: CallRequest,
         write_visible_output: VisibleOutputWriter | None,
+        start_visible_output: VisibleOutputStart | None,
     ) -> CallResult:
         call_id = self._uuid_factory()
         call_started = self._now()
@@ -716,6 +722,7 @@ class CallExecutor:
                         request,
                         deadline,
                         write_visible_output,
+                        start_visible_output,
                     )
                 except _AttemptCancelled as error:
                     attempt_failure = error.failure
@@ -1020,6 +1027,7 @@ class CallExecutor:
         request: CallRequest,
         deadline: float,
         write_visible_output: VisibleOutputWriter | None,
+        start_visible_output: VisibleOutputStart | None,
     ) -> _AttemptResult:
         route = candidate.route
         price = candidate.price
@@ -1067,13 +1075,18 @@ class CallExecutor:
                     # Retain every bounded provider event even when semantic
                     # validation rejects it and normal fallback continues.
                     try:
-                        _validate_output(request, event, outputs, tool_call_ids)
+                        await _validate_output(request, event, outputs, tool_call_ids)
                     finally:
                         outputs.append(event)
                     if request.streaming and event.kind in {"text_delta", "tool_call"}:
+                        first_visible = not visible
                         visible = True
                         if write_visible_output is not None:
                             try:
+                                if first_visible and start_visible_output is not None:
+                                    await start_visible_output(
+                                        route.provider_model_api_name
+                                    )
                                 await write_visible_output(event)
                             except asyncio.CancelledError:
                                 raise
@@ -1225,7 +1238,7 @@ class CallExecutor:
         return value
 
 
-def _validate_output(
+async def _validate_output(
     request: CallRequest,
     event: ProviderOutput,
     current: Sequence[ProviderOutput],
@@ -1263,10 +1276,14 @@ def _validate_output(
         raise ValueError("A standard model result must be one content list.")
     if event.kind == "structured_json":
         validator = request.output_validator
+        valid = False
+        if validator is not None:
+            validation = validator(value)
+            valid = await validation if inspect.isawaitable(validation) else validation
         if (
             len(event.content_json.encode("utf-8")) > 1_000_000
             or validator is None
-            or not validator(value)
+            or not valid
         ):
             raise ValueError("The structured provider result is invalid.")
     if event.kind == "embedding":
