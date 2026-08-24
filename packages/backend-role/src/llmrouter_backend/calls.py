@@ -69,6 +69,19 @@ _INPUTS = frozenset({"text", "image"})
 _OUTPUTS = frozenset(
     {"text", "structured_json", "embedding", "image", "video", "audio"}
 )
+_MEDIA_OUTPUT_TYPES = frozenset(
+    {
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+        "video/mp4",
+        "video/webm",
+        "audio/mpeg",
+        "audio/mp4",
+        "audio/ogg",
+        "audio/wav",
+    }
+)
 _CAPABILITIES = frozenset({"tool_calling", "streaming", "reasoning"})
 _COOLDOWN_FAILURES = frozenset(
     {
@@ -256,6 +269,11 @@ class ProviderAttemptRequest:
     route: ProviderRoute
     request_json: str
     credential: str | None
+    kind: CallKind
+    requirements: CallRequirements
+    streaming: bool
+    expected_embedding_count: int | None
+    input_media: tuple[diagnostics.CapturedMedia, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -264,6 +282,7 @@ class ProviderOutput:
 
     kind: OutputKind
     content_json: str
+    media_body: bytes | None = None
 
     def __post_init__(self) -> None:
         if self.kind not in {
@@ -282,9 +301,20 @@ class ProviderOutput:
         ):
             raise ValueError("The provider output is outside its safe bounds.")
         try:
-            _load_json(self.content_json)
+            value = _load_json(self.content_json)
         except (ValueError, RecursionError) as error:
             raise ValueError("The provider output is not valid JSON.") from error
+        if self.kind == "media":
+            if (
+                not isinstance(value, dict)
+                or type(value.get("size_bytes")) is not int
+                or self.media_body is None
+                or len(self.media_body) != value["size_bytes"]
+                or not 1 <= len(self.media_body) <= 1024 * 1024 * 1024
+            ):
+                raise ValueError("The provider media body is invalid.")
+        elif self.media_body is not None:
+            raise ValueError("Only a media result can contain a media body.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -331,6 +361,10 @@ class ProviderAdapter(Protocol):
     """Create one attempt and declare every unit that it can report."""
 
     usage_units: frozenset[str]
+
+    def usage_units_for(self, request: ProviderAttemptRequest, /) -> frozenset[str]:
+        """Declare the possible usage units for this exact operation."""
+        ...
 
     def attempt(
         self, request: ProviderAttemptRequest, /
@@ -785,7 +819,7 @@ class CallExecutor:
                 attempts=tuple(detailed_attempts),
                 tags=request.tags,
                 started_at=call_started,
-                media=request.media,
+                media=request.media + _captured_output_media(final_outputs),
                 accounting_call_id=call_id,
             ),
         )
@@ -882,7 +916,8 @@ class CallExecutor:
             candidates = tuple(
                 candidate
                 for route in routes
-                if (candidate := self._freeze_candidate(connection, route)) is not None
+                if (candidate := self._freeze_candidate(connection, route, request))
+                is not None
             )
             # Commit assignment evidence and release the shared catalog lock only
             # after route, price, and credential values are immutable in memory.
@@ -907,7 +942,10 @@ class CallExecutor:
             raise
 
     def _freeze_candidate(
-        self, connection: psycopg.Connection[Any], route: ProviderRoute
+        self,
+        connection: psycopg.Connection[Any],
+        route: ProviderRoute,
+        request: CallRequest,
     ) -> _FrozenCandidate | None:
         price = accounting.effective_price_snapshot(
             connection, route.provider_model_api_name
@@ -919,9 +957,15 @@ class CallExecutor:
             return _FrozenCandidate(
                 route, price, None, None, frozenset(), "unavailable"
             )
-        usage_units = frozenset(adapter.usage_units)
-        price_units = {item.unit for item in price.unit_prices}
-        if not usage_units <= price_units:
+        declaration_request = _provider_attempt_request(route, request, None)
+        usage_units = frozenset(adapter.usage_units_for(declaration_request))
+        if (
+            not usage_units
+            or not usage_units <= adapter.usage_units
+            or not usage_units <= _USAGE_UNITS
+        ):
+            raise ValueError("The provider adapter usage declaration is invalid.")
+        if not usage_units <= {item.unit for item in price.unit_prices}:
             return None
         try:
             credential = self._credential(connection, route)
@@ -978,8 +1022,8 @@ class CallExecutor:
         adapter = candidate.adapter
         if adapter is None:
             raise RuntimeError("An admitted candidate has no provider adapter.")
-        attempt_request = ProviderAttemptRequest(
-            route, request.request_json, candidate.credential
+        attempt_request = _provider_attempt_request(
+            route, request, candidate.credential
         )
         remaining = deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
@@ -1295,10 +1339,27 @@ def _valid_media_result(request: CallRequest, value: object) -> bool:
     output = request.requirements.required_output
     return (
         isinstance(value["media_type"], str)
-        and 1 <= len(value["media_type"]) <= 200
+        and value["media_type"] in _MEDIA_OUTPUT_TYPES
         and value["media_type"].startswith(f"{output}/")
         and type(value["size_bytes"]) is int
         and 1 <= value["size_bytes"] <= 1024 * 1024 * 1024
+    )
+
+
+def _provider_attempt_request(
+    route: ProviderRoute,
+    request: CallRequest,
+    credential: str | None,
+) -> ProviderAttemptRequest:
+    return ProviderAttemptRequest(
+        route=route,
+        request_json=request.request_json,
+        credential=credential,
+        kind=request.kind,
+        requirements=request.requirements,
+        streaming=request.streaming,
+        expected_embedding_count=request.expected_embedding_count,
+        input_media=request.media,
     )
 
 
@@ -1445,4 +1506,40 @@ def _load_json(value: str) -> object:
     def reject_constant(_value: str) -> object:
         raise ValueError("A JSON number must be finite.")
 
-    return json.loads(value, parse_constant=reject_constant)
+    result = json.loads(value, parse_constant=reject_constant)
+    if not _json_numbers_are_finite(result):
+        raise ValueError("A JSON number must be finite.")
+    return result
+
+
+def _captured_output_media(
+    outputs: Sequence[ProviderOutput],
+) -> tuple[diagnostics.CapturedMedia, ...]:
+    captured: list[diagnostics.CapturedMedia] = []
+    for output in outputs:
+        if output.kind != "media" or output.media_body is None:
+            continue
+        value = _load_json(output.content_json)
+        if (
+            isinstance(value, dict)
+            and isinstance(value.get("media_type"), str)
+            and value["media_type"] in _MEDIA_OUTPUT_TYPES
+        ):
+            captured.append(
+                diagnostics.CapturedMedia(
+                    output.media_body,
+                    cast("str", value["media_type"]),
+                    "output",
+                )
+            )
+    return tuple(captured)
+
+
+def _json_numbers_are_finite(value: object) -> bool:
+    if isinstance(value, float):
+        return math.isfinite(value)
+    if isinstance(value, list):
+        return all(_json_numbers_are_finite(item) for item in value)
+    if isinstance(value, dict):
+        return all(_json_numbers_are_finite(item) for item in value.values())
+    return True

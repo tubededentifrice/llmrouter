@@ -67,6 +67,10 @@ class ScriptedAdapter:
         self.credentials: list[str | None] = []
         self.requests: list[ProviderAttemptRequest] = []
 
+    def usage_units_for(self, _request: ProviderAttemptRequest, /) -> frozenset[str]:
+        """Use one configurable declaration for the scripted test operation."""
+        return self.usage_units
+
     async def attempt(
         self, request: ProviderAttemptRequest, /
     ) -> AsyncIterator[ProviderEvent]:
@@ -659,7 +663,7 @@ def test_detailed_log_keeps_each_buffered_fallback_response(
 
 
 def test_structured_embedding_and_media_validation_use_normal_fallback(
-    call_context: CallContext,
+    call_context: CallContext, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Reject provider-caused invalid values before success for each output family."""
     structured_adapter = ScriptedAdapter(
@@ -717,6 +721,16 @@ def test_structured_embedding_and_media_validation_use_normal_fallback(
     assert embedding_adapter.calls == ["embedding-a", "embedding-b"]
     assert result.provider_model_api_name == "embedding-b"
 
+    detailed_writes: list[diagnostics.DetailedLogWrite] = []
+
+    def capture_detailed(
+        _database_url: str,
+        _object_store: object,
+        value: diagnostics.DetailedLogWrite,
+    ) -> None:
+        detailed_writes.append(value)
+
+    monkeypatch.setattr(diagnostics, "write_detailed_log_best_effort", capture_detailed)
     for output in ("image", "video", "audio"):
         media_type = {
             "image": "image/png",
@@ -730,6 +744,7 @@ def test_structured_embedding_and_media_validation_use_normal_fallback(
                         ProviderOutput(
                             "media",
                             json.dumps({"media_type": media_type, "size_bytes": 8}),
+                            b"12345678",
                         ),
                         _completed(),
                     ]
@@ -755,6 +770,12 @@ def test_structured_embedding_and_media_validation_use_normal_fallback(
             )
         )
         assert result.provider_model_api_name == "media"
+    assert [item.media[-1].media_type for item in detailed_writes] == [
+        "image/png",
+        "video/mp4",
+        "audio/mpeg",
+    ]
+    assert all(item.media[-1].body == b"12345678" for item in detailed_writes)
 
 
 def test_actual_tools_images_and_bounds_filter_before_provider_work(
@@ -847,6 +868,49 @@ def test_unexpected_tool_output_fails_before_visible_output(
     assert delivered == []
 
 
+@pytest.mark.parametrize(
+    "limits",
+    [
+        CallLimits(maximum_output_json_bytes=10),
+        CallLimits(maximum_output_events=1),
+    ],
+    ids=["bytes", "events"],
+)
+def test_stream_output_bounds_are_cumulative_and_stop_fallback(
+    call_context: CallContext, limits: CallLimits
+) -> None:
+    """Count all visible events and stop the active chain when one bound is full."""
+    first = ProviderOutput("text_delta", '"aaaa"')
+    second = ProviderOutput("text_delta", '"bbbb"')
+    adapter = ScriptedAdapter(
+        {
+            "text-a": [[first, second, _completed()]],
+            "text-b": [[ProviderOutput("text_delta", '"unused"'), _completed()]],
+        }
+    )
+    delivered: list[ProviderOutput] = []
+
+    async def write(event: ProviderOutput) -> None:
+        delivered.append(event)
+
+    with pytest.raises(CallExecutionError) as failed:
+        asyncio.run(
+            call_context.executor(adapter, limits=limits).execute(
+                call_context.actors["alpha"],
+                _text_request(
+                    AssignmentSelector("workflow"),
+                    streaming=True,
+                    excluded=("plain",),
+                ),
+                write_visible_output=write,
+            )
+        )
+
+    assert failed.value.phase is CallFailurePhase.AFTER_VISIBLE_OUTPUT
+    assert adapter.calls == ["text-a"]
+    assert delivered == [first]
+
+
 def test_stream_tool_call_id_is_unique_without_fallback(
     call_context: CallContext,
 ) -> None:
@@ -901,6 +965,33 @@ def test_incomplete_declared_price_skips_provider_work(
         )
     assert unavailable.value.code == "provider_unavailable"
     assert adapter.calls == []
+
+
+def test_price_admission_uses_only_units_for_the_exact_operation(
+    call_context: CallContext,
+) -> None:
+    """Do not require a media price from one text operation on a shared adapter."""
+
+    class MultiOperationAdapter(ScriptedAdapter):
+        def usage_units_for(
+            self, _request: ProviderAttemptRequest, /
+        ) -> frozenset[str]:
+            return frozenset({"request"})
+
+    adapter = MultiOperationAdapter(
+        {"text-a": [[_standard(), _completed()]]},
+        usage_units=frozenset({"request", "image"}),
+    )
+    result = asyncio.run(
+        call_context.executor(adapter).execute(
+            call_context.actors["alpha"],
+            _text_request(ExactModelSelector("text-a")),
+        )
+    )
+
+    assert result.provider_model_api_name == "text-a"
+    assert result.usage == _usage()
+    assert adapter.calls == ["text-a"]
 
 
 def test_undeclared_failure_usage_has_safe_incomplete_cost_posture(
@@ -1122,6 +1213,7 @@ def test_uncertain_media_write_stops_fallback_and_records_one_attempt(
                     ProviderOutput(
                         "media",
                         '{"media_type":"image/png","size_bytes":8}',
+                        b"12345678",
                     ),
                     _completed(),
                 ]
