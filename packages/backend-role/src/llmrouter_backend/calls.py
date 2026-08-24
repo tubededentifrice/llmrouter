@@ -251,7 +251,8 @@ class CallRequest:
         if any(item.role != "input" for item in self.media):
             raise ValueError("A call request can contain only input media.")
         if any(
-            item.media_type not in {"image/jpeg", "image/png", "image/webp"}
+            type(item.body) is not bytes
+            or item.media_type not in {"image/jpeg", "image/png", "image/webp"}
             or not 1 <= len(item.body) <= 20 * 1024 * 1024
             for item in self.media
         ):
@@ -260,6 +261,16 @@ class CallRequest:
             self.requirements.input_image_sizes
         ):
             raise ValueError("The retained input image bytes do not match the call.")
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderOperation:
+    """Immutable provider-neutral facts for price and usage admission."""
+
+    kind: CallKind
+    requirements: CallRequirements
+    streaming: bool
+    expected_embedding_count: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -274,6 +285,16 @@ class ProviderAttemptRequest:
     streaming: bool
     expected_embedding_count: int | None
     input_media: tuple[diagnostics.CapturedMedia, ...]
+
+    @property
+    def operation(self) -> ProviderOperation:
+        """Return operation facts without request content or control values."""
+        return ProviderOperation(
+            self.kind,
+            self.requirements,
+            self.streaming,
+            self.expected_embedding_count,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -308,7 +329,7 @@ class ProviderOutput:
             if (
                 not isinstance(value, dict)
                 or type(value.get("size_bytes")) is not int
-                or self.media_body is None
+                or type(self.media_body) is not bytes
                 or len(self.media_body) != value["size_bytes"]
                 or not 1 <= len(self.media_body) <= 1024 * 1024 * 1024
             ):
@@ -362,7 +383,7 @@ class ProviderAdapter(Protocol):
 
     usage_units: frozenset[str]
 
-    def usage_units_for(self, request: ProviderAttemptRequest, /) -> frozenset[str]:
+    def usage_units_for(self, operation: ProviderOperation, /) -> frozenset[str]:
         """Declare the possible usage units for this exact operation."""
         ...
 
@@ -957,8 +978,7 @@ class CallExecutor:
             return _FrozenCandidate(
                 route, price, None, None, frozenset(), "unavailable"
             )
-        declaration_request = _provider_attempt_request(route, request, None)
-        usage_units = frozenset(adapter.usage_units_for(declaration_request))
+        usage_units = frozenset(adapter.usage_units_for(_provider_operation(request)))
         if (
             not usage_units
             or not usage_units <= adapter.usage_units
@@ -1360,6 +1380,15 @@ def _provider_attempt_request(
         streaming=request.streaming,
         expected_embedding_count=request.expected_embedding_count,
         input_media=request.media,
+    )
+
+
+def _provider_operation(request: CallRequest) -> ProviderOperation:
+    return ProviderOperation(
+        request.kind,
+        request.requirements,
+        request.streaming,
+        request.expected_embedding_count,
     )
 
 

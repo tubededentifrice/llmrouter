@@ -3,11 +3,14 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
+import inspect
 import json
-from dataclasses import fields, replace
-from typing import TYPE_CHECKING
+from dataclasses import FrozenInstanceError, fields, replace
+from typing import TYPE_CHECKING, Any, cast
 
+import llmrouter_backend.adapters.fake as fake_module
 import pytest
 from llmrouter_backend.adapters.fake import FakeAdapter
 from llmrouter_backend.calls import (
@@ -15,6 +18,7 @@ from llmrouter_backend.calls import (
     CallRequirements,
     ProviderAttemptRequest,
     ProviderCompleted,
+    ProviderOperation,
     ProviderOutput,
 )
 from llmrouter_backend.catalog import ProviderRoute
@@ -29,6 +33,7 @@ from .provider_adapter_conformance import (
     assert_cumulative_output_bound,
     assert_failure,
     assert_success,
+    assert_success_suite,
     capture_attempt,
 )
 
@@ -137,10 +142,14 @@ def _success_request(name: str) -> ProviderAttemptRequest:
             },
         )
     if name == "input_image":
-        image = CapturedMedia(b"safe image", "image/png", "input")
+        images = (
+            CapturedMedia(b"safe jpeg bytes", "image/jpeg", "input"),
+            CapturedMedia(b"safe png bytes", "image/png", "input"),
+            CapturedMedia(b"safe webp bytes", "image/webp", "input"),
+        )
         return _attempt(
             "fake-text-v1",
-            media=(image,),
+            media=images,
             body={"messages": [{"role": "user"}]},
         )
     if name == "embedding":
@@ -169,9 +178,123 @@ def test_fake_adapter_passes_each_common_success_case(case: SuccessCase) -> None
     """Use one fixture for each standard, stream, tool, JSON, image, and media case."""
     adapter = FakeAdapter()
     request = _success_request(case.name)
-    capture = asyncio.run(capture_attempt(adapter, request))
+    first = asyncio.run(capture_attempt(adapter, request))
+    second = asyncio.run(capture_attempt(adapter, request))
 
-    assert_success(adapter, request, capture, case, priced_usage_units=_PRICED_UNITS)
+    assert first == second
+    assert_success(adapter, request, first, case, priced_usage_units=_PRICED_UNITS)
+
+
+def test_fake_adapter_passes_the_complete_common_success_suite() -> None:
+    """Run the full reusable matrix through one entry point without omitted cases."""
+    asyncio.run(
+        assert_success_suite(
+            FakeAdapter(),
+            _success_request,
+            priced_usage_units=_PRICED_UNITS,
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "outputs"),
+    [
+        ("standard_text", (ProviderOutput("standard", "[]"),)),
+        (
+            "stream_text",
+            (
+                ProviderOutput("text_delta", '""'),
+                ProviderOutput("text_delta", '""'),
+            ),
+        ),
+        (
+            "buffered_tools",
+            (
+                ProviderOutput(
+                    "standard",
+                    '[{"type":"tool_call","id":"same","name":"first",'
+                    '"arguments_json":"{}"},{"type":"tool_call","id":"same",'
+                    '"name":"second","arguments_json":"{}"}]',
+                ),
+            ),
+        ),
+        (
+            "stream_tools",
+            (
+                ProviderOutput(
+                    "tool_call",
+                    '{"type":"tool_call","id":"same","name":"first",'
+                    '"arguments_json":"{}"}',
+                ),
+                ProviderOutput(
+                    "tool_call",
+                    '{"type":"tool_call","id":"same","name":"second",'
+                    '"arguments_json":"{}"}',
+                ),
+            ),
+        ),
+        ("structured_json", (ProviderOutput("structured_json", "[]"),)),
+        ("embedding", (ProviderOutput("embedding", "[[1]]"),)),
+        (
+            "image",
+            (
+                ProviderOutput(
+                    "media",
+                    '{"media_type":"image/gif","size_bytes":1}',
+                    b"x",
+                ),
+            ),
+        ),
+    ],
+)
+def test_common_fixture_rejects_incomplete_operation_results(
+    name: str, outputs: tuple[ProviderOutput, ...]
+) -> None:
+    """Reject each malformed result family even when event names are correct."""
+    request = _success_request(name)
+    adapter = FakeAdapter()
+    good = asyncio.run(capture_attempt(adapter, request))
+    completion = good.events[-1]
+    assert isinstance(completion, ProviderCompleted)
+    broken = replace(good, events=(*outputs, completion))
+    case = next(item for item in SUCCESS_CASES if item.name == name)
+
+    with pytest.raises(AssertionError):
+        assert_success(
+            adapter,
+            request,
+            broken,
+            case,
+            priced_usage_units=_PRICED_UNITS,
+        )
+
+
+def test_fake_adapter_has_no_clock_random_secret_or_network_dependency() -> None:
+    """Prove that the fake source imports no environment or external-I/O facility."""
+    tree = ast.parse(inspect.getsource(fake_module))
+    imported_roots = {
+        alias.name.partition(".")[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    } | {
+        node.module.partition(".")[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+    assert imported_roots.isdisjoint(
+        {
+            "datetime",
+            "httpx",
+            "os",
+            "random",
+            "requests",
+            "secrets",
+            "socket",
+            "time",
+            "urllib",
+        }
+    )
 
 
 def test_fake_outputs_are_deterministic_ordered_and_secret_free() -> None:
@@ -284,7 +407,11 @@ def test_fake_adapter_marks_after_visible_and_uncertain_media_failures() -> None
         adapter,
         uncertain_request,
         uncertain,
-        FailureCase("transport", visible_before_failure=False),
+        FailureCase(
+            "transport",
+            visible_before_failure=False,
+            phase=CallFailurePhase.UNCERTAIN,
+        ),
         priced_usage_units=_PRICED_UNITS,
     )
     assert uncertain.failure is not None
@@ -340,6 +467,64 @@ def test_fake_adapter_cancellation_has_no_late_result_or_changed_repeat() -> Non
     asyncio.run(run_case())
 
 
+def test_fake_waiting_attempt_obeys_the_caller_timeout() -> None:
+    """Let the call boundary stop a waiting fake without a fake-owned clock."""
+
+    async def run_case() -> None:
+        with pytest.raises(TimeoutError):
+            async with asyncio.timeout(0.01):
+                await capture_attempt(FakeAdapter(), _attempt("fake-cancel-v1"))
+
+    asyncio.run(run_case())
+
+
+@pytest.mark.parametrize(
+    ("count", "dimension"),
+    [(1, 1), (32, 1536)],
+    ids=["minimum", "maximum-fake-catalog-batch"],
+)
+def test_fake_embedding_batch_and_dimension_bounds(count: int, dimension: int) -> None:
+    """Return one finite vector in order for each bounded batch input."""
+    request = _attempt(
+        "fake-embedding-v1",
+        kind="embedding",
+        output="embedding",
+        embedding_dimension=dimension,
+        embedding_count=count,
+        body={"inputs": [f"item-{index}" for index in range(count)]},
+    )
+    case = next(item for item in SUCCESS_CASES if item.name == "embedding")
+    capture = asyncio.run(capture_attempt(FakeAdapter(), request))
+
+    assert_success(
+        FakeAdapter(), request, capture, case, priced_usage_units=_PRICED_UNITS
+    )
+    output = cast("ProviderOutput", capture.events[0])
+    vectors = json.loads(output.content_json)
+    assert [vector[0] for vector in vectors] == list(range(count))
+
+
+def test_fake_embedding_rejects_a_body_count_mismatch() -> None:
+    """Do not create missing or extra embedding results from adapter metadata."""
+    request = _attempt(
+        "fake-embedding-v1",
+        kind="embedding",
+        output="embedding",
+        embedding_dimension=3,
+        embedding_count=2,
+        body={"inputs": ["only-one"]},
+    )
+    capture = asyncio.run(capture_attempt(FakeAdapter(), request))
+
+    assert_failure(
+        FakeAdapter(),
+        request,
+        capture,
+        FailureCase("incompatible", visible_before_failure=False),
+        priced_usage_units=_PRICED_UNITS,
+    )
+
+
 def test_common_fixture_detects_cumulative_output_bounds() -> None:
     """Count all stream events instead of checking each event in isolation."""
     capture = asyncio.run(
@@ -364,6 +549,7 @@ def test_common_fixture_detects_cumulative_output_bounds() -> None:
         "not-json",
         '{"messages":[NaN]}',
         '{"messages":[1e999]}',
+        "[" * 2_000 + "0" + "]" * 2_000,
         '{"messages":[],"agent_run":{"id":"removed"}}',
         '{"messages":[],"durable_request":true}',
         '{"messages":[],"openai_compatible":true}',
@@ -413,10 +599,18 @@ def test_fake_adapter_rejects_input_and_output_bound_failures() -> None:
         ProviderOutput("embedding", "[NaN]")
     with pytest.raises(ValueError, match="valid JSON"):
         ProviderOutput("embedding", "[[1e999]]")
+    with pytest.raises(ValueError, match="valid JSON"):
+        ProviderOutput("embedding", "[" * 2_000 + "0" + "]" * 2_000)
     with pytest.raises(ValueError, match="safe bounds"):
         ProviderOutput("standard", json.dumps("x" * 5_000_000))
     with pytest.raises(ValueError, match="media body"):
         ProviderOutput("media", '{"media_type":"image/png","size_bytes":2}', b"one")
+    with pytest.raises(ValueError, match="media body"):
+        ProviderOutput(
+            "media",
+            '{"media_type":"image/png","size_bytes":3}',
+            cast("Any", bytearray(b"one")),
+        )
 
 
 def test_adapter_boundary_has_only_current_call_fields_and_operations() -> None:
@@ -431,6 +625,20 @@ def test_adapter_boundary_has_only_current_call_fields_and_operations() -> None:
         "expected_embedding_count",
         "input_media",
     ]
+    operation = _success_request("input_image").operation
+    assert isinstance(operation, ProviderOperation)
+    assert [field.name for field in fields(ProviderOperation)] == [
+        "kind",
+        "requirements",
+        "streaming",
+        "expected_embedding_count",
+    ]
+    for control in ("credential", "request_json", "input_media", "route"):
+        assert not hasattr(operation, control)
+    with pytest.raises(FrozenInstanceError):
+        operation.streaming = True  # type: ignore[misc]
+    with pytest.raises(FrozenInstanceError):
+        operation.requirements.required_output = "image"  # type: ignore[misc]
     adapter = FakeAdapter()
     for removed in (
         "run_agent",

@@ -29,6 +29,7 @@ from llmrouter_backend.calls import (
     ProviderCooldowns,
     ProviderEvent,
     ProviderFailureError,
+    ProviderOperation,
     ProviderOutput,
 )
 from llmrouter_backend.database import migrate
@@ -67,7 +68,7 @@ class ScriptedAdapter:
         self.credentials: list[str | None] = []
         self.requests: list[ProviderAttemptRequest] = []
 
-    def usage_units_for(self, _request: ProviderAttemptRequest, /) -> frozenset[str]:
+    def usage_units_for(self, _operation: ProviderOperation, /) -> frozenset[str]:
         """Use one configurable declaration for the scripted test operation."""
         return self.usage_units
 
@@ -973,9 +974,7 @@ def test_price_admission_uses_only_units_for_the_exact_operation(
     """Do not require a media price from one text operation on a shared adapter."""
 
     class MultiOperationAdapter(ScriptedAdapter):
-        def usage_units_for(
-            self, _request: ProviderAttemptRequest, /
-        ) -> frozenset[str]:
+        def usage_units_for(self, _operation: ProviderOperation, /) -> frozenset[str]:
             return frozenset({"request"})
 
     adapter = MultiOperationAdapter(
@@ -1116,6 +1115,13 @@ def test_admission_atomically_freezes_route_price_and_credential(
             )
             == "provider-secret-replaced"
         )
+        log = connection.execute(
+            "SELECT request_json, response_json, attempts FROM router.request_logs"
+        ).fetchone()
+        assert log is not None
+        serialized_log = json.dumps(log, default=str)
+        assert "provider-secret-control" not in serialized_log
+        assert "provider-secret-replaced" not in serialized_log
 
 
 def test_cooldown_uses_exact_three_failure_rolling_window_and_restart_reset() -> None:

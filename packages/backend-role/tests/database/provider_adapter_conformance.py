@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -13,9 +14,10 @@ from llmrouter_backend.calls import (
     ProviderFailureError,
     ProviderOutput,
 )
+from opendle import CallFailurePhase
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +43,7 @@ class FailureCase:
 
     failure_class: str
     visible_before_failure: bool
+    phase: CallFailurePhase = CallFailurePhase.BEFORE_VISIBLE_OUTPUT
 
 
 SUCCESS_CASES = (
@@ -159,6 +162,29 @@ async def capture_attempt(
     return AttemptCapture(tuple(events), None)
 
 
+async def assert_success_suite(
+    adapter: ProviderAdapter,
+    request_factory: Callable[[str], ProviderAttemptRequest],
+    *,
+    priced_usage_units: frozenset[str],
+    cases: Sequence[SuccessCase] = SUCCESS_CASES,
+) -> None:
+    """Run every named operation so one incomplete adapter cannot pass by omission."""
+    names = [case.name for case in cases]
+    assert names
+    assert len(names) == len(set(names))
+    for case in cases:
+        request = request_factory(case.name)
+        capture = await capture_attempt(adapter, request)
+        assert_success(
+            adapter,
+            request,
+            capture,
+            case,
+            priced_usage_units=priced_usage_units,
+        )
+
+
 def assert_success(
     adapter: ProviderAdapter,
     request: ProviderAttemptRequest,
@@ -178,6 +204,7 @@ def assert_success(
         event for event in capture.events if isinstance(event, ProviderOutput)
     )
     assert tuple(output.kind for output in outputs) == case.expected_output_kinds
+    _assert_operation_outputs(request, outputs, case)
     for output in outputs:
         if output.kind == "media":
             value = json.loads(output.content_json)
@@ -191,7 +218,7 @@ def assert_success(
     units = tuple(item.unit for item in completion.usage)
     assert len(units) == len(set(units))
     assert frozenset(units) == case.expected_usage_units
-    declared = adapter.usage_units_for(request)
+    declared = adapter.usage_units_for(request.operation)
     assert declared == case.expected_usage_units
     assert frozenset(units) <= declared <= adapter.usage_units
     assert declared <= priced_usage_units
@@ -211,6 +238,8 @@ def assert_failure(
     """Check one safe failure, visibility boundary, and partial usage declaration."""
     assert capture.failure is not None
     assert capture.failure.failure_class == expected.failure_class
+    assert capture.failure.phase is expected.phase
+    assert str(capture.failure) == "The provider attempt failed."
     visible = any(
         isinstance(event, ProviderOutput) and event.kind in {"text_delta", "tool_call"}
         for event in capture.events
@@ -219,12 +248,145 @@ def assert_failure(
     assert all(not isinstance(event, ProviderCompleted) for event in capture.events)
     units = tuple(item.unit for item in capture.failure.usage)
     assert len(units) == len(set(units))
-    declared = adapter.usage_units_for(request)
+    declared = adapter.usage_units_for(request.operation)
     assert frozenset(units) <= declared <= adapter.usage_units
     assert declared <= priced_usage_units
     assert all(
         item.quantity.is_finite() and item.quantity >= 0
         for item in capture.failure.usage
+    )
+
+
+def _assert_operation_outputs(
+    request: ProviderAttemptRequest,
+    outputs: Sequence[ProviderOutput],
+    case: SuccessCase,
+) -> None:
+    values = [_load_finite_json(output.content_json) for output in outputs]
+    if case.name in {"standard_text", "input_image"}:
+        assert len(values) == 1
+        _assert_standard_content(values[0], expect_tools=False)
+        if case.name == "input_image":
+            assert {item.media_type for item in request.input_media} == {
+                "image/jpeg",
+                "image/png",
+                "image/webp",
+            }
+            assert all(
+                type(item.body) is bytes and item.body for item in request.input_media
+            )
+        return
+    if case.name == "stream_text":
+        assert values
+        assert all(isinstance(value, str) and value for value in values)
+        return
+    if case.name in {"buffered_tools", "stream_tools"}:
+        tools = values[0] if case.name == "buffered_tools" else values
+        assert isinstance(tools, list)
+        _assert_tool_calls(tools)
+        body = _load_finite_json(request.request_json)
+        assert isinstance(body, dict)
+        definitions = body.get("tools")
+        assert isinstance(definitions, list)
+        assert [tool["name"] for tool in tools] == [
+            item["name"] for item in definitions
+        ]
+        return
+    if case.name == "structured_json":
+        assert len(values) == 1
+        assert isinstance(values[0], dict)
+        return
+    if case.name == "embedding":
+        assert len(values) == 1
+        assert isinstance(values[0], list)
+        vectors = values[0]
+        assert len(vectors) == request.expected_embedding_count
+        dimension = request.requirements.embedding_dimension
+        assert all(
+            isinstance(vector, list)
+            and len(vector) == dimension
+            and all(_finite_number(item) for item in vector)
+            for vector in vectors
+        )
+        return
+    if case.name in {"image", "video", "audio"}:
+        assert len(values) == 1
+        assert isinstance(values[0], dict)
+        metadata = values[0]
+        media_types = {
+            "image": {"image/jpeg", "image/png", "image/webp"},
+            "video": {"video/mp4", "video/webm"},
+            "audio": {"audio/mpeg", "audio/mp4", "audio/ogg", "audio/wav"},
+        }
+        assert set(metadata) == {"media_type", "size_bytes"}
+        assert isinstance(metadata["media_type"], str)
+        assert metadata["media_type"] in media_types[case.name]
+        assert type(metadata["size_bytes"]) is int
+        assert metadata["size_bytes"] > 0
+        assert type(outputs[0].media_body) is bytes
+        assert len(outputs[0].media_body) == metadata["size_bytes"]
+        return
+    message = f"The conformance fixture has no semantic check for {case.name}."
+    raise AssertionError(message)
+
+
+def _assert_standard_content(value: object, *, expect_tools: bool) -> None:
+    assert isinstance(value, list)
+    assert value
+    if expect_tools:
+        _assert_tool_calls(value)
+        return
+    assert all(
+        isinstance(item, dict)
+        and set(item) == {"type", "text"}
+        and item["type"] == "text"
+        and isinstance(item["text"], str)
+        for item in value
+    )
+
+
+def _assert_tool_calls(values: Sequence[object]) -> None:
+    ids: list[str] = []
+    for value in values:
+        assert isinstance(value, dict)
+        assert set(value) == {"type", "id", "name", "arguments_json"}
+        assert value["type"] == "tool_call"
+        assert all(
+            isinstance(value[field], str) and value[field]
+            for field in ("id", "name", "arguments_json")
+        )
+        arguments = _load_finite_json(value["arguments_json"])
+        assert isinstance(arguments, dict)
+        ids.append(value["id"])
+    assert len(ids) == len(set(ids))
+
+
+def _load_finite_json(value: str) -> object:
+    def reject_constant(_value: str) -> None:
+        raise ValueError
+
+    parsed = json.loads(value, parse_constant=reject_constant)
+    assert _finite_json(parsed)
+    return parsed
+
+
+def _finite_json(value: object) -> bool:
+    if isinstance(value, float):
+        return math.isfinite(value)
+    if isinstance(value, list):
+        return all(_finite_json(item) for item in value)
+    if isinstance(value, dict):
+        return all(
+            isinstance(key, str) and _finite_json(item) for key, item in value.items()
+        )
+    return value is None or isinstance(value, str | int | bool)
+
+
+def _finite_number(value: object) -> bool:
+    return (
+        not isinstance(value, bool)
+        and isinstance(value, int | float)
+        and math.isfinite(value)
     )
 
 

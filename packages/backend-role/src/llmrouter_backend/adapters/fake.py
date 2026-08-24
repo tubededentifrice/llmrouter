@@ -16,6 +16,7 @@ from llmrouter_backend.calls import (
     ProviderCompleted,
     ProviderFailureClass,
     ProviderFailureError,
+    ProviderOperation,
     ProviderOutput,
 )
 
@@ -83,9 +84,9 @@ class FakeAdapter:
 
     usage_units = _USAGE_UNITS
 
-    def usage_units_for(self, request: ProviderAttemptRequest, /) -> frozenset[str]:
+    def usage_units_for(self, operation: ProviderOperation, /) -> frozenset[str]:
         """Return only units that the selected fake operation can report."""
-        return frozenset(item.unit for item in _usage(request))
+        return frozenset(item.unit for item in _usage(operation))
 
     async def attempt(
         self, request: ProviderAttemptRequest, /
@@ -152,11 +153,11 @@ async def _normal_events(
         return
     if model == "fake-embedding-v1":
         yield _embedding_output(request)
-        yield ProviderCompleted(_usage(request))
+        yield ProviderCompleted(_usage(request.operation))
         return
     if model == "fake-media-v1":
         yield _media_output(request)
-        yield ProviderCompleted(_usage(request))
+        yield ProviderCompleted(_usage(request.operation))
         return
     raise _failure(_INCOMPATIBLE)
 
@@ -168,14 +169,15 @@ async def _cumulative_output_events(
         raise _failure(_INCOMPATIBLE)
     for value in ("one", "two", "three"):
         yield ProviderOutput("text_delta", json.dumps(value * 32))
-    yield ProviderCompleted(_usage(request))
+    yield ProviderCompleted(_usage(request.operation))
 
 
 def _request_body(request: ProviderAttemptRequest) -> dict[str, object]:
     if tuple(len(item.body) for item in request.input_media) != (
         request.requirements.input_image_sizes
     ) or any(
-        item.role != "input"
+        type(item.body) is not bytes
+        or item.role != "input"
         or item.media_type not in {"image/jpeg", "image/png", "image/webp"}
         for item in request.input_media
     ):
@@ -200,8 +202,14 @@ def _request_body(request: ProviderAttemptRequest) -> dict[str, object]:
         raise _failure(_INCOMPATIBLE)
     if request.kind == "model" and not isinstance(body.get("messages"), list):
         raise _failure(_INCOMPATIBLE)
-    if request.kind == "embedding" and not isinstance(body.get("inputs"), list):
-        raise _failure(_INCOMPATIBLE)
+    if request.kind == "embedding":
+        inputs = body.get("inputs")
+        if (
+            not isinstance(inputs, list)
+            or len(inputs) != request.expected_embedding_count
+            or any(not isinstance(item, str) or not item for item in inputs)
+        ):
+            raise _failure(_INCOMPATIBLE)
     if (
         request.kind == "media"
         and body.get("kind") != request.requirements.required_output
@@ -243,7 +251,7 @@ async def _text_events(
         if request.streaming:
             raise _failure(_INCOMPATIBLE)
         yield ProviderOutput("structured_json", '{"result":"fake"}')
-        yield ProviderCompleted(_usage(request))
+        yield ProviderCompleted(_usage(request.operation))
         return
 
     tools = body.get("tools", [])
@@ -283,7 +291,7 @@ async def _text_events(
         else:
             parts = [{"type": "text", "text": "Fake response."}]
         yield ProviderOutput("standard", json.dumps(parts, separators=(",", ":")))
-    yield ProviderCompleted(_usage(request))
+    yield ProviderCompleted(_usage(request.operation))
 
 
 def _tool_names(tools: Sequence[object]) -> tuple[str, ...]:
@@ -347,15 +355,25 @@ async def _duplicate_tool_events(
         yield ProviderOutput(
             "standard", json.dumps([tool, tool], separators=(",", ":"))
         )
-    yield ProviderCompleted(_usage(request))
+    yield ProviderCompleted(_usage(request.operation))
 
 
-def _usage(request: ProviderAttemptRequest) -> tuple[UsageAmount, ...]:
+def _usage(operation: ProviderOperation) -> tuple[UsageAmount, ...]:
     common = (
         UsageAmount("request", Decimal(1)),
         UsageAmount("provider_unit", Decimal("0.5")),
     )
-    output = request.requirements.required_output
+    output = operation.requirements.required_output
+    expected_kind = {
+        "text": "model",
+        "structured_json": "model",
+        "embedding": "embedding",
+        "image": "media",
+        "video": "media",
+        "audio": "media",
+    }.get(output)
+    if operation.kind != expected_kind:
+        raise _failure(_INCOMPATIBLE)
     if output in {"text", "structured_json"}:
         return (
             UsageAmount("input_token", Decimal(4)),
