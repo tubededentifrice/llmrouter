@@ -25,7 +25,7 @@ from starlette.exceptions import HTTPException as StarletteHttpException
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from llmrouter_backend import accounting, assignments, catalog
+from llmrouter_backend import accounting, assignments, catalog, openrouter_catalog
 from llmrouter_backend.adapters import (
     CompositeProviderAdapter,
     FakeAdapter,
@@ -111,6 +111,10 @@ from llmrouter_backend.models import (
     ModelImportResult,
     ModelPage,
     ModelWrite,
+    OpenRouterModelImportPreview,
+    OpenRouterModelImportPreviewRequest,
+    OpenRouterModelImportRequest,
+    OpenRouterModelImportResult,
     PageInfo,
     PriceSyncRequest,
     PriceSyncResult,
@@ -262,6 +266,8 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
     object_store: ObjectStore | None = None,
     price_sources: dict[str, PriceSource] | None = None,
     openrouter_price_transport: httpx.BaseTransport | None = None,
+    openrouter_catalog_transport: httpx.BaseTransport | None = None,
+    openrouter_catalog_clock: Callable[[], float] | None = None,
     wavespeed_media_transport: httpx.AsyncBaseTransport | None = None,
     call_executor: CallExecutor | None = None,
 ) -> FastAPI:
@@ -335,6 +341,8 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
         else accounting.default_price_sources(openrouter_price_transport)
     )
     application.state.price_sources = price_source_values
+    application.state.openrouter_catalog_transport = openrouter_catalog_transport
+    application.state.openrouter_catalog_clock = openrouter_catalog_clock
     configured_call_database_url = database_url or os.environ.get(
         "LLMROUTER_DATABASE_URL"
     )
@@ -494,11 +502,11 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
             database, session_token=session_token, control_keys=controls
         )
 
-    def health_administrator_actor(
+    def detached_administrator_actor(
         request: Request,
         controls: ControlKeys = Depends(control_keys),
     ) -> AdministratorActor:
-        """Authenticate health access without holding a dependency connection."""
+        """Authenticate an administrator without holding a later-work connection."""
         session_token = _control_cookie(request, _ADMINISTRATOR_COOKIE)
         if session_token is None:
             raise authentication_required()
@@ -2095,6 +2103,89 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
         )
 
     @application.post(
+        "/v1/admin/openrouter-model-imports/preview",
+        response_model=OpenRouterModelImportPreview,
+        response_model_exclude_none=True,
+    )
+    def admin_preview_openrouter_model_import(
+        body: OpenRouterModelImportPreviewRequest,
+        request: Request,
+        actor: AdministratorActor = Depends(detached_administrator_actor),
+        controls: ControlKeys = Depends(control_keys),
+    ) -> OpenRouterModelImportPreview:
+        """Fetch without a database slot, then project one short current snapshot."""
+        _require_browser_write(request, actor, controls)
+        transport = cast(
+            "httpx.BaseTransport | None",
+            request.app.state.openrouter_catalog_transport,
+        )
+        clock = cast(
+            "Callable[[], float] | None", request.app.state.openrouter_catalog_clock
+        )
+        if clock is None:
+            proposal = openrouter_catalog.prepare_openrouter_model_preview(
+                body.model_id_or_url, transport=transport
+            )
+        else:
+            proposal = openrouter_catalog.prepare_openrouter_model_preview(
+                body.model_id_or_url,
+                transport=transport,
+                monotonic_clock=clock,
+            )
+        configured_url = request.app.state.database_url or os.environ.get(
+            "LLMROUTER_DATABASE_URL"
+        )
+        if configured_url is None:
+            raise ApiError(
+                500,
+                "internal_error",
+                "The Router could not complete the operation.",
+            )
+        with database_connections.connect(
+            configured_url,
+            connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
+            row_factory=dict_row,
+            options=_database_timeout_options(),
+        ) as database:
+            return openrouter_catalog.project_openrouter_model_preview(
+                database, proposal
+            )
+
+    @application.post(
+        "/v1/admin/openrouter-model-imports",
+        response_model=OpenRouterModelImportResult,
+        response_model_exclude_none=True,
+        status_code=HTTPStatus.CREATED,
+    )
+    def admin_import_openrouter_model(
+        body: OpenRouterModelImportRequest,
+        request: Request,
+        actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+        controls: ControlKeys = Depends(control_keys),
+    ) -> OpenRouterModelImportResult:
+        """Create the exact reviewed model and selected mappings atomically."""
+        _require_browser_write(request, actor, controls)
+        result = cast(
+            "tuple[dict[str, Any], list[dict[str, Any]]]",
+            catalog.configuration_change(
+                database,
+                actor,
+                action="openrouter_model_import.apply",
+                resource_type="model_import",
+                resource_api_name=body.model.api_name,
+                operation=lambda: openrouter_catalog.import_reviewed_openrouter_model(
+                    database, body
+                ),
+            ),
+        )
+        return OpenRouterModelImportResult(
+            source_model_id=body.source_model_id,
+            model=Model.model_validate(result[0]),
+            provider_models=[ProviderModel.model_validate(item) for item in result[1]],
+        )
+
+    @application.post(
         "/v1/admin/model-imports",
         response_model=ModelImportResult,
         response_model_exclude_none=True,
@@ -2301,7 +2392,7 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
     )
     def admin_health(
         request: Request,
-        _actor: AdministratorActor = Depends(health_administrator_actor),
+        _actor: AdministratorActor = Depends(detached_administrator_actor),
         objects: ObjectStore | None = Depends(retained_objects),
     ) -> AdministratorHealth:
         configured_url = request.app.state.database_url or os.environ.get(

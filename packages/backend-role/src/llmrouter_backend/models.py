@@ -26,6 +26,21 @@ OutputModality = Literal[
 ]
 ModelCapability = Literal["tool_calling", "streaming", "reasoning"]
 ReasoningLevel = Literal["none", "low", "medium", "high"]
+OpenRouterSupportedConstraint = Literal[
+    "maximum_output_tokens",
+    "temperature",
+    "top_p",
+    "top_k",
+    "min_p",
+    "seed",
+    "stop",
+    "frequency_penalty",
+    "presence_penalty",
+    "repetition_penalty",
+    "logit_bias",
+    "logprobs",
+    "top_logprobs",
+]
 ObservedRequirement = Literal[
     "text_input",
     "image_input",
@@ -279,8 +294,14 @@ class ProviderPage(ClosedModel):
 
 
 class ModelConstraints(ClosedModel):
-    """Bounded embedding and media limits."""
+    """Bounded model, embedding, and media limits."""
 
+    max_context_tokens: int | None = Field(
+        default=None, strict=True, ge=1, le=2_147_483_647
+    )
+    max_output_tokens: int | None = Field(
+        default=None, strict=True, ge=1, le=2_147_483_647
+    )
     embedding_dimensions: list[EmbeddingDimension] | None = Field(
         default=None, min_length=1, max_length=64
     )
@@ -557,6 +578,97 @@ class ModelImportResult(ClosedModel):
 
     models: list[Model]
     provider_models: list[ProviderModel]
+
+
+class OpenRouterModelImportPreviewRequest(ClosedModel):
+    """Select one exact public OpenRouter model."""
+
+    model_id_or_url: str = Field(min_length=1, max_length=512)
+
+
+class OpenRouterReasoningPreview(ClosedModel):
+    """Exact reasoning facts that the public catalog supplies."""
+
+    supported: bool
+    mandatory: bool | None = None
+    source_configuration_available: bool
+    default_enabled: bool | None = None
+    default_effort: str | None = Field(default=None, min_length=1, max_length=64)
+    supported_efforts: list[str] | None = Field(default=None, max_length=16)
+    supports_max_tokens: bool | None = None
+
+
+class OpenRouterImportIssue(ClosedModel):
+    """One safe source-to-native mapping limit."""
+
+    code: Literal[
+        "display_name_shortened",
+        "input_modality_unsupported",
+        "output_modality_unsupported",
+        "embedding_dimensions_unknown",
+        "media_duration_unknown",
+        "reasoning_mapping_incomplete",
+        "price_unit_unsupported",
+        "source_price_zero_omitted",
+        "conditional_price_unsupported",
+        "router_input_limits_applied",
+    ]
+    field: str = Field(min_length=1, max_length=100)
+    source_value: str | None = Field(default=None, min_length=1, max_length=200)
+    message: str = Field(min_length=1, max_length=500)
+
+
+class OpenRouterImportConflict(ClosedModel):
+    """One current resource that blocks create-only confirmation."""
+
+    kind: Literal["model", "provider_model"]
+    api_name: str = Field(pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+    provider_api_name: str | None = Field(
+        default=None, pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+    )
+    message: str = Field(min_length=1, max_length=500)
+
+
+class OpenRouterProviderModelOption(ClosedModel):
+    """One existing global OpenRouter connection and its native proposal."""
+
+    provider_api_name: str = Field(pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+    provider_display_name: str = Field(min_length=1, max_length=200)
+    provider_enabled: bool
+    selectable: bool
+    unavailable_reason: str | None = Field(default=None, min_length=1, max_length=500)
+    provider_model: ProviderModelWrite
+
+
+class OpenRouterModelImportPreview(ClosedModel):
+    """One complete no-write OpenRouter create proposal."""
+
+    source_model_id: str = Field(min_length=3, max_length=240)
+    model: ModelWrite
+    reviewed_price: Price | None = None
+    reasoning: OpenRouterReasoningPreview
+    supported_constraints: list[OpenRouterSupportedConstraint] = Field(max_length=13)
+    provider_options: list[OpenRouterProviderModelOption] = Field(max_length=200)
+    conflicts: list[OpenRouterImportConflict] = Field(max_length=202)
+    issues: list[OpenRouterImportIssue] = Field(max_length=64)
+    can_confirm: bool
+
+
+class OpenRouterModelImportRequest(ClosedModel):
+    """Confirm exact reviewed native OpenRouter values without a refetch."""
+
+    source_model_id: str = Field(min_length=3, max_length=240)
+    model: ModelWrite
+    reviewed_price: Price | None = None
+    provider_models: list[ProviderModelWrite] = Field(min_length=1, max_length=200)
+
+
+class OpenRouterModelImportResult(ClosedModel):
+    """Return the complete safe result of one atomic OpenRouter import."""
+
+    source_model_id: str = Field(min_length=3, max_length=240)
+    model: Model
+    provider_models: list[ProviderModel] = Field(min_length=1, max_length=200)
 
 
 class ActivityEvent(BaseModel):

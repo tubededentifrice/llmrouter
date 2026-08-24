@@ -55,6 +55,8 @@ operations:
   adminDeleteModel: {actor: administrator, permission: model.write}
   adminPreviewModelImport: {actor: administrator, permission: model.import}
   adminImportModels: {actor: administrator, permission: model.import}
+  adminPreviewOpenRouterModelImport: {actor: administrator, permission: model.import}
+  adminImportOpenRouterModel: {actor: administrator, permission: model.import}
   adminListProviderModels: {actor: administrator, permission: provider_model.read}
   adminCreateProviderModel: {actor: administrator, permission: provider_model.write}
   adminGetProviderModel: {actor: administrator, permission: provider_model.read}

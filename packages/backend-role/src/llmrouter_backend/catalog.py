@@ -127,19 +127,6 @@ _CATALOGS: dict[str, tuple[ModelImportCandidate, ...]] = {
             ),
         ),
     ),
-    "openrouter": (
-        ModelImportCandidate(
-            catalog_key="openrouter-text",
-            display_name="OpenRouter text model",
-            provider_model_name="openrouter-text",
-            input_modalities=["text", "image"],
-            output_modalities=["text", "structured_json"],
-            capabilities=["tool_calling", "streaming", "reasoning"],
-            constraints=ModelConstraints(
-                max_input_images=8, max_input_image_bytes=20 * 1024 * 1024
-            ),
-        ),
-    ),
     "wavespeed": (
         ModelImportCandidate(
             catalog_key="wavespeed-image",
@@ -1116,7 +1103,7 @@ def _validate_constraint_applicability(
 def _applicable_constraints(
     constraints: dict[str, Any], inputs: Sequence[str], outputs: Sequence[str]
 ) -> dict[str, Any]:
-    applicable: set[str] = set()
+    applicable: set[str] = {"max_context_tokens", "max_output_tokens"}
     if "image" in inputs:
         applicable.update({"max_input_images", "max_input_image_bytes"})
     if "embedding" in outputs:
@@ -1129,6 +1116,11 @@ def _applicable_constraints(
 def _lock_catalog_write(connection: Connection[Any]) -> None:
     """Serialize dependent current-state writes in a deadlock-safe order."""
     connection.execute("SELECT pg_advisory_xact_lock(%s)", (_CATALOG_WRITE_LOCK,))
+
+
+def lock_catalog_write(connection: Connection[Any]) -> None:
+    """Expose the shared serialization order to an atomic catalog workflow."""
+    _lock_catalog_write(connection)
 
 
 def _normalized_provider_model(

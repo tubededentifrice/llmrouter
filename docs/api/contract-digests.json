@@ -10,7 +10,7 @@
     },
     {
       "path": "docs/api/openapi.yaml",
-      "sha256": "8145f779c656c2a3a74f22724151f554e5e62b706a29a9e07b0bd8fe20684bd8"
+      "sha256": "77fe3c9c462303c8b544b2a34cb9d24d445d1900a274e46b512b9a9ef6b9e37a"
     },
     {
       "path": "docs/api/stream-protocol.md",
@@ -65,7 +65,7 @@
     "ModelCallRequest": "f610f8fc9830710885c0c4482d911899e3ed9957f8eb7d43ca299b6bdb159a7a",
     "ModelCallResult": "029646e5d93e0c3c112a28661407e1345e12024f7f8d9393aa372317cc0d26b9",
     "ModelCapability": "b3ac3d69a2cecc7252fbd1bf9f19fd34b1a0306b5ee1d56dd383c79df0b08993",
-    "ModelConstraints": "1f945b572030f2b20ac51d4617aae33eefc30211faa30039581a125f86aca093",
+    "ModelConstraints": "67ad6311fe915cdac4ce79cbc8eff217224b14a74cb0952f018417aea6812e49",
     "ModelImportCandidate": "7ef1aa4cf0219634a599e892582932f81967793d0149e4b9098591c2a7f54408",
     "ModelImportPreview": "1af105da570cce9b3956873227fb098c11b13f09ab0938df949e2353cead22e3",
     "ModelImportPreviewRequest": "55c71f56b111cc889eeac082fd34a1e5969369052826e7156d63008e2f86395a",
@@ -78,6 +78,14 @@
     "ModelWrite": "ef2e69791f394766f7481e568add488b6583fc81baa377baed4ced638a679db1",
     "ObservedRequirement": "0aac267ed3f8a359af57a98fbc37099e7a6e9d36cb2966389a2e5f6042f3e18d",
     "OpaqueId": "52ba84a4bbf396ba7a35cd1190963c82865bfd272f0b6020865087e04c5283d5",
+    "OpenRouterImportConflict": "c821a90471f8d9923fe7235d2ece01bbdf68a92fb5a5aadc4dddb8bb4ae277fe",
+    "OpenRouterImportIssue": "834f5e6280c0efa3ead3340b21c60995aad107446f52112284ab78f605c96832",
+    "OpenRouterModelImportPreview": "25f629b85ba5907d5402105b077fbbc1ac7fb82c0294db72040e56c133a80f7b",
+    "OpenRouterModelImportPreviewRequest": "1694c4c7447d5e256c444a650d5b1f3a351cf27fe28f37edd2ac44d5f669fda5",
+    "OpenRouterModelImportRequest": "f36acb5b47179181c6b212a7a818d1e32793e613b32d335e7e92f9fb9796bee8",
+    "OpenRouterModelImportResult": "4269001f37278a9194434376cca8e782e1bf408566ee995a34304f793fe79b1a",
+    "OpenRouterProviderModelOption": "a8287ad121525bb2c86d606842d7c160b35cb99e94709daf385e25c8ee24ffcf",
+    "OpenRouterReasoningPreview": "4fc3568a998224f70c4d5a481b6925ee7237512efc7be9965e9a80c1ba6d6f0e",
     "Outcome": "df4718e1a51097f9716cbd14c23f4559f14dfff5576898b8e370d5b9ba2f08ec",
     "OutputFormat": "6aab00b49f173347a4937cfa089b386c5d579f15fd1209e7d64a0e0be152ee5e",
     "OutputModality": "ffc9e9b35e27512f3f83fdeeebadb82c9080c856f92062df61be74556c055da4",
@@ -138,6 +146,6 @@
   },
   "contract_set": "llmrouter-v1",
   "generator_version": 3,
-  "source_sha256": "8145f779c656c2a3a74f22724151f554e5e62b706a29a9e07b0bd8fe20684bd8",
+  "source_sha256": "77fe3c9c462303c8b544b2a34cb9d24d445d1900a274e46b512b9a9ef6b9e37a",
   "version": "1.0.0"
 }

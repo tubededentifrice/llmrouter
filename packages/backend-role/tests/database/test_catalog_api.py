@@ -6,11 +6,14 @@ from __future__ import annotations
 import concurrent.futures
 import json
 import os
+import threading
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
 from typing import TYPE_CHECKING, Any, cast
+from urllib.parse import urlsplit
 
+import httpx
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
@@ -33,9 +36,11 @@ from llmrouter_backend.models import (
 )
 from llmrouter_backend.security import ControlKeys, new_token
 from llmrouter_backend.store import create_administrator_session
+from opendle import RouterClient, RouterStreamResponse, RouterTransportResponse
 from psycopg.rows import dict_row
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Mapping
     from pathlib import Path
 
 ADMIN_ORIGIN = "http://127.0.0.1:5174"
@@ -44,13 +49,25 @@ ADMIN_ORIGIN = "http://127.0.0.1:5174"
 class CatalogContext:
     """Authenticated local administrator and database test controls."""
 
-    def __init__(self, database_url: str, settings: Settings) -> None:
+    def __init__(
+        self,
+        database_url: str,
+        settings: Settings,
+        *,
+        openrouter_catalog_transport: httpx.BaseTransport | None = None,
+        openrouter_catalog_clock: Callable[[], float] | None = None,
+    ) -> None:
         self.database_url = database_url
         self.settings = settings
         self.controls = ControlKeys.load(settings)
         self.credential_keys = ProviderCredentialKeys.load(settings)
         self.client = TestClient(
-            create_app(database_url=database_url, settings=settings),
+            create_app(
+                database_url=database_url,
+                settings=settings,
+                openrouter_catalog_transport=openrouter_catalog_transport,
+                openrouter_catalog_clock=openrouter_catalog_clock,
+            ),
             base_url="https://llmrouter.test",
         )
         self.session = new_token()
@@ -78,6 +95,64 @@ class CatalogContext:
     @property
     def read_headers(self) -> dict[str, str]:
         return {"Cookie": f"llmrouter_admin_session={self.session}"}
+
+
+class RouterSdkTestTransport:
+    """Adapt the live test application to the public OpenDLE Router client."""
+
+    def __init__(self, client: TestClient) -> None:
+        self.client = client
+
+    def request(
+        self,
+        method: str,
+        url: str,
+        headers: Mapping[str, str],
+        body: bytes | None,
+        _timeout: float,
+    ) -> RouterTransportResponse:
+        target = urlsplit(url)
+        path = target.path + (f"?{target.query}" if target.query else "")
+        response = self.client.request(
+            method, path, headers=dict(headers), content=body
+        )
+        return RouterTransportResponse(
+            response.status_code, dict(response.headers), response.content
+        )
+
+    def stream(
+        self,
+        method: str,
+        url: str,
+        headers: Mapping[str, str],
+        body: bytes,
+        timeout: float,
+    ) -> RouterStreamResponse:
+        response = self.request(method, url, headers, body, timeout)
+        return RouterStreamResponse(response.status, response.headers, (response.body,))
+
+
+def assert_service_provider_model_sdk_contract(
+    client: TestClient, service_key: str
+) -> None:
+    """Check the safe response and parse its token bounds with the locked SDK."""
+    expected_context_tokens = 131_072
+    expected_output_tokens = 8_192
+    response = client.get(
+        "/v1/provider-models", headers={"Authorization": f"Bearer {service_key}"}
+    )
+    assert response.status_code == HTTPStatus.OK
+    assert [item["api_name"] for item in response.json()["items"]] == ["fake-text"]
+    assert "provider_api_name" not in response.text
+    assert "wire-text" not in response.text
+    sdk_page = RouterClient(
+        base_url="https://llmrouter.test",
+        service_key=service_key,
+        transport=RouterSdkTestTransport(client),
+    ).list_provider_models()
+    assert sdk_page.items[0].constraints is not None
+    assert sdk_page.items[0].constraints.max_context_tokens == expected_context_tokens
+    assert sdk_page.items[0].constraints.max_output_tokens == expected_output_tokens
 
 
 def assert_provider_model_cooldown(context: CatalogContext) -> None:
@@ -149,6 +224,18 @@ def catalog_database(database_url: str) -> str:
             ["text"],
             ["video"],
             {"max_output_duration_seconds": True},
+        ),
+        (
+            "boolean-context",
+            ["text"],
+            ["text"],
+            {"max_context_tokens": True},
+        ),
+        (
+            "boolean-output",
+            ["text"],
+            ["text"],
+            {"max_output_tokens": True},
         ),
     ],
 )
@@ -572,7 +659,12 @@ def test_global_models_mappings_reasoning_and_service_visibility(
         "input_modalities": ["text", "image"],
         "output_modalities": ["text", "structured_json"],
         "capabilities": ["tool_calling", "streaming", "reasoning"],
-        "constraints": {"max_input_images": 4, "max_input_image_bytes": 1000},
+        "constraints": {
+            "max_context_tokens": 131072,
+            "max_output_tokens": 8192,
+            "max_input_images": 4,
+            "max_input_image_bytes": 1000,
+        },
     }
     assert (
         client.post(
@@ -712,13 +804,7 @@ def test_global_models_mappings_reasoning_and_service_visibility(
         ).json()["secret"]
         service_keys.append(key)
     for key in service_keys:
-        response = client.get(
-            "/v1/provider-models", headers={"Authorization": f"Bearer {key}"}
-        )
-        assert response.status_code == HTTPStatus.OK
-        assert [item["api_name"] for item in response.json()["items"]] == ["fake-text"]
-        assert "provider_api_name" not in response.text
-        assert "wire-text" not in response.text
+        assert_service_provider_model_sdk_contract(client, key)
 
     denied_admin = client.get(
         "/v1/admin/models", headers={"Authorization": f"Bearer {service_keys[0]}"}
@@ -1426,6 +1512,1022 @@ def test_concurrent_catalog_import_leaves_one_complete_current_state(
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         statuses = sorted(executor.map(lambda _index: import_once(), range(2)))
     assert statuses == [HTTPStatus.OK, HTTPStatus.CONFLICT]
+    with psycopg.connect(catalog_database) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM router.canonical_models"
+        ).fetchone() == (1,)
+        assert connection.execute(
+            "SELECT count(*) FROM router.provider_models"
+        ).fetchone() == (1,)
+
+
+def _openrouter_snapshot(model_id: str = "google/gemma-4-31b-it") -> dict[str, Any]:
+    return {
+        "data": [
+            {
+                "id": model_id,
+                "canonical_slug": model_id,
+                "name": "Gemma 4 31B Instruct",
+                "architecture": {
+                    "input_modalities": ["text", "image", "audio"],
+                    "output_modalities": [
+                        "text",
+                        "image",
+                        "video",
+                        "audio",
+                        "embedding",
+                    ],
+                },
+                "supported_parameters": [
+                    "tools",
+                    "response_format",
+                    "stream",
+                    "reasoning",
+                    "max_completion_tokens",
+                    "temperature",
+                ],
+                "context_length": 131072,
+                "top_provider": {"max_completion_tokens": 8192},
+                "reasoning": {
+                    "mandatory": False,
+                    "default_enabled": True,
+                    "default_effort": "medium",
+                    "supported_efforts": ["low", "medium", "high"],
+                    "supports_max_tokens": True,
+                },
+                "pricing": {
+                    "prompt": "0.00000015",
+                    "completion": "0.00000045",
+                    "input_cache_read": "0.00000002",
+                    "input_cache_write": "0.00000003",
+                    "image": "0.001",
+                    "request": "0.002",
+                    "web_search": "0.003",
+                    "overrides": [{"min_prompt_tokens": 1000, "prompt": "0.00000020"}],
+                },
+            }
+        ]
+    }
+
+
+def _openrouter_transport(
+    snapshot: dict[str, Any] | None = None,
+    *,
+    status_code: int = HTTPStatus.OK,
+    headers: dict[str, str] | None = None,
+) -> tuple[httpx.MockTransport, list[httpx.Request]]:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            status_code,
+            json=snapshot if snapshot is not None else _openrouter_snapshot(),
+            headers=headers,
+            request=request,
+        )
+
+    return httpx.MockTransport(handler), requests
+
+
+def _create_openrouter_provider(
+    context: CatalogContext, api_name: str, *, enabled: bool = True
+) -> None:
+    credential = context.client.post(
+        "/v1/admin/credentials",
+        json={"api_name": f"{api_name}-key", "secret": f"private-{api_name}-value"},
+        headers=context.write_headers,
+    )
+    assert credential.status_code == HTTPStatus.CREATED
+    provider = context.client.post(
+        "/v1/admin/providers",
+        json={
+            "api_name": api_name,
+            "display_name": api_name.replace("-", " ").title(),
+            "adapter": "openrouter",
+            "credential_api_name": f"{api_name}-key",
+            "enabled": enabled,
+        },
+        headers=context.write_headers,
+    )
+    assert provider.status_code == HTTPStatus.CREATED
+
+
+def _openrouter_preview(context: CatalogContext) -> dict[str, Any]:
+    response = context.client.post(
+        "/v1/admin/openrouter-model-imports/preview",
+        json={
+            "model_id_or_url": ("https://openrouter.ai/models/google/gemma-4-31b-it")
+        },
+        headers=context.write_headers,
+    )
+    assert response.status_code == HTTPStatus.OK, response.text
+    return cast("dict[str, Any]", response.json())
+
+
+def _confirmation_from_preview(
+    preview: dict[str, Any], *, selected: int
+) -> dict[str, Any]:
+    return {
+        "source_model_id": preview["source_model_id"],
+        "model": preview["model"],
+        "reviewed_price": preview.get("reviewed_price"),
+        "provider_models": [
+            option["provider_model"]
+            for option in preview["provider_options"][:selected]
+        ],
+    }
+
+
+def test_openrouter_preview_maps_complete_safe_native_proposal_without_writes(
+    catalog_database: str, catalog_settings: Settings
+) -> None:
+    """Map exact source facts, expose limits, and keep preview read-only."""
+    transport, requests = _openrouter_transport()
+    context = CatalogContext(
+        catalog_database,
+        catalog_settings,
+        openrouter_catalog_transport=transport,
+    )
+    _create_openrouter_provider(context, "openrouter-a")
+    _create_openrouter_provider(context, "openrouter-b", enabled=False)
+
+    before_activity = context.client.get(
+        "/v1/admin/activity",
+        params={
+            "from": (datetime.now(tz=UTC) - timedelta(hours=1)).isoformat(),
+            "to": (datetime.now(tz=UTC) + timedelta(hours=1)).isoformat(),
+        },
+        headers=context.read_headers,
+    ).json()["items"]
+    preview = _openrouter_preview(context)
+
+    assert len(requests) == 1
+    assert str(requests[0].url) == "https://openrouter.ai/api/v1/models"
+    assert requests[0].headers["accept-encoding"] == "identity"
+    assert "authorization" not in requests[0].headers
+    assert preview["source_model_id"] == "google/gemma-4-31b-it"
+    assert preview["model"] == {
+        "api_name": "google-gemma-4-31b-it",
+        "display_name": "Gemma 4 31B Instruct",
+        "input_modalities": ["text", "image"],
+        "output_modalities": ["text", "image", "structured_json"],
+        "capabilities": ["tool_calling", "streaming", "reasoning"],
+        "constraints": {
+            "max_context_tokens": 131072,
+            "max_output_tokens": 8192,
+            "max_input_images": 8,
+            "max_input_image_bytes": 20 * 1024 * 1024,
+        },
+        "price_source": "openrouter",
+        "price_lookup_key": "google/gemma-4-31b-it",
+    }
+    assert preview["reasoning"] == {
+        "supported": True,
+        "mandatory": False,
+        "source_configuration_available": True,
+        "default_enabled": True,
+        "default_effort": "medium",
+        "supported_efforts": ["low", "medium", "high"],
+        "supports_max_tokens": True,
+    }
+    assert preview["supported_constraints"] == [
+        "maximum_output_tokens",
+        "temperature",
+    ]
+    assert {
+        item["unit"]: item["amount"]
+        for item in preview["reviewed_price"]["unit_prices"]
+    } == {
+        "input_token": "0.00000015",
+        "output_token": "0.00000045",
+        "cached_input_token": "0.00000002",
+        "image": "0.001",
+        "request": "0.002",
+    }
+    assert {item["code"] for item in preview["issues"]} >= {
+        "input_modality_unsupported",
+        "embedding_dimensions_unknown",
+        "media_duration_unknown",
+        "price_unit_unsupported",
+        "conditional_price_unsupported",
+        "router_input_limits_applied",
+        "output_modality_unsupported",
+    }
+    assert preview["can_confirm"] is True
+    assert [item["selectable"] for item in preview["provider_options"]] == [
+        True,
+        False,
+    ]
+    proposal = preview["provider_options"][0]["provider_model"]
+    assert proposal["provider_model_name"] == "google/gemma-4-31b-it"
+    assert proposal["output_modalities"] == ["text", "structured_json"]
+    assert {item["level"] for item in proposal["reasoning_mappings"]} == {
+        "none",
+        "low",
+        "medium",
+        "high",
+    }
+    with psycopg.connect(catalog_database) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM router.canonical_models"
+        ).fetchone() == (0,)
+        assert connection.execute(
+            "SELECT count(*) FROM router.provider_models"
+        ).fetchone() == (0,)
+    after_activity = context.client.get(
+        "/v1/admin/activity",
+        params={
+            "from": (datetime.now(tz=UTC) - timedelta(hours=1)).isoformat(),
+            "to": (datetime.now(tz=UTC) + timedelta(hours=1)).isoformat(),
+        },
+        headers=context.read_headers,
+    ).json()["items"]
+    assert after_activity == before_activity
+
+
+def test_openrouter_preview_releases_database_gate_during_external_fetch(
+    catalog_database: str, catalog_settings: Settings
+) -> None:
+    """Hold no database slot while the bounded public catalog fetch is blocked."""
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocked_catalog(request: httpx.Request) -> httpx.Response:
+        entered.set()
+        if not release.wait(timeout=5):
+            raise TimeoutError
+        return httpx.Response(
+            HTTPStatus.OK, json=_openrouter_snapshot(), request=request
+        )
+
+    context = CatalogContext(
+        catalog_database,
+        replace(catalog_settings, database_concurrency=1),
+        openrouter_catalog_transport=httpx.MockTransport(blocked_catalog),
+    )
+    connections = cast("Any", context.client.app).state.database_connections
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        preview_future = executor.submit(_openrouter_preview, context)
+        try:
+            assert entered.wait(timeout=2)
+            with connections.connect(
+                catalog_database, connect_timeout=2, row_factory=dict_row
+            ) as database:
+                catalog.create_credential(
+                    database,
+                    api_name="during-preview-key",
+                    secret=new_token(),
+                    keys=context.credential_keys,
+                )
+                catalog.create_provider(
+                    database,
+                    ProviderWrite(
+                        api_name="during-preview",
+                        display_name="During preview",
+                        adapter="openrouter",
+                        credential_api_name="during-preview-key",
+                        enabled=True,
+                    ),
+                )
+                database.commit()
+        finally:
+            release.set()
+        preview = preview_future.result(timeout=5)
+
+    assert [item["provider_api_name"] for item in preview["provider_options"]] == [
+        "during-preview"
+    ]
+    with connections.connect(
+        catalog_database, connect_timeout=2, row_factory=dict_row
+    ) as database:
+        assert database.execute("SELECT 1").fetchone() is not None
+
+
+@pytest.mark.parametrize(
+    ("reasoning", "expected_mapping"),
+    [
+        ({}, False),
+        ({"mandatory": None}, False),
+        (
+            {
+                "mandatory": True,
+                "supported_efforts": ["low", "medium", "high"],
+            },
+            False,
+        ),
+        (
+            {
+                "mandatory": False,
+                "supported_efforts": ["low", "medium", "high"],
+            },
+            True,
+        ),
+        ({"mandatory": False}, True),
+        (
+            {"mandatory": False, "supported_efforts": ["low", "medium"]},
+            False,
+        ),
+    ],
+    ids=[
+        "mandatory-absent",
+        "mandatory-null",
+        "mandatory-true",
+        "optional-complete-efforts",
+        "optional-unrestricted-efforts",
+        "optional-incomplete-efforts",
+    ],
+)
+def test_openrouter_preview_claims_only_complete_optional_reasoning(
+    catalog_database: str,
+    catalog_settings: Settings,
+    reasoning: dict[str, Any],
+    expected_mapping: bool,
+) -> None:
+    """Map native reasoning only when optional and all enabled levels are known."""
+    snapshot = _openrouter_snapshot()
+    snapshot["data"][0]["reasoning"] = reasoning
+    transport, _requests = _openrouter_transport(snapshot)
+    context = CatalogContext(
+        catalog_database,
+        catalog_settings,
+        openrouter_catalog_transport=transport,
+    )
+    _create_openrouter_provider(context, "openrouter-a")
+
+    preview = _openrouter_preview(context)
+    mapping = preview["provider_options"][0]["provider_model"]
+    issue_codes = {item["code"] for item in preview["issues"]}
+    assert ("reasoning" in preview["model"]["capabilities"]) is expected_mapping
+    assert ("reasoning" in mapping["capabilities"]) is expected_mapping
+    assert bool(mapping["reasoning_mappings"]) is expected_mapping
+    assert ("reasoning_mapping_incomplete" not in issue_codes) is expected_mapping
+
+
+def test_openrouter_confirmation_rejects_uncertain_reasoning_tampering_atomically(
+    catalog_database: str, catalog_settings: Settings
+) -> None:
+    """Reject native reasoning added to a proposal that did not prove it."""
+    snapshot = _openrouter_snapshot()
+    snapshot["data"][0]["reasoning"] = {}
+    transport, _requests = _openrouter_transport(snapshot)
+    context = CatalogContext(
+        catalog_database,
+        catalog_settings,
+        openrouter_catalog_transport=transport,
+    )
+    _create_openrouter_provider(context, "openrouter-a")
+    preview = _openrouter_preview(context)
+    body = _confirmation_from_preview(preview, selected=1)
+    body["provider_models"][0]["capabilities"].append("reasoning")
+    body["provider_models"][0]["reasoning_mappings"] = [
+        {"level": level, "provider_value": level}
+        for level in ("none", "low", "medium", "high")
+    ]
+
+    response = context.client.post(
+        "/v1/admin/openrouter-model-imports",
+        json=body,
+        headers=context.write_headers,
+    )
+    assert response.status_code == HTTPStatus.BAD_REQUEST
+    with psycopg.connect(catalog_database) as database:
+        assert database.execute(
+            "SELECT count(*) FROM router.canonical_models"
+        ).fetchone() == (0,)
+        assert database.execute(
+            "SELECT count(*) FROM router.provider_models"
+        ).fetchone() == (0,)
+
+
+def test_openrouter_import_omits_zero_source_unit_from_mixed_price(
+    catalog_database: str, catalog_settings: Settings
+) -> None:
+    """Keep positive source units and omit a zero source unit from import."""
+    snapshot = _openrouter_snapshot()
+    snapshot["data"][0]["pricing"]["prompt"] = "0"
+    transport, _requests = _openrouter_transport(snapshot)
+    context = CatalogContext(
+        catalog_database,
+        catalog_settings,
+        openrouter_catalog_transport=transport,
+    )
+    _create_openrouter_provider(context, "openrouter-a")
+    preview = _openrouter_preview(context)
+
+    assert "input_token" not in {
+        item["unit"] for item in preview["reviewed_price"]["unit_prices"]
+    }
+    assert any(
+        item["code"] == "source_price_zero_omitted"
+        and item["source_value"] == "input_token"
+        for item in preview["issues"]
+    )
+    response = context.client.post(
+        "/v1/admin/openrouter-model-imports",
+        json=_confirmation_from_preview(preview, selected=1),
+        headers=context.write_headers,
+    )
+    assert response.status_code == HTTPStatus.CREATED
+    assert "input_token" not in {
+        item["unit"]
+        for item in response.json()["model"]["current_price"]["unit_prices"]
+    }
+
+
+def test_openrouter_import_omits_all_zero_source_prices_and_rejects_injection(
+    catalog_database: str, catalog_settings: Settings
+) -> None:
+    """Import no synchronized price when all source amounts are zero."""
+    snapshot = _openrouter_snapshot()
+    pricing = snapshot["data"][0]["pricing"]
+    for field in (
+        "prompt",
+        "completion",
+        "input_cache_read",
+        "input_cache_write",
+        "image",
+        "request",
+        "web_search",
+    ):
+        pricing[field] = "0"
+    pricing["overrides"] = []
+    transport, _requests = _openrouter_transport(snapshot)
+    context = CatalogContext(
+        catalog_database,
+        catalog_settings,
+        openrouter_catalog_transport=transport,
+    )
+    _create_openrouter_provider(context, "openrouter-a")
+    preview = _openrouter_preview(context)
+    assert "reviewed_price" not in preview
+    assert any(
+        item["code"] == "source_price_zero_omitted" for item in preview["issues"]
+    )
+
+    tampered = _confirmation_from_preview(preview, selected=1)
+    tampered["reviewed_price"] = {
+        "currency": "USD",
+        "source": "openrouter",
+        "unit_prices": [{"unit": "input_token", "amount": "0"}],
+    }
+    rejected = context.client.post(
+        "/v1/admin/openrouter-model-imports",
+        json=tampered,
+        headers=context.write_headers,
+    )
+    assert rejected.status_code == HTTPStatus.BAD_REQUEST
+    with psycopg.connect(catalog_database) as database:
+        assert database.execute(
+            "SELECT count(*) FROM router.canonical_models"
+        ).fetchone() == (0,)
+        assert database.execute(
+            "SELECT count(*) FROM router.provider_models"
+        ).fetchone() == (0,)
+    accepted = context.client.post(
+        "/v1/admin/openrouter-model-imports",
+        json=_confirmation_from_preview(preview, selected=1),
+        headers=context.write_headers,
+    )
+    assert accepted.status_code == HTTPStatus.CREATED
+    assert "current_price" not in accepted.json()["model"]
+
+
+def test_generic_catalog_does_not_offer_the_replaced_openrouter_placeholder(
+    catalog_database: str, catalog_settings: Settings
+) -> None:
+    """Keep generic imports for other sources without a second OpenRouter path."""
+    context = CatalogContext(catalog_database, catalog_settings)
+    _create_openrouter_provider(context, "openrouter-a")
+    preview = context.client.post(
+        "/v1/admin/model-imports/preview",
+        json={"provider_api_name": "openrouter-a"},
+        headers=context.write_headers,
+    )
+    assert preview.status_code == HTTPStatus.OK
+    assert preview.json()["candidates"] == []
+    import_response = context.client.post(
+        "/v1/admin/model-imports",
+        json={
+            "provider_api_name": "openrouter-a",
+            "selections": [
+                {
+                    "catalog_key": "openrouter-text",
+                    "model_api_name": "placeholder",
+                    "provider_model_api_name": "placeholder",
+                }
+            ],
+        },
+        headers=context.write_headers,
+    )
+    assert import_response.status_code == HTTPStatus.BAD_REQUEST
+    with psycopg.connect(catalog_database) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM router.canonical_models"
+        ).fetchone() == (0,)
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        "",
+        "one-part",
+        "a/b/c",
+        "https://example.com/google/gemma-4-31b-it",
+        "http://openrouter.ai/google/gemma-4-31b-it",
+        "https://openrouter.ai:443/google/gemma-4-31b-it",
+        "https://user@openrouter.ai/google/gemma-4-31b-it",
+        "https://openrouter.ai/google/gemma-4-31b-it?next=secret",
+        "//openrouter.ai/google/gemma-4-31b-it",
+    ],
+)
+def test_openrouter_preview_rejects_unsafe_references_before_transport(
+    catalog_database: str,
+    catalog_settings: Settings,
+    reference: str,
+) -> None:
+    """Reject malformed and hostile authorities without an outbound request."""
+    transport, requests = _openrouter_transport()
+    context = CatalogContext(
+        catalog_database,
+        catalog_settings,
+        openrouter_catalog_transport=transport,
+    )
+    response = context.client.post(
+        "/v1/admin/openrouter-model-imports/preview",
+        json={"model_id_or_url": reference},
+        headers=context.write_headers,
+    )
+    assert response.status_code == HTTPStatus.BAD_REQUEST
+    assert response.json()["error"]["code"] == "invalid_request"
+    assert requests == []
+
+
+@pytest.mark.parametrize(
+    ("status_code", "headers"),
+    [
+        (HTTPStatus.FOUND, None),
+        (HTTPStatus.INTERNAL_SERVER_ERROR, None),
+        (HTTPStatus.OK, {"content-type": "text/html"}),
+        (HTTPStatus.OK, {"content-encoding": "gzip"}),
+    ],
+)
+def test_openrouter_preview_returns_one_safe_transport_error(
+    catalog_database: str,
+    catalog_settings: Settings,
+    status_code: int,
+    headers: dict[str, str] | None,
+) -> None:
+    """Do not follow redirects or expose dependency response details."""
+    transport, _requests = _openrouter_transport(
+        status_code=status_code, headers=headers
+    )
+    context = CatalogContext(
+        catalog_database,
+        catalog_settings,
+        openrouter_catalog_transport=transport,
+    )
+    response = context.client.post(
+        "/v1/admin/openrouter-model-imports/preview",
+        json={"model_id_or_url": "google/gemma-4-31b-it"},
+        headers=context.write_headers,
+    )
+    assert response.status_code == HTTPStatus.SERVICE_UNAVAILABLE
+    assert response.json() == {
+        "error": {
+            "code": "upstream_failed",
+            "message": "The OpenRouter catalog is unavailable.",
+        }
+    }
+
+
+def test_openrouter_preview_bounds_body_headers_deadline_and_malformed_rows(
+    catalog_database: str, catalog_settings: Settings
+) -> None:
+    """Fail closed for resource limits, timeouts, and unrelated source data."""
+    cases: list[tuple[httpx.BaseTransport, Callable[[], float] | None, int]] = []
+
+    def timeout_handler(request: httpx.Request) -> httpx.Response:
+        private_detail = "private transport detail"
+        raise httpx.ReadTimeout(private_detail, request=request)
+
+    cases.append((httpx.MockTransport(timeout_handler), None, 503))
+    too_large = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200,
+            content=b"x" * (8 * 1024 * 1024 + 1),
+            headers={"content-type": "application/json"},
+            request=request,
+        )
+    )
+    cases.append((too_large, None, 503))
+    large_headers = {f"x-test-{index}": "value" for index in range(65)}
+    header_transport, _ = _openrouter_transport(headers=large_headers)
+    cases.append((header_transport, None, 503))
+    malformed = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200,
+            content=b'{"data":[',
+            headers={"content-type": "application/json"},
+            request=request,
+        )
+    )
+    cases.append((malformed, None, 503))
+    unrelated, _ = _openrouter_transport({"data": [{"id": "other/model"}]})
+    cases.append((unrelated, None, 404))
+    duplicate_snapshot = _openrouter_snapshot()
+    duplicate_snapshot["data"].append(duplicate_snapshot["data"][0])
+    duplicate, _ = _openrouter_transport(duplicate_snapshot)
+    cases.append((duplicate, None, 503))
+
+    class ExpiredClock:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def __call__(self) -> float:
+            self.calls += 1
+            return 0.0 if self.calls == 1 else 20.0
+
+    deadline_transport, _ = _openrouter_transport()
+    cases.append((deadline_transport, ExpiredClock(), 503))
+
+    for transport, clock, expected_status in cases:
+        context = CatalogContext(
+            catalog_database,
+            catalog_settings,
+            openrouter_catalog_transport=transport,
+            openrouter_catalog_clock=clock,
+        )
+        response = context.client.post(
+            "/v1/admin/openrouter-model-imports/preview",
+            json={"model_id_or_url": "google/gemma-4-31b-it"},
+            headers=context.write_headers,
+        )
+        assert response.status_code == expected_status
+        assert "private transport detail" not in response.text
+
+
+def test_openrouter_preview_requires_admin_session_csrf_and_origin(
+    catalog_database: str, catalog_settings: Settings
+) -> None:
+    """Keep the strict preview on the administrator browser-write path."""
+    transport, requests = _openrouter_transport()
+    context = CatalogContext(
+        catalog_database,
+        catalog_settings,
+        openrouter_catalog_transport=transport,
+    )
+    body = {"model_id_or_url": "google/gemma-4-31b-it"}
+    missing_session = context.client.post(
+        "/v1/admin/openrouter-model-imports/preview", json=body
+    )
+    missing_csrf = context.client.post(
+        "/v1/admin/openrouter-model-imports/preview",
+        json=body,
+        headers=context.read_headers,
+    )
+    wrong_origin = context.client.post(
+        "/v1/admin/openrouter-model-imports/preview",
+        json=body,
+        headers={**context.write_headers, "Origin": "https://evil.example"},
+    )
+    service_actor = context.client.post(
+        "/v1/admin/openrouter-model-imports/preview",
+        json=body,
+        headers={"Authorization": "Bearer service-key-value"},
+    )
+    assert missing_session.status_code == HTTPStatus.UNAUTHORIZED
+    assert missing_csrf.status_code == HTTPStatus.FORBIDDEN
+    assert wrong_origin.status_code == HTTPStatus.FORBIDDEN
+    assert service_actor.status_code == HTTPStatus.UNAUTHORIZED
+    assert requests == []
+
+
+@pytest.mark.parametrize("selected", [1, 2])
+def test_openrouter_confirmation_creates_one_or_many_mappings_without_refetch(
+    catalog_database: str, catalog_settings: Settings, selected: int
+) -> None:
+    """Commit exact reviewed native values once for one or many connections."""
+    transport, requests = _openrouter_transport()
+    context = CatalogContext(
+        catalog_database,
+        catalog_settings,
+        openrouter_catalog_transport=transport,
+    )
+    _create_openrouter_provider(context, "openrouter-a")
+    _create_openrouter_provider(context, "openrouter-b")
+    preview = _openrouter_preview(context)
+    body = _confirmation_from_preview(preview, selected=selected)
+
+    response = context.client.post(
+        "/v1/admin/openrouter-model-imports",
+        json=body,
+        headers=context.write_headers,
+    )
+    assert response.status_code == HTTPStatus.CREATED, response.text
+    assert len(requests) == 1
+    assert response.json()["source_model_id"] == "google/gemma-4-31b-it"
+    assert len(response.json()["provider_models"]) == selected
+    assert "private-openrouter" not in response.text
+    assert response.json()["model"]["current_price"] == preview["reviewed_price"]
+    with psycopg.connect(catalog_database) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM router.canonical_models"
+        ).fetchone() == (1,)
+        assert connection.execute(
+            "SELECT count(*) FROM router.provider_models"
+        ).fetchone() == (selected,)
+    activity = context.client.get(
+        "/v1/admin/activity",
+        params={
+            "from": (datetime.now(tz=UTC) - timedelta(hours=1)).isoformat(),
+            "to": (datetime.now(tz=UTC) + timedelta(hours=1)).isoformat(),
+        },
+        headers=context.read_headers,
+    ).json()["items"]
+    imported = next(
+        item for item in activity if item["action"] == "openrouter_model_import.apply"
+    )
+    assert imported["result"] == "succeeded"
+    assert imported["resource_type"] == "model_import"
+    assert imported["resource_api_name"] == "google-gemma-4-31b-it"
+
+
+def test_openrouter_confirmation_rejects_zero_selection_and_exact_value_tampering(
+    catalog_database: str, catalog_settings: Settings
+) -> None:
+    """Require one selection and preserve the reviewed source relationship."""
+    transport, _requests = _openrouter_transport()
+    context = CatalogContext(
+        catalog_database,
+        catalog_settings,
+        openrouter_catalog_transport=transport,
+    )
+    _create_openrouter_provider(context, "openrouter-a")
+    preview = _openrouter_preview(context)
+    zero = _confirmation_from_preview(preview, selected=0)
+    zero_response = context.client.post(
+        "/v1/admin/openrouter-model-imports",
+        json=zero,
+        headers=context.write_headers,
+    )
+    assert zero_response.status_code == HTTPStatus.BAD_REQUEST
+
+    tampered = _confirmation_from_preview(preview, selected=1)
+    tampered["provider_models"][0]["provider_model_name"] = "other/model"
+    tampered_response = context.client.post(
+        "/v1/admin/openrouter-model-imports",
+        json=tampered,
+        headers=context.write_headers,
+    )
+    assert tampered_response.status_code == HTTPStatus.BAD_REQUEST
+    tampered["provider_models"][0]["provider_model_name"] = preview["source_model_id"]
+    tampered["reviewed_price"]["source"] = "unreviewed-source"
+    price_response = context.client.post(
+        "/v1/admin/openrouter-model-imports",
+        json=tampered,
+        headers=context.write_headers,
+    )
+    assert price_response.status_code == HTTPStatus.BAD_REQUEST
+    with psycopg.connect(catalog_database) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM router.canonical_models"
+        ).fetchone() == (0,)
+        assert connection.execute(
+            "SELECT count(*) FROM router.provider_models"
+        ).fetchone() == (0,)
+
+
+@pytest.mark.parametrize("invalid_value", ["capability", "reasoning", "price"])
+def test_openrouter_confirmation_rejects_invalid_native_values_atomically(
+    catalog_database: str,
+    catalog_settings: Settings,
+    invalid_value: str,
+) -> None:
+    """Reject invalid reviewed native values without a partial model insert."""
+    transport, _requests = _openrouter_transport()
+    context = CatalogContext(
+        catalog_database,
+        catalog_settings,
+        openrouter_catalog_transport=transport,
+    )
+    _create_openrouter_provider(context, "openrouter-a")
+    preview = _openrouter_preview(context)
+    body = _confirmation_from_preview(preview, selected=1)
+    if invalid_value == "capability":
+        body["model"]["capabilities"] = ["streaming", "reasoning"]
+    elif invalid_value == "reasoning":
+        body["provider_models"][0]["capabilities"] = ["tool_calling", "streaming"]
+    else:
+        body["reviewed_price"]["unit_prices"][0]["amount"] = "-0.1"
+
+    response = context.client.post(
+        "/v1/admin/openrouter-model-imports",
+        json=body,
+        headers=context.write_headers,
+    )
+    assert response.status_code == HTTPStatus.BAD_REQUEST
+    with psycopg.connect(catalog_database) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM router.canonical_models"
+        ).fetchone() == (0,)
+        assert connection.execute(
+            "SELECT count(*) FROM router.provider_models"
+        ).fetchone() == (0,)
+
+
+def test_openrouter_preview_identifies_current_create_only_conflict(
+    catalog_database: str, catalog_settings: Settings
+) -> None:
+    """Direct an administrator to an existing model and block replacement."""
+    transport, requests = _openrouter_transport()
+    context = CatalogContext(
+        catalog_database,
+        catalog_settings,
+        openrouter_catalog_transport=transport,
+    )
+    _create_openrouter_provider(context, "openrouter-a")
+    initial = _openrouter_preview(context)
+    created = context.client.post(
+        "/v1/admin/models",
+        json=initial["model"],
+        headers=context.write_headers,
+    )
+    assert created.status_code == HTTPStatus.CREATED
+
+    conflicted = _openrouter_preview(context)
+    expected_request_count = 2
+    assert len(requests) == expected_request_count
+    assert conflicted["can_confirm"] is False
+    assert conflicted["conflicts"] == [
+        {
+            "kind": "model",
+            "api_name": "google-gemma-4-31b-it",
+            "message": (
+                "This canonical model identity or OpenRouter source model already "
+                "exists."
+            ),
+        }
+    ]
+    assert conflicted["provider_options"][0]["selectable"] is False
+    confirmation = context.client.post(
+        "/v1/admin/openrouter-model-imports",
+        json=_confirmation_from_preview(conflicted, selected=1),
+        headers=context.write_headers,
+    )
+    assert confirmation.status_code == HTTPStatus.CONFLICT
+    with psycopg.connect(catalog_database) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM router.canonical_models"
+        ).fetchone() == (1,)
+        assert connection.execute(
+            "SELECT count(*) FROM router.provider_models"
+        ).fetchone() == (0,)
+
+
+@pytest.mark.parametrize("changed_state", ["disabled", "deleted", "adapter"])
+def test_openrouter_confirmation_rechecks_provider_current_state_and_rolls_back(
+    catalog_database: str,
+    catalog_settings: Settings,
+    changed_state: str,
+) -> None:
+    """Reject a deleted, disabled, or changed provider before any insert commits."""
+    transport, _requests = _openrouter_transport()
+    context = CatalogContext(
+        catalog_database,
+        catalog_settings,
+        openrouter_catalog_transport=transport,
+    )
+    _create_openrouter_provider(context, "openrouter-a")
+    preview = _openrouter_preview(context)
+    body = _confirmation_from_preview(preview, selected=1)
+    if changed_state == "deleted":
+        changed = context.client.delete(
+            "/v1/admin/providers/openrouter-a", headers=context.write_headers
+        )
+    else:
+        changed = context.client.put(
+            "/v1/admin/providers/openrouter-a",
+            json={
+                "api_name": "openrouter-a",
+                "display_name": "OpenRouter A",
+                "adapter": "openai" if changed_state == "adapter" else "openrouter",
+                "credential_api_name": "openrouter-a-key",
+                "enabled": changed_state != "disabled",
+            },
+            headers=context.write_headers,
+        )
+    assert changed.status_code in {HTTPStatus.OK, HTTPStatus.NO_CONTENT}
+    response = context.client.post(
+        "/v1/admin/openrouter-model-imports",
+        json=body,
+        headers=context.write_headers,
+    )
+    assert response.status_code in {HTTPStatus.NOT_FOUND, HTTPStatus.CONFLICT}
+    with psycopg.connect(catalog_database) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM router.canonical_models"
+        ).fetchone() == (0,)
+        assert connection.execute(
+            "SELECT count(*) FROM router.provider_models"
+        ).fetchone() == (0,)
+
+
+def test_openrouter_confirmation_rolls_back_storage_failure_and_records_safe_failure(
+    catalog_database: str,
+    catalog_settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Roll back the model and first mapping when a later insert fails."""
+    transport, _requests = _openrouter_transport()
+    context = CatalogContext(
+        catalog_database,
+        catalog_settings,
+        openrouter_catalog_transport=transport,
+    )
+    _create_openrouter_provider(context, "openrouter-a")
+    _create_openrouter_provider(context, "openrouter-b")
+    preview = _openrouter_preview(context)
+    body = _confirmation_from_preview(preview, selected=2)
+    original = catalog.create_provider_model
+    calls = 0
+    failure_call = 2
+
+    def fail_second_mapping(
+        connection: psycopg.Connection[Any], value: ProviderModelWrite
+    ) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        if calls == failure_call:
+            private_detail = "private storage failure detail"
+            raise RuntimeError(private_detail)
+        return original(connection, value)
+
+    monkeypatch.setattr(catalog, "create_provider_model", fail_second_mapping)
+    failure_client = TestClient(
+        create_app(database_url=catalog_database, settings=catalog_settings),
+        base_url="https://llmrouter.test",
+        raise_server_exceptions=False,
+    )
+    response = failure_client.post(
+        "/v1/admin/openrouter-model-imports",
+        json=body,
+        headers=context.write_headers,
+    )
+    assert response.status_code == HTTPStatus.INTERNAL_SERVER_ERROR
+    assert "private storage failure detail" not in response.text
+    with psycopg.connect(catalog_database) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM router.canonical_models"
+        ).fetchone() == (0,)
+        assert connection.execute(
+            "SELECT count(*) FROM router.provider_models"
+        ).fetchone() == (0,)
+    activity = context.client.get(
+        "/v1/admin/activity",
+        params={
+            "from": (datetime.now(tz=UTC) - timedelta(hours=1)).isoformat(),
+            "to": (datetime.now(tz=UTC) + timedelta(hours=1)).isoformat(),
+        },
+        headers=context.read_headers,
+    ).json()["items"]
+    assert any(
+        item["action"] == "openrouter_model_import.apply" and item["result"] == "failed"
+        for item in activity
+    )
+
+
+def test_concurrent_openrouter_confirmation_has_one_complete_winner(
+    catalog_database: str, catalog_settings: Settings
+) -> None:
+    """Serialize duplicate confirmations and keep one complete winner."""
+    transport, _requests = _openrouter_transport()
+    context = CatalogContext(
+        catalog_database,
+        catalog_settings,
+        openrouter_catalog_transport=transport,
+    )
+    _create_openrouter_provider(context, "openrouter-a")
+    preview = _openrouter_preview(context)
+    body = _confirmation_from_preview(preview, selected=1)
+
+    def import_once() -> int:
+        client = TestClient(
+            create_app(database_url=catalog_database, settings=catalog_settings),
+            base_url="https://llmrouter.test",
+        )
+        return cast(
+            "int",
+            client.post(
+                "/v1/admin/openrouter-model-imports",
+                json=body,
+                headers=context.write_headers,
+            ).status_code,
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        statuses = sorted(executor.map(lambda _index: import_once(), range(2)))
+    assert statuses == [HTTPStatus.CREATED, HTTPStatus.CONFLICT]
     with psycopg.connect(catalog_database) as connection:
         assert connection.execute(
             "SELECT count(*) FROM router.canonical_models"
