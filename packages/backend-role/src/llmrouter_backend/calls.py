@@ -36,6 +36,7 @@ from llmrouter_backend.accounting import (
     UsageAmount,
 )
 from llmrouter_backend.assignments import resolve_assignment_for_call
+from llmrouter_backend.database import DatabaseConnectionLimitError
 from llmrouter_backend.errors import ApiError, not_found
 from llmrouter_backend.models import RequestAttempt
 from llmrouter_backend.store import ServiceActor
@@ -606,6 +607,8 @@ class CallExecutor:
         object_store: ObjectStore | None = None,
         limits: CallLimits | None = None,
         metrics: MetricsRegistry | None = None,
+        database_connect: Callable[..., psycopg.Connection[Any]] | None = None,
+        final_database_connect: Callable[..., psycopg.Connection[Any]] | None = None,
         wall_clock: Callable[[], datetime] | None = None,
         uuid_factory: Callable[[], uuid.UUID] = uuid.uuid4,
     ) -> None:
@@ -621,6 +624,9 @@ class CallExecutor:
         self._object_store = object_store
         self._limits = limits or CallLimits()
         self._metrics = metrics
+        self._uses_default_database_connect = database_connect is None
+        self._database_connect = database_connect or psycopg.connect
+        self._final_database_connect = final_database_connect or psycopg.connect
         self._wall_clock = wall_clock or (lambda: datetime.now(tz=UTC))
         self._uuid_factory = uuid_factory
         self._active = 0
@@ -758,6 +764,12 @@ class CallExecutor:
             raise
         except CallExecutionError:
             raise
+        except DatabaseConnectionLimitError as error:
+            raise CallExecutionError(
+                "rate_limited",
+                "The Router database connection limit is full.",
+                phase=CallFailurePhase.BEFORE_VISIBLE_OUTPUT,
+            ) from error
         except Exception as error:
             raise CallExecutionError(
                 "internal_error",
@@ -922,30 +934,40 @@ class CallExecutor:
         response_json = (
             _response_json(final_outputs) if call_outcome == "succeeded" else None
         )
-        await asyncio.to_thread(
-            diagnostics.write_detailed_log_best_effort,
-            self._database_url,
-            self._object_store,
-            diagnostics.DetailedLogWrite(
-                service_id=actor.service_id,
-                workspace_id=workspace_id,
-                assignment_api_name=assignment_name,
-                provider_model_api_name=(
-                    selected_route.provider_model_api_name
-                    if selected_route is not None
-                    else None
-                ),
-                kind=request.kind,
-                outcome=cast("Any", call_outcome),
-                request_json=request.request_json,
-                response_json=response_json,
-                attempts=tuple(detailed_attempts),
-                tags=request.tags,
-                started_at=call_started,
-                media=request.media + _captured_output_media(final_outputs),
-                accounting_call_id=call_id,
+        detailed_value = diagnostics.DetailedLogWrite(
+            service_id=actor.service_id,
+            workspace_id=workspace_id,
+            assignment_api_name=assignment_name,
+            provider_model_api_name=(
+                selected_route.provider_model_api_name
+                if selected_route is not None
+                else None
             ),
+            kind=request.kind,
+            outcome=cast("Any", call_outcome),
+            request_json=request.request_json,
+            response_json=response_json,
+            attempts=tuple(detailed_attempts),
+            tags=request.tags,
+            started_at=call_started,
+            media=request.media + _captured_output_media(final_outputs),
+            accounting_call_id=call_id,
         )
+        if self._uses_default_database_connect:
+            await asyncio.to_thread(
+                diagnostics.write_detailed_log_best_effort,
+                self._database_url,
+                self._object_store,
+                detailed_value,
+            )
+        else:
+            await asyncio.to_thread(
+                diagnostics.write_detailed_log_best_effort,
+                self._database_url,
+                self._object_store,
+                detailed_value,
+                database_connect=self._database_connect,
+            )
         if cancelled is not None:
             raise cancelled
         if failure is not None:
@@ -1067,7 +1089,7 @@ class CallExecutor:
             raise
 
     def _connect(self) -> psycopg.Connection[Any]:
-        return psycopg.connect(
+        return self._database_connect(
             self._database_url,
             connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
             application_name=_DATABASE_APPLICATION_NAME,
@@ -1125,7 +1147,17 @@ class CallExecutor:
             connection.close()
 
     def _record_accounting_new_connection(self, value: CallAccountingWrite) -> None:
-        self._record_accounting_and_close(self._connect(), value)
+        connection = self._final_database_connect(
+            self._database_url,
+            connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
+            application_name=_DATABASE_APPLICATION_NAME,
+            options=(
+                f"-c statement_timeout={_DATABASE_STATEMENT_TIMEOUT_MILLISECONDS} "
+                f"-c lock_timeout={_DATABASE_LOCK_TIMEOUT_MILLISECONDS}"
+            ),
+            row_factory=dict_row,
+        )
+        self._record_accounting_and_close(connection, value)
 
     @staticmethod
     def _rollback_and_close(connection: psycopg.Connection[Any]) -> None:

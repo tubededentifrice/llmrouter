@@ -1,5 +1,5 @@
 """Closed asynchronous media-job API and durable worker composition."""
-# ruff: noqa: BLE001, C901, D102, EM101, TRY003, TRY004, TRY300, TRY301
+# ruff: noqa: BLE001, C901, D102, EM101, PLR0912, PLR0913, PLR0915, TRY003, TRY004, TRY300, TRY301
 
 from __future__ import annotations
 
@@ -31,6 +31,7 @@ from llmrouter_backend.calls import (
     CallRequirements,
     CallResult,
 )
+from llmrouter_backend.database import DatabaseConnectionLimitError
 from llmrouter_backend.diagnostics import CapturedMedia
 from llmrouter_backend.errors import (
     ApiError,
@@ -54,7 +55,7 @@ from llmrouter_backend.object_store import (
 from llmrouter_backend.store import ServiceActor
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping
 
 _DATABASE_OPTIONS = "-c statement_timeout=2000 -c lock_timeout=500"
 _DATABASE_CONNECT_TIMEOUT_SECONDS = 2
@@ -171,13 +172,18 @@ def create_media_job(
     actor: ServiceActor,
     body: MediaJobRequest,
     deadline_seconds: int,
+    database_connect: Callable[..., psycopg.Connection[Any]] = psycopg.connect,
+    cleanup_database_connect: Callable[..., psycopg.Connection[Any]] | None = None,
 ) -> dict[str, Any]:
     """Upload without locks, then admit through one short checked transaction."""
     connection: psycopg.Connection[Any] | None = None
     uploaded: list[str] = []
+    cleanup_connect = cleanup_database_connect or database_connect
     try:
         call = _validated_internal_media_call(body)
-        snapshot = _read_media_admission_snapshot(database_url, actor, call)
+        snapshot = _read_media_admission_snapshot(
+            database_url, actor, call, database_connect
+        )
         retained_objects = _required_object_store(object_store)
         job_id = uuid.uuid4()
         created_at = datetime.now(tz=UTC)
@@ -210,7 +216,7 @@ def create_media_job(
                 ),
             )
             cast("list[str]", payload["input_media_ids"]).append(str(media_id))
-        connection = psycopg.connect(
+        connection = database_connect(
             database_url,
             connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
             row_factory=dict_row,
@@ -249,14 +255,30 @@ def create_media_job(
     except ApiError:
         if connection is not None:
             _rollback_media_admission(connection)
+            connection.close()
+            connection = None
         for object_key in uploaded:
-            _delete_or_queue(database_url, object_store, object_key)
+            _delete_or_queue(database_url, object_store, object_key, cleanup_connect)
         raise
+    except DatabaseConnectionLimitError as error:
+        if connection is not None:
+            _rollback_media_admission(connection)
+            connection.close()
+            connection = None
+        for object_key in uploaded:
+            _delete_or_queue(database_url, object_store, object_key, cleanup_connect)
+        raise ApiError(
+            429,
+            "rate_limited",
+            "The Router database connection limit is full.",
+        ) from error
     except Exception as error:
         if connection is not None:
             _rollback_media_admission(connection)
+            connection.close()
+            connection = None
         for object_key in uploaded:
-            _delete_or_queue(database_url, object_store, object_key)
+            _delete_or_queue(database_url, object_store, object_key, cleanup_connect)
         raise ApiError(
             500,
             "internal_error",
@@ -366,15 +388,20 @@ async def run_media_worker_once(
     database_url: str,
     executor: CallExecutor,
     object_store: ObjectStore | None,
+    database_connect: Callable[..., psycopg.Connection[Any]] = psycopg.connect,
 ) -> bool:
     """Claim and finish at most one durable job without a public lease state."""
-    claimed = await asyncio.to_thread(_claim_job, database_url)
+    claimed = await asyncio.to_thread(_claim_job, database_url, database_connect)
     if claimed is None:
         return False
     job_id = cast("uuid.UUID", claimed["id"])
     try:
         call = await asyncio.to_thread(
-            _call_from_claimed_job, database_url, object_store, claimed
+            _call_from_claimed_job,
+            database_url,
+            object_store,
+            claimed,
+            database_connect,
         )
         actor = ServiceActor(
             cast("uuid.UUID", claimed["service_id"]),
@@ -389,7 +416,12 @@ async def run_media_worker_once(
         async with asyncio.timeout(remaining):
             result = await executor.execute(actor, call)
         await asyncio.to_thread(
-            _complete_job, database_url, object_store, claimed, result
+            _complete_job,
+            database_url,
+            object_store,
+            claimed,
+            result,
+            database_connect,
         )
     except asyncio.CancelledError:
         raise
@@ -400,9 +432,17 @@ async def run_media_worker_once(
             job_id,
             "upstream_failed",
             "The media-job deadline expired.",
+            database_connect,
         )
     except CallExecutionError as error:
-        await asyncio.to_thread(_fail_job, database_url, job_id, error.code, str(error))
+        await asyncio.to_thread(
+            _fail_job,
+            database_url,
+            job_id,
+            error.code,
+            str(error),
+            database_connect,
+        )
     except Exception:
         await asyncio.to_thread(
             _fail_job,
@@ -410,6 +450,7 @@ async def run_media_worker_once(
             job_id,
             "internal_error",
             "The Router could not complete the media job.",
+            database_connect,
         )
     return True
 
@@ -418,12 +459,19 @@ async def media_worker_loop(
     database_url: str,
     executor: CallExecutor,
     object_store: ObjectStore | None,
+    database_connect: Callable[..., psycopg.Connection[Any]] | None = None,
 ) -> None:
     """Run bounded durable media work in the one normal application."""
     retry_seconds = _WORKER_DEPENDENCY_RETRY_SECONDS
     while True:
         try:
-            worked = await run_media_worker_once(database_url, executor, object_store)
+            worked = await (
+                run_media_worker_once(database_url, executor, object_store)
+                if database_connect is None
+                else run_media_worker_once(
+                    database_url, executor, object_store, database_connect
+                )
+            )
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -450,9 +498,12 @@ def _rollback_media_admission(connection: psycopg.Connection[Any]) -> None:
 
 
 def _read_media_admission_snapshot(
-    database_url: str, actor: ServiceActor, call: CallRequest
+    database_url: str,
+    actor: ServiceActor,
+    call: CallRequest,
+    database_connect: Callable[..., psycopg.Connection[Any]] = psycopg.connect,
 ) -> _MediaAdmissionSnapshot:
-    with psycopg.connect(
+    with database_connect(
         database_url,
         connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
         row_factory=dict_row,
@@ -537,8 +588,11 @@ def _assignment_route_state(resolved: ResolvedAssignment) -> tuple[object, ...]:
     )
 
 
-def _claim_job(database_url: str) -> dict[str, Any] | None:
-    with psycopg.connect(
+def _claim_job(
+    database_url: str,
+    database_connect: Callable[..., psycopg.Connection[Any]] = psycopg.connect,
+) -> dict[str, Any] | None:
+    with database_connect(
         database_url,
         connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
         row_factory=dict_row,
@@ -585,6 +639,7 @@ def _call_from_claimed_job(
     database_url: str,
     object_store: ObjectStore | None,
     claimed: Mapping[str, object],
+    database_connect: Callable[..., psycopg.Connection[Any]] = psycopg.connect,
 ) -> CallRequest:
     payload = cast("dict[str, object]", claimed["payload"])
     document = {
@@ -600,7 +655,7 @@ def _call_from_claimed_job(
         parsed_ids = [uuid.UUID(cast("str", raw_id)) for raw_id in media_ids]
         if len(parsed_ids) != len(set(parsed_ids)):
             raise ValueError
-        with psycopg.connect(
+        with database_connect(
             database_url,
             connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
             row_factory=dict_row,
@@ -645,6 +700,7 @@ def _complete_job(
     object_store: ObjectStore | None,
     claimed: Mapping[str, object],
     result: CallResult,
+    database_connect: Callable[..., psycopg.Connection[Any]] = psycopg.connect,
 ) -> None:
     if (
         object_store is None
@@ -657,6 +713,7 @@ def _complete_job(
             cast("uuid.UUID", claimed["id"]),
             "content_unavailable",
             "The generated media could not be retained.",
+            database_connect,
         )
         return
     output = result.outputs[0]
@@ -673,7 +730,7 @@ def _complete_job(
     )
     try:
         object_store.put(object_key, body, cast("str", metadata["media_type"]))
-        with psycopg.connect(
+        with database_connect(
             database_url,
             connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
             row_factory=dict_row,
@@ -707,16 +764,23 @@ def _complete_job(
                 ),
             )
     except Exception:
-        _delete_or_queue(database_url, object_store, object_key)
+        _delete_or_queue(database_url, object_store, object_key, database_connect)
         _fail_job(
             database_url,
             cast("uuid.UUID", claimed["id"]),
             "content_unavailable",
             "The generated media could not be retained.",
+            database_connect,
         )
 
 
-def _fail_job(database_url: str, job_id: uuid.UUID, code: str, message: str) -> None:
+def _fail_job(
+    database_url: str,
+    job_id: uuid.UUID,
+    code: str,
+    message: str,
+    database_connect: Callable[..., psycopg.Connection[Any]] = psycopg.connect,
+) -> None:
     safe_codes = {
         "provider_unavailable",
         "upstream_failed",
@@ -726,7 +790,7 @@ def _fail_job(database_url: str, job_id: uuid.UUID, code: str, message: str) -> 
     }
     safe_code = code if code in safe_codes else "upstream_failed"
     safe_message = message[:1000] if code in safe_codes else "The media job failed."
-    with psycopg.connect(
+    with database_connect(
         database_url,
         connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
         options=_DATABASE_OPTIONS,
@@ -786,7 +850,10 @@ def _object_key(
 
 
 def _delete_or_queue(
-    database_url: str, object_store: ObjectStore | None, object_key: str
+    database_url: str,
+    object_store: ObjectStore | None,
+    object_key: str,
+    database_connect: Callable[..., psycopg.Connection[Any]] = psycopg.connect,
 ) -> None:
     if object_store is None:
         return
@@ -796,7 +863,7 @@ def _delete_or_queue(
     except Exception:
         _LOGGER.warning("A retained media object needs queued deletion.")
     try:
-        with psycopg.connect(
+        with database_connect(
             database_url,
             connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
             options=_DATABASE_OPTIONS,

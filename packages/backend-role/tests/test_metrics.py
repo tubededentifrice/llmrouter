@@ -1,4 +1,5 @@
 """Tests for bounded metrics, deployment limits, and overload errors."""
+# ruff: noqa: ANN401, PLR2004
 
 from __future__ import annotations
 
@@ -6,17 +7,37 @@ import concurrent.futures
 import threading
 from decimal import Decimal
 from http import HTTPStatus
-from typing import Any, cast
+from typing import Any, Self, cast
 
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
 from llmrouter_backend import create_app
 from llmrouter_backend.config import Settings
+from llmrouter_backend.database import (
+    DatabaseConnectionLimitError,
+    DatabaseConnections,
+)
 from llmrouter_backend.metrics import MetricsRegistry
 
 _DATABASE_PROBE_LIMIT = 2
 _EXPECTED_PROVIDER_MODEL_SERIES = 1_025
+
+
+class _FakeConnection:
+    """Supply close behavior for connection-gate unit tests."""
+
+    def __init__(self) -> None:
+        self.closed = False
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        self.closed = True
 
 
 def test_metrics_have_fixed_safe_dimensions_and_survive_database_failure(
@@ -24,9 +45,9 @@ def test_metrics_have_fixed_safe_dimensions_and_survive_database_failure(
 ) -> None:
     """Expose required facts without request, identity, or control values."""
     registry = MetricsRegistry()
-    assert registry.try_admit_database_request(1)
-    assert not registry.try_admit_database_request(1)
-    registry.release_database_request()
+    registry.set_database_saturation(1, 1)
+    registry.reject_database_connection()
+    registry.close_database_connection()
     registry.set_call_saturation(1, 4)
     registry.reject_call("model")
     registry.observe_request("model", "succeeded", 0.25)
@@ -88,6 +109,7 @@ def test_metrics_bound_database_probes_and_historical_model_series(
 
     def blocked_snapshot(
         _database_url: str | None,
+        _database_connect: object = None,
     ) -> tuple[dict[tuple[str, str], int], bool]:
         nonlocal entered
         with entered_lock:
@@ -123,6 +145,20 @@ def test_metrics_bound_database_probes_and_historical_model_series(
             cost=Decimal("1e9999"),
             currency="USD",
         )
+    for index in range(64):
+        registry.observe_attempt(
+            kind="model",
+            provider_model="currency-model",
+            outcome="succeeded",
+            duration=0.1,
+            usage=(),
+            cost=Decimal(1),
+            currency=(
+                chr(ord("A") + index // (26 * 26))
+                + chr(ord("A") + (index // 26) % 26)
+                + chr(ord("A") + index % 26)
+            ),
+        )
     body = registry.render(database_url=None, cooldowns=())
     attempt_series = [
         line
@@ -131,22 +167,39 @@ def test_metrics_bound_database_probes_and_historical_model_series(
     ]
     assert len(attempt_series) == _EXPECTED_PROVIDER_MODEL_SERIES
     assert any('provider_model="(other)"' in line for line in attempt_series)
+    cost_series = [
+        line for line in body.splitlines() if line.startswith("llmrouter_cost_total{")
+    ]
+    assert (
+        len({line.split('currency="', 1)[1].split('"', 1)[0] for line in cost_series})
+        == 33
+    )
+    assert any('currency="OTHER"' in line for line in cost_series)
     for line in body.splitlines():
         if line and not line.startswith("#"):
             assert line.rsplit(" ", 1)[1] not in {"Inf", "+Inf", "-Inf", "NaN"}
 
 
-def test_public_metrics_route_and_database_admission_are_retryable() -> None:
-    """Keep scrape access open and reject overloaded database work safely."""
-    application = create_app(settings=Settings(database_concurrency=1))
-    registry: MetricsRegistry = application.state.metrics
-    assert registry.try_admit_database_request(1)
+def test_public_metrics_route_and_database_admission_are_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep scrape access open and reject an exhausted connection gate safely."""
+    monkeypatch.setattr(
+        "llmrouter_backend.database.connections.psycopg.connect",
+        lambda *_args, **_kwargs: cast("Any", _FakeConnection()),
+    )
+    application = create_app(
+        database_url="postgresql://database.invalid/router",
+        settings=Settings(database_concurrency=1),
+    )
+    connections: DatabaseConnections = application.state.database_connections
+    held = connections.connect("postgresql://database.invalid/router")
     try:
         client = TestClient(application)
         rejected = client.get("/v1/workspaces")
         metrics = client.get("/v1/metrics")
     finally:
-        registry.release_database_request()
+        held.close()
 
     assert rejected.status_code == HTTPStatus.TOO_MANY_REQUESTS
     assert rejected.headers["retry-after"] == "1"
@@ -154,7 +207,7 @@ def test_public_metrics_route_and_database_admission_are_retryable() -> None:
     assert rejected.json() == {
         "error": {
             "code": "rate_limited",
-            "message": "The Router concurrency limit is full.",
+            "message": "The Router database connection limit is full.",
         }
     }
     assert metrics.status_code == HTTPStatus.OK
@@ -162,6 +215,54 @@ def test_public_metrics_route_and_database_admission_are_retryable() -> None:
         "text/plain; version=0.0.4; charset=utf-8"
     )
     assert "llmrouter_database_healthy 0" in metrics.text
+
+
+def test_database_connection_gate_bounds_waiting_and_new_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Count only open connections and give finalization one bounded wait."""
+    opened: list[_FakeConnection] = []
+
+    def fake_connect(*_args: object, **_kwargs: object) -> Any:
+        connection = _FakeConnection()
+        opened.append(connection)
+        return connection
+
+    monkeypatch.setattr(
+        "llmrouter_backend.database.connections.psycopg.connect", fake_connect
+    )
+    registry = MetricsRegistry()
+    connections = DatabaseConnections(1, registry)
+    first = connections.connect("postgresql://database.invalid/router")
+    with pytest.raises(DatabaseConnectionLimitError):
+        connections.connect("postgresql://database.invalid/router")
+
+    acquired = threading.Event()
+    release_second = threading.Event()
+
+    def wait_for_connection() -> None:
+        second = connections.waiting_connect(
+            "postgresql://database.invalid/router", connect_timeout=1
+        )
+        acquired.set()
+        assert release_second.wait(timeout=2)
+        second.close()
+
+    thread = threading.Thread(target=wait_for_connection)
+    thread.start()
+    assert not acquired.wait(timeout=0.05)
+    first.close()
+    assert acquired.wait(timeout=1)
+    body = registry.render(database_url=None, cooldowns=())
+    assert 'llmrouter_saturation_active{resource="database_connection"} 1' in body
+    assert (
+        "llmrouter_admission_rejections_total"
+        '{resource="database_connection",kind=""} 1' in body
+    )
+    release_second.set()
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+    assert len(opened) == 2
 
 
 @pytest.mark.parametrize(
@@ -182,6 +283,11 @@ def test_public_metrics_route_and_database_admission_are_retryable() -> None:
             "database concurrency",
             {"database_concurrency": 100_001},
             "Database concurrency",
+        ),
+        (
+            "request body",
+            {"maximum_request_body_bytes": 1024 * 1024 * 1024 + 1},
+            "request-body limit",
         ),
         (
             "Boolean provider timeout",
@@ -218,6 +324,7 @@ def test_deployment_call_limits_load_from_environment(
         "LLMROUTER_CALL_CONNECTION_TIMEOUT_SECONDS": "120",
         "LLMROUTER_CALL_CONCURRENCY": "8",
         "LLMROUTER_DATABASE_CONCURRENCY": "16",
+        "LLMROUTER_MAXIMUM_REQUEST_BODY_BYTES": "4096",
         "LLMROUTER_MEDIA_JOB_DEADLINE_SECONDS": "600",
     }
     for name, value in values.items():
@@ -228,5 +335,68 @@ def test_deployment_call_limits_load_from_environment(
         settings.call_connection_timeout_seconds,
         settings.call_concurrency,
         settings.database_concurrency,
+        settings.maximum_request_body_bytes,
         settings.media_job_deadline_seconds,
-    ) == (30, 120, 8, 16, 600)
+    ) == (30, 120, 8, 16, 4096, 600)
+
+
+def test_request_body_limit_covers_framework_parsed_and_streamed_bodies() -> None:
+    """Reject a declared or streamed body before framework JSON parsing."""
+    client = TestClient(create_app(settings=Settings(maximum_request_body_bytes=1)))
+    declared = client.post(
+        "/v1/admin/services",
+        content=b"{}",
+        headers={"Content-Type": "application/json"},
+    )
+    streamed = client.post(
+        "/v1/admin/services",
+        content=(chunk for chunk in (b"{", b"}")),
+        headers={"Content-Type": "application/json"},
+    )
+    assert declared.status_code == HTTPStatus.BAD_REQUEST
+    assert declared.json() == {
+        "error": {
+            "code": "invalid_request",
+            "message": "The request is invalid.",
+            "details": {
+                "field": "body",
+                "reason": "The request body is too large.",
+            },
+        }
+    }
+    assert streamed.status_code == HTTPStatus.BAD_REQUEST
+    assert streamed.json()["error"] == {
+        "code": "invalid_request",
+        "message": "The request is invalid.",
+    }
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"Content-Length": "invalid"},
+        [("Content-Length", "1"), ("Content-Length", "1")],
+        {"Content-Length": "9" * 5_000},
+    ],
+    ids=("invalid", "duplicate", "oversized-digit-count"),
+)
+def test_request_body_limit_rejects_unsafe_content_length(headers: Any) -> None:
+    """Reject unsafe length fields with a stable public error."""
+    client = TestClient(create_app(settings=Settings(maximum_request_body_bytes=4_096)))
+    response = client.post(
+        "/v1/admin/services",
+        content=b"",
+        headers=headers,
+    )
+
+    assert response.status_code == HTTPStatus.BAD_REQUEST
+    assert response.json() == {
+        "error": {
+            "code": "invalid_request",
+            "message": "The request is invalid.",
+            "details": {
+                "field": "body",
+                "reason": "The request body is too large.",
+            },
+        }
+    }

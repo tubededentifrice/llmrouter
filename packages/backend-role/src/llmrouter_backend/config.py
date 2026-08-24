@@ -31,6 +31,7 @@ _MAXIMUM_MEDIA_JOB_DEADLINE_SECONDS = 24 * 60 * 60
 _MAXIMUM_PROVIDER_ATTEMPT_TIMEOUT_SECONDS = 10 * 60
 _MAXIMUM_CALL_CONNECTION_TIMEOUT_SECONDS = 15 * 60
 _MAXIMUM_CONCURRENCY = 100_000
+_MAXIMUM_REQUEST_BODY_BYTES = 1024 * 1024 * 1024
 _BUCKET_NAME = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
 _IP_BUCKET_NAME = re.compile(r"^[0-9]+(?:\.[0-9]+){3}$")
 _OBJECT_STORE_REGION = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
@@ -66,7 +67,8 @@ class Settings:
     provider_attempt_timeout_seconds: int = 60
     call_connection_timeout_seconds: int = 15 * 60
     call_concurrency: int = 100
-    database_concurrency: int = 200
+    database_concurrency: int = 50
+    maximum_request_body_bytes: int = 70 * 1024 * 1024
     media_job_deadline_seconds: int = 60 * 60
 
     def __post_init__(self) -> None:
@@ -107,6 +109,12 @@ class Settings:
         _validate_object_store(self)
         _validate_local_embedding(self)
         _validate_call_limits(self)
+        if (
+            type(self.maximum_request_body_bytes) is not int
+            or not 1 <= self.maximum_request_body_bytes <= _MAXIMUM_REQUEST_BODY_BYTES
+        ):
+            message = "The request-body limit must be from 1 byte through 1 GiB."
+            raise ValueError(message)
         if (
             type(self.media_job_deadline_seconds) is not int
             or not 1
@@ -184,7 +192,10 @@ class Settings:
             ),
             call_concurrency=_integer_environment("LLMROUTER_CALL_CONCURRENCY", 100),
             database_concurrency=_integer_environment(
-                "LLMROUTER_DATABASE_CONCURRENCY", 200
+                "LLMROUTER_DATABASE_CONCURRENCY", 50
+            ),
+            maximum_request_body_bytes=_integer_environment(
+                "LLMROUTER_MAXIMUM_REQUEST_BODY_BYTES", 70 * 1024 * 1024
             ),
             media_job_deadline_seconds=_integer_environment(
                 "LLMROUTER_MEDIA_JOB_DEADLINE_SECONDS", 60 * 60

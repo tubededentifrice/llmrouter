@@ -24,7 +24,7 @@ from llmrouter_backend.object_store import (
 from llmrouter_backend.store import AdministratorActor, record_activity
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
     from psycopg import Connection
 
@@ -92,12 +92,15 @@ def write_detailed_log_best_effort(
     database_url: str,
     object_store: ObjectStore | None,
     value: DetailedLogWrite,
+    *,
+    database_connect: Callable[..., psycopg.Connection[Any]] | None = None,
 ) -> uuid.UUID | None:
     """Write diagnostic data separately so call success never depends on it."""
     uploaded: list[str] = []
+    connect = database_connect or psycopg.connect
     try:
         _validate_write(value)
-        with psycopg.connect(
+        with connect(
             database_url,
             connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
             row_factory=dict_row,
@@ -151,7 +154,11 @@ def write_detailed_log_best_effort(
                         object_store.put(object_key, media.body, media.media_type)
                     except Exception:  # noqa: BLE001 - Diagnostic media is best-effort.
                         _delete_or_queue_best_effort(
-                            database_url, object_store, object_key
+                            database_url,
+                            object_store,
+                            object_key,
+                            database=connection,
+                            database_connect=connect,
                         )
                         break
                     uploaded.append(object_key)
@@ -176,7 +183,12 @@ def write_detailed_log_best_effort(
     except Exception:  # noqa: BLE001 - Diagnostics must not change the call result.
         if object_store is not None:
             for object_key in uploaded:
-                _delete_or_queue_best_effort(database_url, object_store, object_key)
+                _delete_or_queue_best_effort(
+                    database_url,
+                    object_store,
+                    object_key,
+                    database_connect=connect,
+                )
         return None
     else:
         return log_id
@@ -575,33 +587,57 @@ def _object_key(
     return f"{day}/{service_id}/{workspace_id}/{media_id}"
 
 
-def _queue_orphaned_object_best_effort(database_url: str, object_key: str) -> None:
+def _queue_orphaned_object_best_effort(
+    database_url: str,
+    object_key: str,
+    *,
+    database: Connection[Any] | None = None,
+    database_connect: Callable[..., psycopg.Connection[Any]] | None = None,
+) -> None:
     """Keep cleanup intent when upload rollback cannot delete an object."""
+    connect = database_connect or psycopg.connect
     try:
-        with psycopg.connect(
+        if database is not None:
+            _queue_orphaned_object(database, object_key)
+            return
+        with connect(
             database_url,
             connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
             options=_DATABASE_TIMEOUT_OPTIONS,
         ) as connection:
-            connection.execute(
-                """INSERT INTO router.object_deletion_queue
-                       (object_key, failure_count, failure_class, last_attempt_at)
-                   VALUES (%s, 1, 'upload_rollback_failed', statement_timestamp())
-                   ON CONFLICT (object_key) DO UPDATE
-                   SET failure_count = router.object_deletion_queue.failure_count + 1,
-                       failure_class = 'upload_rollback_failed',
-                       last_attempt_at = statement_timestamp()""",
-                (object_key,),
-            )
+            _queue_orphaned_object(connection, object_key)
     except Exception:  # noqa: BLE001 - Diagnostic cleanup stays best-effort.
         return
 
 
+def _queue_orphaned_object(database: Connection[Any], object_key: str) -> None:
+    database.execute(
+        """INSERT INTO router.object_deletion_queue
+               (object_key, failure_count, failure_class, last_attempt_at)
+           VALUES (%s, 1, 'upload_rollback_failed', statement_timestamp())
+           ON CONFLICT (object_key) DO UPDATE
+           SET failure_count = router.object_deletion_queue.failure_count + 1,
+               failure_class = 'upload_rollback_failed',
+               last_attempt_at = statement_timestamp()""",
+        (object_key,),
+    )
+
+
 def _delete_or_queue_best_effort(
-    database_url: str, object_store: ObjectStore, object_key: str
+    database_url: str,
+    object_store: ObjectStore,
+    object_key: str,
+    *,
+    database: Connection[Any] | None = None,
+    database_connect: Callable[..., psycopg.Connection[Any]] | None = None,
 ) -> None:
     """Delete one uncertain upload or keep durable cleanup intent."""
     try:
         object_store.delete(object_key)
     except Exception:  # noqa: BLE001 - Convert dependency failures to cleanup intent.
-        _queue_orphaned_object_best_effort(database_url, object_key)
+        _queue_orphaned_object_best_effort(
+            database_url,
+            object_key,
+            database=database,
+            database_connect=database_connect,
+        )

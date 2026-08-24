@@ -196,3 +196,32 @@ def test_metrics_query_global_media_counts_and_health_stays_small(
         failed_components["accounting_rollup"],
     } == {"unavailable"}
     assert "private PostgreSQL detail" not in failed_snapshot.text
+
+
+def test_database_connection_limit_includes_unauthed_and_probe_work(
+    database_url: str,
+) -> None:
+    """Reject a new request and keep scrape or readiness probes observational."""
+    with psycopg.connect(database_url) as connection:
+        migrate(connection)
+    application = create_app(
+        database_url=database_url,
+        settings=Settings(database_concurrency=1),
+    )
+    held = application.state.database_connections.connect(
+        database_url, connect_timeout=2
+    )
+    try:
+        client = TestClient(application)
+        rejected = client.get("/v1/workspaces")
+        metrics = client.get("/v1/metrics")
+        readiness = client.get("/ready")
+    finally:
+        held.close()
+
+    assert rejected.status_code == HTTPStatus.TOO_MANY_REQUESTS
+    assert rejected.headers["retry-after"] == "1"
+    assert rejected.json()["error"]["code"] == "rate_limited"
+    assert metrics.status_code == HTTPStatus.OK
+    assert "llmrouter_database_healthy 0" in metrics.text
+    assert readiness.status_code == HTTPStatus.SERVICE_UNAVAILABLE

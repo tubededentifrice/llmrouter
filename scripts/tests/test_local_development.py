@@ -15,6 +15,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 CHECK_PATH = REPOSITORY_ROOT / "scripts/check-local-development.py"
 COMPOSE_PATH = REPOSITORY_ROOT / "docker-compose.dev.yml"
 STORAGE_CONFIG_PATH = REPOSITORY_ROOT / "scripts/local-development-object-storage.toml"
+VITE_CONFIG_PATH = REPOSITORY_ROOT / "apps/admin/vite.config.ts"
 SUBJECTS_INPUT = (
     "LLMROUTER_ADMINISTRATOR_SUBJECTS_FILE: /run/secrets/administrator_subjects"
 )
@@ -49,6 +50,11 @@ def test_local_development_contract_accepts_repository_compose() -> None:
             SUBJECTS_INPUT,
             "LLMROUTER_ADMINISTRATOR_SUBJECTS_FILE: missing",
             "Pocket ID deployment inputs",
+        ),
+        (
+            'LLMROUTER_MAXIMUM_REQUEST_BODY_BYTES: "73400320"',
+            "LLMROUTER_MAXIMUM_REQUEST_BODY_BYTES: missing",
+            "deployment operation limits",
         ),
     ],
 )
@@ -165,6 +171,16 @@ def test_local_wrapper_rejects_a_public_address_before_start() -> None:
     assert "LLMROUTER_BIND_ADDRESS:-127.0.0.1" in script
     assert "can bind only to 127.0.0.1" in script
     assert "flock --nonblock" in script
+
+
+def test_public_administration_proxy_does_not_expose_metrics() -> None:
+    """Keep the unauthenticated scrape route on the loopback backend port."""
+    config = VITE_CONFIG_PATH.read_text(encoding="utf-8")
+    bypass = config[config.index("bypass(") :]
+    assert "decodeURIComponent(rawPath)" in bypass
+    assert 'path !== "/v1/metrics"' in bypass
+    assert "response.statusCode = 404" in bypass
+    assert "return false" in bypass
 
 
 def test_local_start_reruns_migrations_before_the_application() -> None:

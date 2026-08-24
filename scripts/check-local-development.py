@@ -1,5 +1,5 @@
 """Check the localhost development deployment contract."""
-# ruff: noqa: EM101, INP001, TRY003
+# ruff: noqa: C901, EM101, INP001, TRY003
 
 from __future__ import annotations
 
@@ -133,6 +133,16 @@ def main() -> None:
     }
     if any(value not in text for value in required_storage_inputs):
         raise SystemExit("The private object-store deployment inputs are incomplete.")
+    required_limits = {
+        'LLMROUTER_PROVIDER_ATTEMPT_TIMEOUT_SECONDS: "60"',
+        'LLMROUTER_CALL_CONNECTION_TIMEOUT_SECONDS: "900"',
+        'LLMROUTER_CALL_CONCURRENCY: "100"',
+        'LLMROUTER_DATABASE_CONCURRENCY: "50"',
+        'LLMROUTER_MAXIMUM_REQUEST_BODY_BYTES: "73400320"',
+        'LLMROUTER_MEDIA_JOB_DEADLINE_SECONDS: "3600"',
+    }
+    if any(value not in text for value in required_limits):
+        raise SystemExit("The deployment operation limits are incomplete.")
     if 'network_mode: "service:backend"' not in text:
         raise SystemExit("The object-store endpoint is not isolated on loopback.")
     _check_storage_isolation()

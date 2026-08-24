@@ -6,13 +6,13 @@ import math
 import sys
 import threading
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 import psycopg
 from psycopg.rows import dict_row
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Sequence
+    from collections.abc import Callable, Iterable, Sequence
     from decimal import Decimal
 
 type CallKind = Literal["model", "embedding", "media"]
@@ -43,7 +43,9 @@ _MEDIA_KINDS: Final = ("image", "video", "audio")
 _MEDIA_STATES: Final = ("pending", "running", "succeeded", "failed")
 _DATABASE_PROBE_LIMIT: Final = 2
 _MAXIMUM_PROVIDER_MODEL_SERIES: Final = 1_024
+_MAXIMUM_CURRENCY_SERIES: Final = 32
 _OTHER_PROVIDER_MODEL: Final = "(other)"
+_OTHER_CURRENCY: Final = "OTHER"
 _REQUEST_OUTCOMES: Final = frozenset(
     {
         "succeeded",
@@ -86,27 +88,28 @@ class MetricsRegistry:
         self._call_active = 0
         self._call_limit = 0
         self._provider_models: set[str] = set()
+        self._currencies: set[str] = set()
 
     def set_database_saturation(self, active: int, limit: int) -> None:
-        """Set the current database-request admission state for this replica."""
+        """Set the current database-connection state for this replica."""
         with self._lock:
             self._database_active = active
             self._database_limit = limit
 
-    def try_admit_database_request(self, limit: int) -> bool:
-        """Admit one database-backed HTTP request without waiting in memory."""
+    def open_database_connection(self) -> None:
+        """Count one connection after the shared gate admits it."""
         with self._lock:
-            self._database_limit = limit
-            if self._database_active >= limit:
-                self._increment("database_admission_rejections", ())
-                return False
             self._database_active += 1
-            return True
 
-    def release_database_request(self) -> None:
-        """Release one admitted database-backed HTTP request."""
+    def close_database_connection(self) -> None:
+        """Count one connection after the shared gate releases it."""
         with self._lock:
             self._database_active = max(0, self._database_active - 1)
+
+    def reject_database_connection(self) -> None:
+        """Count one connection admission rejection."""
+        with self._lock:
+            self._increment("database_admission_rejections", ())
 
     def set_call_saturation(self, active: int, limit: int) -> None:
         """Set the current call admission state for this replica."""
@@ -152,7 +155,7 @@ class MetricsRegistry:
                 )
             self._increment(
                 "cost",
-                (kind, safe_provider_model, currency),
+                (kind, safe_provider_model, self._currency_label(currency)),
                 _decimal_value(cost),
             )
 
@@ -161,6 +164,7 @@ class MetricsRegistry:
         *,
         database_url: str | None,
         cooldowns: Iterable[tuple[str, float, str]],
+        database_connect: Callable[..., psycopg.Connection[Any]] | None = None,
     ) -> str:
         """Render one Prometheus text snapshot and isolate database failures."""
         with self._lock:
@@ -169,7 +173,9 @@ class MetricsRegistry:
                 self._database_probe_active += 1
         try:
             media_counts, database_healthy = (
-                _database_snapshot(database_url) if probe_database else ({}, False)
+                _database_snapshot(database_url, database_connect)
+                if probe_database
+                else ({}, False)
             )
         finally:
             if probe_database:
@@ -223,14 +229,24 @@ class MetricsRegistry:
         self._provider_models.add(provider_model)
         return provider_model
 
+    def _currency_label(self, currency: str) -> str:
+        if currency in self._currencies:
+            return currency
+        if len(self._currencies) >= _MAXIMUM_CURRENCY_SERIES:
+            return _OTHER_CURRENCY
+        self._currencies.add(currency)
+        return currency
+
 
 def _database_snapshot(
     database_url: str | None,
+    database_connect: Callable[..., psycopg.Connection[Any]] | None = None,
 ) -> tuple[dict[tuple[str, str], int], bool]:
     if database_url is None:
         return {}, False
+    connect = database_connect or psycopg.connect
     try:
-        with psycopg.connect(
+        with connect(
             database_url,
             connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
             options=_DATABASE_OPTIONS,
@@ -358,10 +374,11 @@ def _render_snapshot(  # noqa: PLR0913
         for state in _MEDIA_STATES
     )
     database_active_line = (
-        f'llmrouter_saturation_active{{resource="database_request"}} {database_active}'
+        f'llmrouter_saturation_active{{resource="database_connection"}} '
+        f"{database_active}"
     )
     database_limit_line = (
-        f'llmrouter_saturation_limit{{resource="database_request"}} {database_limit}'
+        f'llmrouter_saturation_limit{{resource="database_connection"}} {database_limit}'
     )
     database_rejections = _counter_value(counters, "database_admission_rejections", ())
     rejection_help = (
@@ -370,7 +387,7 @@ def _render_snapshot(  # noqa: PLR0913
     )
     database_rejection_line = (
         "llmrouter_admission_rejections_total"
-        f'{{resource="database_request",kind=""}} {database_rejections}'
+        f'{{resource="database_connection",kind=""}} {database_rejections}'
     )
     database_probe_active_line = (
         'llmrouter_saturation_active{resource="database_probe"} '

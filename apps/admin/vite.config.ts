@@ -1,4 +1,5 @@
 import react from "@vitejs/plugin-react";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { defineConfig } from "vite";
 
 export default defineConfig({
@@ -31,5 +32,25 @@ function localProxy() {
     url.hostname !== "backend"
   )
     throw new Error("LLMROUTER_VITE_PROXY_ORIGIN is invalid.");
-  return { "/v1": { target, changeOrigin: false } };
+  return {
+    "/v1": {
+      target,
+      changeOrigin: false,
+      bypass(request: IncomingMessage, response: ServerResponse | undefined) {
+        const rawPath = request.url?.split("?", 1)[0];
+        if (rawPath === undefined) return;
+        let path: string;
+        try {
+          path = decodeURIComponent(rawPath);
+        } catch {
+          return false;
+        }
+        if (path !== "/v1/metrics") return;
+        if (response === undefined) return false;
+        response.statusCode = 404;
+        response.setHeader("Cache-Control", "no-store");
+        return false;
+      },
+    },
+  };
 }

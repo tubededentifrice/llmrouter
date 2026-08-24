@@ -1,5 +1,5 @@
 """Create the one LLM Router web application."""
-# ruff: noqa: B008, C901, EM101, FAST002, PLR0913, PLR0917, PLR2004, TC002, TC003, TRY003
+# ruff: noqa: B008, C901, EM101, FAST002, PLR0913, PLR0917, PLR2004, TC002, TRY003
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import hmac
 import json
 import os
 import uuid
-from collections.abc import AsyncGenerator, AsyncIterator, Iterator
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
@@ -23,6 +23,7 @@ from psycopg.rows import dict_row
 from pydantic import ValidationError
 from starlette.exceptions import HTTPException as StarletteHttpException
 from starlette.middleware.base import RequestResponseEndpoint
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from llmrouter_backend import accounting, assignments, catalog
 from llmrouter_backend.adapters import (
@@ -44,7 +45,11 @@ from llmrouter_backend.calls import (
     ProviderOutput,
 )
 from llmrouter_backend.config import Settings
-from llmrouter_backend.database import migration_plan
+from llmrouter_backend.database import (
+    DatabaseConnectionLimitError,
+    DatabaseConnections,
+    migration_plan,
+)
 from llmrouter_backend.diagnostics import (
     apply_retention_and_cleanup,
     cleanup_health,
@@ -184,6 +189,7 @@ _OIDC_FLOW_MINUTES = 10
 ApiNamePath = Annotated[str, Path(pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$")]
 AssignmentNamePath = Annotated[str, Path(pattern=r"^[a-z0-9][a-z0-9._-]{0,126}$")]
 type HealthStatus = Literal["healthy", "degraded", "unavailable"]
+type DatabaseConnect = Callable[..., psycopg.Connection[Any]]
 ObservedRequirementPath = Annotated[
     Literal[
         "text_input",
@@ -200,6 +206,52 @@ ObservedRequirementPath = Annotated[
     ],
     Path(),
 ]
+
+
+class _BoundedRequestBodyMiddleware:
+    """Reject a request body before its process memory use exceeds its limit."""
+
+    def __init__(self, application: ASGIApp, maximum_bytes: int) -> None:
+        self._application = application
+        self._maximum_bytes = maximum_bytes
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self._application(scope, receive, send)
+            return
+        lengths = [
+            value
+            for name, value in scope["headers"]
+            if name.lower() == b"content-length"
+        ]
+        if lengths and (
+            len(lengths) != 1
+            or not lengths[0].isdigit()
+            or len(lengths[0]) > len(str(self._maximum_bytes))
+            or int(lengths[0]) > self._maximum_bytes
+        ):
+            await _request_body_limit_response(scope, receive, send)
+            return
+        received = 0
+
+        async def limited_receive() -> Message:
+            nonlocal received
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > self._maximum_bytes:
+                    raise invalid_request("body", "The request body is too large.")
+            return message
+
+        await self._application(scope, limited_receive, send)
+
+
+async def _request_body_limit_response(
+    scope: Scope, receive: Receive, send: Send
+) -> None:
+    public = invalid_request("body", "The request body is too large.")
+    response = JSONResponse(public.envelope(), status_code=public.status_code)
+    await response(scope, receive, send)
 
 
 def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
@@ -224,12 +276,15 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
     @asynccontextmanager
     async def lifespan(_application: FastAPI) -> AsyncIterator[None]:
         cleanup_task = asyncio.create_task(
-            _retention_cleanup_loop(database_url, object_store_value)
+            _retention_cleanup_loop(
+                database_url, object_store_value, database_connections.waiting_connect
+            )
         )
         accounting_task = asyncio.create_task(
             _accounting_maintenance_loop(
                 database_url,
                 price_source_values,
+                database_connections.waiting_connect,
             )
         )
         media_task = (
@@ -238,6 +293,7 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
                     configured_call_database_url,
                     cast("CallExecutor", application.state.call_executor),
                     object_store_value,
+                    database_connections.waiting_connect,
                 )
             )
             if configured_call_database_url is not None
@@ -258,14 +314,21 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
                     await task
 
     application = FastAPI(title="LLM Router", version="1.0.0", lifespan=lifespan)
+    application.add_middleware(
+        _BoundedRequestBodyMiddleware,
+        maximum_bytes=settings_value.maximum_request_body_bytes,
+    )
     application.state.database_url = database_url
     application.state.settings = settings_value
     application.state.oidc_transport = oidc_transport
     application.state.object_store = object_store_value
     metrics = MetricsRegistry()
-    metrics.set_database_saturation(0, settings_value.database_concurrency)
     metrics.set_call_saturation(0, settings_value.call_concurrency)
     application.state.metrics = metrics
+    database_connections = DatabaseConnections(
+        settings_value.database_concurrency, metrics
+    )
+    application.state.database_connections = database_connections
     price_source_values = (
         price_sources
         if price_sources is not None
@@ -329,36 +392,13 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
                 media_connection_timeout_seconds=settings_value.media_job_deadline_seconds,
             ),
             metrics=metrics,
+            database_connect=database_connections.connect,
+            final_database_connect=database_connections.waiting_connect,
         )
         if configured_call_database_url is not None
         else None
     )
     _install_error_handlers(application)
-
-    @application.middleware("http")
-    async def admit_database_work(
-        request: Request, call_next: RequestResponseEndpoint
-    ) -> Response:
-        """Reject new database-backed work when the configured limit is full."""
-        if request.url.path in {"/health", "/ready", "/v1/health", "/v1/metrics"}:
-            return await call_next(request)
-        if not request.url.path.startswith("/v1/"):
-            return await call_next(request)
-        if not metrics.try_admit_database_request(settings_value.database_concurrency):
-            return JSONResponse(
-                status_code=HTTPStatus.TOO_MANY_REQUESTS,
-                content={
-                    "error": {
-                        "code": "rate_limited",
-                        "message": "The Router concurrency limit is full.",
-                    }
-                },
-                headers={"Cache-Control": "no-store", "Retry-After": "1"},
-            )
-        try:
-            return await call_next(request)
-        finally:
-            metrics.release_database_request()
 
     @application.middleware("http")
     async def prevent_sensitive_response_caching(
@@ -388,7 +428,7 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
                 "internal_error",
                 "The Router could not complete the operation.",
             )
-        with psycopg.connect(
+        with database_connections.connect(
             configured_url,
             connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
             row_factory=dict_row,
@@ -433,7 +473,7 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
                 "internal_error",
                 "The Router could not complete the operation.",
             )
-        with psycopg.connect(
+        with database_connections.connect(
             configured_url,
             connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
             row_factory=dict_row,
@@ -472,7 +512,7 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
                 "internal_error",
                 "The Router could not complete the operation.",
             )
-        with psycopg.connect(
+        with database_connections.connect(
             configured_url,
             connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
             row_factory=dict_row,
@@ -503,6 +543,7 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
         body = await asyncio.to_thread(
             metrics.render,
             database_url=configured_url,
+            database_connect=database_connections.connect,
             cooldowns=(
                 (
                     item.provider_model_api_name,
@@ -533,7 +574,7 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
                 (migration.version, migration.name, migration.checksum)
                 for migration in migration_plan()
             )
-            with psycopg.connect(
+            with database_connections.connect(
                 configured_url,
                 connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
                 options=_database_timeout_options(),
@@ -858,6 +899,8 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
             actor=actor,
             body=body,
             deadline_seconds=request.app.state.settings.media_job_deadline_seconds,
+            database_connect=database_connections.connect,
+            cleanup_database_connect=database_connections.waiting_connect,
         )
         return MediaJob.model_validate(created)
 
@@ -2260,7 +2303,9 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
             retention_status,
             price_status,
             rollup_status,
-        ) = _administrator_health_database_snapshot(configured_url)
+        ) = _administrator_health_database_snapshot(
+            configured_url, database_connections.connect
+        )
         object_status: HealthStatus = (
             "healthy" if _object_store_is_healthy(objects) else "unavailable"
         )
@@ -2536,12 +2581,17 @@ def _commit_public_delete_and_cleanup(
 
 
 async def _retention_cleanup_loop(
-    fixed_database_url: str | None, object_store: ObjectStore | None
+    fixed_database_url: str | None,
+    object_store: ObjectStore | None,
+    database_connect: DatabaseConnect = psycopg.connect,
 ) -> None:
     """Retry bounded retention and physical deletion work each minute."""
     while True:
         await asyncio.to_thread(
-            _run_scheduled_cleanup, fixed_database_url, object_store
+            _run_scheduled_cleanup,
+            fixed_database_url,
+            object_store,
+            database_connect,
         )
         await asyncio.sleep(60)
 
@@ -2549,6 +2599,7 @@ async def _retention_cleanup_loop(
 async def _accounting_maintenance_loop(
     fixed_database_url: str | None,
     price_sources: dict[str, PriceSource],
+    database_connect: DatabaseConnect = psycopg.connect,
 ) -> None:
     """Run due fixed price and accounting work and survive dependency failures."""
     while True:
@@ -2556,6 +2607,7 @@ async def _accounting_maintenance_loop(
             _run_due_accounting_maintenance,
             fixed_database_url,
             price_sources,
+            database_connect,
         )
         await asyncio.sleep(60)
 
@@ -2563,6 +2615,7 @@ async def _accounting_maintenance_loop(
 def _run_due_accounting_maintenance(
     fixed_database_url: str | None,
     price_sources: dict[str, PriceSource],
+    database_connect: DatabaseConnect = psycopg.connect,
     *,
     now: datetime | None = None,
 ) -> None:
@@ -2572,7 +2625,7 @@ def _run_due_accounting_maintenance(
         return
     current = (now or datetime.now(tz=UTC)).astimezone(UTC)
     try:
-        with psycopg.connect(
+        with database_connect(
             database_url,
             connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
             row_factory=dict_row,
@@ -2644,13 +2697,15 @@ def _run_due_accounting_maintenance(
 
 
 def _run_scheduled_cleanup(
-    fixed_database_url: str | None, object_store: ObjectStore | None
+    fixed_database_url: str | None,
+    object_store: ObjectStore | None,
+    database_connect: DatabaseConnect = psycopg.connect,
 ) -> None:
     database_url = fixed_database_url or os.environ.get("LLMROUTER_DATABASE_URL")
     if database_url is None:
         return
     try:
-        with psycopg.connect(
+        with database_connect(
             database_url,
             connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
             row_factory=dict_row,
@@ -2681,6 +2736,7 @@ def _object_store_is_healthy(object_store: ObjectStore | None) -> bool:
 
 def _administrator_health_database_snapshot(
     database_url: str | None,
+    database_connect: DatabaseConnect = psycopg.connect,
 ) -> tuple[HealthStatus, HealthStatus, HealthStatus, HealthStatus]:
     """Read database-backed health and close before other dependency I/O."""
     unavailable: tuple[HealthStatus, HealthStatus, HealthStatus, HealthStatus] = (
@@ -2692,7 +2748,7 @@ def _administrator_health_database_snapshot(
     if database_url is None:
         return unavailable
     try:
-        with psycopg.connect(
+        with database_connect(
             database_url,
             connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
             row_factory=dict_row,
@@ -2834,7 +2890,14 @@ def _call_api_error(error: CallExecutionError) -> ApiError:
 def _install_error_handlers(application: FastAPI) -> None:
     @application.exception_handler(ApiError)
     async def api_error(_request: Request, error: ApiError) -> JSONResponse:
-        return JSONResponse(error.envelope(), status_code=error.status_code)
+        headers = (
+            {"Cache-Control": "no-store", "Retry-After": "1"}
+            if error.code == "rate_limited"
+            else None
+        )
+        return JSONResponse(
+            error.envelope(), status_code=error.status_code, headers=headers
+        )
 
     @application.exception_handler(RequestValidationError)
     async def request_validation(
@@ -2876,6 +2939,21 @@ def _install_error_handlers(application: FastAPI) -> None:
             500, "internal_error", "The Router could not complete the operation."
         )
         return JSONResponse(public.envelope(), status_code=public.status_code)
+
+    @application.exception_handler(DatabaseConnectionLimitError)
+    async def database_limit(
+        _request: Request, _error: DatabaseConnectionLimitError
+    ) -> JSONResponse:
+        public = ApiError(
+            HTTPStatus.TOO_MANY_REQUESTS,
+            "rate_limited",
+            "The Router database connection limit is full.",
+        )
+        return JSONResponse(
+            public.envelope(),
+            status_code=public.status_code,
+            headers={"Cache-Control": "no-store", "Retry-After": "1"},
+        )
 
     @application.exception_handler(StarletteHttpException)
     async def route_error(
