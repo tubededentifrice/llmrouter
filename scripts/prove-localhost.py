@@ -31,6 +31,7 @@ from opendle import (
     ContextPolicy,
     ConversationHarness,
     ConversationState,
+    ExactModelSelector,
     HarnessConfig,
     ImageInputPart,
     MediaJobState,
@@ -409,6 +410,51 @@ def _prove_native_http(
         assert result["provider_model_api_name"] == "text"
         assert result["content"] == [{"type": "text", "text": "Fake response."}]
 
+        exact_failure_body = _model_body("workflow")
+        exact_failure_body["selector"] = {"provider_model_api_name": "failed-text"}
+        exact_failure = client.post(
+            "/v1/model-calls", headers=alpha_headers, json=exact_failure_body
+        )
+        assert exact_failure.status_code == 502
+        assert exact_failure.json()["error"]["code"] == "upstream_failed"
+
+        exact_body = _model_body("workflow", tags=["exact", "proof"])
+        exact_body["selector"] = {"provider_model_api_name": "text"}
+        exact = client.post("/v1/model-calls", headers=alpha_headers, json=exact_body)
+        assert exact.status_code == 200
+        assert exact.json()["provider_model_api_name"] == "text"
+
+        foreign_model_body = _model_body("workflow")
+        foreign_model_body["workspace_api_name"] = "alpha-private"
+        foreign_model_body["selector"] = {"provider_model_api_name": "text"}
+        foreign_model = client.post(
+            "/v1/model-calls", headers=beta_headers, json=foreign_model_body
+        )
+        assert foreign_model.status_code == 404
+
+        foreign_embedding = client.post(
+            "/v1/embeddings",
+            headers=beta_headers,
+            json={
+                "workspace_api_name": "alpha-private",
+                "selector": {"provider_model_api_name": "embedding"},
+                "inputs": ["foreign"],
+            },
+        )
+        assert foreign_embedding.status_code == 404
+
+        foreign_media = client.post(
+            "/v1/media-jobs",
+            headers=beta_headers,
+            json={
+                "workspace_api_name": "alpha-private",
+                "selector": {"provider_model_api_name": "media"},
+                "kind": "image",
+                "prompt": "This foreign request must fail.",
+            },
+        )
+        assert foreign_media.status_code == 404
+
         tool_body = _model_body("workflow")
         tool_body["tools"] = [
             {
@@ -513,6 +559,12 @@ def _prove_native_http(
             )
             assert content.status_code == 200
             assert content.content == b"fake-media-bytes"
+            hidden_job = client.get(f"/v1/media-jobs/{job['id']}", headers=beta_headers)
+            assert hidden_job.status_code == 404
+            hidden_content = client.get(
+                f"/v1/media-jobs/{job['id']}/content", headers=beta_headers
+            )
+            assert hidden_content.status_code == 404
 
         statistics = client.get(
             "/v1/statistics",
@@ -525,7 +577,21 @@ def _prove_native_http(
             },
         )
         assert statistics.status_code == 200, statistics.status_code
-        assert statistics.json()["buckets"]
+        buckets = statistics.json()["buckets"]
+        assert buckets
+        assert any(bucket["dimensions"][0] == "(exact)" for bucket in buckets)
+        foreign_statistics = client.get(
+            "/v1/statistics",
+            headers=beta_headers,
+            params={
+                "from": (datetime.now(tz=UTC) - timedelta(hours=1)).isoformat(),
+                "to": (datetime.now(tz=UTC) + timedelta(hours=1)).isoformat(),
+                "tag": "proof",
+                "group_by": ["assignment"],
+            },
+        )
+        assert foreign_statistics.status_code == 200
+        assert foreign_statistics.json()["buckets"] == []
 
         serialized = (
             f"{response.text}\n{tool.text}\n{structured_result.text}\n"
@@ -606,6 +672,16 @@ def _prove_sdk_and_harness(alpha_key: str) -> None:
     result = client.model_call(call)
     assert result.route.provider_model_api_name == "text"
     assert result.usage.cost != "0"
+
+    exact = client.model_call(
+        ModelCall(
+            "main",
+            ExactModelSelector("text"),
+            (UserMessage((TextInputPart("Run one exact SDK call."),)),),
+            tags=("exact", "proof", "sdk"),
+        )
+    )
+    assert exact.route == ExactModelSelector("text")
 
     stream = tuple(client.stream_model(call))
     assert len(stream) >= 3
@@ -943,9 +1019,11 @@ class _Cdp:
         return remote.get("value")
 
     def _send(self, value: str) -> None:
-        payload = value.encode()
+        self._send_frame(1, value.encode())
+
+    def _send_frame(self, opcode: int, payload: bytes) -> None:
         mask = os.urandom(4)
-        header = bytearray([0x81])
+        header = bytearray([0x80 | opcode])
         if len(payload) < 126:
             header.append(0x80 | len(payload))
         elif len(payload) <= 65_535:
@@ -972,6 +1050,7 @@ class _Cdp:
             if opcode == 8:
                 raise AssertionError("The Chrome debugging socket closed.")
             if opcode == 9:
+                self._send_frame(10, payload)
                 continue
             if opcode in {0, 1}:
                 fragments.extend(payload)

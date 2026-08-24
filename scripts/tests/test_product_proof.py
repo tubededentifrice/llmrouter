@@ -53,6 +53,9 @@ def test_proof_covers_restart_and_dependency_failures() -> None:
     assert "--no-cov" in shell
     assert "unset LLMROUTER_TEST_DATABASE_URL" in shell
     assert "[[ ! -x /usr/bin/google-chrome ]]" in shell
+    assert "lock_deployment" in shell
+    assert "flock --nonblock 9" in shell
+    assert 'readlink "/proc/$$/fd/9"' in shell
 
 
 def test_local_development_exposes_the_fixed_proof() -> None:
@@ -62,6 +65,10 @@ def test_local_development_exposes_the_fixed_proof() -> None:
     )
     assert "prove)" in source
     assert '[[ "$#" == "1" ]]' in source
+    proof_action = source[source.index("    prove)") : source.index("    *)")]
+    assert proof_action.index("lock_operation") < proof_action.index(
+        'exec "${repository_root}/scripts/prove-simplified-product.sh"'
+    )
     assert 'exec "${repository_root}/scripts/prove-simplified-product.sh"' in source
 
 
@@ -71,6 +78,7 @@ def test_live_proof_covers_sdk_harness_and_native_operation_families() -> None:
     for evidence in (
         "ConversationHarness(",
         "RouterClient(",
+        "ExactModelSelector(",
         '"/v1/model-calls"',
         '"/v1/model-streams"',
         '"/v1/embeddings"',
@@ -78,9 +86,16 @@ def test_live_proof_covers_sdk_harness_and_native_operation_families() -> None:
         '"/v1/statistics"',
         '"/v1/admin/session/start"',
         '"/v1/admin/services/beta"',
+        "foreign_model.status_code == 404",
+        "foreign_embedding.status_code == 404",
+        "foreign_media.status_code == 404",
+        "hidden_content.status_code == 404",
+        'bucket["dimensions"][0] == "(exact)"',
+        'foreign_statistics.json()["buckets"] == []',
         "fake-stream-interruption-v1",
         'Path("/usr/bin/google-chrome")',
         '"Services\\n2"',
         '"Provider connections\\n1"',
     ):
         assert evidence in source
+    assert "if opcode == 9:\n                self._send_frame(10, payload)" in source

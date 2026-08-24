@@ -161,7 +161,12 @@ cleanup_failed_start() {
 }
 
 lock_operation() {
-  exec 9>>"${state_directory}/.operation-lock"
+  local operation_lock="${state_directory}/.operation-lock"
+  local inherited_lock
+  inherited_lock="$(readlink "/proc/$$/fd/9" 2>/dev/null || true)"
+  if [[ "${inherited_lock}" != "${operation_lock}" ]]; then
+    exec 9>>"${operation_lock}"
+  fi
   flock --nonblock 9 || fail "Another local development operation is active."
 }
 
@@ -227,6 +232,7 @@ main() {
       ;;
     prove)
       [[ "$#" == "1" ]] || fail "The prove action does not accept arguments."
+      lock_operation
       exec "${repository_root}/scripts/prove-simplified-product.sh"
       ;;
     *)

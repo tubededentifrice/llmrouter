@@ -3,6 +3,7 @@
 set -euo pipefail
 
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+state_directory="${repository_root}/.local-development"
 stopped_storage=""
 stopped_postgres=""
 
@@ -21,7 +22,7 @@ if [[ "$#" -ne 0 ]]; then
   exit 2
 fi
 
-for command in curl docker uv; do
+for command in curl docker flock uv; do
   if ! command -v "${command}" >/dev/null 2>&1; then
     echo "${command} is required for the simplified product proof." >&2
     exit 1
@@ -31,6 +32,29 @@ if [[ ! -x /usr/bin/google-chrome ]]; then
   echo "Google Chrome is required for the hydrated administration proof." >&2
   exit 1
 fi
+
+lock_deployment() {
+  local operation_lock="${state_directory}/.operation-lock"
+  local inherited_lock
+  if [[ -L "${state_directory}" ]]; then
+    echo "The local development state directory must not be a symbolic link." >&2
+    exit 1
+  fi
+  mkdir -p "${state_directory}"
+  if [[ ! -d "${state_directory}" ]] || [[ -L "${state_directory}" ]]; then
+    echo "The local development state directory is unsafe." >&2
+    exit 1
+  fi
+  chmod 700 "${state_directory}"
+  inherited_lock="$(readlink "/proc/$$/fd/9" 2>/dev/null || true)"
+  if [[ "${inherited_lock}" != "${operation_lock}" ]]; then
+    exec 9>>"${operation_lock}"
+  fi
+  if ! flock --nonblock 9; then
+    echo "Another local development operation is active." >&2
+    exit 1
+  fi
+}
 
 find_container() {
   local service="$1"
@@ -70,6 +94,7 @@ wait_for_health() {
 }
 
 cd "${repository_root}"
+lock_deployment
 unset LLMROUTER_TEST_DATABASE_URL
 uv run python scripts/check-backend-reset.py
 ./scripts/check-database.sh
