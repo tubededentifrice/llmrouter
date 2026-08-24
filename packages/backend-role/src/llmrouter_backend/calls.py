@@ -161,10 +161,8 @@ class CallRequirements:
             or not 1 <= self.output_duration_seconds <= 86_400
         ):
             raise ValueError("The output duration is invalid.")
-        if (self.embedding_dimension is not None) != (
-            self.required_output == "embedding"
-        ):
-            raise ValueError("The embedding dimension must match embedding output.")
+        if self.embedding_dimension is not None and self.required_output != "embedding":
+            raise ValueError("The embedding dimension requires embedding output.")
         if self.input_image_sizes and "image" not in self.required_inputs:
             raise ValueError("Image bytes require the image input modality.")
         if self.output_duration_seconds is not None and self.required_output not in {
@@ -1094,7 +1092,11 @@ class CallExecutor:
                             for output in outputs:
                                 try:
                                     await _validate_output(
-                                        request, output, validated, tool_call_ids
+                                        request,
+                                        route,
+                                        output,
+                                        validated,
+                                        tool_call_ids,
                                     )
                                 finally:
                                     validated.append(output)
@@ -1112,7 +1114,9 @@ class CallExecutor:
                     # Retain every bounded stream event even when semantic
                     # validation rejects it after provider output starts.
                     try:
-                        await _validate_output(request, event, outputs, tool_call_ids)
+                        await _validate_output(
+                            request, route, event, outputs, tool_call_ids
+                        )
                     finally:
                         outputs.append(event)
                     if event.kind in {"text_delta", "tool_call"}:
@@ -1289,6 +1293,7 @@ class CallExecutor:
 
 async def _validate_output(
     request: CallRequest,
+    route: ProviderRoute,
     event: ProviderOutput,
     current: Sequence[ProviderOutput],
     tool_call_ids: set[str],
@@ -1338,7 +1343,7 @@ async def _validate_output(
         ):
             raise ValueError("The structured provider result is invalid.")
     if event.kind == "embedding":
-        _validate_embeddings(request, value)
+        _validate_embeddings(request, route, value)
     if event.kind == "media" and not _valid_media_result(request, value):
         raise ValueError("A media provider result must be one object.")
 
@@ -1358,10 +1363,20 @@ def _validate_completion(
         raise ValueError("Provider usage has no applied price.")
 
 
-def _validate_embeddings(request: CallRequest, value: object) -> None:
+def _validate_embeddings(
+    request: CallRequest, route: ProviderRoute, value: object
+) -> None:
     if not isinstance(value, list) or len(value) != request.expected_embedding_count:
         raise ValueError("The embedding count is invalid.")
-    dimension = request.requirements.embedding_dimension
+    requested_dimension = request.requirements.embedding_dimension
+    allowed_dimensions = route.constraints.embedding_dimensions
+    if not allowed_dimensions:
+        raise ValueError("The embedding dimension is not configured.")
+    dimension = requested_dimension or (
+        len(value[0]) if value and isinstance(value[0], list) else None
+    )
+    if dimension not in allowed_dimensions:
+        raise ValueError("The embedding dimension is invalid.")
     for vector in value:
         if (
             not isinstance(vector, list)

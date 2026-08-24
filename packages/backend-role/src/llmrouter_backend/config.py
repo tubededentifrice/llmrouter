@@ -26,9 +26,11 @@ _MINIMUM_BUCKET_LENGTH = 3
 _MAXIMUM_BUCKET_LENGTH = 63
 _MAXIMUM_OBJECT_STORE_CONNECT_TIMEOUT = 30
 _MAXIMUM_OBJECT_STORE_READ_TIMEOUT = 120
+_MAXIMUM_LOCAL_EMBEDDING_THREADS = 32
 _BUCKET_NAME = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
 _IP_BUCKET_NAME = re.compile(r"^[0-9]+(?:\.[0-9]+){3}$")
 _OBJECT_STORE_REGION = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +56,9 @@ class Settings:
     object_store_ca_file: Path | None = None
     object_store_connect_timeout_seconds: int = 2
     object_store_read_timeout_seconds: int = 10
+    local_embedding_cache_dir: Path | None = None
+    local_embedding_artifact_sha256: str | None = None
+    local_embedding_threads: int = 1
 
     def __post_init__(self) -> None:
         """Reject unsafe session and origin configuration."""
@@ -91,6 +96,7 @@ class Settings:
             message = "The provider credential wrapping key must have one purpose."
             raise ValueError(message)
         _validate_object_store(self)
+        _validate_local_embedding(self)
 
     @classmethod
     def from_environment(cls) -> Settings:
@@ -144,6 +150,13 @@ class Settings:
             ),
             object_store_read_timeout_seconds=_integer_environment(
                 "LLMROUTER_OBJECT_STORE_READ_TIMEOUT_SECONDS", 10
+            ),
+            local_embedding_cache_dir=_path("LLMROUTER_LOCAL_EMBEDDING_CACHE_DIR"),
+            local_embedding_artifact_sha256=os.environ.get(
+                "LLMROUTER_LOCAL_EMBEDDING_ARTIFACT_SHA256"
+            ),
+            local_embedding_threads=_integer_environment(
+                "LLMROUTER_LOCAL_EMBEDDING_THREADS", 1
             ),
         )
 
@@ -212,6 +225,33 @@ def _validate_object_store(settings: Settings) -> None:
         <= _MAXIMUM_OBJECT_STORE_READ_TIMEOUT
     ):
         message = "The object-store read timeout must be from 1 to 120 seconds."
+        raise ValueError(message)
+
+
+def _validate_local_embedding(settings: Settings) -> None:
+    configured = (
+        settings.local_embedding_cache_dir,
+        settings.local_embedding_artifact_sha256,
+    )
+    if any(value is not None for value in configured) and not all(
+        value is not None for value in configured
+    ):
+        message = "The local embedding artifact configuration must be complete."
+        raise ValueError(message)
+    if settings.local_embedding_cache_dir is not None and not (
+        settings.local_embedding_cache_dir.is_absolute()
+        and settings.local_embedding_cache_dir.name
+    ):
+        message = "The local embedding cache path must be absolute."
+        raise ValueError(message)
+    if (
+        settings.local_embedding_artifact_sha256 is not None
+        and _SHA256.fullmatch(settings.local_embedding_artifact_sha256) is None
+    ):
+        message = "The local embedding artifact digest must be SHA-256."
+        raise ValueError(message)
+    if not 1 <= settings.local_embedding_threads <= _MAXIMUM_LOCAL_EMBEDDING_THREADS:
+        message = "The local embedding thread limit must be from 1 through 32."
         raise ValueError(message)
 
 

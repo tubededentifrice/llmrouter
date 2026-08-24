@@ -307,7 +307,10 @@ def _tool_names(tools: Sequence[object]) -> tuple[str, ...]:
 
 
 def _embedding_output(request: ProviderAttemptRequest) -> ProviderOutput:
+    dimensions = request.route.constraints.embedding_dimensions or []
     dimension = request.requirements.embedding_dimension
+    if dimension is None and len(dimensions) == 1:
+        dimension = dimensions[0]
     count = request.expected_embedding_count
     if request.kind != "embedding" or dimension is None or count is None:
         raise _failure(_INCOMPATIBLE)

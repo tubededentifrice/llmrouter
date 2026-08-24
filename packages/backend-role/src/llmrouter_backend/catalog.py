@@ -19,6 +19,10 @@ from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from llmrouter_backend.control_files import ControlFileError, read_control_file
+from llmrouter_backend.embedding_contract import (
+    LOCAL_EMBEDDING_DIMENSION,
+    LOCAL_EMBEDDING_MODEL,
+)
 from llmrouter_backend.errors import ApiError, conflict, invalid_request, not_found
 from llmrouter_backend.models import (
     CredentialWrite,
@@ -100,8 +104,10 @@ _ADAPTER_CAPABILITIES: dict[
         frozenset({"tool_calling", "streaming", "reasoning"}),
     ),
 }
-_BUILT_IN_ENDPOINTS = frozenset({"openai", "openrouter", "wavespeed", "fake"})
-_LOCAL_ENDPOINTS = frozenset({"local_embeddings"})
+_BUILT_IN_ENDPOINTS = frozenset(
+    {"openai", "openrouter", "wavespeed", "local_embeddings", "fake"}
+)
+_LOCAL_ENDPOINTS: frozenset[str] = frozenset()
 _REQUIRED_CREDENTIAL_ADAPTERS = frozenset({"openai", "openrouter", "wavespeed"})
 _CREDENTIAL_ADAPTERS = _REQUIRED_CREDENTIAL_ADAPTERS | frozenset(
     {"openai_compatible", "custom", "ollama"}
@@ -1166,6 +1172,17 @@ def _normalized_provider_model(
         canonical=model,
         reasoning=reasoning,
     )
+    if provider["adapter"] == "local_embeddings" and (
+        value.provider_model_name != LOCAL_EMBEDDING_MODEL
+        or inputs != ["text"]
+        or outputs != ["embedding"]
+        or capabilities
+        or constraints != {"embedding_dimensions": [LOCAL_EMBEDDING_DIMENSION]}
+    ):
+        raise invalid_request(
+            "provider_model_name",
+            "A local embedding mapping must use the approved fixed model.",
+        )
     _validate_price_source(value.price_source, value.price_lookup_key)
     _validate_price_authority(value.price_source, value.manual_price)
     manual_price = (

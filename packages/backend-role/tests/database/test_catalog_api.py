@@ -378,7 +378,8 @@ def test_provider_wrapping_key_requires_one_bounded_regular_file(
         ("custom", "http://127.0.0.1:9000/v1", None, True),
         ("ollama", "http://localhost:11434", None, True),
         ("ollama", "http://localhost:11434", "primary", True),
-        ("local_embeddings", "http://[::1]:8080", None, True),
+        ("local_embeddings", None, None, True),
+        ("local_embeddings", "http://[::1]:8080", None, False),
         ("fake", None, None, True),
         ("openai", "https://api.example.test", "primary", False),
         ("openai_compatible", "http://api.example.test", "primary", False),
@@ -941,7 +942,6 @@ def test_provider_adapter_change_waits_for_concurrent_mapping(
         api_name="provider",
         display_name="Provider",
         adapter="local_embeddings",
-        endpoint="http://127.0.0.1:8080",
         enabled=True,
     )
     with (
@@ -968,6 +968,68 @@ def test_provider_adapter_change_waits_for_concurrent_mapping(
                WHERE api_name = 'provider'"""
         ).fetchone()
         assert current == {"adapter": "fake"}
+
+
+def test_local_embedding_mapping_is_one_fixed_model_space(
+    catalog_database: str, catalog_settings: Settings
+) -> None:
+    """Accept only the approved local wire model and exact vector dimension."""
+    context = CatalogContext(catalog_database, catalog_settings)
+    assert (
+        context.client.post(
+            "/v1/admin/providers",
+            json={
+                "api_name": "local",
+                "display_name": "Local embedding",
+                "adapter": "local_embeddings",
+                "enabled": True,
+            },
+            headers=context.write_headers,
+        ).status_code
+        == HTTPStatus.CREATED
+    )
+    assert (
+        context.client.post(
+            "/v1/admin/models",
+            json={
+                "api_name": "embedding",
+                "display_name": "Embedding",
+                "input_modalities": ["text"],
+                "output_modalities": ["embedding"],
+                "capabilities": [],
+                "constraints": {"embedding_dimensions": [384, 768]},
+            },
+            headers=context.write_headers,
+        ).status_code
+        == HTTPStatus.CREATED
+    )
+    mapping = {
+        "api_name": "local-embedding",
+        "provider_api_name": "local",
+        "model_api_name": "embedding",
+        "provider_model_name": "BAAI/bge-small-en-v1.5",
+        "enabled": True,
+        "constraints": {"embedding_dimensions": [384]},
+    }
+    accepted = context.client.post(
+        "/v1/admin/provider-models", json=mapping, headers=context.write_headers
+    )
+    assert accepted.status_code == HTTPStatus.CREATED
+    for api_name, wire_name, dimensions in (
+        ("wrong-model", "other/model", [384]),
+        ("wrong-dimension", "BAAI/bge-small-en-v1.5", [768]),
+    ):
+        rejected = context.client.post(
+            "/v1/admin/provider-models",
+            json={
+                **mapping,
+                "api_name": api_name,
+                "provider_model_name": wire_name,
+                "constraints": {"embedding_dimensions": dimensions},
+            },
+            headers=context.write_headers,
+        )
+        assert rejected.status_code == HTTPStatus.BAD_REQUEST
 
 
 def test_canonical_model_change_waits_for_concurrent_mapping(

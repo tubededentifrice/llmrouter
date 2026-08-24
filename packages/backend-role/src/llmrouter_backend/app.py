@@ -25,7 +25,16 @@ from starlette.exceptions import HTTPException as StarletteHttpException
 from starlette.middleware.base import RequestResponseEndpoint
 
 from llmrouter_backend import accounting, assignments, catalog
-from llmrouter_backend.adapters import FakeAdapter, OllamaTextAdapter, OpenAITextAdapter
+from llmrouter_backend.adapters import (
+    CompositeProviderAdapter,
+    FakeAdapter,
+    LocalEmbeddingAdapter,
+    LocalEmbeddingConfiguration,
+    OllamaEmbeddingAdapter,
+    OllamaTextAdapter,
+    OpenAIEmbeddingAdapter,
+    OpenAITextAdapter,
+)
 from llmrouter_backend.calls import (
     CallExecutionError,
     CallExecutor,
@@ -42,6 +51,12 @@ from llmrouter_backend.diagnostics import (
     get_request_log_media,
     list_request_logs,
     put_log_retention,
+)
+from llmrouter_backend.embedding_api import (
+    EmbeddingRequest,
+    EmbeddingResult,
+    embedding_result,
+    internal_embedding_call,
 )
 from llmrouter_backend.errors import (
     ApiError,
@@ -150,6 +165,7 @@ _DATABASE_CONNECT_TIMEOUT_SECONDS = 2
 _DATABASE_STATEMENT_TIMEOUT_MILLISECONDS = 2_000
 _DATABASE_LOCK_TIMEOUT_MILLISECONDS = 500
 _MAXIMUM_MODEL_HTTP_BODY_BYTES = 70 * 1024 * 1024
+_MAXIMUM_EMBEDDING_HTTP_BODY_BYTES = 2 * 1024 * 1024
 _ACCOUNTING_SCHEDULE_LOCK = 4_993_044_345_824
 _ADMINISTRATOR_COOKIE = "llmrouter_admin_session"
 _OIDC_FLOW_COOKIE = "llmrouter_admin_oidc_flow"
@@ -235,11 +251,34 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
         CallExecutor(
             database_url=configured_call_database_url,
             adapters={
-                "openai": OpenAITextAdapter("openai"),
-                "openai_compatible": OpenAITextAdapter("openai_compatible"),
+                "openai": CompositeProviderAdapter(
+                    {
+                        "model": OpenAITextAdapter("openai"),
+                        "embedding": OpenAIEmbeddingAdapter("openai"),
+                    }
+                ),
+                "openai_compatible": CompositeProviderAdapter(
+                    {
+                        "model": OpenAITextAdapter("openai_compatible"),
+                        "embedding": OpenAIEmbeddingAdapter("openai_compatible"),
+                    }
+                ),
                 "openrouter": OpenAITextAdapter("openrouter"),
-                "custom": OpenAITextAdapter("custom"),
-                "ollama": OllamaTextAdapter(),
+                "custom": CompositeProviderAdapter(
+                    {
+                        "model": OpenAITextAdapter("custom"),
+                        "embedding": OpenAIEmbeddingAdapter("custom"),
+                    }
+                ),
+                "ollama": CompositeProviderAdapter(
+                    {
+                        "model": OllamaTextAdapter(),
+                        "embedding": OllamaEmbeddingAdapter(),
+                    }
+                ),
+                "local_embeddings": LocalEmbeddingAdapter(
+                    LocalEmbeddingConfiguration.from_settings(settings_value)
+                ),
                 "fake": FakeAdapter(),
             },
             credential_keys=credential_keys,
@@ -256,7 +295,13 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
     ) -> Response:
         response = await call_next(request)
         if request.url.path.startswith(
-            ("/v1/admin/", "/v1/service-keys", "/v1/model-calls", "/v1/model-streams")
+            (
+                "/v1/admin/",
+                "/v1/service-keys",
+                "/v1/model-calls",
+                "/v1/model-streams",
+                "/v1/embeddings",
+            )
         ):
             response.headers["Cache-Control"] = "no-store"
         return response
@@ -633,6 +678,30 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
                 "X-Accel-Buffering": "no",
             },
         )
+
+    @application.post(
+        "/v1/embeddings",
+        response_model=EmbeddingResult,
+        response_model_exclude_none=True,
+    )
+    async def service_embedding_call(
+        request: Request,
+        actor: ServiceActor = Depends(call_service_actor),
+        executor: CallExecutor = Depends(model_executor),
+    ) -> EmbeddingResult:
+        """Make one synchronous native embedding batch call."""
+        body = await _embedding_call_body(request)
+        try:
+            call = internal_embedding_call(body)
+        except ValueError as error:
+            raise invalid_request(
+                "body", "The embedding call does not match the contract."
+            ) from error
+        try:
+            result = await executor.execute(actor, call)
+        except CallExecutionError as error:
+            raise _call_api_error(error) from error
+        return embedding_result(result)
 
     @application.get(
         "/v1/statistics",
@@ -2109,6 +2178,49 @@ async def _model_call_body(request: Request) -> ModelCallRequest:
     except UnicodeDecodeError, ValueError, RecursionError, ValidationError:
         raise invalid_request(
             "body", "The model call does not match the contract."
+        ) from None
+
+
+async def _embedding_call_body(request: Request) -> EmbeddingRequest:
+    """Read and validate one bounded closed JSON embedding-call body."""
+    content_types = request.headers.getlist("content-type")
+    if len(content_types) != 1:
+        raise invalid_request("body", "The body must use application/json.")
+    media_type = [part.strip().lower() for part in content_types[0].split(";")]
+    if (
+        not media_type
+        or media_type[0] != "application/json"
+        or len(media_type) > 2
+        or (len(media_type) == 2 and media_type[1] != "charset=utf-8")
+    ):
+        raise invalid_request("body", "The body must use application/json.")
+    encodings = request.headers.getlist("content-encoding")
+    if encodings and encodings != ["identity"]:
+        raise invalid_request("body", "The body encoding is not supported.")
+    lengths = request.headers.getlist("content-length")
+    if lengths and (
+        len(lengths) != 1
+        or not lengths[0].isdigit()
+        or int(lengths[0]) > _MAXIMUM_EMBEDDING_HTTP_BODY_BYTES
+    ):
+        raise invalid_request("body", "The embedding-call body is too large.")
+    raw = bytearray()
+    async for chunk in request.stream():
+        if len(raw) + len(chunk) > _MAXIMUM_EMBEDDING_HTTP_BODY_BYTES:
+            raise invalid_request("body", "The embedding-call body is too large.")
+        raw.extend(chunk)
+    if not raw:
+        raise invalid_request("body", "The embedding-call body is required.")
+    try:
+        value = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_object_without_duplicate_fields,
+            parse_constant=_reject_json_constant,
+        )
+        return EmbeddingRequest.model_validate(value)
+    except UnicodeDecodeError, ValueError, RecursionError, ValidationError:
+        raise invalid_request(
+            "body", "The embedding call does not match the contract."
         ) from None
 
 

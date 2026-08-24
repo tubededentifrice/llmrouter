@@ -302,6 +302,13 @@ def _assert_operation_outputs(
         vectors = values[0]
         assert len(vectors) == request.expected_embedding_count
         dimension = request.requirements.embedding_dimension
+        if dimension is None:
+            allowed = request.route.constraints.embedding_dimensions
+            assert allowed
+            assert vectors
+            assert isinstance(vectors[0], list)
+            dimension = len(vectors[0])
+            assert dimension in allowed
         assert all(
             isinstance(vector, list)
             and len(vector) == dimension
