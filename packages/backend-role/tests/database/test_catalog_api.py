@@ -1663,7 +1663,9 @@ def test_openrouter_preview_maps_complete_safe_native_proposal_without_writes(
     preview = _openrouter_preview(context)
 
     assert len(requests) == 1
-    assert str(requests[0].url) == "https://openrouter.ai/api/v1/models"
+    assert str(requests[0].url) == (
+        "https://openrouter.ai/api/v1/models?output_modalities=all"
+    )
     assert requests[0].headers["accept-encoding"] == "identity"
     assert "authorization" not in requests[0].headers
     assert preview["source_model_id"] == "google/gemma-4-31b-it"
@@ -2289,6 +2291,14 @@ def test_openrouter_confirmation_rejects_zero_selection_and_exact_value_tamperin
         headers=context.write_headers,
     )
     assert price_response.status_code == HTTPStatus.BAD_REQUEST
+    tampered["reviewed_price"]["source"] = "openrouter"
+    tampered["reviewed_price"]["synchronized_at"] = "2026-08-24T12:00:00"
+    timestamp_response = context.client.post(
+        "/v1/admin/openrouter-model-imports",
+        json=tampered,
+        headers=context.write_headers,
+    )
+    assert timestamp_response.status_code == HTTPStatus.BAD_REQUEST
     with psycopg.connect(catalog_database) as connection:
         assert connection.execute(
             "SELECT count(*) FROM router.canonical_models"
@@ -2383,6 +2393,69 @@ def test_openrouter_preview_identifies_current_create_only_conflict(
         assert connection.execute(
             "SELECT count(*) FROM router.provider_models"
         ).fetchone() == (0,)
+
+
+def test_openrouter_preview_identifies_global_mapping_identity_conflict(
+    catalog_database: str, catalog_settings: Settings
+) -> None:
+    """Report a global mapping identity collision from another provider."""
+    transport, _requests = _openrouter_transport()
+    context = CatalogContext(
+        catalog_database,
+        catalog_settings,
+        openrouter_catalog_transport=transport,
+    )
+    _create_openrouter_provider(context, "openrouter-a")
+    _create_openrouter_provider(context, "openrouter-b")
+    model = context.client.post(
+        "/v1/admin/models",
+        json={
+            "api_name": "existing-model",
+            "display_name": "Existing model",
+            "input_modalities": ["text"],
+            "output_modalities": ["text"],
+            "capabilities": [],
+        },
+        headers=context.write_headers,
+    )
+    assert model.status_code == HTTPStatus.CREATED
+    mapping = context.client.post(
+        "/v1/admin/provider-models",
+        json={
+            "api_name": "google-gemma-4-31b-it-openrouter-a",
+            "provider_api_name": "openrouter-b",
+            "model_api_name": "existing-model",
+            "provider_model_name": "other/model",
+            "enabled": True,
+            "input_modalities": ["text"],
+            "output_modalities": ["text"],
+            "capabilities": [],
+            "reasoning_mappings": [],
+        },
+        headers=context.write_headers,
+    )
+    assert mapping.status_code == HTTPStatus.CREATED
+
+    preview = _openrouter_preview(context)
+
+    assert preview["can_confirm"] is False
+    assert preview["conflicts"] == [
+        {
+            "kind": "provider_model",
+            "api_name": "google-gemma-4-31b-it-openrouter-a",
+            "provider_api_name": "openrouter-b",
+            "message": (
+                "An existing provider-model already uses the proposed mapping "
+                "identity or this connection's wire model."
+            ),
+        }
+    ]
+    option = next(
+        item
+        for item in preview["provider_options"]
+        if item["provider_api_name"] == "openrouter-a"
+    )
+    assert option["selectable"] is False
 
 
 @pytest.mark.parametrize("changed_state", ["disabled", "deleted", "adapter"])

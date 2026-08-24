@@ -49,7 +49,7 @@ if TYPE_CHECKING:
 
     from psycopg import Connection
 
-_MODELS_URL = "https://openrouter.ai/api/v1/models"
+_MODELS_URL = "https://openrouter.ai/api/v1/models?output_modalities=all"
 _MAXIMUM_BODY_BYTES = 8 * 1024 * 1024
 _MAXIMUM_HEADER_BYTES = 32 * 1024
 _MAXIMUM_HEADERS = 64
@@ -503,14 +503,14 @@ def _provider_options(
         provider_name = cast("str", provider["api_name"])
         mapping_name = _api_name(f"{model.api_name}-{provider_name}")
         current = connection.execute(
-            """SELECT mapping.api_name
+            """SELECT mapping.api_name, provider.api_name AS provider_api_name
                FROM router.provider_models AS mapping
                JOIN router.provider_connections AS provider
                  ON provider.id = mapping.provider_id
-               WHERE provider.api_name = %s
-                 AND (mapping.api_name = %s OR mapping.provider_model_name = %s)
+               WHERE mapping.api_name = %s
+                  OR (provider.api_name = %s AND mapping.provider_model_name = %s)
                ORDER BY mapping.api_name LIMIT 1""",
-            (provider_name, mapping_name, facts.model_id),
+            (mapping_name, provider_name, facts.model_id),
         ).fetchone()
         mapping_conflict = current is not None
         if current is not None:
@@ -518,8 +518,8 @@ def _provider_options(
                 OpenRouterImportConflict(
                     kind="provider_model",
                     api_name=current["api_name"],
-                    provider_api_name=provider_name,
-                    message="This OpenRouter connection already has the proposed mapping identity or wire model.",
+                    provider_api_name=current["provider_api_name"],
+                    message="An existing provider-model already uses the proposed mapping identity or this connection's wire model.",
                 )
             )
         enabled = cast("bool", provider["enabled"])
@@ -597,11 +597,13 @@ def _validate_reviewed_model(
             "model", "The reviewed model must keep its exact OpenRouter price source."
         )
     if reviewed_price is not None and (
-        reviewed_price.currency != "USD" or reviewed_price.source != "openrouter"
+        reviewed_price.currency != "USD"
+        or reviewed_price.source != "openrouter"
+        or reviewed_price.synchronized_at is not None
     ):
         raise invalid_request(
             "reviewed_price",
-            "The reviewed OpenRouter price must use USD source values.",
+            "The reviewed OpenRouter price must use USD source values without synchronization metadata.",
         )
     if reviewed_price is not None and any(
         Decimal(item.amount) == 0 for item in reviewed_price.unit_prices
