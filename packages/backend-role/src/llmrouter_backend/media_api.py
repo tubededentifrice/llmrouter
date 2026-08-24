@@ -426,13 +426,6 @@ def create_administrator_media_job(
     cleanup_connect = cleanup_database_connect or database_connect
     try:
         call = internal_media_call(body)
-        with database_connect(
-            database_url,
-            connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
-            row_factory=dict_row,
-            options=_DATABASE_OPTIONS,
-        ) as snapshot_connection:
-            snapshot = _resolve_administrator_media_admission(snapshot_connection, call)
         retained_objects = _required_object_store(object_store)
         job_id = uuid.uuid4()
         logical_call_id = uuid.uuid4()
@@ -466,11 +459,7 @@ def create_administrator_media_job(
             row_factory=dict_row,
             options=_DATABASE_OPTIONS,
         )
-        current = _resolve_administrator_media_admission(connection, call)
-        if current != snapshot:
-            raise invalid_request(
-                "selector", "The media route changed during job admission."
-            )
+        snapshot = _resolve_administrator_media_admission(connection, call)
         accounting.record_call_admission(
             connection,
             call_id=logical_call_id,

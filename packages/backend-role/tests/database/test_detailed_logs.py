@@ -926,6 +926,85 @@ def test_object_store_configuration_and_keys_fail_closed(
         )
 
 
+def test_retention_keeps_content_for_a_terminal_administrator_job_left_in_batch(
+    database_url: str,
+) -> None:
+    """Let job deletion own administrator job content across uneven batches."""
+    now = datetime.now(tz=UTC)
+    with psycopg.connect(database_url, row_factory=dict_row) as connection:
+        migrate(connection)
+        connection.execute(
+            "UPDATE router.global_settings SET log_retention_days = 1 WHERE singleton"
+        )
+        jobs: list[uuid.UUID] = []
+        for index, age_days in enumerate((5, 4), start=1):
+            created_at = now - timedelta(days=age_days)
+            call_id = connection.execute(
+                """INSERT INTO router.raw_accounting_calls
+                       (call_actor, administrator_subject,
+                        exact_provider_model_api_name, kind, outcome, started_at,
+                        completed_at)
+                   VALUES ('administrator', 'administrator-subject', 'media',
+                           'media', 'succeeded', %s, %s)
+                   RETURNING id""",
+                (created_at, created_at + timedelta(minutes=2)),
+            ).fetchone()
+            assert call_id is not None
+            job = connection.execute(
+                """INSERT INTO router.media_jobs
+                       (logical_call_id, call_actor, administrator_subject,
+                        exact_provider_model_api_name, provider_model_api_name,
+                        kind, state, payload, attempts, elapsed_ms, usage,
+                        created_at, deadline_at, completed_at)
+                   VALUES (%s, 'administrator', 'administrator-subject', 'media',
+                           'media', 'image', 'succeeded', '{}',
+                           '[{"provider_model_api_name":"media",
+                              "outcome":"succeeded","elapsed_ms":1}]',
+                           1, '{"units":[],"cost":"0","currency":"USD"}',
+                           %s, %s, %s)
+                   RETURNING id""",
+                (
+                    call_id["id"],
+                    created_at,
+                    created_at + timedelta(hours=1),
+                    created_at + timedelta(minutes=2),
+                ),
+            ).fetchone()
+            assert job is not None
+            jobs.append(job["id"])
+            object_created_at = (
+                now - timedelta(hours=12) if index == 1 else now - timedelta(days=3)
+            )
+            connection.execute(
+                """INSERT INTO router.media_objects
+                       (call_actor, media_job_id, object_key, media_type, role,
+                        size_bytes, content_sha256, created_at)
+                   VALUES ('administrator', %s, %s, 'image/png', 'output', 1,
+                           %s, %s)""",
+                (
+                    job["id"],
+                    f"administrator-retention-{index}",
+                    bytes([index]) * 32,
+                    object_created_at,
+                ),
+            )
+        apply_retention_and_cleanup(
+            connection, cast("ObjectStore", MemoryObjectStore()), batch=1
+        )
+        remaining = connection.execute(
+            """SELECT job.id, media.id AS media_id
+               FROM router.media_jobs AS job
+               LEFT JOIN router.media_objects AS media ON media.media_job_id = job.id
+               WHERE job.id = ANY(%s)""",
+            (jobs,),
+        ).fetchall()
+        health = cleanup_health(connection)
+    assert len(remaining) == 1
+    assert remaining[0]["id"] == jobs[0]
+    assert remaining[0]["media_id"] is not None
+    assert health == "healthy"
+
+
 def test_concurrent_retention_and_scope_isolation_are_safe(
     database_url: str, tmp_path: Path
 ) -> None:

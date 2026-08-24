@@ -643,7 +643,8 @@ def record_call_admission(
     row = connection.execute(
         """SELECT call_actor, service_id, workspace_id, administrator_subject,
                   configuration_service_api_name, assignment_api_name,
-                  exact_provider_model_api_name, kind, tags, outcome
+                  exact_provider_model_api_name, kind, tags, outcome,
+                  selection_snapshot
            FROM router.raw_accounting_calls WHERE id = %s FOR KEY SHARE""",
         (call_id,),
     ).fetchone()
@@ -659,8 +660,9 @@ def record_call_admission(
         or row["exact_provider_model_api_name"] != exact_provider_model_api_name
         or row["kind"] != kind
         or tuple(row["tags"]) != tags
+        or row["selection_snapshot"] != selection_snapshot
     ):
-        raise ValueError("The admitted logical call ownership does not match.")
+        raise ValueError("The admitted logical call snapshot does not match.")
 
 
 def record_call_attempt(

@@ -431,7 +431,11 @@ def apply_retention_and_cleanup(
     expired_media = connection.execute(
         """DELETE FROM router.media_objects WHERE id IN (
                SELECT id FROM router.media_objects
-               WHERE created_at < %s ORDER BY created_at, id LIMIT %s
+               WHERE created_at < %s
+                 AND NOT (
+                     call_actor = 'administrator' AND media_job_id IS NOT NULL
+                 )
+               ORDER BY created_at, id LIMIT %s
                FOR UPDATE SKIP LOCKED
            ) RETURNING id""",
         (cutoff, batch),
@@ -450,10 +454,15 @@ def apply_retention_and_cleanup(
                WHERE call_actor = 'administrator'
                  AND state IN ('succeeded', 'failed')
                  AND created_at < %s
+                 AND NOT EXISTS (
+                     SELECT 1 FROM router.media_objects
+                     WHERE media_objects.media_job_id = media_jobs.id
+                       AND media_objects.created_at >= %s
+                 )
                ORDER BY created_at, id LIMIT %s
                FOR UPDATE SKIP LOCKED
            )""",
-        (cutoff, batch),
+        (cutoff, cutoff, batch),
     ).rowcount
     connection.execute(
         """DELETE FROM router.activity_events WHERE id IN (
@@ -494,12 +503,24 @@ def cleanup_health(
                     SELECT 1 FROM router.media_objects, router.global_settings
                     WHERE media_objects.created_at < statement_timestamp()
                           - make_interval(days => global_settings.log_retention_days)
+                      AND NOT (
+                        media_objects.call_actor = 'administrator'
+                        AND media_objects.media_job_id IS NOT NULL
+                      )
                   ) OR EXISTS (
                     SELECT 1 FROM router.media_jobs, router.global_settings
                     WHERE media_jobs.call_actor = 'administrator'
                       AND media_jobs.state IN ('succeeded', 'failed')
                       AND media_jobs.created_at < statement_timestamp()
                           - make_interval(days => global_settings.log_retention_days)
+                      AND NOT EXISTS (
+                        SELECT 1 FROM router.media_objects
+                        WHERE media_objects.media_job_id = media_jobs.id
+                          AND media_objects.created_at >= statement_timestamp()
+                              - make_interval(
+                                  days => global_settings.log_retention_days
+                                )
+                      )
                   ) AS expired_diagnostics,
                   EXISTS (
                     SELECT 1 FROM router.request_logs, router.global_settings
@@ -519,6 +540,10 @@ def cleanup_health(
                           - make_interval(
                               days => global_settings.log_retention_days + 1
                             )
+                      AND NOT (
+                        media_objects.call_actor = 'administrator'
+                        AND media_objects.media_job_id IS NOT NULL
+                      )
                   ) OR EXISTS (
                     SELECT 1 FROM router.media_jobs, router.global_settings
                     WHERE media_jobs.call_actor = 'administrator'
@@ -527,6 +552,14 @@ def cleanup_health(
                           - make_interval(
                               days => global_settings.log_retention_days + 1
                             )
+                      AND NOT EXISTS (
+                        SELECT 1 FROM router.media_objects
+                        WHERE media_objects.media_job_id = media_jobs.id
+                          AND media_objects.created_at >= statement_timestamp()
+                              - make_interval(
+                                  days => global_settings.log_retention_days + 1
+                                )
+                      )
                   ) AS overdue_diagnostics
            FROM router.object_deletion_queue"""
     ).fetchone()

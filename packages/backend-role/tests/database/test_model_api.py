@@ -1055,6 +1055,157 @@ def test_administrator_exact_embedding_and_all_media_kinds_are_global(
     assert retained.status_code == HTTPStatus.OK
 
 
+def test_administrator_media_admits_only_the_final_transaction_selection(
+    model_api_context: ModelApiContext,
+) -> None:
+    """Use the current route when configuration changes during input upload."""
+    context = model_api_context
+    with psycopg.connect(context.database_url) as connection:
+        assignment_id = _required(
+            connection.execute(
+                """INSERT INTO router.assignment_definitions
+                       (service_id, api_name, display_name)
+                   SELECT id, 'media-race', 'Media race' FROM router.services
+                   WHERE api_name = 'alpha' RETURNING id"""
+            ).fetchone()
+        )[0]
+        connection.execute(
+            """INSERT INTO router.assignment_candidates
+                   (assignment_id, position, provider_model_id)
+               SELECT %s, 0, id FROM router.provider_models
+               WHERE api_name = 'media-failure'""",
+            (assignment_id,),
+        )
+    original_put = context.objects.put
+    changed = False
+
+    def put_and_change_route(key: str, body: bytes, content_type: str) -> None:
+        nonlocal changed
+        original_put(key, body, content_type)
+        if changed:
+            return
+        changed = True
+        with psycopg.connect(context.database_url) as connection:
+            connection.execute(
+                "DELETE FROM router.assignment_candidates WHERE assignment_id = %s",
+                (assignment_id,),
+            )
+            connection.execute(
+                """INSERT INTO router.assignment_candidates
+                       (assignment_id, position, provider_model_id)
+                   SELECT %s, 0, id FROM router.provider_models
+                   WHERE api_name = 'media'""",
+                (assignment_id,),
+            )
+
+    context.objects.put = put_and_change_route  # type: ignore[method-assign]
+    try:
+        response = context.client.post(
+            "/v1/admin/playground/media-jobs",
+            json={
+                "selector": {
+                    "service_api_name": "alpha",
+                    "assignment_api_name": "media-race",
+                },
+                "kind": "image",
+                "prompt": "Use the uploaded input.",
+                "input_images": [
+                    {
+                        "type": "image",
+                        "media_type": "image/png",
+                        "data_base64": base64.b64encode(_PNG).decode(),
+                    }
+                ],
+            },
+            headers=context.administrator_headers,
+        )
+    finally:
+        context.objects.put = original_put  # type: ignore[method-assign]
+    assert response.status_code == HTTPStatus.ACCEPTED
+    assert response.json()["provider_model_api_name"] == "media"
+    with psycopg.connect(context.database_url, row_factory=dict_row) as connection:
+        snapshot = _required(
+            connection.execute(
+                """SELECT selection_snapshot FROM router.raw_accounting_calls
+                   WHERE id = %s""",
+                (response.json()["logical_call_id"],),
+            ).fetchone()
+        )["selection_snapshot"]
+    assert [item["provider_model_api_name"] for item in snapshot["candidates"]] == [
+        "media"
+    ]
+    assert context.objects.values
+
+
+def test_administrator_media_cleans_uploaded_input_when_final_selection_fails(
+    model_api_context: ModelApiContext,
+) -> None:
+    """Remove uploaded bytes when the final admission transaction cannot select."""
+    context = model_api_context
+    with psycopg.connect(context.database_url) as connection:
+        assignment_id = _required(
+            connection.execute(
+                """INSERT INTO router.assignment_definitions
+                       (service_id, api_name, display_name)
+                   SELECT id, 'media-disappears', 'Media disappears'
+                   FROM router.services WHERE api_name = 'alpha' RETURNING id"""
+            ).fetchone()
+        )[0]
+        connection.execute(
+            """INSERT INTO router.assignment_candidates
+                   (assignment_id, position, provider_model_id)
+               SELECT %s, 0, id FROM router.provider_models
+               WHERE api_name = 'media'""",
+            (assignment_id,),
+        )
+    original_put = context.objects.put
+    deleted = False
+
+    def put_and_delete_assignment(key: str, body: bytes, content_type: str) -> None:
+        nonlocal deleted
+        original_put(key, body, content_type)
+        if deleted:
+            return
+        deleted = True
+        with psycopg.connect(context.database_url) as connection:
+            connection.execute(
+                "DELETE FROM router.assignment_definitions WHERE id = %s",
+                (assignment_id,),
+            )
+
+    context.objects.put = put_and_delete_assignment  # type: ignore[method-assign]
+    try:
+        response = context.client.post(
+            "/v1/admin/playground/media-jobs",
+            json={
+                "selector": {
+                    "service_api_name": "alpha",
+                    "assignment_api_name": "media-disappears",
+                },
+                "kind": "image",
+                "prompt": "Use the uploaded input.",
+                "input_images": [
+                    {
+                        "type": "image",
+                        "media_type": "image/png",
+                        "data_base64": base64.b64encode(_PNG).decode(),
+                    }
+                ],
+            },
+            headers=context.administrator_headers,
+        )
+    finally:
+        context.objects.put = original_put  # type: ignore[method-assign]
+    assert response.status_code == HTTPStatus.NOT_FOUND
+    assert response.json()["error"]["code"] == "not_found"
+    assert context.objects.values == {}
+    with psycopg.connect(context.database_url) as connection:
+        assert connection.execute(
+            """SELECT count(*) FROM router.raw_accounting_calls
+               WHERE call_actor = 'administrator' AND kind = 'media'"""
+        ).fetchone() == (0,)
+
+
 def test_administrator_media_deadline_finalizes_zero_attempt_call(
     model_api_context: ModelApiContext,
 ) -> None:
