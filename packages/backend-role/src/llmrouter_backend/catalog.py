@@ -101,7 +101,7 @@ _ADAPTER_CAPABILITIES: dict[
     ),
 }
 _BUILT_IN_ENDPOINTS = frozenset({"openai", "openrouter", "wavespeed", "fake"})
-_LOCAL_ENDPOINTS = frozenset({"ollama", "local_embeddings"})
+_LOCAL_ENDPOINTS = frozenset({"local_embeddings"})
 _REQUIRED_CREDENTIAL_ADAPTERS = frozenset({"openai", "openrouter", "wavespeed"})
 _CREDENTIAL_ADAPTERS = _REQUIRED_CREDENTIAL_ADAPTERS | frozenset(
     {"openai_compatible", "custom", "ollama"}

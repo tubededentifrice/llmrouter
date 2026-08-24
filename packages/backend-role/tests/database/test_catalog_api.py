@@ -387,7 +387,7 @@ def test_provider_wrapping_key_requires_one_bounded_regular_file(
         ("custom", "https://api.example.test/v1?token=x", "primary", False),
         ("custom", "https://[broken", "primary", False),
         ("custom", "https://example.test\uff1a443", "primary", False),
-        ("ollama", "https://api.example.test", None, False),
+        ("ollama", "https://api.example.test", None, True),
         ("fake", None, "primary", False),
     ],
 )

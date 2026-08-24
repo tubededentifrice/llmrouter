@@ -25,7 +25,7 @@ from starlette.exceptions import HTTPException as StarletteHttpException
 from starlette.middleware.base import RequestResponseEndpoint
 
 from llmrouter_backend import accounting, assignments, catalog
-from llmrouter_backend.adapters import FakeAdapter
+from llmrouter_backend.adapters import FakeAdapter, OllamaTextAdapter, OpenAITextAdapter
 from llmrouter_backend.calls import (
     CallExecutionError,
     CallExecutor,
@@ -234,7 +234,14 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
     application.state.call_executor = call_executor or (
         CallExecutor(
             database_url=configured_call_database_url,
-            adapters={"fake": FakeAdapter()},
+            adapters={
+                "openai": OpenAITextAdapter("openai"),
+                "openai_compatible": OpenAITextAdapter("openai_compatible"),
+                "openrouter": OpenAITextAdapter("openrouter"),
+                "custom": OpenAITextAdapter("custom"),
+                "ollama": OllamaTextAdapter(),
+                "fake": FakeAdapter(),
+            },
             credential_keys=credential_keys,
             object_store=object_store_value,
         )
