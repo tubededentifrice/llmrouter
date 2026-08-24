@@ -1,6 +1,7 @@
 # Product scope and ownership
 
-Status: Accepted on 2026-08-23.
+Status: Accepted on 2026-08-23. The administrator playground amendment was
+accepted on 2026-08-24.
 
 ## Purpose
 
@@ -20,6 +21,7 @@ The first release MUST provide:
 - durable usage and cost accounting;
 - bounded detailed request logs and basic activity events;
 - one global administration application;
+- unrestricted global administrator playground calls;
 - a native versioned HTTP API;
 - a Python SDK and shared caller-process harness.
 
@@ -61,10 +63,10 @@ The first release MUST NOT provide:
 
 ## Isolation
 
-Every model, embedding, and media request MUST authenticate one service and
-identify exactly one workspace that the service owns. A normal service MUST
-NOT read or change another service's configuration, keys, workspaces,
-requests, media jobs, logs, or accounting.
+Every service model, embedding, and media request MUST authenticate one
+service and identify exactly one workspace that the service owns. A normal
+service MUST NOT read or change another service's configuration, keys,
+workspaces, requests, media jobs, logs, or accounting.
 
 A service MAY inherit assignments only through its one parent chain. Parent
 inheritance MUST NOT give either service access to the other service's keys,
@@ -72,6 +74,11 @@ workspaces, request data, media, or accounting.
 
 Global administration MUST use a separate human identity and authorization
 path. A service API key MUST NOT authenticate a global administrator action.
+An allowlisted administrator session MUST have unrestricted authority to make
+global playground calls. An administrator playground call MUST NOT
+authenticate or impersonate a service, identify a workspace, or use a service
+API key. Its accounting, logs, and media MUST be global administrator-only
+records. A service API MUST NOT expose them.
 
 ## Public state and contract versions
 

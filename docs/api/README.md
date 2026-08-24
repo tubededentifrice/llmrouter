@@ -19,8 +19,19 @@ eligible candidate at most once for one call. It does not retry one candidate.
 An assignment reports its observed call requirements. A service or global
 administrator can remove an observed requirement that is no longer applicable.
 
-Global administrators use the protected browser session. Administrative write
-operations also require the CSRF and Origin headers.
+Global administrators use the protected browser session. Each administrator
+has one unrestricted authority. The contract does not define administrator
+permission scopes. Administrative write and playground call operations also
+require the CSRF and Origin headers.
+
+Administrator playground operations make synchronous and streaming model
+calls, embeddings, and image, video, and audio media jobs. They do not accept
+a service key or workspace. An assignment selector requires one service only
+as assignment and inheritance configuration context. An exact provider-model
+selector omits service context. Administrator playground accounting, detailed
+logs, jobs, and retained media are global administrator-only records.
+Completed playground results include each provider attempt in order so a
+fallback cannot hide usage or cost from an earlier failed attempt.
 
 Provider connections, models, provider-models, and credentials are global.
 Services cannot own or restrict them. Configuration writes validate and apply
@@ -35,7 +46,9 @@ application authentication, so the deployment must limit network access to the
 monitoring system.
 
 The statistics assignment dimension uses `(exact)` for an exact provider-model
-selection. This marker cannot be an assignment name.
+selection. This marker cannot be an assignment name. A statistics dimension
+value is `null` when it does not apply to the call actor. Service statistics
+never include administrator playground records.
 
 The other normative files are:
 

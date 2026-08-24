@@ -165,6 +165,12 @@ def check_operations(
         raise ContractError(f"Operation policy drift. Missing={missing}; extra={extra}")
 
     required_reset_operations = {
+        "adminCreatePlaygroundEmbedding",
+        "adminCreatePlaygroundMediaJob",
+        "adminCreatePlaygroundModelCall",
+        "adminCreatePlaygroundModelStream",
+        "adminGetPlaygroundMediaJob",
+        "adminGetPlaygroundMediaJobContent",
         "adminGetLogRetention",
         "adminPutLogRetention",
         "adminRemoveObservedAssignmentRequirement",
@@ -196,6 +202,10 @@ def check_operations(
             raise ContractError(f"{operation_id} has invalid actor {actor!r}")
         if not isinstance(permission, str) or not permission:
             raise ContractError(f"{operation_id} has no permission")
+        if actor == "administrator" and permission != "administrator.unrestricted":
+            raise ContractError(
+                f"{operation_id} does not use unrestricted administrator authority"
+            )
         security = operation.get("security", spec.get("security", []))
         names = {name for requirement in security for name in requirement}
         if names != expected_security[actor]:
@@ -452,6 +462,663 @@ def check_reset_boundaries(spec: dict[str, Any]) -> None:
         )
 
 
+def validation_errors(
+    spec: dict[str, Any], schema_name: str, instance: dict[str, Any]
+) -> list[Any]:
+    """Return deterministic validation errors for one component instance."""
+    schema = spec["components"]["schemas"][schema_name]
+    resolver = RefResolver.from_schema(spec)
+    return sorted(
+        Draft202012Validator(schema, resolver=resolver).iter_errors(instance),
+        key=lambda error: (list(error.path), error.message),
+    )
+
+
+def require_valid_instances(
+    spec: dict[str, Any], schema_name: str, instances: tuple[dict[str, Any], ...]
+) -> None:
+    """Require each positive contract form to validate."""
+    errors = [
+        error
+        for instance in instances
+        for error in validation_errors(spec, schema_name, instance)
+    ]
+    if errors:
+        detail = "; ".join(error.message for error in errors[:5])
+        raise ContractError(f"A valid {schema_name} form does not validate: {detail}")
+
+
+def require_invalid_instances(
+    spec: dict[str, Any], schema_name: str, instances: tuple[dict[str, Any], ...]
+) -> None:
+    """Require each unsafe or contradictory contract form to fail."""
+    valid_indexes = [
+        index
+        for index, instance in enumerate(instances)
+        if not validation_errors(spec, schema_name, instance)
+    ]
+    if valid_indexes:
+        raise ContractError(
+            f"Invalid {schema_name} forms validate at indexes {valid_indexes}"
+        )
+
+
+def check_administrator_playground(spec: dict[str, Any]) -> None:
+    """Check unrestricted administrator calls and their isolated records."""
+    schemas = spec["components"]["schemas"]
+    expected_paths = {
+        "adminCreatePlaygroundModelCall": (
+            "/v1/admin/playground/model-calls",
+            "post",
+        ),
+        "adminCreatePlaygroundModelStream": (
+            "/v1/admin/playground/model-streams",
+            "post",
+        ),
+        "adminCreatePlaygroundEmbedding": (
+            "/v1/admin/playground/embeddings",
+            "post",
+        ),
+        "adminCreatePlaygroundMediaJob": (
+            "/v1/admin/playground/media-jobs",
+            "post",
+        ),
+        "adminGetPlaygroundMediaJob": (
+            "/v1/admin/playground/media-jobs/{media_job_id}",
+            "get",
+        ),
+        "adminGetPlaygroundMediaJobContent": (
+            "/v1/admin/playground/media-jobs/{media_job_id}/content",
+            "get",
+        ),
+    }
+    spec_operations = operations(spec)
+    for operation_id, (expected_path, expected_method) in expected_paths.items():
+        item = spec_operations[operation_id]
+        if item["path"] != expected_path or item["method"] != expected_method:
+            raise ContractError(f"{operation_id} uses an unexpected path or method")
+        success_status = (
+            "202" if operation_id == "adminCreatePlaygroundMediaJob" else "200"
+        )
+        success = item["operation"]["responses"][success_status]
+        no_store = success.get("headers", {}).get("Cache-Control", {})
+        if (
+            no_store.get("required") is not True
+            or no_store.get("schema", {}).get("const") != "no-store"
+        ):
+            raise ContractError(f"{operation_id} does not require no-store responses")
+
+    stream_headers = spec_operations["adminCreatePlaygroundModelStream"]["operation"][
+        "responses"
+    ]["200"]["headers"]
+    call_id_header = stream_headers.get("X-LLMRouter-Logical-Call-Id", {})
+    if (
+        call_id_header.get("required") is not True
+        or call_id_header.get("schema", {}).get("$ref")
+        != "#/components/schemas/OpaqueId"
+    ):
+        raise ContractError("Administrator streams lack the logical-call header")
+
+    administrator_requests = {
+        "AdministratorModelCallRequest": "ModelCallRequest",
+        "AdministratorEmbeddingRequest": "EmbeddingRequest",
+        "AdministratorMediaJobRequest": "MediaJobRequest",
+    }
+    for administrator_name, service_name in administrator_requests.items():
+        administrator_schema = schemas[administrator_name]
+        administrator_fields = set(administrator_schema.get("properties", {}))
+        if administrator_fields & {
+            "workspace_api_name",
+            "service_key",
+            "service_api_key",
+        }:
+            raise ContractError(
+                f"{administrator_name} contains service authority or workspace fields"
+            )
+        service_fields = set(schemas[service_name].get("properties", {}))
+        expected_shared_fields = service_fields - {"workspace_api_name", "selector"}
+        if not expected_shared_fields.issubset(administrator_fields):
+            raise ContractError(
+                f"{administrator_name} lacks service-call bounds for "
+                f"{sorted(expected_shared_fields - administrator_fields)}"
+            )
+        for field in expected_shared_fields:
+            if (
+                administrator_schema["properties"][field]
+                != schemas[service_name]["properties"][field]
+            ):
+                raise ContractError(
+                    f"{administrator_name}.{field} differs from {service_name}.{field}"
+                )
+        for bound in ("x-max-json-bytes", "x-max-image-bytes"):
+            if (
+                bound in schemas[service_name]
+                and administrator_schema.get(bound) != schemas[service_name][bound]
+            ):
+                raise ContractError(
+                    f"{administrator_name}.{bound} differs from {service_name}.{bound}"
+                )
+
+    assignment_selector = {
+        "assignment_api_name": "summarize",
+        "service_api_name": "billing",
+    }
+    exact_selector = {"provider_model_api_name": "primary-text"}
+    base_messages = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "Summarize this."}],
+        }
+    ]
+    image = {
+        "type": "image",
+        "media_type": "image/png",
+        "data_base64": "aW1hZ2U=",
+    }
+    require_valid_instances(
+        spec,
+        "AdministratorModelCallRequest",
+        (
+            {"selector": assignment_selector, "messages": base_messages},
+            {
+                "selector": assignment_selector,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Summarize this."},
+                            image,
+                            {
+                                "type": "tool_result",
+                                "tool_call_id": "tool-call",
+                                "result_json": '{"value":1}',
+                            },
+                        ],
+                    }
+                ],
+                "excluded_provider_model_api_names": ["secondary-text"],
+                "tools": [
+                    {
+                        "name": "lookup",
+                        "description": "Find one record.",
+                        "input_schema_json": '{"type":"object"}',
+                    }
+                ],
+                "output_format": {
+                    "type": "json_schema",
+                    "schema_json": '{"type":"object"}',
+                },
+                "output_limit": 1000000,
+                "temperature": 2,
+                "tags": ["playground"],
+            },
+            {"selector": exact_selector, "messages": base_messages},
+        ),
+    )
+    require_invalid_instances(
+        spec,
+        "AdministratorModelCallRequest",
+        (
+            {
+                "selector": {"assignment_api_name": "summarize"},
+                "messages": base_messages,
+            },
+            {
+                "selector": {
+                    "provider_model_api_name": "primary-text",
+                    "service_api_name": "billing",
+                },
+                "messages": base_messages,
+            },
+            {
+                "selector": exact_selector,
+                "messages": base_messages,
+                "excluded_provider_model_api_names": ["secondary-text"],
+            },
+            {
+                "workspace_api_name": "billing-production",
+                "selector": exact_selector,
+                "messages": base_messages,
+            },
+            {
+                "service_api_key": "secret",
+                "selector": exact_selector,
+                "messages": base_messages,
+            },
+            {
+                "selector": assignment_selector,
+                "messages": base_messages,
+                "excluded_provider_model_api_names": [
+                    f"route-{index}" for index in range(17)
+                ],
+            },
+            {
+                "selector": exact_selector,
+                "messages": base_messages,
+                "tools": [
+                    {
+                        "name": f"tool-{index}",
+                        "description": "One tool.",
+                        "input_schema_json": '{"type":"object"}',
+                    }
+                    for index in range(129)
+                ],
+            },
+            {
+                "selector": exact_selector,
+                "messages": base_messages,
+                "output_limit": 1000001,
+            },
+            {
+                "selector": exact_selector,
+                "messages": base_messages,
+                "temperature": 2.01,
+            },
+        ),
+    )
+    usage = {
+        "units": [
+            {"unit": "input_token", "quantity": "10"},
+            {"unit": "output_token", "quantity": "5"},
+        ],
+        "cost": "0.001",
+        "currency": "USD",
+    }
+    succeeded_attempt = {
+        "provider_model_api_name": "primary-text",
+        "outcome": "succeeded",
+        "elapsed_ms": 900,
+        "usage": usage,
+    }
+    model_result = {
+        "logical_call_id": "call-model",
+        "selector": exact_selector,
+        "elapsed_ms": 1000,
+        "attempts": [succeeded_attempt],
+        "result": {
+            "output_type": "standard",
+            "provider_model_api_name": "primary-text",
+            "content": [{"type": "text", "text": "Complete."}],
+            "usage": usage,
+        },
+    }
+    require_valid_instances(
+        spec,
+        "AdministratorModelCallResult",
+        (
+            model_result,
+            {
+                **model_result,
+                "selector": assignment_selector,
+                "attempts": [
+                    {
+                        "provider_model_api_name": "primary-text",
+                        "outcome": "failed",
+                        "elapsed_ms": 900,
+                        "usage": usage,
+                        "error": {
+                            "code": "upstream_failed",
+                            "message": "First route failed.",
+                        },
+                    },
+                    {
+                        **succeeded_attempt,
+                        "provider_model_api_name": "secondary-text",
+                    },
+                ],
+                "result": {
+                    **model_result["result"],
+                    "provider_model_api_name": "secondary-text",
+                },
+            },
+            {
+                **model_result,
+                "result": {
+                    "output_type": "standard",
+                    "provider_model_api_name": "primary-text",
+                    "content": [
+                        {
+                            "type": "tool_call",
+                            "id": "tool-call",
+                            "name": "lookup",
+                            "arguments_json": '{"id":1}',
+                        }
+                    ],
+                    "usage": usage,
+                },
+            },
+            {
+                **model_result,
+                "result": {
+                    "output_type": "structured_json",
+                    "provider_model_api_name": "primary-text",
+                    "structured_output_json": '{"summary":"Complete."}',
+                    "usage": usage,
+                },
+            },
+        ),
+    )
+    require_invalid_instances(
+        spec,
+        "AdministratorModelCallResult",
+        (
+            {**model_result, "workspace_api_name": "production"},
+            {**model_result, "elapsed_ms": 900001},
+            {**model_result, "attempts": [succeeded_attempt, succeeded_attempt]},
+        ),
+    )
+    require_valid_instances(
+        spec,
+        "AdministratorStreamStart",
+        (
+            {
+                "logical_call_id": "call-stream",
+                "selector": assignment_selector,
+                "provider_model_api_name": "primary-text",
+            },
+        ),
+    )
+    require_valid_instances(
+        spec,
+        "AdministratorStreamCompleted",
+        (
+            {
+                "logical_call_id": "call-stream",
+                "provider_model_api_name": "primary-text",
+                "selector": exact_selector,
+                "elapsed_ms": 1000,
+                "attempts": [succeeded_attempt],
+                "usage": usage,
+            },
+        ),
+    )
+    require_valid_instances(
+        spec,
+        "AdministratorEmbeddingRequest",
+        (
+            {"selector": assignment_selector, "inputs": ["one"] * 32},
+            {"selector": exact_selector, "inputs": ["one"]},
+        ),
+    )
+    require_invalid_instances(
+        spec,
+        "AdministratorEmbeddingRequest",
+        (
+            {
+                "workspace_api_name": "billing-production",
+                "selector": exact_selector,
+                "inputs": ["one"],
+            },
+            {"selector": {"assignment_api_name": "embed"}, "inputs": ["one"]},
+            {"selector": exact_selector, "inputs": []},
+            {"selector": exact_selector, "inputs": ["one"] * 33},
+            {"selector": exact_selector, "inputs": ["x" * 32769]},
+        ),
+    )
+    embedding_result = {
+        "logical_call_id": "call-embedding",
+        "selector": assignment_selector,
+        "elapsed_ms": 1000,
+        "attempts": [
+            {**succeeded_attempt, "provider_model_api_name": "primary-embedding"}
+        ],
+        "result": {
+            "provider_model_api_name": "primary-embedding",
+            "embeddings": [{"index": 0, "values": [0.1, 0.2]}],
+            "usage": usage,
+        },
+    }
+    require_valid_instances(
+        spec,
+        "AdministratorEmbeddingResult",
+        (embedding_result,),
+    )
+    require_invalid_instances(
+        spec,
+        "AdministratorEmbeddingResult",
+        (
+            {**embedding_result, "workspace_api_name": "production"},
+            {**embedding_result, "elapsed_ms": 900001},
+        ),
+    )
+    require_valid_instances(
+        spec,
+        "AdministratorMediaJobRequest",
+        (
+            {
+                "selector": assignment_selector,
+                "kind": "image",
+                "prompt": "Create an image.",
+                "input_images": [image],
+            },
+            {
+                "selector": exact_selector,
+                "kind": "video",
+                "prompt": "Create a video.",
+            },
+            {
+                "selector": exact_selector,
+                "kind": "audio",
+                "prompt": "Create audio.",
+            },
+        ),
+    )
+    require_invalid_instances(
+        spec,
+        "AdministratorMediaJobRequest",
+        (
+            {
+                "selector": exact_selector,
+                "kind": "audio",
+                "prompt": "Create audio.",
+                "input_images": [image],
+            },
+            {
+                "selector": {"assignment_api_name": "image"},
+                "kind": "image",
+                "prompt": "Create an image.",
+            },
+            {
+                "workspace_api_name": "billing-production",
+                "selector": exact_selector,
+                "kind": "image",
+                "prompt": "Create an image.",
+            },
+            {
+                "selector": exact_selector,
+                "kind": "image",
+                "prompt": "Create an image.",
+                "input_images": [image] * 9,
+            },
+        ),
+    )
+    pending_job = {
+        "id": "media-admin",
+        "logical_call_id": "call-admin",
+        "selector": exact_selector,
+        "provider_model_api_name": "primary-image",
+        "kind": "image",
+        "state": "pending",
+        "attempts": [],
+        "created_at": "2026-08-24T00:00:00Z",
+    }
+    require_valid_instances(
+        spec,
+        "AdministratorMediaJob",
+        (
+            pending_job,
+            {
+                **pending_job,
+                "state": "succeeded",
+                "elapsed_ms": 1000,
+                "attempts": [
+                    {
+                        **succeeded_attempt,
+                        "provider_model_api_name": "primary-image",
+                    }
+                ],
+                "usage": usage,
+                "content": {"media_type": "image/png", "size_bytes": 1024},
+                "completed_at": "2026-08-24T00:00:01Z",
+            },
+            {
+                **pending_job,
+                "state": "failed",
+                "elapsed_ms": 1000,
+                "attempts": [
+                    {
+                        "provider_model_api_name": "primary-image",
+                        "outcome": "failed",
+                        "elapsed_ms": 900,
+                        "error": {
+                            "code": "upstream_failed",
+                            "message": "Call failed.",
+                        },
+                    }
+                ],
+                "error": {"code": "upstream_failed", "message": "Call failed."},
+                "completed_at": "2026-08-24T00:00:01Z",
+            },
+            {
+                **pending_job,
+                "selector": assignment_selector,
+                "state": "succeeded",
+                "elapsed_ms": 1000,
+                "attempts": [
+                    {
+                        "provider_model_api_name": "primary-image",
+                        "outcome": "failed",
+                        "elapsed_ms": 500,
+                        "error": {
+                            "code": "upstream_failed",
+                            "message": "First route failed.",
+                        },
+                    },
+                    {
+                        **succeeded_attempt,
+                        "provider_model_api_name": "secondary-image",
+                    },
+                ],
+                "provider_model_api_name": "secondary-image",
+                "usage": usage,
+                "content": {"media_type": "image/png", "size_bytes": 1024},
+                "completed_at": "2026-08-24T00:00:01Z",
+            },
+        ),
+    )
+    require_invalid_instances(
+        spec,
+        "AdministratorMediaJob",
+        (
+            {
+                **pending_job,
+                "content": {"media_type": "image/png", "size_bytes": 1024},
+            },
+            {**pending_job, "state": "succeeded"},
+            {
+                **pending_job,
+                "state": "succeeded",
+                "elapsed_ms": 1000,
+                "content": {"media_type": "image/png", "size_bytes": 1024},
+                "completed_at": "2026-08-24T00:00:01Z",
+            },
+            {
+                **pending_job,
+                "state": "succeeded",
+                "elapsed_ms": 1000,
+                "attempts": [succeeded_attempt, succeeded_attempt],
+                "content": {"media_type": "image/png", "size_bytes": 1024},
+                "completed_at": "2026-08-24T00:00:01Z",
+            },
+            {
+                **pending_job,
+                "state": "failed",
+                "elapsed_ms": 1000,
+                "content": {"media_type": "image/png", "size_bytes": 1024},
+                "error": {"code": "upstream_failed", "message": "Call failed."},
+                "completed_at": "2026-08-24T00:00:01Z",
+            },
+        ),
+    )
+
+    require_valid_instances(
+        spec,
+        "RequestLogSummary",
+        (
+            {
+                "id": "log-service",
+                "logical_call_id": "call-service",
+                "call_actor": "service",
+                "service_api_name": "billing",
+                "workspace_api_name": "production",
+                "kind": "model",
+                "outcome": "succeeded",
+                "started_at": "2026-08-24T00:00:00Z",
+            },
+            {
+                "id": "log-admin-exact",
+                "logical_call_id": "call-admin-exact",
+                "call_actor": "administrator",
+                "administrator_subject": "issuer|subject",
+                "provider_model_api_name": "primary-text",
+                "kind": "model",
+                "outcome": "succeeded",
+                "started_at": "2026-08-24T00:00:00Z",
+            },
+            {
+                "id": "log-admin-assignment",
+                "logical_call_id": "call-admin-assignment",
+                "call_actor": "administrator",
+                "administrator_subject": "issuer|subject",
+                "configuration_service_api_name": "billing",
+                "assignment_api_name": "summarize",
+                "kind": "model",
+                "outcome": "failed",
+                "started_at": "2026-08-24T00:00:00Z",
+            },
+        ),
+    )
+    require_invalid_instances(
+        spec,
+        "RequestLogSummary",
+        (
+            {
+                "id": "log-admin-owned",
+                "logical_call_id": "call-admin-owned",
+                "call_actor": "administrator",
+                "administrator_subject": "issuer|subject",
+                "service_api_name": "billing",
+                "workspace_api_name": "production",
+                "kind": "model",
+                "outcome": "succeeded",
+                "started_at": "2026-08-24T00:00:00Z",
+            },
+            {
+                "id": "log-service-with-admin",
+                "logical_call_id": "call-service-with-admin",
+                "call_actor": "service",
+                "service_api_name": "billing",
+                "workspace_api_name": "production",
+                "administrator_subject": "issuer|subject",
+                "kind": "model",
+                "outcome": "succeeded",
+                "started_at": "2026-08-24T00:00:00Z",
+            },
+        ),
+    )
+
+    dimensions = set(schemas["StatisticsDimension"].get("enum", []))
+    required_dimensions = {
+        "call_actor",
+        "administrator",
+        "configuration_service",
+    }
+    if not required_dimensions.issubset(dimensions):
+        raise ContractError(
+            "Statistics cannot separate administrator playground records"
+        )
+
+
 def check_error_drift(spec: dict[str, Any], errors_path: Path) -> None:
     """Keep stable error names equal in OpenAPI and readable documentation."""
     markdown_codes = set(
@@ -535,6 +1202,7 @@ def run(root: Path) -> None:
     check_operations(spec, spec_operations, policy)
     walk_closed_objects(spec["components"]["schemas"], "components.schemas")
     check_reset_boundaries(spec)
+    check_administrator_playground(spec)
     check_error_drift(spec, root / "docs/api/errors.md")
     check_readable_contracts(root, policy)
     check_fixtures(root, spec, policy)

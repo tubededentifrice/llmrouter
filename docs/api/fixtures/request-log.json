@@ -1,6 +1,8 @@
 {
   "summary": {
     "id": "log_01",
+    "logical_call_id": "call_01",
+    "call_actor": "service",
     "service_api_name": "billing",
     "workspace_api_name": "billing-production",
     "assignment_api_name": "summarize",

@@ -103,9 +103,17 @@ explicit blocker or decision items.
 
 ## Service boundaries
 
-Every model, embedding, and media request must have a service identity and one
-workspace identity. A normal service must not read or change another service's
-configuration, credentials, requests, accounting data, media, or workspaces.
+Every service API model, embedding, and media request must have a service
+identity and one workspace identity. A normal service must not read or change
+another service's configuration, credentials, requests, accounting data,
+media, or workspaces.
+
+An allowlisted administrator session has unrestricted authority for global
+playground calls. These calls do not use a service API key or workspace. An
+assignment call requires one selected service only for configuration and
+inheritance context. An exact provider-model call has no service context.
+Administrator playground accounting, logs, jobs, and media remain global
+administrator-only records.
 
 Service configuration uses one ordered parent chain. For one named assignment,
 the nearest service definition replaces the complete inherited fallback chain.

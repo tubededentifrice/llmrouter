@@ -2,7 +2,7 @@
   "artifacts": [
     {
       "path": "docs/api/README.md",
-      "sha256": "822bdabb259d824abfed47e4b401d852e1a0334ea0458c9d8d0edcbd49d4e67b"
+      "sha256": "3a8cab45dc18ce6e03b358659179bc6ab0b0f7fb998f6247d3b73a24f3d6a5e3"
     },
     {
       "path": "docs/api/errors.md",
@@ -10,20 +10,32 @@
     },
     {
       "path": "docs/api/openapi.yaml",
-      "sha256": "77fe3c9c462303c8b544b2a34cb9d24d445d1900a274e46b512b9a9ef6b9e37a"
+      "sha256": "3bf975f41f48a061108a1941b272b9e50a43e12178f31788abfbd0b110dfa0f3"
     },
     {
       "path": "docs/api/stream-protocol.md",
-      "sha256": "325f0b2726151f4d2e62050aef3903c5382530aa4bd49908c08bdc7654c9d28d"
+      "sha256": "0e6cd068643182f4de44de0459a6785bd781bb0df56f020a11098bf59be0da06"
     }
   ],
   "component_schemas": {
     "ActivityEvent": "d17ed9617f7b80bd534b6edcf059bf48495a4434ae5c886fe181d32d50832c9d",
     "ActivityPage": "360434a60db7b696d56c2af8cc4f4e0cf30e3723e89f64f62804be0387c17418",
+    "AdministratorAssignmentSelector": "23caf168e18f206a7985bd36e778031c367841d0e9392026280cdd5ac43f0884",
+    "AdministratorAttemptResult": "af9700513886f8588e529f33c24a90516e9b195e96867d6162d01b836ad19f90",
+    "AdministratorAttemptResults": "0301449717cb92c0e947c5c38109e8d6035bb31fbc2f551efb3acee46656d01f",
+    "AdministratorEmbeddingRequest": "0aeeb45dd56bbd7fdccadaac198ef115d9c1a20c7ef4523d2a16195059e4cc81",
+    "AdministratorEmbeddingResult": "a8498b0cdb47e994188cf88931df7f70c59739b26c7e9bd728bdfeeafe260886",
     "AdministratorHealth": "7dae8629e96b35a995493822700c779cd61befab435d2bdad51b97061cd3ad68",
+    "AdministratorMediaJob": "94472bd6d0dd2c8639afef575bc98e57ea3a7f15c2c1069035bc9cde3230ef46",
+    "AdministratorMediaJobRequest": "652e48a09c2ebb71a4ca4c4e438c76392ff3c06debd119047e8509f5986bd216",
+    "AdministratorModelCallRequest": "672a46f76ce84456410e329274b4f3a58f3e2e5dd0ac81e2eb60b66d1678bbdd",
+    "AdministratorModelCallResult": "f9bcd45eb2756a5012d788cee3e6bcae7b6309f37222432ad2e23dc91f515d5e",
+    "AdministratorModelSelector": "855847234e5255abb6aeb8382f39d2610b32290df8d4f46c28db7165a0dbd735",
     "AdministratorSession": "89727f3387d58554e69d7938d5063df4f4410726a998f979ca3b586cf6a36bc0",
     "AdministratorSessionRedirect": "83593a483477ceeb6d1b657468d7ae2f97f889183bf32cab3ca2284b53aab30c",
     "AdministratorSessionStart": "3b7f9b02214ff37918055dec1c1f0945b5420b9188e4dbd5eb4476542ce5af2d",
+    "AdministratorStreamCompleted": "0c9fc90e73c1e35eea8331a333637b62936d044956092195465deadd799c56a5",
+    "AdministratorStreamStart": "cf74c1fd785c85405e9740aa793a224012b4953c5a59d8a0b329a8187018b7fc",
     "ApiName": "19a41c0d770863240c2eee57a0765b075e5785da504709d9f7d9d954da131f4b",
     "Assignment": "5141a96ee28f0e53c744af5e8ce26dd3b51bf355d568313c87ee4e4d93c38698",
     "AssignmentChain": "86e2513feac6a67136c42f771ac3005bad3089142a68677c4aa319c423a961e6",
@@ -36,6 +48,12 @@
     "AssistantMessage": "b07eb3facb93a57f5edd98b918ce2296186de823a7de4710dcea0c01ce61c203",
     "AvailableProviderModel": "47401180d346ef6cb6c3486f49e066d30904addbc6f7c92105da16d6a5d9a2ae",
     "AvailableProviderModelPage": "eee07a809bb150bbebcf2adfbeb3b296aa4b228e41acc69e5edbfe072e8db293",
+    "CallActor": "e77c03605ecfb33557139e5e94774b3085239a13ad01059d1122a9278894759f",
+    "CompletedAdministratorAttemptResults": "b8c6cf23df46f948c6e81e96b9fb053911f10020bda0c59cd80f6f70f3911d0e",
+    "CompletedExactAdministratorAttemptResults": "d129574938c4e2aaffd6b54ce3df48549f43217c9e13b7a5ebdc27f30a7a99cd",
+    "CompletedMediaAdministratorAttemptResults": "cc3f48b5bb48f8a14ca04669cbb03ebf8ab555ebbf49f2ebaec113ea76f52df5",
+    "ConnectionAdministratorAttemptResult": "d31bb4b75538a3e864c3fb4de38a644f741709687ffa9ae86f0d5f9aebcbb6ce",
+    "ConnectionElapsedMilliseconds": "800d6d32f20c5f11ef9e9462a24870a480cfe886d06a5bcfdccc460053041ab4",
     "Cooldown": "2f780e311d619c9a2f62b2ac4c5b479445c9eacfa270a6daf26cee1fdff482b8",
     "Credential": "e90aa646be6550b417385aa884081b0010907c84eb8a18dd1bc19d9dad7f048c",
     "CredentialPage": "3dc8e462eab584c24382e931473210f43884520b54e7e0550794c4bd902766ad",
@@ -48,6 +66,7 @@
     "ErrorCode": "e8266639ac252adc8e77813b2c954e3fabd5f67b02e0ee2935ba86ad0baf2172",
     "ErrorDetails": "d8e891663d0ca6437798fdeac1ce3bb562fa1455bc0dad4044911a2831f0745e",
     "ErrorEnvelope": "e4f784ea203b5a20f933a1f45bf0dc4e9f960bdd743e104cec03b2c4a39e2497",
+    "ExactMediaAdministratorAttemptResults": "0e055e61fbc826f97c4fa21e18ef049f0175483e01931afd8e1c5507347200dd",
     "ExactProviderModelSelector": "e82a86157f91b6406ac115e2a78660742468aad0b6e71943a566c4f5db8d4ed2",
     "HealthComponent": "08499fdc005b6d9fa441c43ba49a890f8e9fc9eb05a7e5ac2ef5d11269ca9293",
     "HealthStatus": "a0b8b18f449b151ff18cac7ad31de8ac4981edbce57a5865ed828a6cfac9e978",
@@ -57,6 +76,7 @@
     "LogMedia": "95f1ffaba58c9ed7b755e8bab34587acbc58df35b4f5d6fd1d8b250d44ffab56",
     "LogRetentionSettings": "b0782d2055517f49251fee483861954783b4b7b45f0550778e92bb205e571749",
     "MediaContent": "9fe4116666b6cfe5f247316730eed728f78717ad1c8468c9418f37575e35baa4",
+    "MediaElapsedMilliseconds": "7b8bec6866ebc90ed0fc658f66d0f5f172a674cd1011ae9831740fe190dfeff4",
     "MediaJob": "f2d5c96a01c91a9cd7f7f18197a79768ca9d8d0144fd1900afdc82758828fe02",
     "MediaJobRequest": "096f0e5a0a1f391f5e07d74c8bea1281425794290ccd3e5496cb6b948f332bd9",
     "MediaJobState": "497b521c8c0f0195a8798e361e1e20f8a132f7e91a29d6f2508d58243f175827",
@@ -107,7 +127,7 @@
     "RequestAttempt": "61e72879e0de8479b84b92c2befcbc5323d1eec30056308a48c0cd9e163ea805",
     "RequestLog": "25c5fd743bb00e4667530dcc97935e1f5abcadd45d2c440a1668b7aed0d17e46",
     "RequestLogPage": "39444b1ca63390f6c67321868d590b96cbf49a0a2357df98729cf03042794507",
-    "RequestLogSummary": "1f12d9ca97df2e9cba18b3546d4692e9688dcc5b6dab495989b71f486a43dede",
+    "RequestLogSummary": "742bc89446c712b50d9c2a1092357bf58b9cbb7615bd6a7afe71d957507e027d",
     "Service": "080e42ee301669f447358abe8f27760be74279628505a52d84deb86faef66d7d",
     "ServiceCreate": "226ca2fb0f513176404c28fd4beab37469b83b0c383f542f7f5116a01fefe88f",
     "ServiceKey": "9c54bc325a80585a6e3bead26c9f79dec61abd65f6c404df5c71010839a06ee1",
@@ -117,8 +137,8 @@
     "ServicePage": "2e6e2e5b21042a1a4aa15c764a0e143db54faec0b042a5021e6b7ed917c2a7f9",
     "ServiceUpdate": "b56a577917e5f9997ec75d2ba264ec90c0b8c6f7833033d6bd33bf148117390f",
     "StandardModelCallResult": "be0d434efee50db3b1d0301231a6c16d18f1ab372fb38b412eccdf44e4f49952",
-    "StatisticsBucket": "4e0b49cee1c18d07712a6d50a88201981c7de6729b2fdaf839fe032cb2ac90f1",
-    "StatisticsDimension": "6ecd8b95765987ff919c6b0b7abba73c85e5464c4e26af809821370aef2f54c3",
+    "StatisticsBucket": "30f4830dd086ba5c28f3cbc2629627f991cdfa5f62be45df75e4a12f9a544c76",
+    "StatisticsDimension": "9b79e48e3a569afbd9edadea68ca932480e9f2eb07573b83ab96b7f251fa55a0",
     "StatisticsResult": "e0044bf0198fe4cc8608e5d778f71aa1e0744f0d14217262860b8210b2e7bf76",
     "StreamCompleted": "ff3ab2ff49ffe5467c7f21f444ae06970be92615313ab5b5f1c8f7b9f3f44ca8",
     "StreamStart": "e82a86157f91b6406ac115e2a78660742468aad0b6e71943a566c4f5db8d4ed2",
@@ -146,6 +166,6 @@
   },
   "contract_set": "llmrouter-v1",
   "generator_version": 3,
-  "source_sha256": "77fe3c9c462303c8b544b2a34cb9d24d445d1900a274e46b512b9a9ef6b9e37a",
+  "source_sha256": "3bf975f41f48a061108a1941b272b9e50a43e12178f31788abfbd0b110dfa0f3",
   "version": "1.0.0"
 }

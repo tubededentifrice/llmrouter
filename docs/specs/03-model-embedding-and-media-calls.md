@@ -1,12 +1,13 @@
 # Model, embedding, and media calls
 
-Status: Accepted on 2026-08-23.
+Status: Accepted on 2026-08-23. The administrator playground amendment was
+accepted on 2026-08-24.
 
 ## Common request rules
 
-Each call MUST authenticate one service API key and identify one workspace
-that the service owns. The Router MUST reject a missing, deleted, or foreign
-workspace before provider work.
+Each service call MUST authenticate one service API key and identify one
+workspace that the service owns. The Router MUST reject a missing, deleted,
+or foreign workspace before provider work.
 
 A call MUST select either one named assignment or one exact enabled
 provider-model. An exact selection MUST use no assignment fallback. Both paths
@@ -23,6 +24,114 @@ A deployment MUST configure bounded request bytes, connection timeouts,
 provider-attempt timeouts, concurrency, and output sizes. The formal API MAY
 set a smaller limit for one operation. It MUST NOT permit an unbounded input,
 output, attempt, or job.
+
+## Administrator playground calls
+
+An allowlisted administrator session MUST be able to make synchronous and
+streaming model calls, synchronous embedding calls, and image, video, and
+audio media-job calls from the global playground. These operations MUST use
+the same native messages, tools, structured JSON, image input, embedding,
+media input, temperature, output limit, tag, request-size, timeout,
+concurrency, capability, and output bounds as the applicable service call.
+The administrator contract MUST NOT contain a service API key or a workspace
+identity. The browser MUST NOT fetch, store, or send a service API key.
+
+An exact administrator call MUST name one enabled global provider-model. It
+MUST omit service context and MUST use no assignment fallback. An assignment
+administrator call MUST name one existing assignment and exactly one service
+as its configuration context. The Router MUST resolve the assignment through
+that service's current parent chain. This service name MUST NOT authorize,
+own, expose, or delete the call or any record that it creates. The Router MUST
+reject an assignment request with no service context and an exact request
+with a service context before provider work.
+
+An administrator assignment call MUST use a read-only assignment snapshot. It
+MUST NOT create a missing assignment, change last-use evidence, or add an
+observed requirement. A missing service or assignment MUST return `not_found`.
+An empty or ineligible effective chain and a disabled or ineligible exact
+provider-model MUST return `provider_unavailable`. The Router MUST apply the
+normal candidate eligibility, one-attempt, cooldown, fallback, structured-
+output validation, and visible-output rules to the snapshot.
+
+Each administrator call MUST require a current administrator session, the
+session-bound CSRF token, and the exact allowed `Origin` at admission. A
+missing or expired session MUST return `authentication_required`. A missing
+or incorrect CSRF token or Origin MUST return `permission_denied`. Polling one
+administrator media job and reading its content MUST require a current
+administrator session. These reads MUST NOT accept a service key. Session
+expiry after admission MUST NOT change the selected route or cancel provider
+work that the Router already admitted. A later poll or content read MUST
+authenticate again.
+
+The Router application MUST be the only database-transaction owner for an
+administrator call. After authentication and complete validation, it MUST
+create one logical call and its immutable administrator actor and selection
+snapshot in one transaction before provider work. A rollback of this
+transaction MUST start no provider work. Provider I/O MUST occur outside a
+database transaction. Each completed provider attempt MUST commit its raw
+accounting once before the Router starts a fallback attempt. If that commit
+fails, the Router MUST return `internal_error`, MUST NOT start another
+candidate, and MUST NOT repeat the completed provider attempt.
+
+A model or embedding response MUST return the logical call identity, elapsed
+milliseconds, selected provider-model, usage, and cost that are available for
+the successful result. It MUST also return each completed attempt in order
+with its route, outcome, elapsed time, reported usage and cost, and safe error.
+The interface MUST NOT hide failed-attempt cost, add costs in different
+currencies, or claim an unavailable usage value is zero. The administrator
+stream MUST identify the logical call before visible output and MUST return
+elapsed time, selector, route, attempts, usage, and cost on completion. It MUST
+use the native interruption error when failure occurs after visible output. A
+caller disconnect MUST use the normal model-call rules and MUST NOT create a
+replay or result operation.
+
+Each successful administrator playground response and stream MUST use
+`Cache-Control: no-store`. The stream response MUST also return the logical
+call identity in its declared correlation header. These headers MUST NOT
+contain authority or a secret.
+
+Administrator media operations MUST contain only create, get, and retained-
+content reads. They MUST NOT add list, cancel, replay, or delete operations.
+The create transaction MUST create the logical call and media job before it
+returns acceptance or starts provider work. Each later state change MUST use
+one Router-owned transaction. A response MUST return the logical call
+identity, current or final selected provider-model, elapsed time when known,
+and reported usage and cost when known. It MUST return media bytes only from
+the authenticated Router content operation. A job response MUST return its
+completed attempts in order. A pending or running job MAY have no completed
+attempt. A succeeded job MUST have at least one succeeded attempt.
+
+An administrator call MUST use only safe native errors. An error, response
+header, stream event, job, accounting row, log index, and activity detail MUST
+NOT contain a provider credential, service API key, administrator cookie,
+CSRF token, authorization header, object-store credential, or internal object
+location.
+
+Administrator playground operations MUST use the stable errors as follows:
+
+- `authentication_required` for no current administrator session, including
+  when the request supplies only a service key;
+- `permission_denied` for a missing or incorrect CSRF token or Origin;
+- `invalid_request` for a closed-schema error, contradictory selector, missing
+  assignment service context, invalid input, or exceeded request bound;
+- `not_found` for a missing service, assignment, or administrator media job;
+- `provider_unavailable` when selection or capability filtering leaves no
+  eligible provider-model;
+- `upstream_failed` when one exact attempt or all permitted assignment
+  attempts fail before a result;
+- `content_unavailable` when media is not ready or retained bytes no longer
+  exist;
+- `rate_limited` when an applicable rate or concurrency admission bound is
+  full; and
+- `internal_error` for a transaction or required dependency failure that has
+  no safe, more specific error.
+
+`conflict` and `assignment_cycle` MUST NOT report a normal playground call
+failure. A configuration write can return these errors through its own
+operation. A concurrent configuration change after call admission MUST NOT
+change the immutable selection snapshot. A logical call identity MUST be a
+correlation value only. It MUST NOT authorize a log, job, media, accounting,
+or result read.
 
 ## Attempts and fallback
 

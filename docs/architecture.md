@@ -46,6 +46,13 @@ The application authenticates the service API key and verifies the workspace.
 It resolves the named assignment or exact provider-model, checks the required
 call capabilities, and creates one attempt record for each provider call.
 
+The global administrator playground uses the same call core through the
+administrator session, CSRF, and exact-Origin path. It does not use a service
+key or workspace. An assignment call uses one selected service only to resolve
+configuration and inheritance. An exact call uses the global provider-model
+directly. Its accounting, logs, jobs, and media are global administrator-only
+records.
+
 An assignment call tries each eligible candidate no more than once. Fallback
 can continue only before model output becomes visible. An exact call has one
 candidate and no fallback.

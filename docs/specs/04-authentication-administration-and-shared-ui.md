@@ -1,7 +1,7 @@
 # Authentication, administration, and shared UI
 
-Status: Accepted on 2026-08-23. The graph-first UI amendment was accepted on
-2026-08-24.
+Status: Accepted on 2026-08-23. The graph-first UI and administrator
+playground amendments were accepted on 2026-08-24.
 
 ## Service API keys
 
@@ -161,17 +161,20 @@ dialog, and make the background inactive. Escape and the close action MUST
 close it and restore focus to the node or action that opened it.
 
 The playground modal is a global administration presentation and is not a
-workspace-owned navigation page. This presentation change MUST NOT create a
-new global call authority. A service API key is a backend-only credential and
-MUST NOT enter this browser application. Until an accepted specification
-defines the playground execution authority and accounting rules, the global
-modal MUST NOT execute a call or accept a service API key. It MAY let the
-administrator prepare input, but its run action MUST be unavailable and MUST
-state why. The interface MUST NOT invent, hide, or silently select an execution
-service, workspace, or credential. An accepted change for execution MUST keep
-service-owned data isolated and MUST define an explicit approved accounting
-scope. It MAY define a separate administrator diagnostic scope. This paragraph
-does not require a service or workspace identity for that future choice.
+workspace-owned navigation page. An allowlisted administrator session MUST
+have unrestricted authority to execute its operations. The modal MUST NOT
+ask for, fetch, store, or send a service API key or workspace identity. It
+MUST NOT show a permission-scope control because the product has no
+fine-grained administrator permissions.
+
+An exact provider-model node MUST supply its global provider-model identity
+and no service context. An assignment node MUST supply its assignment name
+and the currently selected service as configuration context. The modal MUST
+show that service context but MUST NOT describe it as authorization or
+accounting ownership. Its run action MUST require the normal administrator
+session, CSRF, and exact-Origin controls. Administrator playground accounting,
+logs, and media MUST remain visible only to an administrator through the
+global administration interfaces.
 
 If the target node becomes disabled, deleted, or unavailable while the modal
 is open, the modal MUST keep the reviewed input, prevent execution, and show

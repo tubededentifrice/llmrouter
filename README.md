@@ -27,6 +27,7 @@ The first release has these functions:
 - durable usage and cost accounting;
 - short-lived detailed request logs;
 - one global administration application;
+- unrestricted global administrator playground calls;
 - reusable assignment and playground components in OpenDLE UI;
 - a Python SDK and multi-turn harness in OpenDLE Lib.
 
@@ -39,6 +40,12 @@ high-availability coordination.
 A calling service owns its prompts, workflows, durable conversations, domain
 data, user permissions, and tools. Each model, embedding, and media request
 identifies one workspace that belongs to the authenticated service.
+
+The global playground is the one exception to service call ownership. An
+allowlisted administrator session can call an exact global provider-model or
+an assignment for one selected service. The selected service supplies only
+assignment and inheritance configuration. The call uses no service key or
+workspace, and its records remain global administrator-only records.
 
 ## Documents
 
