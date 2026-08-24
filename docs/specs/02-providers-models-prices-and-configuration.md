@@ -31,7 +31,7 @@ Codex subscription adapters. The Router MUST NOT migrate a dormant provider
 branch only because old code exists.
 
 The global administration application MUST manage providers, canonical
-models, provider-model mappings, and assignments through one three-column
+models, provider-model mappings, and assignments through a three-column
 configuration graph. The columns MUST show provider connections, canonical
 models with their provider-model mappings, and assignments. The graph MUST be
 the only primary configuration entry. Separate provider, model, and assignment
@@ -45,6 +45,24 @@ is selected, the first two columns MUST stay global and the assignment column
 MUST show that service's effective assignments, local definitions, and
 inherited sources. Selecting a service MUST NOT create a service-owned copy or
 allowlist of a provider, model, mapping, credential, capability, or price.
+
+Changing the selected service MUST replace only the assignment column. It MUST
+close an open assignment inspector or playground. It MUST NOT silently discard
+an unsubmitted service-assignment form. It MUST let the administrator cancel
+the service change or confirm that the form will close. A response for the
+previously selected service MUST NOT replace data for the current selection.
+Each assignment write from the graph MUST name the selected service. When no
+service is selected, assignment create, change, and delete actions MUST be
+unavailable.
+
+The graph MUST have one search and filter surface for its three columns. A
+result MUST show each direct match and the connected records that are necessary
+to understand its provider-model and assignment routes. It MUST show a clear
+no-result state and a clear action that restores the complete graph. Search,
+filtering, or bounded incremental loading MUST NOT change global ownership,
+assignment inheritance, or the selected service. The graph MUST identify when
+more records are available and MUST NOT present a partial result as the
+complete configuration.
 
 ## Provider connections and credentials
 
@@ -60,6 +78,15 @@ endpoint. Custom endpoints, adapter-specific limits, enablement, and other
 closed-schema settings MUST be in an explicit advanced section. A custom or
 OpenAI-compatible endpoint that has no registered standard value MUST remain
 an explicit field and MUST keep the endpoint trust rules below.
+
+Before submission, the editor MUST show the inferred endpoint and defaults in
+a review summary or in the open advanced section. It MUST identify which
+values will change. A change of adapter type MUST revalidate all fields and
+MUST NOT silently keep or apply a setting that the new adapter schema does not
+permit. An adapter that does not use a credential MUST NOT ask for one. If an
+adapter requires a credential, the editor MUST make clear that the connection
+is unavailable without an applicable credential and MUST show how to correct
+the missing value. It MUST NOT report that connection as ready.
 
 The editor MUST show a provider credential as write-only input and safe
 metadata. It MUST make create, replace, and delete effects clear. It MUST NOT
@@ -173,12 +200,23 @@ identity, typed prices, and each proposed provider-model mapping. It MUST NOT
 infer a capability that the catalog metadata does not support.
 
 The preview MUST identify an existing canonical model or provider-model
-mapping and MUST NOT silently replace it. The administrator MUST select the
-applicable existing global provider connections before confirmation. One
-confirmation MUST create the selected canonical model and provider-model
-mappings in one database transaction. A validation, duplicate, catalog, or
-storage failure MUST create none of them. Imported values MUST remain editable
-through the same graph inspectors after creation.
+mapping and MUST NOT silently replace it. The preview MUST let the
+administrator select the applicable existing global provider connections for
+new mappings. One confirmation MUST create the selected canonical model and
+provider-model mappings in one database transaction. A validation, duplicate,
+catalog, or storage failure MUST create none of them. Imported values MUST
+remain editable through the same graph inspectors after creation.
+
+Catalog import through this create workflow MUST create new records only. An
+existing proposed canonical model or provider-model mapping MUST block
+confirmation and MUST direct the administrator to the existing graph node.
+The administrator MUST select one or more compatible global provider
+connections for new mappings. Confirmation MUST use the native values that the
+administrator reviewed. A catalog change after preview MUST NOT silently
+change those values. The Router MUST validate the complete reviewed model,
+every selected connection, every mapping, and the current database state again
+in the confirmation transaction. A concurrent duplicate or deleted connection
+MUST fail the complete import.
 
 ## Direct configuration changes
 

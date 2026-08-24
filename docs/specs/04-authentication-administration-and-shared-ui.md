@@ -84,10 +84,12 @@ page.
 The application shell and each retained page MUST use the complete available
 width after the sidebar. They MUST use one responsive gutter system for page
 headings, filters, panels, graphs, and tables. A page MUST NOT use one maximum
-width for its controls and another width for its result. On a phone, the shell
-MUST use the complete viewport width with the phone gutter and MUST prevent
-page-level horizontal overflow. A graph or dense data region MAY scroll in its
-own labelled viewport when its content cannot reflow.
+width for its controls and another width for its result, and the page container
+MUST NOT set a smaller maximum width. On a phone, the shell MUST use the
+complete viewport width with the phone gutter and MUST prevent page-level
+horizontal overflow. A graph or dense data region MAY scroll in its own
+labelled viewport when its content cannot reflow. Its heading, filters, and
+primary actions MUST remain outside that scrolling region.
 
 The service tree and the three-column configuration graph MUST use graph nodes
 and inspectors as their complete interaction surface. A graph toolbar MUST NOT
@@ -99,13 +101,37 @@ graph-viewport scrolling.
 
 Each actionable graph node MUST be a semantic control in the browser
 accessibility tree. Its accessible name MUST identify the record and its
-important state. Keyboard users MUST be able to reach each node, move through
-related nodes with documented arrow-key behavior, open the same inspector or
-modal as a pointer user, close it with Escape, and return focus to the opening
-node. The graph MUST expose selected, expanded, inherited, disabled, empty,
-error, and unavailable state without color alone. The application MUST NOT
-render a duplicate service or assignment table or list. The graph nodes MUST
-provide the complete accessible record and action surface.
+important state, column or tree level, and relationship to other records.
+Decorative edges MUST be hidden from assistive technology only when the
+connected node descriptions provide the same relationship. The application
+MUST NOT render a duplicate service or assignment table or list. The graph
+nodes MUST provide the complete accessible record and action surface.
+
+Each graph MUST have one active keyboard tab stop. When no inspector or modal
+is open, Tab MUST enter at the selected node, or at the first node when there is
+no selection, and the next Tab MUST leave the graph. In the service tree, Up
+and Down MUST move through the visible nodes, Right MUST move to the first
+child, Left MUST move to the parent, and Home and End MUST move to the first
+and last visible nodes. If the tree permits branch collapse, Right MUST first
+expand a collapsed node and Left MUST first collapse an expanded node. In the
+configuration graph, Up and Down MUST move in the current column, Left and
+Right MUST move to the nearest connected node in rendered order in the
+adjacent column, and Home and End MUST move to the first and last node in the
+current column. A key that has no valid target MUST keep focus on the current
+node. A focus change MUST scroll the focused node into the labelled graph
+viewport. Enter or Space MUST open the same inspector or modal as a pointer
+action. Escape MUST close it and return focus to the opening node.
+
+The graph MUST expose selected, expanded, inherited, disabled, empty, loading,
+error, partial, and unavailable state without color alone. A refresh MUST keep
+focus and selection when the record still exists. If the record no longer
+exists, the graph MUST close its inspector, move focus to the first available
+node or its empty-state action, and announce that the record is unavailable.
+
+OpenDLE UI MUST own the reusable behavior for graph nodes, viewports, keyboard
+use, focus return, and responsive inspectors. The Router MUST own the
+composition of the service tree and configuration graph, record relationships,
+domain labels, permissions, and mutations.
 
 The three-column configuration graph MUST make each provider-to-model mapping
 and each ordered assignment route clear. Selecting a provider, canonical
@@ -115,6 +141,14 @@ selected node as context so the form does not ask for known references. The
 assignment column MUST show inherited assignment sources, direct replacement
 chains, default inheritance, empty default chains, last use, and observed call
 requirements for the selected service.
+
+Each graph inspector MUST use a right-side panel on a wide screen and a bottom
+sheet on a phone. Its content MUST use a local scroll region when necessary.
+Opening or closing an inspector MUST NOT change the page width or hide the
+focused graph node outside the reachable graph viewport. A failed create,
+change, or delete MUST keep the applicable inspector open, keep the entered
+non-secret values, and show a corrective error. It MUST NOT show success or
+change the graph until the server confirms the write.
 
 The playground MUST open as a modal from an applicable provider-model or
 assignment node. It MUST infer the exact provider-model or assignment target,
@@ -128,13 +162,21 @@ close it and restore focus to the node or action that opened it.
 
 The playground modal is a global administration presentation and is not a
 workspace-owned navigation page. This presentation change MUST NOT create a
-new global call authority. The execution authority and accounting design
-remain an explicit open item owned by `llmr-gui-playground`. Until that item
-has an accepted specification change, each execution MUST follow the existing
-service-key and workspace rules in
-[Model, embedding, and media calls](03-model-embedding-and-media-calls.md#common-request-rules).
-The interface MUST NOT invent, hide, or silently select an execution service,
-workspace, or credential.
+new global call authority. A service API key is a backend-only credential and
+MUST NOT enter this browser application. Until an accepted specification
+defines the playground execution authority and accounting rules, the global
+modal MUST NOT execute a call or accept a service API key. It MAY let the
+administrator prepare input, but its run action MUST be unavailable and MUST
+state why. The interface MUST NOT invent, hide, or silently select an execution
+service, workspace, or credential. An accepted change for execution MUST keep
+service-owned data isolated and MUST define an explicit approved accounting
+scope. It MAY define a separate administrator diagnostic scope. This paragraph
+does not require a service or workspace identity for that future choice.
+
+If the target node becomes disabled, deleted, or unavailable while the modal
+is open, the modal MUST keep the reviewed input, prevent execution, and show
+the target state. It MUST NOT silently change to a different assignment or
+provider-model.
 
 The application MUST use reusable components, layout, tokens, and interaction
 patterns from `../opendle-ui`. Router-specific data and actions MUST stay in
@@ -147,11 +189,22 @@ MUST include semantic table structure, caller-defined columns and widths,
 responsive phone labels, long-value handling, row selection, keyboard
 movement, visible focus, focus after create or delete, inline create and edit,
 explicit, automatic, or batch save, validation, pending and error state, safe
-delete confirmation, search and filters, bounded incremental loading, empty
-and unavailable state, optional detail rows, and accessible live status.
+delete confirmation, search and filters, initial and bounded incremental
+loading, empty and unavailable state, optional detail rows, and accessible
+live status.
 Optional tree and reorder behavior MAY be included when a host needs it. Host
 applications MUST own records, permissions, API calls, domain copy, and
 mutation policy.
+
+The Router application MUST use this family for each retained record table.
+A failed save MUST keep the entered non-secret values, identify the affected
+row, and provide a retry or cancel action. A failed delete MUST keep the row.
+A delete confirmation MUST identify the record and the effects of removal,
+and cancellation MUST return focus to the delete action. Loading more records
+MUST keep the current selection and unsaved row values, and MUST announce the
+new total. On a phone, the responsive presentation MUST keep each cell label,
+value, state, and row action associated with its record without page-level
+horizontal overflow.
 
 ## Calling-service administration
 

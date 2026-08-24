@@ -62,6 +62,13 @@ selected service and the operation do not already supply. A new service key
 MUST keep the one-time display and write-only rules in
 [Authentication, administration, and shared UI](04-authentication-administration-and-shared-ui.md#service-api-keys).
 
+The workspace and key sections MUST use the shared table behavior in
+[Authentication, administration, and shared UI](04-authentication-administration-and-shared-ui.md#global-administration-application).
+Each section MUST have its own loading, empty, error, and bounded loading
+state. A failure in one section MUST NOT remove records that are already
+visible in the other section. Long names and key metadata MUST wrap or scroll
+inside the inspector and MUST NOT increase the page width.
+
 Deleting a workspace MUST delete its detailed logs, raw accounting, daily
 aggregates, media jobs, uploaded images, and retained generated media. It MUST
 NOT change the owning service or its assignment definitions. The delete MUST

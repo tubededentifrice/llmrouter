@@ -78,6 +78,14 @@ content, tool data, errors, tags, usage, prices, and route data MUST stay in a
 bounded detail region with usable wrapping or local scrolling. The view MUST
 NOT let a table or detail value create page-level horizontal overflow.
 
+The log view MUST treat model messages, tool data, provider responses, and
+errors as untrusted content. It MUST render text as text and MUST NOT execute
+markup, scripts, links, or embedded active content from a log. Retained images
+and media MUST load only through authenticated Router endpoints. If a selected
+log or media object expires or disappears, the list MUST remain usable and the
+detail region MUST show an unavailable state. It MUST NOT silently select a
+different log.
+
 Uploaded input images and generated media MUST use the same rolling maximum
 duration. They MAY disappear early after an applicable diagnostic-cache or
 object-storage failure. They MUST remain behind Router endpoints while they
