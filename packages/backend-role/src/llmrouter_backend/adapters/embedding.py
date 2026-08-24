@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 type OpenAIEmbeddingAdapterName = Literal["openai", "openai_compatible", "custom"]
 
 _OPENAI_ENDPOINT = "https://api.openai.com/v1"
-_MAXIMUM_REQUEST_BYTES = 512 * 1024
+_MAXIMUM_REQUEST_BYTES = 2 * 1024 * 1024
 _MAXIMUM_RESPONSE_BYTES = 5_000_000
 _MAXIMUM_HEADERS = 100
 _MAXIMUM_HEADER_BYTES = 32 * 1024
@@ -72,6 +72,7 @@ class OpenAIEmbeddingAdapter:
             headers = {
                 "Content-Type": "application/json",
                 "Accept": "application/json",
+                "Accept-Encoding": "identity",
             }
             if request.credential is not None:
                 headers["Authorization"] = _bearer_authorization(request.credential)
@@ -150,6 +151,7 @@ class OllamaEmbeddingAdapter:
             headers = {
                 "Content-Type": "application/json",
                 "Accept": "application/json",
+                "Accept-Encoding": "identity",
             }
             if request.credential is not None:
                 headers["Authorization"] = _bearer_authorization(request.credential)
@@ -301,6 +303,46 @@ def _openai_response(
     body: bytes, request: ProviderAttemptRequest
 ) -> tuple[ProviderOutput, tuple[UsageAmount, ...]]:
     value = _json_object(body)
+    usage_value = value.get("usage")
+    usage = [UsageAmount("request", Decimal(1))]
+    if usage_value is not None:
+        if not isinstance(usage_value, dict):
+            raise ValueError
+        usage.append(
+            UsageAmount(
+                "input_token",
+                Decimal(_nonnegative_integer(usage_value.get("prompt_tokens"))),
+            )
+        )
+    reported_usage = tuple(usage)
+    try:
+        output = _openai_output(value, request)
+    except TypeError, UnicodeError, ValueError, RecursionError:
+        raise ProviderFailureError("invalid_response", usage=reported_usage) from None
+    return output, reported_usage
+
+
+def _ollama_response(
+    body: bytes, request: ProviderAttemptRequest
+) -> tuple[ProviderOutput, tuple[UsageAmount, ...]]:
+    value = _json_object(body)
+    usage = (
+        UsageAmount("request", Decimal(1)),
+        UsageAmount(
+            "input_token",
+            Decimal(_nonnegative_integer(value.get("prompt_eval_count"))),
+        ),
+    )
+    try:
+        output = _ollama_output(value, request)
+    except TypeError, UnicodeError, ValueError, RecursionError:
+        raise ProviderFailureError("invalid_response", usage=usage) from None
+    return output, usage
+
+
+def _openai_output(
+    value: Mapping[str, object], request: ProviderAttemptRequest
+) -> ProviderOutput:
     data = value.get("data")
     if not isinstance(data, list) or len(data) != request.expected_embedding_count:
         raise ValueError
@@ -316,39 +358,21 @@ def _openai_response(
     count = request.expected_embedding_count
     if type(count) is not int or set(indexed) != set(range(count)):
         raise ValueError
-    usage_value = value.get("usage")
-    usage = [UsageAmount("request", Decimal(1))]
-    if usage_value is not None:
-        if not isinstance(usage_value, dict):
-            raise ValueError
-        usage.append(
-            UsageAmount(
-                "input_token",
-                Decimal(_nonnegative_integer(usage_value.get("prompt_tokens"))),
-            )
-        )
-    vectors = [indexed[index] for index in range(count)]
-    return ProviderOutput("embedding", _dump_json(vectors)), tuple(usage)
+    return ProviderOutput(
+        "embedding", _dump_json([indexed[index] for index in range(count)])
+    )
 
 
-def _ollama_response(
-    body: bytes, request: ProviderAttemptRequest
-) -> tuple[ProviderOutput, tuple[UsageAmount, ...]]:
-    value = _json_object(body)
+def _ollama_output(
+    value: Mapping[str, object], request: ProviderAttemptRequest
+) -> ProviderOutput:
     embeddings = value.get("embeddings")
     if (
         not isinstance(embeddings, list)
         or len(embeddings) != request.expected_embedding_count
     ):
         raise ValueError
-    usage = (
-        UsageAmount("request", Decimal(1)),
-        UsageAmount(
-            "input_token",
-            Decimal(_nonnegative_integer(value.get("prompt_eval_count"))),
-        ),
-    )
-    return ProviderOutput("embedding", _dump_json(embeddings)), usage
+    return ProviderOutput("embedding", _dump_json(embeddings))
 
 
 def _dump_request(value: object) -> bytes:
@@ -388,10 +412,10 @@ def _nonnegative_integer(value: object) -> int:
 
 async def _read_response(response: httpx.Response) -> bytes:
     body = bytearray()
-    async for chunk in response.aiter_bytes():
-        body.extend(chunk)
-        if len(body) > _MAXIMUM_RESPONSE_BYTES:
+    async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
+        if len(chunk) > _MAXIMUM_RESPONSE_BYTES - len(body):
             raise ValueError
+        body.extend(chunk)
     if not body:
         raise ValueError
     return bytes(body)
@@ -410,6 +434,9 @@ def _validate_headers(response: httpx.Response) -> None:
         or not length.isdecimal()
         or int(length) > _MAXIMUM_RESPONSE_BYTES
     ):
+        raise ValueError
+    encoding = response.headers.get("content-encoding")
+    if encoding is not None and encoding.strip().lower() != "identity":
         raise ValueError
 
 
@@ -444,7 +471,7 @@ def _http_failure(status: int) -> ProviderFailureError:
 def _failure_with_request(error: ProviderFailureError) -> ProviderFailureError:
     return ProviderFailureError(
         error.failure_class,
-        usage=(UsageAmount("request", Decimal(1)),),
+        usage=error.usage or (UsageAmount("request", Decimal(1)),),
         phase=error.phase,
     )
 

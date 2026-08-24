@@ -13,6 +13,8 @@ import stat
 import threading
 from dataclasses import dataclass
 from decimal import Decimal
+from itertools import islice
+from numbers import Real
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
@@ -39,7 +41,7 @@ _MAXIMUM_CACHE_FILES = 4096
 _MAXIMUM_CACHE_ENTRIES = 8192
 _MAXIMUM_CACHE_DEPTH = 32
 _MAXIMUM_CACHE_BYTES = 2 * 1024 * 1024 * 1024
-_MAXIMUM_REQUEST_BYTES = 512 * 1024
+_MAXIMUM_REQUEST_BYTES = 2 * 1024 * 1024
 _READ_CHUNK_BYTES = 1024 * 1024
 _DIRECTORY_OPEN_FLAGS = (
     os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK
@@ -93,6 +95,7 @@ class FastEmbedEngine:
     """Use exact FastEmbed with CPU-only, offline, bounded-thread controls."""
 
     def __init__(self, cache_dir: Path, threads: int) -> None:
+        os.environ["TOKENIZERS_PARALLELISM"] = "false"
         module = importlib.import_module("fastembed")
         engine_type = module.TextEmbedding
         self._engine = engine_type(
@@ -198,12 +201,17 @@ class LocalEmbeddingAdapter:
             raise LocalArtifactError
         engine = self._local_engine(configuration)
         try:
-            raw = list(engine.embed(inputs))
+            raw = list(islice(engine.embed(inputs), len(inputs) + 1))
         except Exception as error:
             raise LocalEngineError from error
         if len(raw) != len(inputs):
             raise LocalEngineError
-        return [_normalized_vector(value) for value in raw]
+        try:
+            return [_normalized_vector(value) for value in raw]
+        except LocalEngineError:
+            raise
+        except Exception as error:
+            raise LocalEngineError from error
 
     def _local_engine(
         self, configuration: LocalEmbeddingConfiguration
@@ -276,9 +284,12 @@ def _digest_directory(
     opened_stat: os.stat_result,
     state: _ArtifactDigestState,
 ) -> None:
-    names = os.listdir(directory_fd)
-    if state.entry_count + len(names) > _MAXIMUM_CACHE_ENTRIES:
-        raise LocalArtifactError
+    names: list[str] = []
+    with os.scandir(directory_fd) as entries:
+        for entry in entries:
+            if state.entry_count + len(names) >= _MAXIMUM_CACHE_ENTRIES:
+                raise LocalArtifactError
+            names.append(entry.name)
     for name in sorted(names):
         entry_stat = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
         state.entry_count += 1
@@ -410,7 +421,12 @@ def _normalized_vector(value: object) -> list[float]:
     if isinstance(value, str | bytes | bytearray):
         raise LocalEngineError
     try:
-        result = [float(cast("Any", item)) for item in cast("Iterable[object]", value)]
+        source = islice(cast("Iterable[object]", value), LOCAL_EMBEDDING_DIMENSION + 1)
+        result: list[float] = []
+        for item in source:
+            if isinstance(item, bool) or not isinstance(item, Real):
+                raise LocalEngineError
+            result.append(float(cast("Any", item)))
     except (OverflowError, TypeError, ValueError) as error:
         raise LocalEngineError from error
     if len(result) != LOCAL_EMBEDDING_DIMENSION or any(

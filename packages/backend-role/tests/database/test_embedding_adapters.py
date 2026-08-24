@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import importlib
 import json
 import os
@@ -313,6 +314,98 @@ def test_remote_embedding_rejects_unsafe_credentials_and_oversized_results() -> 
     assert bounded.failure.failure_class == "invalid_response"
 
 
+def test_remote_embedding_accepts_the_maximum_escaped_native_batch() -> None:
+    """Keep the text-byte limit valid when JSON must escape each input byte."""
+    inputs = ["\x00" * 32_768] * 8
+    seen_request_bytes = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen_request_bytes
+        seen_request_bytes = len(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"index": index, "embedding": [1, 0, 0]}
+                    for index in range(len(inputs))
+                ],
+                "usage": {"prompt_tokens": 1},
+            },
+        )
+
+    request = replace(
+        _request("openai"),
+        request_json=json.dumps(
+            {
+                "workspace_api_name": "main",
+                "selector": {"assignment_api_name": "embeddings"},
+                "inputs": inputs,
+            },
+            separators=(",", ":"),
+        ),
+        expected_embedding_count=len(inputs),
+    )
+    capture = asyncio.run(
+        capture_attempt(
+            OpenAIEmbeddingAdapter("openai", httpx.MockTransport(handler)), request
+        )
+    )
+
+    assert capture.failure is None
+    assert seen_request_bytes > 512 * 1024
+
+
+def test_remote_embedding_keeps_reported_usage_for_an_invalid_result() -> None:
+    """Keep billable facts when a reported non-finite vector stops the attempt."""
+    response = httpx.Response(
+        200,
+        content=(
+            b'{"data":[{"index":0,"embedding":[1e9999]},'
+            b'{"index":1,"embedding":[0]}],"usage":{"prompt_tokens":7}}'
+        ),
+        headers={"Content-Type": "application/json"},
+    )
+    capture = asyncio.run(
+        capture_attempt(
+            OpenAIEmbeddingAdapter(
+                "openai", httpx.MockTransport(lambda _request: response)
+            ),
+            _request("openai"),
+        )
+    )
+
+    assert capture.failure is not None
+    assert capture.failure.failure_class == "invalid_response"
+    assert {item.unit: item.quantity for item in capture.failure.usage} == {
+        "request": 1,
+        "input_token": 7,
+    }
+
+
+def test_remote_embedding_rejects_encoded_provider_bodies() -> None:
+    """Do not decompress an encoded body before the response-byte bound applies."""
+    response = httpx.Response(
+        200,
+        content=gzip.compress(b"{}"),
+        headers={
+            "Content-Type": "application/json",
+            "Content-Encoding": "gzip",
+        },
+    )
+    capture = asyncio.run(
+        capture_attempt(
+            OpenAIEmbeddingAdapter(
+                "openai", httpx.MockTransport(lambda _request: response)
+            ),
+            _request("openai"),
+        )
+    )
+
+    assert capture.failure is not None
+    assert capture.failure.failure_class == "invalid_response"
+    assert {item.unit for item in capture.failure.usage} == {"request"}
+
+
 class FakeLocalEngine:
     """Return deterministic vectors and record exact batch input."""
 
@@ -432,6 +525,109 @@ def test_local_embedding_stops_on_changed_artifact_and_invalid_engine_result(
     assert invalid.failure is not None
     assert invalid.failure.failure_class == "invalid_response"
     assert str(invalid.failure) == "The provider attempt failed."
+
+
+def test_local_embedding_bounds_and_rejects_invalid_engine_iterators(
+    tmp_path: Path,
+) -> None:
+    """Stop after one extra result or value and reject non-numeric vector values."""
+    artifact = tmp_path / "artifact"
+    artifact.mkdir()
+    (artifact / "model.onnx").write_bytes(b"fixed")
+    configuration = LocalEmbeddingConfiguration(
+        artifact, local_artifact_sha256(artifact), 1
+    )
+    request = _request(
+        "local_embeddings",
+        dimension=384,
+        model_name="BAAI/bge-small-en-v1.5",
+    )
+    expected_bounded_vectors = 3
+    expected_bounded_values = 385
+    yielded_vectors = 0
+
+    class TooManyVectors:
+        def embed(self, _inputs: Sequence[str]) -> Iterable[object]:
+            nonlocal yielded_vectors
+            while True:
+                yielded_vectors += 1
+                yield [1.0] * 384
+
+    too_many = asyncio.run(
+        capture_attempt(
+            LocalEmbeddingAdapter(
+                configuration,
+                engine_factory=lambda _path, _threads: TooManyVectors(),
+            ),
+            request,
+        )
+    )
+    assert too_many.failure is not None
+    assert too_many.failure.failure_class == "invalid_response"
+    assert yielded_vectors == expected_bounded_vectors
+
+    yielded_values = 0
+
+    class TooManyValues:
+        def embed(self, _inputs: Sequence[str]) -> Iterable[object]:
+            def vector() -> Iterable[float]:
+                nonlocal yielded_values
+                while True:
+                    yielded_values += 1
+                    yield 1.0
+
+            return [vector(), [1.0] * 384]
+
+    too_long = asyncio.run(
+        capture_attempt(
+            LocalEmbeddingAdapter(
+                configuration,
+                engine_factory=lambda _path, _threads: TooManyValues(),
+            ),
+            request,
+        )
+    )
+    assert too_long.failure is not None
+    assert too_long.failure.failure_class == "invalid_response"
+    assert yielded_values == expected_bounded_values
+
+    class NonNumericValues:
+        def embed(self, _inputs: Sequence[str]) -> Iterable[object]:
+            return [["1"] * 384, [1.0] * 384]
+
+    nonnumeric = asyncio.run(
+        capture_attempt(
+            LocalEmbeddingAdapter(
+                configuration,
+                engine_factory=lambda _path, _threads: NonNumericValues(),
+            ),
+            request,
+        )
+    )
+    assert nonnumeric.failure is not None
+    assert nonnumeric.failure.failure_class == "invalid_response"
+
+    class BrokenValues:
+        def embed(self, _inputs: Sequence[str]) -> Iterable[object]:
+            def vector() -> Iterable[float]:
+                yield 1.0
+                message = "private engine failure"
+                raise RuntimeError(message)
+
+            return [vector(), [1.0] * 384]
+
+    broken = asyncio.run(
+        capture_attempt(
+            LocalEmbeddingAdapter(
+                configuration,
+                engine_factory=lambda _path, _threads: BrokenValues(),
+            ),
+            request,
+        )
+    )
+    assert broken.failure is not None
+    assert broken.failure.failure_class == "invalid_response"
+    assert "private engine failure" not in str(broken.failure)
 
 
 def test_local_embedding_rechecks_artifact_after_eager_engine_load(
@@ -635,8 +831,10 @@ def test_fastembed_engine_sets_exact_offline_cpu_thread_and_cache_controls(
             else pytest.fail("An unexpected module was imported.")
         ),
     )
+    monkeypatch.setenv("TOKENIZERS_PARALLELISM", "true")
     engine = FastEmbedEngine(tmp_path, 3)
     assert list(engine.embed(["public input"])) == [[1.0] * 384]
+    assert os.environ["TOKENIZERS_PARALLELISM"] == "false"
     assert created == {
         "model_name": "BAAI/bge-small-en-v1.5",
         "cache_dir": str(tmp_path),

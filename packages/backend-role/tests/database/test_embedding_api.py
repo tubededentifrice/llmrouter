@@ -348,6 +348,7 @@ def test_embedding_request_bounds_and_removed_fields_are_closed(
     [
         ["x" * 32_768],
         ["x" * 8_192] * 32,
+        ["\x00" * 32_768] * 8,
     ],
 )
 def test_embedding_accepts_each_exact_native_input_boundary(
