@@ -404,18 +404,54 @@ CREATE TABLE router.media_jobs (
     workspace_id uuid NOT NULL,
     state text NOT NULL DEFAULT 'pending'
         CHECK (state IN ('pending', 'running', 'succeeded', 'failed')),
-    payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+    provider_model_api_name text CHECK (
+        provider_model_api_name ~ '^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$'
+    ),
+    kind text NOT NULL DEFAULT 'image' CHECK (kind IN ('image', 'video', 'audio')),
+    payload jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (
+        octet_length(payload::text) BETWEEN 2 AND 2097152
+    ),
+    error_code text CHECK (char_length(error_code) BETWEEN 1 AND 200),
+    error_message text CHECK (char_length(error_message) BETWEEN 1 AND 1000),
     created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+    deadline_at timestamptz NOT NULL DEFAULT transaction_timestamp() + interval '24 hours',
+    completed_at timestamptz,
+    CHECK (deadline_at > created_at AND deadline_at <= created_at + interval '24 hours'),
+    CHECK (completed_at IS NULL OR completed_at >= created_at),
+    CHECK ((error_code IS NULL) = (error_message IS NULL)),
+    CHECK (state IN ('pending', 'running') OR payload = '{}'::jsonb),
+    CHECK (
+        (state IN ('pending', 'running') AND error_code IS NULL AND completed_at IS NULL)
+        OR (state = 'succeeded' AND error_code IS NULL AND completed_at IS NOT NULL)
+        OR (state = 'failed' AND error_code IS NOT NULL AND completed_at IS NOT NULL)
+    ),
     UNIQUE (service_id, workspace_id, id),
     FOREIGN KEY (service_id, workspace_id)
         REFERENCES router.workspaces(service_id, id) ON DELETE CASCADE
 );
+
+CREATE INDEX media_jobs_pending_deadline
+    ON router.media_jobs(state, deadline_at, created_at, id);
 
 CREATE FUNCTION router.enforce_media_job_state_transition() RETURNS trigger
 LANGUAGE plpgsql
 SET search_path = pg_catalog, router
 AS $$
 BEGIN
+    IF OLD.state IN ('succeeded', 'failed') AND NEW IS DISTINCT FROM OLD THEN
+        RAISE EXCEPTION 'A terminal media job cannot change.'
+            USING ERRCODE = '23514', CONSTRAINT = 'media_jobs_terminal_immutable';
+    END IF;
+    IF (NEW.state = 'failed' AND (
+            NEW.error_code IS NULL OR NEW.completed_at IS NULL
+        )) OR (NEW.state = 'succeeded' AND (
+            NEW.error_code IS NOT NULL OR NEW.completed_at IS NULL
+        )) OR (NEW.state IN ('pending', 'running') AND (
+            NEW.error_code IS NOT NULL OR NEW.completed_at IS NOT NULL
+        )) THEN
+        RAISE EXCEPTION 'A media job result does not match its state.'
+            USING ERRCODE = '23514', CONSTRAINT = 'media_jobs_state_result';
+    END IF;
     IF NEW.state = OLD.state
         OR (OLD.state = 'pending'
             AND NEW.state IN ('running', 'succeeded', 'failed'))
@@ -429,7 +465,7 @@ END;
 $$;
 
 CREATE TRIGGER media_jobs_enforce_state_transition
-BEFORE UPDATE OF state ON router.media_jobs
+BEFORE UPDATE ON router.media_jobs
 FOR EACH ROW EXECUTE FUNCTION router.enforce_media_job_state_transition();
 
 CREATE TABLE router.media_objects (
@@ -456,6 +492,9 @@ CREATE INDEX media_objects_request_log
     ON router.media_objects(request_log_id, id);
 CREATE INDEX media_objects_scope_time
     ON router.media_objects(service_id, workspace_id, created_at, id);
+CREATE UNIQUE INDEX media_objects_one_job_output
+    ON router.media_objects(media_job_id)
+    WHERE media_job_id IS NOT NULL AND role = 'output';
 
 -- Rows remain after public metadata is removed. This lets object deletion
 -- finish after a service, workspace, log, or retention delete commits.

@@ -534,7 +534,10 @@ def test_workspace_delete_cascades_and_blocks_late_media_results(
                 "UPDATE router.media_jobs SET state = 'pending' WHERE id = %s", (job,)
             )
         connection.execute(
-            "UPDATE router.media_jobs SET state = 'succeeded' WHERE id = %s", (job,)
+            """UPDATE router.media_jobs
+               SET state = 'succeeded', completed_at = statement_timestamp()
+               WHERE id = %s""",
+            (job,),
         )
         with (
             pytest.raises(psycopg.errors.CheckViolation),

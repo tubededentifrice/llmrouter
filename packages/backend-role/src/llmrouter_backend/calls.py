@@ -118,6 +118,7 @@ _CATALOG_WRITE_LOCK = 4_993_044_345_823
 _DATABASE_CONNECT_TIMEOUT_SECONDS = 2
 _DATABASE_STATEMENT_TIMEOUT_MILLISECONDS = 2_000
 _DATABASE_LOCK_TIMEOUT_MILLISECONDS = 500
+_DATABASE_APPLICATION_NAME = "llmrouter-call-executor"
 _COOLDOWN_FAILURE_COUNT = 3
 _COOLDOWN_WINDOW_SECONDS = 60.0
 _COOLDOWN_DURATION_SECONDS = 60.0
@@ -502,6 +503,8 @@ class CallLimits:
     concurrency: int = 100
     maximum_output_json_bytes: int = _MAXIMUM_OUTPUT_JSON_BYTES
     maximum_output_events: int = 100_000
+    media_attempt_timeout_seconds: float = 86_400.0
+    media_connection_timeout_seconds: float = 86_400.0
 
     def __post_init__(self) -> None:
         if isinstance(self.attempt_timeout_seconds, bool) or not isinstance(
@@ -528,6 +531,14 @@ class CallLimits:
             or not 1 <= self.maximum_output_events <= 100_000
         ):
             raise ValueError("The output event bound is invalid.")
+        for value in (
+            self.media_attempt_timeout_seconds,
+            self.media_connection_timeout_seconds,
+        ):
+            if isinstance(value, bool) or not isinstance(value, int | float):
+                raise TypeError("The media-job timeout is invalid.")
+            if not 1 <= value <= 86_400:
+                raise ValueError("The media-job timeout is invalid.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -574,7 +585,7 @@ class _FrozenCandidate:
 
 @dataclass(frozen=True, slots=True)
 class _AdmittedCall:
-    connection: psycopg.Connection[Any]
+    connection: psycopg.Connection[Any] | None
     workspace_id: uuid.UUID
     assignment_name: str | None
     candidates: tuple[_FrozenCandidate, ...]
@@ -665,9 +676,12 @@ class CallExecutor:
     ) -> CallResult:
         call_id = self._uuid_factory()
         call_started = self._now()
-        deadline = (
-            asyncio.get_running_loop().time() + self._limits.connection_timeout_seconds
+        connection_timeout = (
+            self._limits.media_connection_timeout_seconds
+            if request.kind == "media"
+            else self._limits.connection_timeout_seconds
         )
+        deadline = asyncio.get_running_loop().time() + connection_timeout
         attempt_writes: list[AttemptAccountingWrite] = []
         detailed_attempts: list[RequestAttempt] = []
         final_outputs: tuple[ProviderOutput, ...] = ()
@@ -686,9 +700,10 @@ class CallExecutor:
         except asyncio.CancelledError:
             with suppress(Exception):
                 admitted_after_cancel = await admission_task
-                await asyncio.to_thread(
-                    self._rollback_and_close, admitted_after_cancel.connection
-                )
+                if admitted_after_cancel.connection is not None:
+                    await asyncio.to_thread(
+                        self._rollback_and_close, admitted_after_cancel.connection
+                    )
             raise
         except ApiError:
             raise
@@ -820,6 +835,11 @@ class CallExecutor:
             )
             accounting_task = asyncio.create_task(
                 asyncio.to_thread(
+                    self._record_accounting_new_connection,
+                    accounting_value,
+                )
+                if connection is None
+                else asyncio.to_thread(
                     self._record_accounting_and_close, connection, accounting_value
                 )
             )
@@ -842,7 +862,8 @@ class CallExecutor:
                     phase=CallFailurePhase.UNCERTAIN,
                 ) from error
         except BaseException:
-            await asyncio.to_thread(self._rollback_and_close, connection)
+            if connection is not None:
+                await asyncio.to_thread(self._rollback_and_close, connection)
             raise
 
         response_json = (
@@ -892,15 +913,7 @@ class CallExecutor:
         actor: ServiceActor,
         request: CallRequest,
     ) -> _AdmittedCall:
-        connection = psycopg.connect(
-            self._database_url,
-            connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
-            options=(
-                f"-c statement_timeout={_DATABASE_STATEMENT_TIMEOUT_MILLISECONDS} "
-                f"-c lock_timeout={_DATABASE_LOCK_TIMEOUT_MILLISECONDS}"
-            ),
-            row_factory=dict_row,
-        )
+        connection = self._connect()
         try:
             workspace = connection.execute(
                 """SELECT workspace.id
@@ -971,15 +984,25 @@ class CallExecutor:
             # Commit assignment evidence and release the shared catalog lock only
             # after route, price, and credential values are immutable in memory.
             connection.commit()
-            workspace = connection.execute(
+            workspace_query = (
                 """SELECT id FROM router.workspaces
-                   WHERE service_id = %s AND api_name = %s FOR KEY SHARE""",
-                (actor.service_id, request.workspace_api_name),
+                   WHERE service_id = %s AND api_name = %s"""
+                if request.kind == "media"
+                else """SELECT id FROM router.workspaces
+                         WHERE service_id = %s AND api_name = %s FOR KEY SHARE"""
+            )
+            workspace = connection.execute(
+                workspace_query, (actor.service_id, request.workspace_api_name)
             ).fetchone()
             if workspace is None:
                 raise not_found("workspace")
+            admitted_connection: psycopg.Connection[Any] | None = connection
+            if request.kind == "media":
+                connection.commit()
+                connection.close()
+                admitted_connection = None
             return _AdmittedCall(
-                connection,
+                admitted_connection,
                 cast("uuid.UUID", workspace["id"]),
                 assignment_name,
                 candidates,
@@ -989,6 +1012,18 @@ class CallExecutor:
             connection.rollback()
             connection.close()
             raise
+
+    def _connect(self) -> psycopg.Connection[Any]:
+        return psycopg.connect(
+            self._database_url,
+            connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
+            application_name=_DATABASE_APPLICATION_NAME,
+            options=(
+                f"-c statement_timeout={_DATABASE_STATEMENT_TIMEOUT_MILLISECONDS} "
+                f"-c lock_timeout={_DATABASE_LOCK_TIMEOUT_MILLISECONDS}"
+            ),
+            row_factory=dict_row,
+        )
 
     def _freeze_candidate(
         self,
@@ -1036,6 +1071,9 @@ class CallExecutor:
         finally:
             connection.close()
 
+    def _record_accounting_new_connection(self, value: CallAccountingWrite) -> None:
+        self._record_accounting_and_close(self._connect(), value)
+
     @staticmethod
     def _rollback_and_close(connection: psycopg.Connection[Any]) -> None:
         if not connection.closed:
@@ -1079,7 +1117,12 @@ class CallExecutor:
             raise _AttemptError(
                 route, "timeout", (), (), False, started_at, self._now()
             )
-        timeout = min(self._limits.attempt_timeout_seconds, remaining)
+        attempt_timeout = (
+            self._limits.media_attempt_timeout_seconds
+            if request.kind == "media"
+            else self._limits.attempt_timeout_seconds
+        )
+        timeout = min(attempt_timeout, remaining)
         try:
             async with asyncio.timeout(timeout):
                 async for event in adapter.attempt(attempt_request):

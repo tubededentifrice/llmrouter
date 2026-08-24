@@ -11,6 +11,7 @@ from llmrouter_backend.adapters.local_embedding import (
     LocalEmbeddingConfiguration,
 )
 from llmrouter_backend.adapters.text import OllamaTextAdapter, OpenAITextAdapter
+from llmrouter_backend.adapters.wavespeed import WaveSpeedMediaAdapter
 
 __all__ = [
     "CompositeProviderAdapter",
@@ -21,4 +22,5 @@ __all__ = [
     "OllamaTextAdapter",
     "OpenAIEmbeddingAdapter",
     "OpenAITextAdapter",
+    "WaveSpeedMediaAdapter",
 ]

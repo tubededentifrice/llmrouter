@@ -144,7 +144,7 @@ _CATALOGS: dict[str, tuple[ModelImportCandidate, ...]] = {
         ModelImportCandidate(
             catalog_key="wavespeed-image",
             display_name="WaveSpeed image model",
-            provider_model_name="wavespeed-image",
+            provider_model_name="wavespeed-ai/flux-dev",
             input_modalities=["text", "image"],
             output_modalities=["image"],
             capabilities=[],

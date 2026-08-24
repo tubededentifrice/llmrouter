@@ -34,10 +34,12 @@ from llmrouter_backend.adapters import (
     OllamaTextAdapter,
     OpenAIEmbeddingAdapter,
     OpenAITextAdapter,
+    WaveSpeedMediaAdapter,
 )
 from llmrouter_backend.calls import (
     CallExecutionError,
     CallExecutor,
+    CallLimits,
     CallResult,
     ProviderOutput,
 )
@@ -64,6 +66,14 @@ from llmrouter_backend.errors import (
     conflict,
     invalid_request,
     not_found,
+)
+from llmrouter_backend.media_api import (
+    MediaJob,
+    MediaJobRequest,
+    create_media_job,
+    get_media_job,
+    get_media_job_content,
+    media_worker_loop,
 )
 from llmrouter_backend.model_api import (
     ModelCallRequest,
@@ -198,6 +208,7 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
     object_store: ObjectStore | None = None,
     price_sources: dict[str, PriceSource] | None = None,
     openrouter_price_transport: httpx.BaseTransport | None = None,
+    wavespeed_media_transport: httpx.AsyncBaseTransport | None = None,
     call_executor: CallExecutor | None = None,
 ) -> FastAPI:
     """Create one application with optional fixed runtime dependencies."""
@@ -219,12 +230,28 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
                 price_source_values,
             )
         )
+        media_task = (
+            asyncio.create_task(
+                media_worker_loop(
+                    configured_call_database_url,
+                    cast("CallExecutor", application.state.call_executor),
+                    object_store_value,
+                )
+            )
+            if configured_call_database_url is not None
+            and application.state.call_executor is not None
+            else None
+        )
         try:
             yield
         finally:
             cleanup_task.cancel()
             accounting_task.cancel()
-            for task in (cleanup_task, accounting_task):
+            tasks = [cleanup_task, accounting_task]
+            if media_task is not None:
+                media_task.cancel()
+                tasks.append(media_task)
+            for task in tasks:
                 with suppress(asyncio.CancelledError):
                     await task
 
@@ -264,6 +291,7 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
                     }
                 ),
                 "openrouter": OpenAITextAdapter("openrouter"),
+                "wavespeed": WaveSpeedMediaAdapter(wavespeed_media_transport),
                 "custom": CompositeProviderAdapter(
                     {
                         "model": OpenAITextAdapter("custom"),
@@ -283,6 +311,10 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
             },
             credential_keys=credential_keys,
             object_store=object_store_value,
+            limits=CallLimits(
+                media_attempt_timeout_seconds=settings_value.media_job_deadline_seconds,
+                media_connection_timeout_seconds=settings_value.media_job_deadline_seconds,
+            ),
         )
         if configured_call_database_url is not None
         else None
@@ -301,6 +333,7 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
                 "/v1/model-calls",
                 "/v1/model-streams",
                 "/v1/embeddings",
+                "/v1/media-jobs",
             )
         ):
             response.headers["Cache-Control"] = "no-store"
@@ -702,6 +735,64 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
         except CallExecutionError as error:
             raise _call_api_error(error) from error
         return embedding_result(result)
+
+    @application.post(
+        "/v1/media-jobs",
+        status_code=HTTPStatus.ACCEPTED,
+        response_model=MediaJob,
+        response_model_exclude_none=True,
+    )
+    async def service_create_media_job(
+        request: Request,
+        actor: ServiceActor = Depends(call_service_actor),
+        objects: ObjectStore | None = Depends(retained_objects),
+    ) -> MediaJob:
+        """Accept one protected image, video, or audio generation job."""
+        body = await _media_job_body(request)
+        configured_url = request.app.state.database_url or os.environ.get(
+            "LLMROUTER_DATABASE_URL"
+        )
+        if configured_url is None:
+            raise ApiError(
+                500, "internal_error", "The Router could not complete the operation."
+            )
+        created = await asyncio.to_thread(
+            create_media_job,
+            database_url=configured_url,
+            object_store=objects,
+            actor=actor,
+            body=body,
+            deadline_seconds=request.app.state.settings.media_job_deadline_seconds,
+        )
+        return MediaJob.model_validate(created)
+
+    @application.get(
+        "/v1/media-jobs/{media_job_id}",
+        response_model=MediaJob,
+        response_model_exclude_none=True,
+    )
+    def service_get_media_job(
+        media_job_id: uuid.UUID,
+        actor: ServiceActor = Depends(service_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+    ) -> MediaJob:
+        """Read one service-isolated media job."""
+        return MediaJob.model_validate(
+            get_media_job(database, actor=actor, job_id=media_job_id)
+        )
+
+    @application.get("/v1/media-jobs/{media_job_id}/content", response_model=None)
+    def service_get_media_job_content(
+        media_job_id: uuid.UUID,
+        actor: ServiceActor = Depends(service_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+        objects: ObjectStore | None = Depends(retained_objects),
+    ) -> Response:
+        """Download one retained generated result through the Router."""
+        stored = get_media_job_content(
+            database, objects, actor=actor, job_id=media_job_id
+        )
+        return Response(content=stored.body, media_type=stored.content_type)
 
     @application.get(
         "/v1/statistics",
@@ -2221,6 +2312,49 @@ async def _embedding_call_body(request: Request) -> EmbeddingRequest:
     except UnicodeDecodeError, ValueError, RecursionError, ValidationError:
         raise invalid_request(
             "body", "The embedding call does not match the contract."
+        ) from None
+
+
+async def _media_job_body(request: Request) -> MediaJobRequest:
+    """Read and validate one bounded closed JSON media-job body."""
+    content_types = request.headers.getlist("content-type")
+    if len(content_types) != 1:
+        raise invalid_request("body", "The body must use application/json.")
+    media_type = [part.strip().lower() for part in content_types[0].split(";")]
+    if (
+        not media_type
+        or media_type[0] != "application/json"
+        or len(media_type) > 2
+        or (len(media_type) == 2 and media_type[1] != "charset=utf-8")
+    ):
+        raise invalid_request("body", "The body must use application/json.")
+    encodings = request.headers.getlist("content-encoding")
+    if encodings and encodings != ["identity"]:
+        raise invalid_request("body", "The body encoding is not supported.")
+    lengths = request.headers.getlist("content-length")
+    if lengths and (
+        len(lengths) != 1
+        or not lengths[0].isdigit()
+        or int(lengths[0]) > _MAXIMUM_MODEL_HTTP_BODY_BYTES
+    ):
+        raise invalid_request("body", "The media-job body is too large.")
+    raw = bytearray()
+    async for chunk in request.stream():
+        if len(raw) + len(chunk) > _MAXIMUM_MODEL_HTTP_BODY_BYTES:
+            raise invalid_request("body", "The media-job body is too large.")
+        raw.extend(chunk)
+    if not raw:
+        raise invalid_request("body", "The media-job body is required.")
+    try:
+        value = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_object_without_duplicate_fields,
+            parse_constant=_reject_json_constant,
+        )
+        return MediaJobRequest.model_validate(value)
+    except UnicodeDecodeError, ValueError, RecursionError, ValidationError:
+        raise invalid_request(
+            "body", "The media job does not match the contract."
         ) from None
 
 

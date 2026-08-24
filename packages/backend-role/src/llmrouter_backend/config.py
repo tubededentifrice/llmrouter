@@ -27,6 +27,7 @@ _MAXIMUM_BUCKET_LENGTH = 63
 _MAXIMUM_OBJECT_STORE_CONNECT_TIMEOUT = 30
 _MAXIMUM_OBJECT_STORE_READ_TIMEOUT = 120
 _MAXIMUM_LOCAL_EMBEDDING_THREADS = 32
+_MAXIMUM_MEDIA_JOB_DEADLINE_SECONDS = 24 * 60 * 60
 _BUCKET_NAME = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
 _IP_BUCKET_NAME = re.compile(r"^[0-9]+(?:\.[0-9]+){3}$")
 _OBJECT_STORE_REGION = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
@@ -59,6 +60,7 @@ class Settings:
     local_embedding_cache_dir: Path | None = None
     local_embedding_artifact_sha256: str | None = None
     local_embedding_threads: int = 1
+    media_job_deadline_seconds: int = 60 * 60
 
     def __post_init__(self) -> None:
         """Reject unsafe session and origin configuration."""
@@ -97,6 +99,13 @@ class Settings:
             raise ValueError(message)
         _validate_object_store(self)
         _validate_local_embedding(self)
+        if (
+            not 1
+            <= self.media_job_deadline_seconds
+            <= _MAXIMUM_MEDIA_JOB_DEADLINE_SECONDS
+        ):
+            message = "The media-job deadline must be from 1 second through 24 hours."
+            raise ValueError(message)
 
     @classmethod
     def from_environment(cls) -> Settings:
@@ -157,6 +166,9 @@ class Settings:
             ),
             local_embedding_threads=_integer_environment(
                 "LLMROUTER_LOCAL_EMBEDDING_THREADS", 1
+            ),
+            media_job_deadline_seconds=_integer_environment(
+                "LLMROUTER_MEDIA_JOB_DEADLINE_SECONDS", 60 * 60
             ),
         )
 
