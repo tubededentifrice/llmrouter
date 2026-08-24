@@ -1,6 +1,7 @@
 # Providers, models, prices, and configuration
 
-Status: Accepted on 2026-08-23.
+Status: Accepted on 2026-08-23. The graph-first UI amendment was accepted on
+2026-08-24.
 
 ## Global ownership
 
@@ -29,11 +30,41 @@ The first adapter set MUST NOT include native Anthropic, Z.AI, or ChatGPT or
 Codex subscription adapters. The Router MUST NOT migrate a dormant provider
 branch only because old code exists.
 
+The global administration application MUST manage providers, canonical
+models, provider-model mappings, and assignments through one three-column
+configuration graph. The columns MUST show provider connections, canonical
+models with their provider-model mappings, and assignments. The graph MUST be
+the only primary configuration entry. Separate provider, model, and assignment
+navigation pages MUST NOT be required.
+
+Provider connections, credentials, canonical models, provider-model mappings,
+capabilities, and prices in the first two columns MUST always be global. When
+no service is selected, the graph MUST show the global catalog and MUST make
+the service requirement for assignment configuration clear. When one service
+is selected, the first two columns MUST stay global and the assignment column
+MUST show that service's effective assignments, local definitions, and
+inherited sources. Selecting a service MUST NOT create a service-owned copy or
+allowlist of a provider, model, mapping, credential, capability, or price.
+
 ## Provider connections and credentials
 
 A provider connection MUST name one registered adapter type and contain only
 the settings that its closed adapter schema permits. Unknown settings MUST
 fail validation.
+
+The provider editor MUST use a low-field setup for a standard adapter. Its
+initial view MUST ask only for the connection identity, adapter type, and an
+applicable credential. It MUST infer the registered standard endpoint and
+safe adapter defaults. It MUST NOT ask the administrator to copy a standard
+endpoint. Custom endpoints, adapter-specific limits, enablement, and other
+closed-schema settings MUST be in an explicit advanced section. A custom or
+OpenAI-compatible endpoint that has no registered standard value MUST remain
+an explicit field and MUST keep the endpoint trust rules below.
+
+The editor MUST show a provider credential as write-only input and safe
+metadata. It MUST make create, replace, and delete effects clear. It MUST NOT
+put a credential value in the graph, a model form, a request log, or a later
+response.
 
 Provider credentials MUST use a built-in encrypted store. The wrapping key
 MUST stay outside the database and repository. Credential input MUST be
@@ -128,6 +159,26 @@ preview from registered catalogs. A preview MUST NOT change current state.
 The administrator MUST select the entries to import. The Router MUST validate
 the selected entries and apply them directly. It MUST NOT add or change model
 catalog entries in a background import.
+
+For OpenRouter, the administrator MUST be able to enter one strict OpenRouter
+model identifier or supported HTTPS `openrouter.ai` model URL from the
+model-create action. The Router MUST reject an empty value, a malformed
+identifier, a non-OpenRouter URL, a missing catalog model, an unavailable
+catalog, and metadata that cannot map to the native model contract. The
+preview MUST populate each native model and mapping field for which OpenRouter
+supplies valid metadata. It MUST show the proposed canonical identity, display
+name, input and output modalities, capabilities, reasoning support, context
+and output bounds, applicable media or embedding constraints, price-source
+identity, typed prices, and each proposed provider-model mapping. It MUST NOT
+infer a capability that the catalog metadata does not support.
+
+The preview MUST identify an existing canonical model or provider-model
+mapping and MUST NOT silently replace it. The administrator MUST select the
+applicable existing global provider connections before confirmation. One
+confirmation MUST create the selected canonical model and provider-model
+mappings in one database transaction. A validation, duplicate, catalog, or
+storage failure MUST create none of them. Imported values MUST remain editable
+through the same graph inspectors after creation.
 
 ## Direct configuration changes
 

@@ -1,6 +1,7 @@
 # Accounting, logs, retention, and operations
 
-Status: Accepted on 2026-08-23.
+Status: Accepted on 2026-08-23. The graph-first UI amendment was accepted on
+2026-08-24.
 
 ## Attempt and request accounting
 
@@ -41,6 +42,12 @@ days and return no more than 1000 groups. The API MUST use bounded pagination
 for record lists. The product MUST NOT provide a general analytics query
 language.
 
+The administration statistics view MUST use the shared OpenDLE UI data-table
+behavior. Its filter controls and results MUST use the same page gutter and
+complete available width. Long dimensions, tags, usage values, and costs MUST
+wrap or scroll inside their bounded cells without causing page-level
+horizontal overflow.
+
 ## Detailed request logs
 
 The Router MUST keep complete detailed request logs for one global rolling
@@ -61,6 +68,15 @@ Detailed logs MUST be best-effort diagnostic data. Cache loss or eviction MAY
 delete them before the configured maximum period. The Router MUST NOT claim a
 minimum durability period. Only a global administrator MAY read them. A
 service API key and a service API MUST NOT expose detailed request logs.
+
+The administration log view MUST use the shared OpenDLE UI data-table
+behavior for the bounded record list. Filters, loading state, error state,
+empty state, result rows, incremental loading, and selected-log details MUST
+use one full-width page grid and one gutter. Selecting a row MUST reveal the
+complete retained detail without navigating to a second list page. Long model
+content, tool data, errors, tags, usage, prices, and route data MUST stay in a
+bounded detail region with usable wrapping or local scrolling. The view MUST
+NOT let a table or detail value create page-level horizontal overflow.
 
 Uploaded input images and generated media MUST use the same rolling maximum
 duration. They MAY disappear early after an applicable diagnostic-cache or

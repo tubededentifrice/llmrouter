@@ -1,6 +1,7 @@
 # Services, workspaces, and assignments
 
-Status: Accepted on 2026-08-23.
+Status: Accepted on 2026-08-23. The graph-first UI amendment was accepted on
+2026-08-24.
 
 ## Names and identity
 
@@ -31,6 +32,19 @@ retained media. It MUST NOT delete a parent service or a child service. The
 delete MUST make the service unavailable to new calls before dependent
 records are removed.
 
+The global administration application MUST use the service tree as the one
+service-management entry. Selecting a service MUST open one inspector that
+contains the service facts, parent change, deletion action, workspaces, and
+service API keys. The administrator MUST be able to create and delete a
+workspace and create or revoke a key in this inspector. These operations MUST
+NOT navigate to a separate workspace or key page.
+
+The create-service action MUST open a create inspector in the same position as
+the selected-service inspector. It MUST use a right-side inspector on a wide
+screen and a bottom sheet on a phone. Closing either inspector with its close
+action or Escape MUST restore focus to the graph node or create action that
+opened it.
+
 ## Workspaces
 
 A workspace MUST belong to exactly one service. A service API key MUST be able
@@ -39,6 +53,14 @@ administrator MUST have the same operations for any service.
 
 A workspace MUST be an accounting label only. It MUST NOT own assignments,
 provider connections, credentials, prices, policy, or limits.
+
+The selected-service inspector MUST present workspaces and keys as two compact,
+labelled sections with their current records and actions. It MUST use the
+selected service as context, and MUST NOT ask the administrator to select the
+same service again. A create operation MUST ask only for fields that the
+selected service and the operation do not already supply. A new service key
+MUST keep the one-time display and write-only rules in
+[Authentication, administration, and shared UI](04-authentication-administration-and-shared-ui.md#service-api-keys).
 
 Deleting a workspace MUST delete its detailed logs, raw accounting, daily
 aggregates, media jobs, uploaded images, and retained generated media. It MUST
