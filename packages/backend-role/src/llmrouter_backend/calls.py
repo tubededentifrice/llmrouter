@@ -44,6 +44,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 
     from llmrouter_backend.catalog import ProviderCredentialKeys, ProviderRoute
+    from llmrouter_backend.metrics import MetricsRegistry
     from llmrouter_backend.object_store import ObjectStore
 
 type CallKind = Literal["model", "embedding", "media"]
@@ -604,6 +605,7 @@ class CallExecutor:
         credential_keys: ProviderCredentialKeys | None = None,
         object_store: ObjectStore | None = None,
         limits: CallLimits | None = None,
+        metrics: MetricsRegistry | None = None,
         wall_clock: Callable[[], datetime] | None = None,
         uuid_factory: Callable[[], uuid.UUID] = uuid.uuid4,
     ) -> None:
@@ -618,10 +620,13 @@ class CallExecutor:
         self._credential_keys = credential_keys
         self._object_store = object_store
         self._limits = limits or CallLimits()
+        self._metrics = metrics
         self._wall_clock = wall_clock or (lambda: datetime.now(tz=UTC))
         self._uuid_factory = uuid_factory
         self._active = 0
         self._active_lock = asyncio.Lock()
+        if self._metrics is not None:
+            self._metrics.set_call_saturation(0, self._limits.concurrency)
 
     @property
     def cooldowns(self) -> ProviderCooldowns:
@@ -651,21 +656,65 @@ class CallExecutor:
                 field="streaming",
                 reason="A stream output writer is required.",
             )
+        started = monotonic()
         async with self._active_lock:
             if self._active >= self._limits.concurrency:
+                if self._metrics is not None:
+                    self._metrics.reject_call(request.kind)
+                    self._metrics.observe_request(
+                        request.kind, "rate_limited", monotonic() - started
+                    )
                 raise CallExecutionError(
                     "rate_limited",
                     "The Router call concurrency limit is full.",
                     phase=CallFailurePhase.BEFORE_VISIBLE_OUTPUT,
                 )
             self._active += 1
+            if self._metrics is not None:
+                self._metrics.set_call_saturation(
+                    self._active, self._limits.concurrency
+                )
         try:
-            return await self._execute(
+            result = await self._execute(
                 actor, request, write_visible_output, start_visible_output
             )
+        except asyncio.CancelledError:
+            if self._metrics is not None:
+                self._metrics.observe_request(
+                    request.kind, "cancelled", monotonic() - started
+                )
+            raise
+        except ApiError as error:
+            if self._metrics is not None:
+                self._metrics.observe_request(
+                    request.kind, error.code, monotonic() - started
+                )
+            raise
+        except CallExecutionError as error:
+            if self._metrics is not None:
+                self._metrics.observe_request(
+                    request.kind, error.code, monotonic() - started
+                )
+            raise
+        except Exception:
+            if self._metrics is not None:
+                self._metrics.observe_request(
+                    request.kind, "internal_error", monotonic() - started
+                )
+            raise
+        else:
+            if self._metrics is not None:
+                self._metrics.observe_request(
+                    request.kind, "succeeded", monotonic() - started
+                )
+            return result
         finally:
             async with self._active_lock:
                 self._active -= 1
+                if self._metrics is not None:
+                    self._metrics.set_call_saturation(
+                        self._active, self._limits.concurrency
+                    )
 
     async def _execute(
         self,
@@ -753,6 +802,7 @@ class CallExecutor:
                     )
                     attempt_writes.append(accounting_write)
                     detailed_attempts.append(detailed)
+                    self._observe_attempt(request.kind, accounting_write)
                     final_outputs = attempt_failure.outputs
                     failure = CallExecutionError(
                         "internal_error",
@@ -767,6 +817,7 @@ class CallExecutor:
                     )
                     attempt_writes.append(accounting_write)
                     detailed_attempts.append(detailed)
+                    self._observe_attempt(request.kind, accounting_write)
                     final_outputs = attempt_failure.outputs
                     cancelled = asyncio.CancelledError()
                     break
@@ -776,6 +827,7 @@ class CallExecutor:
                     )
                     attempt_writes.append(accounting_write)
                     detailed_attempts.append(detailed)
+                    self._observe_attempt(request.kind, accounting_write)
                     final_outputs = attempt_failure.outputs
                     self._cooldowns.record_failure(name, attempt_failure.failure_class)
                     if attempt_failure.visible:
@@ -798,6 +850,7 @@ class CallExecutor:
                 )
                 attempt_writes.append(accounting_write)
                 detailed_attempts.append(detailed)
+                self._observe_attempt(request.kind, accounting_write)
                 final_outputs = result.outputs
                 final_usage = result.usage
                 selected_price = price
@@ -1332,6 +1385,19 @@ class CallExecutor:
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("The call clock must return an aware time.")
         return value
+
+    def _observe_attempt(self, kind: CallKind, value: AttemptAccountingWrite) -> None:
+        if self._metrics is None:
+            return
+        self._metrics.observe_attempt(
+            kind=kind,
+            provider_model=value.provider_model_api_name,
+            outcome=cast('Literal["succeeded", "failed"]', value.outcome),
+            duration=(value.completed_at - value.started_at).total_seconds(),
+            usage=tuple((item.unit, item.quantity) for item in value.usage),
+            cost=_usage_cost(value.usage, value.applied_price),
+            currency=value.applied_price.currency,
+        )
 
 
 async def _validate_output(

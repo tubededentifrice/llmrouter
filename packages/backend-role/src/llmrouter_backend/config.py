@@ -28,6 +28,9 @@ _MAXIMUM_OBJECT_STORE_CONNECT_TIMEOUT = 30
 _MAXIMUM_OBJECT_STORE_READ_TIMEOUT = 120
 _MAXIMUM_LOCAL_EMBEDDING_THREADS = 32
 _MAXIMUM_MEDIA_JOB_DEADLINE_SECONDS = 24 * 60 * 60
+_MAXIMUM_PROVIDER_ATTEMPT_TIMEOUT_SECONDS = 10 * 60
+_MAXIMUM_CALL_CONNECTION_TIMEOUT_SECONDS = 15 * 60
+_MAXIMUM_CONCURRENCY = 100_000
 _BUCKET_NAME = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
 _IP_BUCKET_NAME = re.compile(r"^[0-9]+(?:\.[0-9]+){3}$")
 _OBJECT_STORE_REGION = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
@@ -60,6 +63,10 @@ class Settings:
     local_embedding_cache_dir: Path | None = None
     local_embedding_artifact_sha256: str | None = None
     local_embedding_threads: int = 1
+    provider_attempt_timeout_seconds: int = 60
+    call_connection_timeout_seconds: int = 15 * 60
+    call_concurrency: int = 100
+    database_concurrency: int = 200
     media_job_deadline_seconds: int = 60 * 60
 
     def __post_init__(self) -> None:
@@ -99,8 +106,10 @@ class Settings:
             raise ValueError(message)
         _validate_object_store(self)
         _validate_local_embedding(self)
+        _validate_call_limits(self)
         if (
-            not 1
+            type(self.media_job_deadline_seconds) is not int
+            or not 1
             <= self.media_job_deadline_seconds
             <= _MAXIMUM_MEDIA_JOB_DEADLINE_SECONDS
         ):
@@ -166,6 +175,16 @@ class Settings:
             ),
             local_embedding_threads=_integer_environment(
                 "LLMROUTER_LOCAL_EMBEDDING_THREADS", 1
+            ),
+            provider_attempt_timeout_seconds=_integer_environment(
+                "LLMROUTER_PROVIDER_ATTEMPT_TIMEOUT_SECONDS", 60
+            ),
+            call_connection_timeout_seconds=_integer_environment(
+                "LLMROUTER_CALL_CONNECTION_TIMEOUT_SECONDS", 15 * 60
+            ),
+            call_concurrency=_integer_environment("LLMROUTER_CALL_CONCURRENCY", 100),
+            database_concurrency=_integer_environment(
+                "LLMROUTER_DATABASE_CONCURRENCY", 200
             ),
             media_job_deadline_seconds=_integer_environment(
                 "LLMROUTER_MEDIA_JOB_DEADLINE_SECONDS", 60 * 60
@@ -265,6 +284,32 @@ def _validate_local_embedding(settings: Settings) -> None:
     if not 1 <= settings.local_embedding_threads <= _MAXIMUM_LOCAL_EMBEDDING_THREADS:
         message = "The local embedding thread limit must be from 1 through 32."
         raise ValueError(message)
+
+
+def _validate_call_limits(settings: Settings) -> None:
+    if not (
+        type(settings.provider_attempt_timeout_seconds) is int
+        and 1
+        <= settings.provider_attempt_timeout_seconds
+        <= _MAXIMUM_PROVIDER_ATTEMPT_TIMEOUT_SECONDS
+    ):
+        message = "The provider-attempt timeout must be from 1 to 600 seconds."
+        raise ValueError(message)
+    if not (
+        type(settings.call_connection_timeout_seconds) is int
+        and 1
+        <= settings.call_connection_timeout_seconds
+        <= _MAXIMUM_CALL_CONNECTION_TIMEOUT_SECONDS
+    ):
+        message = "The call connection timeout must be from 1 to 900 seconds."
+        raise ValueError(message)
+    for name, value in (
+        ("Call", settings.call_concurrency),
+        ("Database", settings.database_concurrency),
+    ):
+        if type(value) is not int or not 1 <= value <= _MAXIMUM_CONCURRENCY:
+            message = f"{name} concurrency must be from 1 through 100000."
+            raise ValueError(message)
 
 
 def _valid_origin(origin: str) -> bool:

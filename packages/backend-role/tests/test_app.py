@@ -24,6 +24,15 @@ def test_health_does_not_require_the_database() -> None:
     assert response.json() == {"status": "ok"}
 
 
+def test_native_health_uses_the_closed_public_shape() -> None:
+    """Return only process health and one UTC check time without dependencies."""
+    response = TestClient(create_app()).get("/v1/health")
+    assert response.status_code == HTTPStatus.OK
+    assert set(response.json()) == {"status", "checked_at"}
+    assert response.json()["status"] == "healthy"
+    assert response.json()["checked_at"].endswith("+00:00")
+
+
 def test_readiness_requires_database_configuration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

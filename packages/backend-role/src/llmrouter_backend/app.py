@@ -75,6 +75,7 @@ from llmrouter_backend.media_api import (
     get_media_job_content,
     media_worker_loop,
 )
+from llmrouter_backend.metrics import MetricsRegistry
 from llmrouter_backend.model_api import (
     ModelCallRequest,
     ModelCallResult,
@@ -182,6 +183,7 @@ _OIDC_FLOW_COOKIE = "llmrouter_admin_oidc_flow"
 _OIDC_FLOW_MINUTES = 10
 ApiNamePath = Annotated[str, Path(pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$")]
 AssignmentNamePath = Annotated[str, Path(pattern=r"^[a-z0-9][a-z0-9._-]{0,126}$")]
+type HealthStatus = Literal["healthy", "degraded", "unavailable"]
 ObservedRequirementPath = Annotated[
     Literal[
         "text_input",
@@ -260,6 +262,10 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
     application.state.settings = settings_value
     application.state.oidc_transport = oidc_transport
     application.state.object_store = object_store_value
+    metrics = MetricsRegistry()
+    metrics.set_database_saturation(0, settings_value.database_concurrency)
+    metrics.set_call_saturation(0, settings_value.call_concurrency)
+    application.state.metrics = metrics
     price_source_values = (
         price_sources
         if price_sources is not None
@@ -312,14 +318,47 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
             credential_keys=credential_keys,
             object_store=object_store_value,
             limits=CallLimits(
+                attempt_timeout_seconds=(
+                    settings_value.provider_attempt_timeout_seconds
+                ),
+                connection_timeout_seconds=(
+                    settings_value.call_connection_timeout_seconds
+                ),
+                concurrency=settings_value.call_concurrency,
                 media_attempt_timeout_seconds=settings_value.media_job_deadline_seconds,
                 media_connection_timeout_seconds=settings_value.media_job_deadline_seconds,
             ),
+            metrics=metrics,
         )
         if configured_call_database_url is not None
         else None
     )
     _install_error_handlers(application)
+
+    @application.middleware("http")
+    async def admit_database_work(
+        request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
+        """Reject new database-backed work when the configured limit is full."""
+        if request.url.path in {"/health", "/ready", "/v1/health", "/v1/metrics"}:
+            return await call_next(request)
+        if not request.url.path.startswith("/v1/"):
+            return await call_next(request)
+        if not metrics.try_admit_database_request(settings_value.database_concurrency):
+            return JSONResponse(
+                status_code=HTTPStatus.TOO_MANY_REQUESTS,
+                content={
+                    "error": {
+                        "code": "rate_limited",
+                        "message": "The Router concurrency limit is full.",
+                    }
+                },
+                headers={"Cache-Control": "no-store", "Retry-After": "1"},
+            )
+        try:
+            return await call_next(request)
+        finally:
+            metrics.release_database_request()
 
     @application.middleware("http")
     async def prevent_sensitive_response_caching(
@@ -415,6 +454,34 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
             database, session_token=session_token, control_keys=controls
         )
 
+    def health_administrator_actor(
+        request: Request,
+        controls: ControlKeys = Depends(control_keys),
+    ) -> AdministratorActor:
+        """Authenticate health access without holding a dependency connection."""
+        session_token = _control_cookie(request, _ADMINISTRATOR_COOKIE)
+        if session_token is None:
+            raise authentication_required()
+        require_canonical_token(session_token)
+        configured_url = request.app.state.database_url or os.environ.get(
+            "LLMROUTER_DATABASE_URL"
+        )
+        if configured_url is None:
+            raise ApiError(
+                500,
+                "internal_error",
+                "The Router could not complete the operation.",
+            )
+        with psycopg.connect(
+            configured_url,
+            connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
+            row_factory=dict_row,
+            options=_database_timeout_options(),
+        ) as database:
+            return authenticate_administrator_session(
+                database, session_token=session_token, control_keys=controls
+            )
+
     @application.get("/health", include_in_schema=False)
     async def health() -> dict[str, str]:
         """Report that the web process can serve requests."""
@@ -424,6 +491,34 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
     async def native_health() -> dict[str, str]:
         """Report the public native health shape."""
         return {"status": "healthy", "checked_at": datetime.now(tz=UTC).isoformat()}
+
+    @application.get("/v1/metrics", response_model=None)
+    async def native_metrics(request: Request) -> Response:
+        """Expose deployment-scoped Prometheus text without application auth."""
+        configured_url = request.app.state.database_url or os.environ.get(
+            "LLMROUTER_DATABASE_URL"
+        )
+        executor = cast("CallExecutor | None", request.app.state.call_executor)
+        cooldowns = () if executor is None else executor.cooldowns.snapshots()
+        body = await asyncio.to_thread(
+            metrics.render,
+            database_url=configured_url,
+            cooldowns=(
+                (
+                    item.provider_model_api_name,
+                    item.remaining_seconds,
+                    item.last_failure_class,
+                )
+                for item in cooldowns
+            ),
+        )
+        return Response(
+            body,
+            headers={
+                "Content-Type": "text/plain; version=0.0.4; charset=utf-8",
+                "Cache-Control": "no-store",
+            },
+        )
 
     @application.get("/ready", include_in_schema=False, response_model=None)
     def ready() -> dict[str, str] | JSONResponse:
@@ -2153,33 +2248,31 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
         response_model_exclude_none=True,
     )
     def admin_health(
-        _actor: AdministratorActor = Depends(administrator_actor),
-        database: psycopg.Connection[Any] = Depends(connection),
+        request: Request,
+        _actor: AdministratorActor = Depends(health_administrator_actor),
         objects: ObjectStore | None = Depends(retained_objects),
     ) -> AdministratorHealth:
-        apply_retention_and_cleanup(database, objects)
-        object_status: Literal["healthy", "degraded", "unavailable"] = (
-            "healthy" if objects is not None and objects.healthy() else "unavailable"
+        configured_url = request.app.state.database_url or os.environ.get(
+            "LLMROUTER_DATABASE_URL"
         )
-        retention_status = cleanup_health(database)
-        price_status_value, rollup_status_value = accounting.maintenance_health(
-            database
-        )
-        price_status = cast(
-            'Literal["healthy", "degraded", "unavailable"]', price_status_value
-        )
-        rollup_status = cast(
-            'Literal["healthy", "degraded", "unavailable"]', rollup_status_value
+        (
+            database_status,
+            retention_status,
+            price_status,
+            rollup_status,
+        ) = _administrator_health_database_snapshot(configured_url)
+        object_status: HealthStatus = (
+            "healthy" if _object_store_is_healthy(objects) else "unavailable"
         )
         components = [
             HealthComponent(name="web_application", status="healthy"),
-            HealthComponent(name="postgresql", status="healthy"),
+            HealthComponent(name="postgresql", status=database_status),
             HealthComponent(name="object_storage", status=object_status),
             HealthComponent(name="price_synchronization", status=price_status),
             HealthComponent(name="log_retention", status=retention_status),
             HealthComponent(name="accounting_rollup", status=rollup_status),
         ]
-        overall: Literal["healthy", "degraded", "unavailable"] = (
+        overall: HealthStatus = (
             "unavailable"
             if any(component.status == "unavailable" for component in components)
             else "degraded"
@@ -2573,6 +2666,47 @@ def _database_timeout_options() -> str:
     return (
         f"-c statement_timeout={_DATABASE_STATEMENT_TIMEOUT_MILLISECONDS} "
         f"-c lock_timeout={_DATABASE_LOCK_TIMEOUT_MILLISECONDS}"
+    )
+
+
+def _object_store_is_healthy(object_store: ObjectStore | None) -> bool:
+    """Convert an object-store dependency failure to one safe health state."""
+    if object_store is None:
+        return False
+    try:
+        return object_store.healthy()
+    except Exception:  # noqa: BLE001 - Health does not expose dependency details.
+        return False
+
+
+def _administrator_health_database_snapshot(
+    database_url: str | None,
+) -> tuple[HealthStatus, HealthStatus, HealthStatus, HealthStatus]:
+    """Read database-backed health and close before other dependency I/O."""
+    unavailable: tuple[HealthStatus, HealthStatus, HealthStatus, HealthStatus] = (
+        "unavailable",
+        "unavailable",
+        "unavailable",
+        "unavailable",
+    )
+    if database_url is None:
+        return unavailable
+    try:
+        with psycopg.connect(
+            database_url,
+            connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
+            row_factory=dict_row,
+            options=_database_timeout_options(),
+        ) as database:
+            retention_status = cleanup_health(database)
+            price_status, rollup_status = accounting.maintenance_health(database)
+    except Exception:  # noqa: BLE001 - Health returns only safe component states.
+        return unavailable
+    return (
+        "healthy",
+        retention_status,
+        cast("HealthStatus", price_status),
+        cast("HealthStatus", rollup_status),
     )
 
 

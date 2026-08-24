@@ -157,6 +157,11 @@ services:
       LLMROUTER_OBJECT_STORE_REGION: garage
       LLMROUTER_OBJECT_STORE_ACCESS_KEY_FILE: /run/secrets/object_store_access_key
       LLMROUTER_OBJECT_STORE_SECRET_KEY_FILE: /run/secrets/object_store_secret_key
+      LLMROUTER_PROVIDER_ATTEMPT_TIMEOUT_SECONDS: "60"
+      LLMROUTER_CALL_CONNECTION_TIMEOUT_SECONDS: "900"
+      LLMROUTER_CALL_CONCURRENCY: "100"
+      LLMROUTER_DATABASE_CONCURRENCY: "200"
+      LLMROUTER_MEDIA_JOB_DEADLINE_SECONDS: "3600"
     secrets:
       - postgres_password
       - oidc_client_id
