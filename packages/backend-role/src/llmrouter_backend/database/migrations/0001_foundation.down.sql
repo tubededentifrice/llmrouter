@@ -8,6 +8,7 @@ DROP TABLE router.accounting_rollups;
 DROP TABLE router.daily_accounting;
 DROP TABLE router.raw_accounting_attempts;
 DROP TABLE router.raw_accounting_calls;
+DROP FUNCTION router.reject_raw_accounting_update();
 DROP TABLE router.request_logs;
 DROP TABLE router.assignment_candidates;
 DROP TABLE router.assignment_usage;

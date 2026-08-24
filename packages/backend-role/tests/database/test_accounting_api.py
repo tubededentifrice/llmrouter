@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import concurrent.futures
+import threading
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -26,6 +28,7 @@ from llmrouter_backend.accounting import (
 )
 from llmrouter_backend.config import Settings
 from llmrouter_backend.database import migrate
+from llmrouter_backend.errors import ApiError
 from llmrouter_backend.models import Price, UnitPriceWrite
 from llmrouter_backend.security import ControlKeys, new_token
 from llmrouter_backend.store import create_administrator_session, create_key
@@ -304,6 +307,59 @@ def test_synchronization_fetches_each_source_once_and_preserves_failures(
     assert "private-upstream-control" not in second.model_dump_json()
 
 
+def test_scheduled_and_on_demand_synchronizations_share_one_fixed_lock(
+    accounting_context: AccountingContext,
+) -> None:
+    """Reject a second price run before it can fetch the selected source."""
+    entered = threading.Event()
+    release = threading.Event()
+    calls = 0
+
+    class BlockingSource:
+        def fetch(self) -> dict[str, Price]:
+            nonlocal calls
+            calls += 1
+            entered.set()
+            if not release.wait(timeout=5):
+                raise TimeoutError("The test price source was not released.")
+            return {"source-text": _price("USD", input_token="0.25")}
+
+    source = BlockingSource()
+
+    def run_on_demand() -> None:
+        with psycopg.connect(
+            accounting_context.database_url, row_factory=dict_row
+        ) as connection:
+            accounting.synchronize_prices(
+                connection,
+                sources={"openrouter": source},
+                provider_model_api_names=["source-a"],
+            )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        first = executor.submit(run_on_demand)
+        assert entered.wait(timeout=5)
+        try:
+            with (
+                psycopg.connect(
+                    accounting_context.database_url, row_factory=dict_row
+                ) as connection,
+                pytest.raises(ApiError) as raised,
+            ):
+                accounting.synchronize_prices(
+                    connection,
+                    sources={"openrouter": source},
+                    provider_model_api_names=["source-a"],
+                    run_kind="scheduled",
+                )
+            assert raised.value.code == "conflict"
+            assert raised.value.status_code == HTTPStatus.CONFLICT
+            assert calls == 1
+        finally:
+            release.set()
+        first.result(timeout=5)
+
+
 def test_attempt_snapshots_tags_fallback_and_rollup_are_exact(
     accounting_context: AccountingContext,
 ) -> None:
@@ -348,6 +404,48 @@ def test_attempt_snapshots_tags_fallback_and_rollup_are_exact(
         ).fetchall()
     assert first == second
     assert [(row["calls"], row["attempts"]) for row in first] == [(1, 1), (1, 1)]
+
+
+def test_rollup_keeps_a_zero_usage_attempt(
+    accounting_context: AccountingContext,
+) -> None:
+    """Keep call and attempt counts when a provider reports no usage units."""
+    attempt = AttemptAccountingWrite(
+        id=uuid.uuid4(),
+        provider_connection_api_name="fake-source",
+        provider_model_api_name="source-a",
+        outcome="succeeded",
+        usage=(),
+        applied_price=AttemptPriceSnapshot(
+            "USD", (PriceRate("request", Decimal("0.5")),)
+        ),
+        started_at=START,
+        completed_at=START + timedelta(seconds=1),
+    )
+    with psycopg.connect(
+        accounting_context.database_url, row_factory=dict_row
+    ) as connection:
+        accounting.record_call_accounting(
+            connection,
+            _call(
+                accounting_context.alpha_service,
+                accounting_context.alpha_workspace,
+                attempts=(attempt,),
+            ),
+        )
+        accounting.rollup_day(connection, DAY, now=START + timedelta(days=1))
+        row = connection.execute(
+            """SELECT usage_unit, calls, attempts, quantity, cost
+               FROM router.daily_accounting"""
+        ).fetchone()
+    assert row is not None
+    assert row == {
+        "usage_unit": None,
+        "calls": 1,
+        "attempts": 1,
+        "quantity": Decimal(0),
+        "cost": Decimal(0),
+    }
 
 
 def test_rollup_is_concurrent_repeat_safe_and_transactional(
@@ -408,21 +506,14 @@ def test_late_accounting_reopens_one_completed_day(
             attempts=(_attempt("source-a", "succeeded", "USD", "1", 1, 0),),
         )
         accounting.record_call_accounting(connection, first)
-        accounting.rollup_day(connection, DAY, now=START + timedelta(days=1))
+        accounting.rollup_day(connection, DAY, now=datetime.now(tz=UTC))
         second = _call(
             accounting_context.alpha_service,
             accounting_context.alpha_workspace,
             attempts=(_attempt("source-a", "succeeded", "USD", "1", 2, 2),),
         )
         accounting.record_call_accounting(connection, second)
-        connection.execute(
-            """UPDATE router.raw_accounting_attempts
-               SET recorded_at = %s WHERE id = %s""",
-            (START, second.attempts[0].id),
-        )
-        days = accounting.rollup_pending_days(
-            connection, now=START + timedelta(days=1, hours=1)
-        )
+        days = accounting.rollup_pending_days(connection, now=datetime.now(tz=UTC))
         row = connection.execute(
             """SELECT calls, attempts, quantity, cost
                FROM router.daily_accounting"""
@@ -497,6 +588,33 @@ def test_statistics_routes_enforce_scope_actor_bounds_and_currencies(
         ("alpha", "USD"),
         ("beta", "EUR"),
     }
+    all_filters = client.get(
+        "/v1/admin/statistics?from=2026-08-22T00:00:00Z"
+        "&to=2026-08-23T00:00:00Z&service=alpha&workspace=primary"
+        "&assignment=default&provider_model=source-a&outcome=succeeded&tag=daily"
+        "&group_by=date&group_by=service&group_by=workspace&group_by=assignment"
+        "&group_by=provider_model&group_by=outcome&group_by=tag",
+        headers=accounting_context.admin_read_headers,
+    )
+    assert all_filters.status_code == HTTPStatus.OK
+    assert all_filters.json()["buckets"] == [
+        {
+            "dimensions": [
+                "2026-08-22",
+                "alpha",
+                "primary",
+                "default",
+                "source-a",
+                "succeeded",
+                "daily",
+            ],
+            "calls": 1,
+            "attempts": 1,
+            "units": [{"unit": "input_token", "quantity": "2"}],
+            "cost": "0.5",
+            "currency": "USD",
+        }
+    ]
     too_wide = client.get(
         "/v1/statistics?from=2025-01-01T00:00:00Z&to=2026-08-23T00:00:00Z",
         headers={"Authorization": f"Bearer {accounting_context.alpha_key}"},
@@ -543,6 +661,102 @@ def test_exact_call_marker_cannot_collide_with_an_assignment_name(
             service_id=accounting_context.alpha_service,
         )
     assert {bucket.dimensions[0] for bucket in result.buckets} == {"exact", "(exact)"}
+    client = TestClient(
+        create_app(
+            database_url=accounting_context.database_url,
+            settings=accounting_context.settings,
+            price_sources={},
+        ),
+        base_url="https://llmrouter.test",
+    )
+    filtered = client.get(
+        "/v1/statistics?from=2026-08-22T00:00:00Z&to=2026-08-23T00:00:00Z"
+        "&assignment=%28exact%29&group_by=assignment",
+        headers={"Authorization": f"Bearer {accounting_context.alpha_key}"},
+    )
+    assert filtered.status_code == HTTPStatus.OK
+    assert [row["dimensions"] for row in filtered.json()["buckets"]] == [["(exact)"]]
+
+
+def test_statistics_accepts_1000_groups_and_rejects_1001(
+    accounting_context: AccountingContext,
+) -> None:
+    """Apply the fixed group result bound with real PostgreSQL rows."""
+
+    def insert_groups(first: int, last: int) -> None:
+        with psycopg.connect(
+            accounting_context.database_url, row_factory=dict_row
+        ) as connection:
+            connection.execute(
+                """CREATE TEMP TABLE generated_accounting_groups (
+                       call_id uuid PRIMARY KEY,
+                       provider_model_api_name router.api_name NOT NULL
+                   ) ON COMMIT DROP"""
+            )
+            connection.execute(
+                """INSERT INTO generated_accounting_groups
+                       (call_id, provider_model_api_name)
+                   SELECT gen_random_uuid(),
+                          ('group-' || lpad(value::text, 4, '0'))::router.api_name
+                   FROM generate_series(%s::integer, %s::integer) AS value""",
+                (first, last),
+            )
+            connection.execute(
+                """INSERT INTO router.raw_accounting_calls
+                       (id, service_id, workspace_id, assignment_api_name, tags,
+                        outcome, started_at, completed_at)
+                   SELECT call_id, %s, %s, 'default', ARRAY['bounded'],
+                          'succeeded', %s, %s
+                   FROM generated_accounting_groups""",
+                (
+                    accounting_context.alpha_service,
+                    accounting_context.alpha_workspace,
+                    START,
+                    START + timedelta(seconds=1),
+                ),
+            )
+            connection.execute(
+                """INSERT INTO router.raw_accounting_attempts
+                       (id, call_id, service_id, workspace_id, position,
+                        provider_connection_api_name, provider_model_api_name,
+                        outcome, usage, applied_price, cost, currency,
+                        started_at, completed_at)
+                   SELECT gen_random_uuid(), call_id, %s, %s, 0, 'fake-source',
+                          provider_model_api_name, 'succeeded',
+                          '[{"unit":"request","quantity":"1"}]',
+                          '{"currency":"USD","unit_prices":[{"unit":"request","amount":"0"}]}',
+                          0, 'USD', %s, %s
+                   FROM generated_accounting_groups""",
+                (
+                    accounting_context.alpha_service,
+                    accounting_context.alpha_workspace,
+                    START,
+                    START + timedelta(seconds=1),
+                ),
+            )
+
+    insert_groups(0, 999)
+    client = TestClient(
+        create_app(
+            database_url=accounting_context.database_url,
+            settings=accounting_context.settings,
+            price_sources={},
+        ),
+        base_url="https://llmrouter.test",
+    )
+    path = (
+        "/v1/statistics?from=2026-08-22T00:00:00Z"
+        "&to=2026-08-23T00:00:00Z&group_by=provider_model"
+    )
+    headers = {"Authorization": f"Bearer {accounting_context.alpha_key}"}
+    bounded = client.get(path, headers=headers)
+    assert bounded.status_code == HTTPStatus.OK
+    assert len(bounded.json()["buckets"]) == 1000
+
+    insert_groups(1000, 1000)
+    excessive = client.get(path, headers=headers)
+    assert excessive.status_code == HTTPStatus.BAD_REQUEST
+    assert excessive.json()["error"]["code"] == "invalid_request"
 
 
 def test_admin_price_route_requires_session_csrf_and_never_returns_source_error(
@@ -574,6 +788,36 @@ def test_admin_price_route_requires_session_csrf_and_never_returns_source_error(
     assert failure.calls == 2
     assert {item["outcome"] for item in result.json()["items"]} == {"failed"}
     assert "source-secret" not in result.text
+    with psycopg.connect(
+        accounting_context.database_url, row_factory=dict_row
+    ) as connection:
+        activity = connection.execute(
+            """SELECT result FROM router.activity_events
+               WHERE action = 'price.synchronize'"""
+        ).fetchall()
+    assert [row["result"] for row in activity] == ["failed"]
+
+    failure.failure = None
+    failure.rows = {
+        "source-text": _price("USD", input_token="0.25"),
+        "source-media": _price("EUR", image="0.5"),
+    }
+    succeeded = client.post(
+        path, json={}, headers=accounting_context.admin_write_headers
+    )
+    assert succeeded.status_code == HTTPStatus.OK
+    assert {item["outcome"] for item in succeeded.json()["items"]} == {"updated"}
+    with psycopg.connect(
+        accounting_context.database_url, row_factory=dict_row
+    ) as connection:
+        activity = connection.execute(
+            """SELECT result, count(*) AS count FROM router.activity_events
+               WHERE action = 'price.synchronize' GROUP BY result"""
+        ).fetchall()
+    assert {row["result"]: row["count"] for row in activity} == {
+        "failed": 1,
+        "succeeded": 1,
+    }
 
 
 def test_manual_prices_reject_unsafe_decimals_and_keep_current_state(
@@ -707,6 +951,99 @@ def test_restart_maintenance_retries_dependency_failure_once_per_day(
     assert failure.calls == 4
 
 
+def test_rollup_health_changes_only_after_the_fixed_deadline(
+    accounting_context: AccountingContext,
+) -> None:
+    """Report one pending closed day after 03:00 UTC and recover after rollup."""
+    with psycopg.connect(
+        accounting_context.database_url, row_factory=dict_row
+    ) as connection:
+        accounting.record_call_accounting(
+            connection,
+            _call(
+                accounting_context.alpha_service,
+                accounting_context.alpha_workspace,
+                attempts=(_attempt("source-a", "succeeded", "USD", "1", 1, 0),),
+            ),
+        )
+        before_deadline = accounting.maintenance_health(
+            connection, now=datetime(2026, 8, 23, 2, 59, tzinfo=UTC)
+        )[1]
+        after_deadline = accounting.maintenance_health(
+            connection, now=datetime(2026, 8, 23, 3, tzinfo=UTC)
+        )[1]
+        rollup_now = datetime.now(tz=UTC)
+        accounting.rollup_pending_days(connection, now=rollup_now)
+        recovered = accounting.maintenance_health(connection, now=rollup_now)[1]
+    assert (before_deadline, after_deadline, recovered) == (
+        "healthy",
+        "degraded",
+        "healthy",
+    )
+
+
+def test_price_maintenance_failure_does_not_roll_back_a_due_rollup(
+    accounting_context: AccountingContext,
+) -> None:
+    """Commit the due accounting rollup before an unsafe source snapshot fails."""
+
+    class BrokenSnapshot(Mapping[str, Price]):
+        def __getitem__(self, _key: str) -> Price:
+            raise RuntimeError("private-source-control")
+
+        def __iter__(self) -> Iterator[str]:
+            return iter(("source-text",))
+
+        def __len__(self) -> int:
+            return 1
+
+    class BrokenSource:
+        def fetch(self) -> Mapping[str, Price]:
+            return BrokenSnapshot()
+
+    from llmrouter_backend.app import _run_due_accounting_maintenance
+
+    with psycopg.connect(
+        accounting_context.database_url, row_factory=dict_row
+    ) as connection:
+        accounting.record_call_accounting(
+            connection,
+            _call(
+                accounting_context.alpha_service,
+                accounting_context.alpha_workspace,
+                attempts=(_attempt("source-a", "succeeded", "USD", "1", 1, 0),),
+            ),
+        )
+
+    _run_due_accounting_maintenance(
+        accounting_context.database_url,
+        {
+            "openrouter": BrokenSource(),
+            "wavespeed": MemoryPriceSource(
+                {"source-media": _price("EUR", image="0.5")}
+            ),
+        },
+        now=datetime(2026, 8, 23, 3, tzinfo=UTC),
+    )
+
+    with psycopg.connect(
+        accounting_context.database_url, row_factory=dict_row
+    ) as connection:
+        aggregate_count = connection.execute(
+            "SELECT count(*) AS count FROM router.daily_accounting"
+        ).fetchone()
+        synchronization_count = connection.execute(
+            "SELECT count(*) AS count FROM router.price_synchronizations"
+        ).fetchone()
+        activity = connection.execute(
+            """SELECT result FROM router.activity_events
+               WHERE action = 'price.synchronize'"""
+        ).fetchall()
+    assert aggregate_count is not None and aggregate_count["count"] == 1
+    assert synchronization_count is not None and synchronization_count["count"] == 0
+    assert [row["result"] for row in activity] == ["failed"]
+
+
 def test_accounting_rejects_foreign_workspace_missing_price_and_bad_tags(
     accounting_context: AccountingContext,
 ) -> None:
@@ -773,6 +1110,81 @@ def test_accounting_rejects_foreign_workspace_missing_price_and_bad_tags(
             completed_at=early_attempt.completed_at,
             attempts=(early_attempt,),
         )
+
+
+def test_database_rejects_conflicting_price_authority_and_attempt_outcome(
+    accounting_context: AccountingContext,
+) -> None:
+    """Keep critical price and immutable outcome facts valid below the API."""
+    with psycopg.connect(
+        accounting_context.database_url, row_factory=dict_row
+    ) as connection:
+        with pytest.raises(psycopg.errors.CheckViolation), connection.transaction():
+            connection.execute(
+                """INSERT INTO router.canonical_models
+                       (api_name, display_name, input_modalities, output_modalities,
+                        capabilities, price_source, price_lookup_key, manual_price)
+                   VALUES ('invalid-authority', 'Invalid', ARRAY['text'], ARRAY['text'],
+                           '{}', 'openrouter', 'source-text',
+                           '{"currency":"USD","unit_prices":[{"unit":"request","amount":"1"}]}')"""
+            )
+        with pytest.raises(psycopg.errors.CheckViolation), connection.transaction():
+            connection.execute(
+                """INSERT INTO router.provider_models
+                       (api_name, provider_id, model_id, provider_model_name, enabled,
+                        input_modalities, output_modalities, capabilities,
+                        synchronized_price)
+                   SELECT 'invalid-snapshot', provider.id, model.id, 'invalid-snapshot',
+                          true, ARRAY['text'], ARRAY['text'], '{}',
+                          '{"currency":"USD","unit_prices":[{"unit":"request","amount":"1"}]}'
+                   FROM router.provider_connections AS provider
+                   CROSS JOIN router.canonical_models AS model
+                   WHERE provider.api_name = 'fake-source'
+                     AND model.api_name = 'text-model'"""
+            )
+        call = connection.execute(
+            """INSERT INTO router.raw_accounting_calls
+                   (service_id, workspace_id, outcome, started_at, completed_at)
+               VALUES (%s, %s, 'succeeded', %s, %s) RETURNING id""",
+            (
+                accounting_context.alpha_service,
+                accounting_context.alpha_workspace,
+                START,
+                START + timedelta(seconds=1),
+            ),
+        ).fetchone()
+        assert call is not None
+        with pytest.raises(psycopg.errors.CheckViolation), connection.transaction():
+            connection.execute(
+                """INSERT INTO router.raw_accounting_attempts
+                       (id, call_id, service_id, workspace_id, position,
+                        provider_connection_api_name, provider_model_api_name,
+                        outcome, usage, applied_price, cost, currency,
+                        failure_class, started_at, completed_at)
+                   VALUES (gen_random_uuid(), %s, %s, %s, 0, 'fake-source',
+                           'source-a', 'succeeded', '[]',
+                           '{"currency":"USD","unit_prices":[{"unit":"request","amount":"1"}]}',
+                           0, 'USD', 'upstream_failed', %s, %s)""",
+                (
+                    call["id"],
+                    accounting_context.alpha_service,
+                    accounting_context.alpha_workspace,
+                    START,
+                    START + timedelta(seconds=1),
+                ),
+            )
+        valid = _call(
+            accounting_context.alpha_service,
+            accounting_context.alpha_workspace,
+            attempts=(_attempt("source-a", "succeeded", "USD", "1", 1, 2),),
+        )
+        accounting.record_call_accounting(connection, valid)
+        with pytest.raises(psycopg.errors.CheckViolation), connection.transaction():
+            connection.execute(
+                """UPDATE router.raw_accounting_attempts
+                   SET cost = 0 WHERE id = %s""",
+                (valid.attempts[0].id,),
+            )
 
 
 def _insert_catalog(connection: psycopg.Connection[Any]) -> None:

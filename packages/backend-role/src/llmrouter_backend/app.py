@@ -507,7 +507,8 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
             Query(pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$"),
         ] = None,
         assignment: Annotated[
-            str | None, Query(pattern=r"^[a-z0-9][a-z0-9._-]{0,126}$")
+            str | None,
+            Query(pattern=r"^(?:[a-z0-9][a-z0-9._-]{0,126}|\(exact\))$"),
         ] = None,
         provider_model: Annotated[
             str | None,
@@ -1605,6 +1606,14 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
                 "price.synchronize",
                 "price_synchronization",
                 resource_id=synchronization_id,
+                result=(
+                    "succeeded"
+                    if all(
+                        item.outcome in {"updated", "unchanged"}
+                        for item in result.items
+                    )
+                    else "failed"
+                ),
             )
         except Exception:
             database.rollback()
@@ -1713,7 +1722,8 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
             Query(pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$"),
         ] = None,
         assignment: Annotated[
-            str | None, Query(pattern=r"^[a-z0-9][a-z0-9._-]{0,126}$")
+            str | None,
+            Query(pattern=r"^(?:[a-z0-9][a-z0-9._-]{0,126}|\(exact\))$"),
         ] = None,
         provider_model: Annotated[
             str | None,
@@ -2016,34 +2026,67 @@ def _run_due_accounting_maintenance(
             row_factory=dict_row,
             options=_database_timeout_options(),
         ) as database:
-            if current.hour >= 2:
-                database.execute(
-                    "SELECT pg_advisory_xact_lock(%s)",
-                    (_ACCOUNTING_SCHEDULE_LOCK,),
-                )
-                existing = database.execute(
-                    """SELECT 1 FROM router.price_synchronizations
-                       WHERE run_kind = 'scheduled'
-                         AND (attempted_at AT TIME ZONE 'UTC')::date = %s
-                       LIMIT 1""",
-                    (current.date(),),
-                ).fetchone()
-                if existing is None:
-                    synchronization_id, _result = accounting.synchronize_prices(
-                        database,
-                        sources=price_sources,
-                        now=current,
-                        run_kind="scheduled",
-                    )
-                    record_activity(
-                        database,
-                        "system:price-synchronization",
-                        "price.synchronize",
-                        "price_synchronization",
-                        resource_id=synchronization_id,
-                    )
             if current.hour >= 3:
-                accounting.rollup_pending_days(database, now=current)
+                try:
+                    accounting.rollup_pending_days(database, now=current)
+                except Exception:  # noqa: BLE001 - Price work must remain independent.
+                    database.rollback()
+                else:
+                    database.commit()
+            if current.hour >= 2:
+                failure_id = uuid.uuid4()
+                try:
+                    schedule_lock = database.execute(
+                        "SELECT pg_try_advisory_xact_lock(%s) AS acquired",
+                        (_ACCOUNTING_SCHEDULE_LOCK,),
+                    ).fetchone()
+                    if schedule_lock is not None and schedule_lock["acquired"]:
+                        existing = database.execute(
+                            """SELECT 1 FROM router.price_synchronizations
+                               WHERE run_kind = 'scheduled'
+                                 AND (attempted_at AT TIME ZONE 'UTC')::date = %s
+                               LIMIT 1""",
+                            (current.date(),),
+                        ).fetchone()
+                        if existing is None:
+                            synchronization_id, _result = accounting.synchronize_prices(
+                                database,
+                                sources=price_sources,
+                                now=current,
+                                run_kind="scheduled",
+                            )
+                            record_activity(
+                                database,
+                                "system:price-synchronization",
+                                "price.synchronize",
+                                "price_synchronization",
+                                resource_id=synchronization_id,
+                                result=(
+                                    "succeeded"
+                                    if all(
+                                        item.outcome in {"updated", "unchanged"}
+                                        for item in _result.items
+                                    )
+                                    else "failed"
+                                ),
+                            )
+                except Exception:  # noqa: BLE001 - The next pass retries safely.
+                    database.rollback()
+                    try:
+                        record_activity(
+                            database,
+                            "system:price-synchronization",
+                            "price.synchronize",
+                            "price_synchronization",
+                            resource_id=failure_id,
+                            result="failed",
+                        )
+                    except Exception:  # noqa: BLE001 - Health reports the DB failure.
+                        database.rollback()
+                    else:
+                        database.commit()
+                else:
+                    database.commit()
     except Exception:  # noqa: BLE001 - The next fixed maintenance pass retries safely.
         return
 

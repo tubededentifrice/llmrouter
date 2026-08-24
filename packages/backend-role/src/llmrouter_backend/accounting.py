@@ -16,7 +16,7 @@ from opendle import RouterContractError, normalize_tags
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
-from llmrouter_backend.errors import invalid_request
+from llmrouter_backend.errors import conflict, invalid_request
 from llmrouter_backend.models import (
     Price,
     PriceSyncItem,
@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from psycopg import Connection
 
 _CATALOG_WRITE_LOCK = 4_993_044_345_823
+_PRICE_SYNCHRONIZATION_LOCK = 4_993_044_345_825
 _ROLLUP_LOCK_NAMESPACE = 4_993_044
 _MAXIMUM_DECIMAL = Decimal("99999999999999999999.999999999999999999")
 _OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
@@ -374,6 +375,12 @@ def synchronize_prices(
 ) -> tuple[uuid.UUID, PriceSyncResult]:
     """Fetch each selected source once and atomically apply all valid rows."""
     with connection.transaction():
+        lock = connection.execute(
+            "SELECT pg_try_advisory_xact_lock(%s) AS acquired",
+            (_PRICE_SYNCHRONIZATION_LOCK,),
+        ).fetchone()
+        if lock is None or not lock["acquired"]:
+            raise conflict("A price synchronization is already in progress.")
         return _synchronize_prices(
             connection,
             sources=sources,
@@ -651,14 +658,15 @@ def _rollup_day(
                       attempt.assignment_api_name, attempt.provider_model_api_name,
                       attempt.outcome, attempt.tags, usage.unit, attempt.currency,
                       count(DISTINCT attempt.call_id), count(DISTINCT attempt.id),
-                      sum(usage.quantity), sum(usage.quantity * price.amount), %s
+                      COALESCE(sum(usage.quantity), 0),
+                      COALESCE(sum(usage.quantity * price.amount), 0), %s
                FROM source_attempts AS attempt
-               CROSS JOIN LATERAL jsonb_to_recordset(attempt.usage)
-                   AS usage(unit text, quantity numeric)
-               CROSS JOIN LATERAL jsonb_to_recordset(
+               LEFT JOIN LATERAL jsonb_to_recordset(attempt.usage)
+                   AS usage(unit text, quantity numeric) ON true
+               LEFT JOIN LATERAL jsonb_to_recordset(
                    attempt.applied_price -> 'unit_prices'
-               ) AS price(unit text, amount numeric)
-               WHERE price.unit = usage.unit
+               ) AS price(unit text, amount numeric) ON price.unit = usage.unit
+               WHERE usage.unit IS NULL OR price.unit IS NOT NULL
                GROUP BY attempt.service_id, attempt.workspace_id,
                         attempt.assignment_api_name,
                         attempt.provider_model_api_name, attempt.outcome,
@@ -766,7 +774,8 @@ def statistics(
                AND (%s::uuid IS NULL OR attempt.service_id = %s)
                AND (%s::text IS NULL OR service.api_name = %s)
                AND (%s::text IS NULL OR workspace.api_name = %s)
-               AND (%s::text IS NULL OR call.assignment_api_name = %s)
+               AND (%s::text IS NULL OR
+                    COALESCE(call.assignment_api_name::text, '(exact)') = %s)
                AND (%s::text IS NULL OR attempt.provider_model_api_name = %s)
                AND (%s::text IS NULL OR attempt.outcome = %s)
                AND (%s::text IS NULL OR %s = ANY(call.tags))
@@ -785,7 +794,8 @@ def statistics(
                AND (%s::uuid IS NULL OR attempt.service_id = %s)
                AND (%s::text IS NULL OR service.api_name = %s)
                AND (%s::text IS NULL OR workspace.api_name = %s)
-               AND (%s::text IS NULL OR call.assignment_api_name = %s)
+               AND (%s::text IS NULL OR
+                    COALESCE(call.assignment_api_name::text, '(exact)') = %s)
                AND (%s::text IS NULL OR attempt.provider_model_api_name = %s)
                AND (%s::text IS NULL OR attempt.outcome = %s)
                AND (%s::text IS NULL OR %s = ANY(call.tags))

@@ -199,7 +199,9 @@ CREATE TABLE router.canonical_models (
         synchronized_price IS NULL OR jsonb_typeof(synchronized_price) = 'object'
     ),
     created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
-    CHECK ((price_source IS NULL) = (price_lookup_key IS NULL))
+    CHECK ((price_source IS NULL) = (price_lookup_key IS NULL)),
+    CHECK (price_source IS NULL OR manual_price IS NULL),
+    CHECK (synchronized_price IS NULL OR price_source IS NOT NULL)
 );
 
 CREATE TABLE router.provider_models (
@@ -223,7 +225,9 @@ CREATE TABLE router.provider_models (
     ),
     created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
     UNIQUE (provider_id, provider_model_name),
-    CHECK ((price_source IS NULL) = (price_lookup_key IS NULL))
+    CHECK ((price_source IS NULL) = (price_lookup_key IS NULL)),
+    CHECK (price_source IS NULL OR manual_price IS NULL),
+    CHECK (synchronized_price IS NULL OR price_source IS NOT NULL)
 );
 
 CREATE TABLE router.assignment_candidates (
@@ -302,6 +306,7 @@ CREATE TABLE router.raw_accounting_attempts (
     completed_at timestamptz NOT NULL,
     recorded_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
     CHECK (completed_at >= started_at),
+    CHECK ((outcome = 'succeeded') = (failure_class IS NULL)),
     UNIQUE (call_id, position),
     FOREIGN KEY (service_id, workspace_id, call_id)
         REFERENCES router.raw_accounting_calls(service_id, workspace_id, id)
@@ -310,6 +315,24 @@ CREATE TABLE router.raw_accounting_attempts (
 
 CREATE INDEX raw_accounting_attempts_scope_time
     ON router.raw_accounting_attempts(service_id, started_at, id);
+
+CREATE FUNCTION router.reject_raw_accounting_update() RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, router
+AS $$
+BEGIN
+    RAISE EXCEPTION 'Raw accounting facts are immutable.'
+        USING ERRCODE = '23514', CONSTRAINT = 'raw_accounting_immutable';
+END;
+$$;
+
+CREATE TRIGGER raw_accounting_calls_reject_update
+BEFORE UPDATE ON router.raw_accounting_calls
+FOR EACH ROW EXECUTE FUNCTION router.reject_raw_accounting_update();
+
+CREATE TRIGGER raw_accounting_attempts_reject_update
+BEFORE UPDATE ON router.raw_accounting_attempts
+FOR EACH ROW EXECUTE FUNCTION router.reject_raw_accounting_update();
 
 CREATE TABLE router.daily_accounting (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -320,7 +343,7 @@ CREATE TABLE router.daily_accounting (
     provider_model_api_name router.api_name NOT NULL,
     outcome text NOT NULL CHECK (outcome IN ('succeeded', 'failed')),
     tags text[] NOT NULL,
-    usage_unit text NOT NULL CHECK (usage_unit IN (
+    usage_unit text CHECK (usage_unit IN (
         'input_token', 'output_token', 'cached_input_token', 'image',
         'video_second', 'audio_second', 'request', 'provider_unit'
     )),

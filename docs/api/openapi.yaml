@@ -1540,7 +1540,10 @@ components:
       in: query
       required: false
       schema:
-        $ref: "#/components/schemas/AssignmentName"
+        oneOf:
+          - $ref: "#/components/schemas/AssignmentName"
+          - type: string
+            const: "(exact)"
     ProviderModelFilter:
       name: provider_model
       in: query
