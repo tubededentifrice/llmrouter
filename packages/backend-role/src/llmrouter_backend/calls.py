@@ -415,6 +415,10 @@ class CallExecutionError(RuntimeError):
         super().__init__(message)
 
 
+class OutputValidationUnavailableError(RuntimeError):
+    """Stop fallback when the Router cannot safely validate provider output."""
+
+
 @dataclass(frozen=True, slots=True)
 class CallResult:
     """One complete provider-neutral call result before HTTP composition."""
@@ -551,6 +555,11 @@ class _AttemptError(Exception):
 
 
 class _AttemptCancelled(BaseException):
+    def __init__(self, failure: _AttemptError) -> None:
+        self.failure = failure
+
+
+class _AttemptValidationUnavailableError(Exception):
     def __init__(self, failure: _AttemptError) -> None:
         self.failure = failure
 
@@ -724,6 +733,20 @@ class CallExecutor:
                         write_visible_output,
                         start_visible_output,
                     )
+                except _AttemptValidationUnavailableError as error:
+                    attempt_failure = error.failure
+                    accounting_write, detailed = _failed_attempt_values(
+                        attempt_failure, price, self._uuid_factory()
+                    )
+                    attempt_writes.append(accounting_write)
+                    detailed_attempts.append(detailed)
+                    final_outputs = attempt_failure.outputs
+                    failure = CallExecutionError(
+                        "internal_error",
+                        "The Router could not validate the provider output.",
+                        phase=CallFailurePhase.BEFORE_VISIBLE_OUTPUT,
+                    )
+                    break
                 except _AttemptCancelled as error:
                     attempt_failure = error.failure
                     accounting_write, detailed = _failed_attempt_values(
@@ -1104,6 +1127,18 @@ class CallExecutor:
                     self._now(),
                 )
             ) from None
+        except OutputValidationUnavailableError:
+            raise _AttemptValidationUnavailableError(
+                _AttemptError(
+                    route,
+                    "invalid_response",
+                    usage or (),
+                    tuple(outputs),
+                    visible,
+                    started_at,
+                    self._now(),
+                )
+            ) from None
         except TimeoutError:
             failure = ProviderFailureError(
                 "timeout",
@@ -1248,7 +1283,9 @@ async def _validate_output(
     if event.kind in {"text_delta", "tool_call"}:
         if not request.streaming:
             raise ValueError("Visible stream output requires a streaming call.")
-        if event.kind == "text_delta" and (not isinstance(value, str) or not value):
+        if event.kind == "text_delta" and (
+            not isinstance(value, str) or not value or not _valid_utf8_text(value)
+        ):
             raise ValueError("A text delta must contain non-empty text.")
         if event.kind == "tool_call":
             if "tool_calling" not in request.requirements.required_capabilities:
@@ -1340,7 +1377,9 @@ def _valid_tool_call(value: object) -> bool:
     if value["type"] != "tool_call":
         return False
     if not all(
-        isinstance(value[name], str) and 1 <= len(value[name]) <= maximum
+        isinstance(value[name], str)
+        and 1 <= len(value[name]) <= maximum
+        and _valid_utf8_text(cast("str", value[name]))
         for name, maximum in (("id", 200), ("name", 200), ("arguments_json", 1_000_000))
     ):
         return False
@@ -1359,7 +1398,11 @@ def _valid_standard_content(request: CallRequest, value: object) -> bool:
         if not isinstance(part, dict):
             return False
         if set(part) == {"type", "text"}:
-            if part["type"] != "text" or not isinstance(part["text"], str):
+            if (
+                part["type"] != "text"
+                or not isinstance(part["text"], str)
+                or not _valid_utf8_text(part["text"])
+            ):
                 return False
             continue
         if not _valid_tool_call(part):
@@ -1368,6 +1411,14 @@ def _valid_standard_content(request: CallRequest, value: object) -> bool:
             return False
         tool_call_ids.append(cast("str", part["id"]))
     return len(tool_call_ids) == len(set(tool_call_ids))
+
+
+def _valid_utf8_text(value: str) -> bool:
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
 
 
 def _valid_media_result(request: CallRequest, value: object) -> bool:

@@ -27,6 +27,7 @@ from llmrouter_backend.calls import (
     CallRequest,
     CallRequirements,
     CallResult,
+    OutputValidationUnavailableError,
     OutputValidator,
 )
 from llmrouter_backend.diagnostics import CapturedMedia
@@ -473,7 +474,9 @@ def _validate_structured_output(schema: dict[str, object], value: object) -> boo
     if not _STRUCTURED_VALIDATION_SLOTS.acquire(
         timeout=_STRUCTURED_VALIDATION_TIMEOUT_SECONDS
     ):
-        return False
+        raise OutputValidationUnavailableError(
+            "The structured-output validator is at its safety limit."
+        )
     try:
         try:
             # The executable and program are fixed. Only stdin is caller data.
@@ -485,10 +488,16 @@ def _validate_structured_output(schema: dict[str, object], value: object) -> boo
                 check=False,
                 timeout=_STRUCTURED_VALIDATION_TIMEOUT_SECONDS,
             )
-        except OSError, subprocess.TimeoutExpired:
-            return False
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise OutputValidationUnavailableError(
+                "The structured-output validator is unavailable."
+            ) from error
     finally:
         _STRUCTURED_VALIDATION_SLOTS.release()
+    if completed.returncode not in {0, 1}:
+        raise OutputValidationUnavailableError(
+            "The structured-output validator did not complete safely."
+        )
     return completed.returncode == 0
 
 

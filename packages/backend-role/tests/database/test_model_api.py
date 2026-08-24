@@ -15,7 +15,15 @@ import psycopg
 import pytest
 from fastapi.testclient import TestClient
 from llmrouter_backend import create_app
+from llmrouter_backend.adapters import FakeAdapter
 from llmrouter_backend.app import _model_stream_body
+from llmrouter_backend.calls import (
+    CallExecutor,
+    OutputValidationUnavailableError,
+    ProviderAttemptRequest,
+    ProviderCompleted,
+    ProviderOutput,
+)
 from llmrouter_backend.config import Settings
 from llmrouter_backend.database import migrate
 from llmrouter_backend.model_api import (
@@ -63,6 +71,34 @@ class MemoryObjectStore:
 
     def healthy(self) -> bool:
         return True
+
+
+class InvalidUnicodeAdapter(FakeAdapter):
+    """Return one invalid public string before the normal fake fallback."""
+
+    async def attempt(
+        self, request: ProviderAttemptRequest, /
+    ) -> AsyncGenerator[ProviderOutput | ProviderCompleted]:
+        if request.route.provider_model_name == "fake-error-transport-v1":
+            body = json.loads(request.request_json)
+            if body.get("tools"):
+                tool_call = (
+                    r'{"type":"tool_call","id":"\ud800",'
+                    r'"name":"lookup","arguments_json":"{}"}'
+                )
+                kind = "tool_call" if request.streaming else "standard"
+                content = tool_call if request.streaming else f"[{tool_call}]"
+            else:
+                kind = "text_delta" if request.streaming else "standard"
+                content = (
+                    r'"\ud800"'
+                    if request.streaming
+                    else r'[{"type":"text","text":"\ud800"}]'
+                )
+            yield ProviderOutput(cast("Any", kind), content)
+            return
+        async for event in super().attempt(request):
+            yield event
 
 
 @dataclass(slots=True)
@@ -397,6 +433,142 @@ def test_structured_json_is_schema_validated_before_success(
         }
     }
     assert "fake" not in failed.text
+
+
+def test_structured_validator_dependency_failure_is_safe_and_stops_fallback(
+    model_api_context: ModelApiContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Record the attempt and stop the chain after a Router validation failure."""
+    context = model_api_context
+    with psycopg.connect(context.database_url) as connection:
+        connection.execute(
+            """INSERT INTO router.provider_models
+                       (api_name, provider_id, model_id, provider_model_name,
+                        enabled, input_modalities, output_modalities, capabilities,
+                        constraints, reasoning_mappings)
+                   SELECT 'backup', provider_id, model_id, 'fake-text-backup-v1',
+                          enabled, input_modalities, output_modalities, capabilities,
+                          constraints, reasoning_mappings
+                   FROM router.provider_models WHERE api_name = 'primary'"""
+        )
+        connection.execute(
+            """INSERT INTO router.assignment_candidates
+                       (assignment_id, position, provider_model_id)
+                   SELECT assignment.id, 2, mapping.id
+                   FROM router.assignment_definitions AS assignment
+                   JOIN router.services AS service ON service.id = assignment.service_id
+                   CROSS JOIN router.provider_models AS mapping
+                   WHERE service.api_name = 'alpha'
+                     AND assignment.api_name = 'workflow'
+                     AND mapping.api_name = 'backup'"""
+        )
+
+    def unavailable(_schema: object, _value: object) -> bool:
+        raise OutputValidationUnavailableError
+
+    monkeypatch.setattr(
+        "llmrouter_backend.model_api._validate_structured_output", unavailable
+    )
+    body = _request()
+    body["output_format"] = {"type": "json_schema", "schema_json": "{}"}
+    response = context.client.post(
+        "/v1/model-calls", json=body, headers=context.headers("alpha")
+    )
+    assert response.status_code == HTTPStatus.INTERNAL_SERVER_ERROR
+    assert response.json() == {
+        "error": {
+            "code": "internal_error",
+            "message": "The Router could not validate the provider output.",
+        }
+    }
+    with psycopg.connect(context.database_url, row_factory=dict_row) as read_connection:
+        attempts = read_connection.execute(
+            """SELECT provider_model_api_name, outcome, failure_class
+               FROM router.raw_accounting_attempts ORDER BY position"""
+        ).fetchall()
+    assert attempts == [
+        {
+            "provider_model_api_name": "failure",
+            "outcome": "failed",
+            "failure_class": "transport",
+        },
+        {
+            "provider_model_api_name": "primary",
+            "outcome": "failed",
+            "failure_class": "invalid_response",
+        },
+    ]
+
+
+def test_invalid_provider_unicode_uses_fallback_before_public_output(
+    model_api_context: ModelApiContext,
+) -> None:
+    """Reject non-UTF-8 provider strings before synchronous or SSE success."""
+    context = model_api_context
+    cast("Any", context.client.app).state.call_executor = CallExecutor(
+        database_url=context.database_url,
+        adapters={"fake": InvalidUnicodeAdapter()},
+        object_store=cast("ObjectStore", context.objects),
+    )
+
+    synchronous = context.client.post(
+        "/v1/model-calls", json=_request(), headers=context.headers("alpha")
+    )
+    assert synchronous.status_code == HTTPStatus.OK
+    assert synchronous.json()["provider_model_api_name"] == "primary"
+
+    streamed = context.client.post(
+        "/v1/model-streams", json=_request(), headers=context.headers("alpha")
+    )
+    events = _events(streamed.text)
+    assert events[0] == ("start", {"provider_model_api_name": "primary"})
+    assert [event for event, _value in events] == [
+        "start",
+        "text_delta",
+        "text_delta",
+        "completed",
+    ]
+
+    tool_body = _request()
+    tool_body["tools"] = [
+        {
+            "name": "lookup",
+            "description": "Look up one value.",
+            "input_schema_json": "{}",
+        }
+    ]
+    tool_stream = context.client.post(
+        "/v1/model-streams", json=tool_body, headers=context.headers("alpha")
+    )
+    tool_events = _events(tool_stream.text)
+    assert tool_events[0] == ("start", {"provider_model_api_name": "primary"})
+    assert [event for event, _value in tool_events] == [
+        "start",
+        "tool_call",
+        "completed",
+    ]
+
+    with psycopg.connect(context.database_url, row_factory=dict_row) as connection:
+        attempts = connection.execute(
+            """SELECT call.started_at, attempt.provider_model_api_name,
+                      attempt.outcome, attempt.failure_class
+               FROM router.raw_accounting_calls AS call
+               JOIN router.raw_accounting_attempts AS attempt
+                 ON attempt.call_id = call.id
+               ORDER BY call.started_at, attempt.position"""
+        ).fetchall()
+    assert [
+        (row["provider_model_api_name"], row["outcome"], row["failure_class"])
+        for row in attempts
+    ] == [
+        ("failure", "failed", "invalid_response"),
+        ("primary", "succeeded", None),
+        ("failure", "failed", "invalid_response"),
+        ("primary", "succeeded", None),
+        ("failure", "failed", "invalid_response"),
+        ("primary", "succeeded", None),
+    ]
 
 
 def test_stream_contract_defers_start_and_enforces_the_visibility_boundary(
@@ -823,8 +995,9 @@ def test_stream_generator_cancels_connection_lifetime_work_on_disconnect() -> No
 def test_structured_schema_validation_has_a_hard_resource_boundary() -> None:
     """Stop a pathological regular expression without blocking the web process."""
     started = monotonic()
-    assert not _validate_structured_output(
-        {"type": "string", "pattern": "^(a+)+$"},
-        "a" * 5000 + "b",
-    )
+    with pytest.raises(OutputValidationUnavailableError):
+        _validate_structured_output(
+            {"type": "string", "pattern": "^(a+)+$"},
+            "a" * 5000 + "b",
+        )
     assert monotonic() - started < 3
