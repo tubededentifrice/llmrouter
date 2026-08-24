@@ -46,6 +46,7 @@ ACTIVE_REFERENCE_PATHS = {
     "packages/backend-role/pyproject.toml",
     "packages/backend-role/src/llmrouter_backend",
     "scripts/local-development-migrate.py",
+    "scripts/local_development_admin_session.py",
     "scripts/local-development.sh",
 }
 FORBIDDEN_REFERENCE = re.compile(

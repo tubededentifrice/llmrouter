@@ -38,6 +38,25 @@ When authentication or environment setup blocks tests, add a safe test path:
 If the repository cannot safely automate the setup, improve the nearest skill
 or instruction with the exact prerequisite and failure test.
 
+### Test the Router administration UI without Pocket ID
+
+Keep Pocket ID enabled. Do not add an authentication bypass to the backend.
+For localhost browser automation:
+
+1. Start the deployment with `./scripts/local-development.sh start`.
+2. Run `./scripts/local-development.sh test-session`.
+3. Read `.local-development/test-administrator-session.json` directly from the
+   browser test process. Do not print or copy its values.
+4. Set its named cookie for `http://127.0.0.1:5174`. Make it host-only,
+   HttpOnly, SameSite=Lax, path `/`, and `secure: false` for loopback HTTP.
+   Administrator writes use its CSRF value in `X-CSRF-Token` and its exact
+   origin.
+5. Run `./scripts/local-development.sh clear-test-session` after the test.
+
+The session expires after 15 minutes. It uses the production session store,
+verifier, encryption, CSRF, origin, expiry, and administrator authorization
+path. The complete product proof uses this fixture and tests it on localhost.
+
 ## Preserve quality
 
 - Use LSP inspection before a behavior edit and LSP diagnostics after it when

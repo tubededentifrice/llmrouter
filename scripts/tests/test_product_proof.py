@@ -56,6 +56,9 @@ def test_proof_covers_restart_and_dependency_failures() -> None:
     assert "lock_deployment" in shell
     assert "flock --nonblock 9" in shell
     assert 'readlink "/proc/$$/fd/9"' in shell
+    assert "created_admin_session=0" in shell
+    assert "local-development.sh test-session" in shell
+    assert "local-development.sh clear-test-session" in shell
 
 
 def test_local_development_exposes_the_fixed_proof() -> None:
@@ -70,6 +73,8 @@ def test_local_development_exposes_the_fixed_proof() -> None:
         'exec "${repository_root}/scripts/prove-simplified-product.sh"'
     )
     assert 'exec "${repository_root}/scripts/prove-simplified-product.sh"' in source
+    assert "test-session)" in source
+    assert "clear-test-session)" in source
 
 
 def test_live_proof_covers_sdk_harness_and_native_operation_families() -> None:

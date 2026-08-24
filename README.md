@@ -78,6 +78,28 @@ administrator subject allowlist, and administrator encryption keys.
 ./scripts/local-development.sh stop
 ```
 
+Pocket ID stays enabled for the normal application. For localhost browser
+automation, create one 15-minute administrator test session through the real
+session store:
+
+```bash
+./scripts/local-development.sh test-session
+```
+
+The command writes the cookie, CSRF token, origin, and expiry to the ignored
+mode-0600 file `.local-development/test-administrator-session.json`. Browser
+automation reads this file directly and sets a host-only, HttpOnly,
+SameSite=Lax cookie with path `/` for `http://127.0.0.1:5174`. Local loopback
+HTTP needs `secure: false`. Administrator writes use `X-CSRF-Token` and the
+file's exact origin. The automation must not print or copy the file values. The
+backend still applies normal session, CSRF, origin, expiry, and administrator
+checks.
+Revoke the session after the browser check:
+
+```bash
+./scripts/local-development.sh clear-test-session
+```
+
 Repository checks use:
 
 ```bash

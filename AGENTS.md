@@ -37,6 +37,10 @@ tests, API checks, and local verification. The external URL is for the user
 and for protected access only. Do not bypass the protection or add public host
 port bindings.
 
+For Pocket ID-free localhost browser automation, use
+`./scripts/local-development.sh test-session` and follow the exact workflow in
+the repository-tooling skill. Never print the ignored session file values.
+
 ## Working rules
 
 1. Read this file, `README.md`, and the applicable document indexes before a

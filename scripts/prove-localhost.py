@@ -22,8 +22,11 @@ from urllib.parse import quote
 import httpx
 import psycopg
 from llmrouter_backend.config import Settings
-from llmrouter_backend.security import ControlKeys, new_token
-from llmrouter_backend.store import create_administrator_session, create_key
+from llmrouter_backend.security import ControlKeys
+from llmrouter_backend.store import create_key
+from local_development_admin_session import (
+    read_development_administrator_session,
+)
 from opendle import (
     AssignmentSelector,
     ContextLimits,
@@ -61,14 +64,20 @@ def main() -> None:
     database_url = _database_url()
     with psycopg.connect(database_url, row_factory=dict_row) as connection:
         controls = ControlKeys.load(_settings())
-        alpha_key, child_key, beta_key, admin_session, csrf = _seed(
-            connection, controls
-        )
+        alpha_key, child_key, beta_key = _seed(connection, controls)
 
-    _prove_native_http(alpha_key, child_key, beta_key, admin_session, csrf)
+    administrator = read_development_administrator_session()
+
+    _prove_native_http(
+        alpha_key,
+        child_key,
+        beta_key,
+        administrator.cookie_value,
+        administrator.csrf_token,
+    )
     _prove_sdk_and_harness(alpha_key)
     _prove_persisted_facts(database_url, alpha_key, child_key, beta_key)
-    _prove_hydrated_administration(admin_session)
+    _prove_hydrated_administration(administrator.cookie_value)
     print("Localhost fake Router proof passed.")
 
 
@@ -93,7 +102,7 @@ def _database_url() -> str:
 
 def _seed(
     connection: psycopg.Connection[dict[str, object]], controls: ControlKeys
-) -> tuple[str, str, str, str, str]:
+) -> tuple[str, str, str]:
     """Create one deterministic service tree and fake-only route catalog."""
     existing = connection.execute(
         "SELECT count(*) AS count FROM router.services"
@@ -159,20 +168,8 @@ def _seed(
     _seed_fake_catalog(connection, services["alpha"])
     _seed_child_assignment(connection, services["alpha-child"])
 
-    admin_session = new_token()
-    csrf = new_token()
-    create_administrator_session(
-        connection,
-        session_verifier=controls.verifier(admin_session),
-        csrf_verifier=controls.verifier(csrf),
-        encrypted_csrf_token=controls.encrypt({"csrf_token": csrf}),
-        issuer="https://proof.invalid",
-        subject="localhost-proof",
-        display_name="Localhost proof",
-        expires_at=datetime.now(tz=UTC) + timedelta(minutes=30),
-    )
     connection.commit()
-    return alpha_key, child_key, beta_key, admin_session, csrf
+    return alpha_key, child_key, beta_key
 
 
 def _price(*units: str) -> str:

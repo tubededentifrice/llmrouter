@@ -6,8 +6,12 @@ repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 state_directory="${repository_root}/.local-development"
 stopped_storage=""
 stopped_postgres=""
+created_admin_session=0
 
 cleanup() {
+  if [[ "${created_admin_session}" == "1" ]]; then
+    ./scripts/local-development.sh clear-test-session >/dev/null 2>&1 || true
+  fi
   if [[ -n "${stopped_storage}" ]]; then
     docker start "${stopped_storage}" >/dev/null 2>&1 || true
   fi
@@ -109,7 +113,11 @@ uv run --project "${repository_root}/../opendle-lib" --frozen pytest \
 
 ./scripts/local-development.sh reset
 ./scripts/local-development.sh start
+./scripts/local-development.sh test-session
+created_admin_session=1
 uv run python scripts/prove-localhost.py
+./scripts/local-development.sh clear-test-session
+created_admin_session=0
 
 backend_container="$(find_container backend)"
 storage_container="$(find_container object-storage)"

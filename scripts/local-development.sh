@@ -230,13 +230,24 @@ main() {
     logs)
       compose logs --follow --tail 100
       ;;
+    test-session)
+      [[ "$#" == "1" ]] || fail "The test-session action does not accept arguments."
+      lock_operation
+      uv run python scripts/local_development_admin_session.py create
+      ;;
+    clear-test-session)
+      [[ "$#" == "1" ]] ||
+        fail "The clear-test-session action does not accept arguments."
+      lock_operation
+      uv run python scripts/local_development_admin_session.py clear
+      ;;
     prove)
       [[ "$#" == "1" ]] || fail "The prove action does not accept arguments."
       lock_operation
       exec "${repository_root}/scripts/prove-simplified-product.sh"
       ;;
     *)
-      fail "Usage: ./scripts/local-development.sh {start|stop|reset|status|logs|prove}"
+      fail "Usage: ./scripts/local-development.sh {start|stop|reset|status|logs|test-session|clear-test-session|prove}"
       ;;
   esac
 }
