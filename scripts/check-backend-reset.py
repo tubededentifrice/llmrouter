@@ -29,6 +29,7 @@ REMOVED_PATHS = {
     "packages/backend-role/src/llmrouter_backend/tool_gateway",
     "scripts/administrator-grant.py",
     "scripts/local-development-bootstrap.py",
+    "scripts/local-development-e2e.py",
     "scripts/local-development-live-openrouter.py",
 }
 REMOVED_MIGRATION_NAMES = re.compile(

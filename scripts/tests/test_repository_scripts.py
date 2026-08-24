@@ -129,6 +129,12 @@ def test_backend_reset_gate_rejects_a_removed_script(
         module.main()
 
 
+def test_backend_reset_gate_keeps_the_obsolete_e2e_script_removed() -> None:
+    """Reject the pre-reset browser proof if it returns."""
+    module = _backend_reset_module()
+    assert "scripts/local-development-e2e.py" in module.REMOVED_PATHS
+
+
 @pytest.mark.parametrize(
     "source",
     [
