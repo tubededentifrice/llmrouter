@@ -282,6 +282,7 @@ class ProviderRoute:
     """A validated safe provider route for a later call attempt."""
 
     provider_model_api_name: str
+    provider_connection_api_name: str
     adapter: str
     endpoint: str | None
     provider_model_name: str
@@ -783,6 +784,7 @@ def resolve_provider_route(
                   mapping.input_modalities, mapping.output_modalities,
                   mapping.capabilities, mapping.constraints,
                   mapping.reasoning_mappings,
+                  provider.api_name AS provider_connection_api_name,
                   provider.adapter, provider.endpoint,
                   credential.api_name AS credential_api_name
            FROM router.provider_models AS mapping
@@ -815,6 +817,7 @@ def resolve_provider_route(
         raise ApiError(400, "invalid_request", "The reasoning level is not available.")
     return ProviderRoute(
         provider_model_api_name=row["api_name"],
+        provider_connection_api_name=row["provider_connection_api_name"],
         adapter=row["adapter"],
         endpoint=row["endpoint"],
         provider_model_name=row["provider_model_name"],

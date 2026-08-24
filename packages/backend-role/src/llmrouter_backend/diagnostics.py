@@ -38,7 +38,8 @@ _MAX_RETAINED_OBJECT_BYTES = 1024 * 1024 * 1024
 _MAX_TAGS = 32
 _MAX_TAG_BYTES = 128
 _MAX_TAG_SET_BYTES = 2048
-_MAX_LOG_CONTENT_CHARACTERS = 5_000_000
+_MAX_LOG_REQUEST_CHARACTERS = 5_000_000
+_MAX_LOG_RESPONSE_CHARACTERS = 10_000_000
 _MAX_ATTEMPTS = 16
 _MAX_MEDIA_ITEMS = 16
 _DATABASE_CONNECT_TIMEOUT_SECONDS = 2
@@ -84,6 +85,7 @@ class DetailedLogWrite:
     provider_model_api_name: str | None = None
     tags: tuple[str, ...] = ()
     media: tuple[CapturedMedia, ...] = ()
+    accounting_call_id: uuid.UUID | None = None
 
 
 def write_detailed_log_best_effort(
@@ -111,7 +113,7 @@ def write_detailed_log_best_effort(
             ).fetchone()
             if row is None:
                 return None
-            log_id = uuid.uuid4()
+            log_id = value.accounting_call_id or uuid.uuid4()
             connection.execute(
                 """INSERT INTO router.request_logs
                        (id, service_id, workspace_id, assignment_api_name,
@@ -496,9 +498,9 @@ def _drain_object_deletions(
 def _validate_write(value: DetailedLogWrite) -> None:
     if value.started_at.tzinfo is None:
         raise ValueError
-    if len(value.request_json) > _MAX_LOG_CONTENT_CHARACTERS or (
+    if len(value.request_json) > _MAX_LOG_REQUEST_CHARACTERS or (
         value.response_json is not None
-        and len(value.response_json) > _MAX_LOG_CONTENT_CHARACTERS
+        and len(value.response_json) > _MAX_LOG_RESPONSE_CHARACTERS
     ):
         raise ValueError
     _normalized_tags(value.tags)

@@ -34,7 +34,8 @@
         ],
         "source": "catalog",
         "synchronized_at": "2026-08-23T00:00:00Z"
-      }
+      },
+      "response_json": "[{\"kind\":\"standard\",\"value\":[{\"type\":\"text\",\"text\":\"complete\"}]}]"
     }
   ],
   "media": []

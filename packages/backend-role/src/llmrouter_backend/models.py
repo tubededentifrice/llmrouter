@@ -670,6 +670,7 @@ class RequestAttempt(ClosedModel):
     completed_at: datetime | None = None
     usage: Usage
     applied_prices: AppliedPrice
+    response_json: str | None = Field(default=None, max_length=10_000_000)
     error: SafeError | None = None
 
 
@@ -701,7 +702,7 @@ class RequestLog(ClosedModel):
 
     summary: RequestLogSummary
     request_json: str = Field(max_length=5_000_000)
-    response_json: str | None = Field(default=None, max_length=5_000_000)
+    response_json: str | None = Field(default=None, max_length=10_000_000)
     attempts: list[RequestAttempt] = Field(max_length=16)
     media: list[LogMedia] | None = Field(default=None, max_length=16)
 

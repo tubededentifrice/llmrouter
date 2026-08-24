@@ -264,6 +264,20 @@ CREATE INDEX request_logs_time
 CREATE INDEX request_logs_scope_time
     ON router.request_logs(service_id, workspace_id, started_at DESC, id DESC);
 
+CREATE FUNCTION router.reject_request_log_update() RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, router
+AS $$
+BEGIN
+    RAISE EXCEPTION 'Detailed request logs are immutable.'
+        USING ERRCODE = '23514', CONSTRAINT = 'request_log_immutable';
+END;
+$$;
+
+CREATE TRIGGER request_logs_reject_update
+BEFORE UPDATE ON router.request_logs
+FOR EACH ROW EXECUTE FUNCTION router.reject_request_log_update();
+
 CREATE TABLE router.raw_accounting_calls (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     service_id uuid NOT NULL,

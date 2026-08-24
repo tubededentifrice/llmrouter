@@ -308,8 +308,8 @@ class CallAccountingWrite:
         if self.outcome not in {"succeeded", "failed"}:
             raise ValueError("The call outcome is invalid.")
         _require_interval(self.started_at, self.completed_at)
-        if not 1 <= len(self.attempts) <= 16:
-            raise ValueError("A call must contain from 1 through 16 attempts.")
+        if len(self.attempts) > 16:
+            raise ValueError("A call can contain no more than 16 attempts.")
         if len({item.id for item in self.attempts}) != len(self.attempts):
             raise ValueError("An attempt identity cannot occur more than once.")
         if any(
@@ -323,6 +323,8 @@ class CallAccountingWrite:
         ):
             raise ValueError("Provider attempts must use their recorded order.")
         succeeded = [item for item in self.attempts if item.outcome == "succeeded"]
+        if self.outcome == "succeeded" and not self.attempts:
+            raise ValueError("A successful call must contain one successful attempt.")
         if (self.outcome == "succeeded" and succeeded != [self.attempts[-1]]) or (
             self.outcome == "failed" and succeeded
         ):

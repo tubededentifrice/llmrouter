@@ -3025,7 +3025,7 @@ components:
           maxLength: 5000000
         response_json:
           type: string
-          maxLength: 5000000
+          maxLength: 10000000
         attempts:
           type: array
           items:
@@ -3051,6 +3051,9 @@ components:
           $ref: "#/components/schemas/Usage"
         applied_prices:
           $ref: "#/components/schemas/Price"
+        response_json:
+          type: string
+          maxLength: 10000000
         error:
           $ref: "#/components/schemas/Error"
     LogMedia:

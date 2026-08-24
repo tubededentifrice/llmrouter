@@ -10,6 +10,7 @@ DROP TABLE router.raw_accounting_attempts;
 DROP TABLE router.raw_accounting_calls;
 DROP FUNCTION router.reject_raw_accounting_update();
 DROP TABLE router.request_logs;
+DROP FUNCTION router.reject_request_log_update();
 DROP TABLE router.assignment_candidates;
 DROP TABLE router.assignment_usage;
 DROP FUNCTION router.text_array_is_unique(text[]);

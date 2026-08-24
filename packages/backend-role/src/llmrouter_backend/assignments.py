@@ -279,6 +279,8 @@ def resolve_assignment_for_call(
     embedding_dimension: int | None = None,
     input_image_sizes: Sequence[int] = (),
     output_duration_seconds: int | None = None,
+    excluded_provider_model_api_names: Sequence[str] = (),
+    commit_evidence: bool = True,
 ) -> tuple[ResolvedAssignment, tuple[ProviderRoute, ...]]:
     """Observe one validated call and filter candidates by its actual shape."""
     _require_assignment_name(assignment_api_name)
@@ -322,7 +324,10 @@ def resolve_assignment_for_call(
     if resolved is None:
         raise RuntimeError("The automatic assignment did not resolve.")
     routes: list[ProviderRoute] = []
+    excluded = frozenset(excluded_provider_model_api_names)
     for candidate in resolved.effective_chain:
+        if candidate in excluded:
+            continue
         try:
             route = catalog.resolve_provider_route(
                 connection,
@@ -350,7 +355,8 @@ def resolve_assignment_for_call(
     )
     # Admission evidence and an automatic first-use definition must survive a
     # later empty-chain, eligibility, or provider failure.
-    connection.commit()
+    if commit_evidence:
+        connection.commit()
     if not routes:
         raise provider_unavailable()
     return resolved, tuple(routes)

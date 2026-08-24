@@ -10,7 +10,7 @@
     },
     {
       "path": "docs/api/openapi.yaml",
-      "sha256": "617c5b42783f07d4ad2f18caff502f62aa74357d62a832e9dc87ee66293f0ea3"
+      "sha256": "8145f779c656c2a3a74f22724151f554e5e62b706a29a9e07b0bd8fe20684bd8"
     },
     {
       "path": "docs/api/stream-protocol.md",
@@ -96,8 +96,8 @@
     "ProviderWrite": "2dd3fe4519977266bbb9f5bc621a68de5780f66c9d16e31a65c8614d9e9696c3",
     "ReasoningLevel": "88f58729acbf1fa41460a38739c1a4a2826899e2a1aa58d2758415f3c47c2d71",
     "ReasoningMapping": "e3e9b0b2a65b0edaf55997d2ae278237b2418c4c2616fee73f1b71a87e8f9896",
-    "RequestAttempt": "ac3d78338b2a2188134f747804c239d2f64e574a0f21e64df2849a66f2b47220",
-    "RequestLog": "3f32934b025214b60ceab7dad3c7656473c43a2d3128a0f8b956f947e6bcbd05",
+    "RequestAttempt": "61e72879e0de8479b84b92c2befcbc5323d1eec30056308a48c0cd9e163ea805",
+    "RequestLog": "25c5fd743bb00e4667530dcc97935e1f5abcadd45d2c440a1668b7aed0d17e46",
     "RequestLogPage": "39444b1ca63390f6c67321868d590b96cbf49a0a2357df98729cf03042794507",
     "RequestLogSummary": "1f12d9ca97df2e9cba18b3546d4692e9688dcc5b6dab495989b71f486a43dede",
     "Service": "080e42ee301669f447358abe8f27760be74279628505a52d84deb86faef66d7d",
@@ -138,6 +138,6 @@
   },
   "contract_set": "llmrouter-v1",
   "generator_version": 3,
-  "source_sha256": "617c5b42783f07d4ad2f18caff502f62aa74357d62a832e9dc87ee66293f0ea3",
+  "source_sha256": "8145f779c656c2a3a74f22724151f554e5e62b706a29a9e07b0bd8fe20684bd8",
   "version": "1.0.0"
 }
