@@ -60,8 +60,11 @@ from llmrouter_backend.diagnostics import (
     put_log_retention,
 )
 from llmrouter_backend.embedding_api import (
+    AdministratorEmbeddingRequest,
+    AdministratorEmbeddingResult,
     EmbeddingRequest,
     EmbeddingResult,
+    administrator_embedding_result,
     embedding_result,
     internal_embedding_call,
 )
@@ -73,17 +76,26 @@ from llmrouter_backend.errors import (
     not_found,
 )
 from llmrouter_backend.media_api import (
+    AdministratorMediaJob,
+    AdministratorMediaJobRequest,
     MediaJob,
     MediaJobRequest,
+    create_administrator_media_job,
     create_media_job,
+    get_administrator_media_job,
+    get_administrator_media_job_content,
     get_media_job,
     get_media_job_content,
     media_worker_loop,
 )
 from llmrouter_backend.metrics import MetricsRegistry
 from llmrouter_backend.model_api import (
+    AdministratorModelCallRequest,
+    AdministratorModelCallResult,
     ModelCallRequest,
     ModelCallResult,
+    administrator_attempt_results,
+    administrator_model_call_result,
     internal_model_call,
     model_call_result,
     result_usage,
@@ -795,7 +807,7 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
         executor: CallExecutor = Depends(model_executor),
     ) -> ModelCallResult:
         """Make one synchronous native model call."""
-        body = await _model_call_body(request)
+        body = cast("ModelCallRequest", await _model_call_body(request))
         try:
             call = internal_model_call(body, streaming=False)
         except ValueError as error:
@@ -815,7 +827,7 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
         executor: CallExecutor = Depends(model_executor),
     ) -> StreamingResponse:
         """Start one native SSE model stream after route admission commits."""
-        body = await _model_call_body(request)
+        body = cast("ModelCallRequest", await _model_call_body(request))
         try:
             call = internal_model_call(body, streaming=True)
         except ValueError as error:
@@ -867,7 +879,7 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
         executor: CallExecutor = Depends(model_executor),
     ) -> EmbeddingResult:
         """Make one synchronous native embedding batch call."""
-        body = await _embedding_call_body(request)
+        body = cast("EmbeddingRequest", await _embedding_call_body(request))
         try:
             call = internal_embedding_call(body)
         except ValueError as error:
@@ -892,7 +904,7 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
         objects: ObjectStore | None = Depends(retained_objects),
     ) -> MediaJob:
         """Accept one protected image, video, or audio generation job."""
-        body = await _media_job_body(request)
+        body = cast("MediaJobRequest", await _media_job_body(request))
         configured_url = request.app.state.database_url or os.environ.get(
             "LLMROUTER_DATABASE_URL"
         )
@@ -1210,6 +1222,235 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
             path="/",
         )
         return response
+
+    @application.post(
+        "/v1/admin/playground/model-calls",
+        response_model=AdministratorModelCallResult,
+        response_model_exclude_none=True,
+    )
+    async def admin_playground_model_call(
+        request: Request,
+        actor: AdministratorActor = Depends(detached_administrator_actor),
+        controls: ControlKeys = Depends(control_keys),
+        executor: CallExecutor = Depends(model_executor),
+    ) -> AdministratorModelCallResult | JSONResponse:
+        """Make one unrestricted administrator model call."""
+        _require_browser_write(request, actor, controls)
+        body = cast(
+            "AdministratorModelCallRequest",
+            await _model_call_body(request, administrator=True),
+        )
+        try:
+            call = internal_model_call(body, streaming=False)
+        except ValueError as error:
+            raise invalid_request(
+                "body", "The model call does not match the contract."
+            ) from error
+        try:
+            result = await executor.execute(actor, call)
+        except CallExecutionError as error:
+            return _administrator_call_error_response(error, body.selector)
+        response = administrator_model_call_result(body, result)
+        return JSONResponse(
+            response.model_dump(mode="json", exclude_none=True),
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @application.post(
+        "/v1/admin/playground/embeddings",
+        response_model=AdministratorEmbeddingResult,
+        response_model_exclude_none=True,
+    )
+    async def admin_playground_embedding(
+        request: Request,
+        actor: AdministratorActor = Depends(detached_administrator_actor),
+        controls: ControlKeys = Depends(control_keys),
+        executor: CallExecutor = Depends(model_executor),
+    ) -> AdministratorEmbeddingResult | JSONResponse:
+        """Make one unrestricted administrator embedding call."""
+        _require_browser_write(request, actor, controls)
+        body = cast(
+            "AdministratorEmbeddingRequest",
+            await _embedding_call_body(request, administrator=True),
+        )
+        try:
+            call = internal_embedding_call(body)
+        except ValueError as error:
+            raise invalid_request(
+                "body", "The embedding call does not match the contract."
+            ) from error
+        try:
+            result = await executor.execute(actor, call)
+        except CallExecutionError as error:
+            return _administrator_call_error_response(error, body.selector)
+        response = administrator_embedding_result(body, result)
+        return JSONResponse(
+            response.model_dump(mode="json", exclude_none=True),
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @application.post("/v1/admin/playground/model-streams", response_model=None)
+    async def admin_playground_model_stream(
+        request: Request,
+        actor: AdministratorActor = Depends(detached_administrator_actor),
+        controls: ControlKeys = Depends(control_keys),
+        executor: CallExecutor = Depends(model_executor),
+    ) -> Response:
+        """Start one unrestricted administrator native model stream."""
+        _require_browser_write(request, actor, controls)
+        body = cast(
+            "AdministratorModelCallRequest",
+            await _model_call_body(request, administrator=True),
+        )
+        try:
+            call = internal_model_call(body, streaming=True)
+        except ValueError as error:
+            raise invalid_request(
+                "body", "The model stream does not match the contract."
+            ) from error
+        logical_call_id = uuid.uuid4()
+        selector = body.selector.model_dump(mode="json")
+        queue: asyncio.Queue[tuple[str, dict[str, object]]] = asyncio.Queue(maxsize=16)
+
+        async def start(provider_model_api_name: str) -> None:
+            await queue.put(
+                (
+                    "start",
+                    {
+                        "logical_call_id": str(logical_call_id),
+                        "selector": selector,
+                        "provider_model_api_name": provider_model_api_name,
+                    },
+                )
+            )
+
+        async def write(output: ProviderOutput) -> None:
+            await queue.put(_stream_output(output))
+
+        execution = asyncio.create_task(
+            executor.execute(
+                actor,
+                call,
+                write_visible_output=write,
+                start_visible_output=start,
+                call_id=logical_call_id,
+            )
+        )
+        try:
+            first = await _first_administrator_stream_event(
+                queue, execution, logical_call_id, selector
+            )
+        except CallExecutionError as error:
+            return _administrator_call_error_response(error, body.selector)
+        except BaseException:
+            execution.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await execution
+            raise
+        return StreamingResponse(
+            _administrator_model_stream_body(
+                first, queue, execution, logical_call_id, selector
+            ),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-store",
+                "X-Accel-Buffering": "no",
+                "X-LLMRouter-Logical-Call-Id": str(logical_call_id),
+            },
+        )
+
+    @application.post(
+        "/v1/admin/playground/media-jobs",
+        status_code=HTTPStatus.ACCEPTED,
+        response_model=AdministratorMediaJob,
+        response_model_exclude_none=True,
+    )
+    async def admin_playground_create_media_job(
+        request: Request,
+        actor: AdministratorActor = Depends(detached_administrator_actor),
+        controls: ControlKeys = Depends(control_keys),
+        objects: ObjectStore | None = Depends(retained_objects),
+        executor: CallExecutor = Depends(model_executor),
+    ) -> AdministratorMediaJob | JSONResponse:
+        """Accept one global administrator image, video, or audio job."""
+        _require_browser_write(request, actor, controls)
+        body = cast(
+            "AdministratorMediaJobRequest",
+            await _media_job_body(request, administrator=True),
+        )
+        configured_url = request.app.state.database_url or os.environ.get(
+            "LLMROUTER_DATABASE_URL"
+        )
+        if configured_url is None:
+            raise ApiError(
+                500, "internal_error", "The Router could not complete the operation."
+            )
+        created = await asyncio.to_thread(
+            create_administrator_media_job,
+            database_url=configured_url,
+            object_store=objects,
+            executor=executor,
+            actor=actor,
+            body=body,
+            deadline_seconds=request.app.state.settings.media_job_deadline_seconds,
+            database_connect=database_connections.connect,
+            cleanup_database_connect=database_connections.waiting_connect,
+        )
+        response = AdministratorMediaJob.model_validate(created)
+        return JSONResponse(
+            response.model_dump(mode="json", exclude_none=True),
+            status_code=HTTPStatus.ACCEPTED,
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @application.get(
+        "/v1/admin/playground/media-jobs/{media_job_id}",
+        response_model=AdministratorMediaJob,
+        response_model_exclude_none=True,
+    )
+    def admin_playground_get_media_job(
+        media_job_id: uuid.UUID,
+        _actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+    ) -> JSONResponse:
+        """Read one global administrator media job."""
+        response = AdministratorMediaJob.model_validate(
+            get_administrator_media_job(database, job_id=media_job_id)
+        )
+        return JSONResponse(
+            response.model_dump(mode="json", exclude_none=True),
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @application.get(
+        "/v1/admin/playground/media-jobs/{media_job_id}/content",
+        response_model=None,
+    )
+    def admin_playground_get_media_job_content(
+        request: Request,
+        media_job_id: uuid.UUID,
+        _actor: AdministratorActor = Depends(detached_administrator_actor),
+        objects: ObjectStore | None = Depends(retained_objects),
+    ) -> Response:
+        """Download one global administrator retained media result."""
+        configured_url = request.app.state.database_url or os.environ.get(
+            "LLMROUTER_DATABASE_URL"
+        )
+        if configured_url is None:
+            raise ApiError(
+                500, "internal_error", "The Router could not complete the operation."
+            )
+        stored = get_administrator_media_job_content(
+            configured_url,
+            objects,
+            job_id=media_job_id,
+            database_connect=database_connections.connect,
+        )
+        return Response(
+            content=stored.body,
+            media_type=stored.content_type,
+            headers={"Cache-Control": "no-store"},
+        )
 
     @application.get(
         "/v1/admin/services",
@@ -2259,6 +2500,16 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
             str | None,
             Query(pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$"),
         ] = None,
+        call_actor: Annotated[
+            Literal["service", "administrator"] | None, Query()
+        ] = None,
+        administrator: Annotated[
+            str | None, Query(min_length=1, max_length=500)
+        ] = None,
+        configuration_service: Annotated[
+            str | None,
+            Query(pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$"),
+        ] = None,
         assignment: Annotated[
             str | None,
             Query(pattern=r"^(?:[a-z0-9][a-z0-9._-]{0,126}|\(exact\))$"),
@@ -2278,8 +2529,11 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
             from_time=from_time,
             to_time=to_time,
             group_by=group_by or [],
+            call_actor=call_actor,
             service=service,
             workspace=workspace,
+            administrator=administrator,
+            configuration_service=configuration_service,
             assignment=assignment,
             provider_model=provider_model,
             outcome=outcome,
@@ -2294,6 +2548,16 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
     def admin_list_request_logs(
         from_time: Annotated[datetime, Query(alias="from")],
         to_time: Annotated[datetime, Query(alias="to")],
+        call_actor: Annotated[
+            Literal["service", "administrator"] | None, Query()
+        ] = None,
+        administrator: Annotated[
+            str | None, Query(min_length=1, max_length=500)
+        ] = None,
+        configuration_service: Annotated[
+            str | None,
+            Query(pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$"),
+        ] = None,
         limit: Annotated[int, Query(ge=1, le=200)] = 50,
         cursor: Annotated[str | None, Query(min_length=1, max_length=500)] = None,
         _actor: AdministratorActor = Depends(administrator_actor),
@@ -2307,6 +2571,9 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
             to_time=to_time,
             limit=limit,
             cursor=cursor,
+            call_actor=call_actor,
+            administrator=administrator,
+            configuration_service=configuration_service,
         )
         return RequestLogPage(
             items=[RequestLogSummary.model_validate(item) for item in items],
@@ -2467,7 +2734,27 @@ def _authenticate_service_request(
     return authenticate_service_key(database, bearer, controls)
 
 
-async def _model_call_body(request: Request) -> ModelCallRequest:
+def _require_bounded_content_length(
+    request: Request, *, maximum: int, message: str
+) -> None:
+    """Reject ambiguous or unsafe decimal lengths before integer conversion."""
+    values = request.headers.getlist("content-length")
+    if not values:
+        return
+    value = values[0] if len(values) == 1 else ""
+    if (
+        not value
+        or len(value) > 20
+        or not value.isascii()
+        or not value.isdigit()
+        or int(value) > maximum
+    ):
+        raise invalid_request("body", message)
+
+
+async def _model_call_body(
+    request: Request, *, administrator: bool = False
+) -> ModelCallRequest | AdministratorModelCallRequest:
     """Read and validate one bounded closed JSON model-call body."""
     content_types = request.headers.getlist("content-type")
     if len(content_types) != 1:
@@ -2483,13 +2770,11 @@ async def _model_call_body(request: Request) -> ModelCallRequest:
     encodings = request.headers.getlist("content-encoding")
     if encodings and encodings != ["identity"]:
         raise invalid_request("body", "The body encoding is not supported.")
-    lengths = request.headers.getlist("content-length")
-    if lengths and (
-        len(lengths) != 1
-        or not lengths[0].isdigit()
-        or int(lengths[0]) > _MAXIMUM_MODEL_HTTP_BODY_BYTES
-    ):
-        raise invalid_request("body", "The model-call body is too large.")
+    _require_bounded_content_length(
+        request,
+        maximum=_MAXIMUM_MODEL_HTTP_BODY_BYTES,
+        message="The model-call body is too large.",
+    )
     raw = bytearray()
     async for chunk in request.stream():
         if len(raw) + len(chunk) > _MAXIMUM_MODEL_HTTP_BODY_BYTES:
@@ -2503,14 +2788,17 @@ async def _model_call_body(request: Request) -> ModelCallRequest:
             object_pairs_hook=_object_without_duplicate_fields,
             parse_constant=_reject_json_constant,
         )
-        return ModelCallRequest.model_validate(value)
+        model = AdministratorModelCallRequest if administrator else ModelCallRequest
+        return model.model_validate(value)
     except UnicodeDecodeError, ValueError, RecursionError, ValidationError:
         raise invalid_request(
             "body", "The model call does not match the contract."
         ) from None
 
 
-async def _embedding_call_body(request: Request) -> EmbeddingRequest:
+async def _embedding_call_body(
+    request: Request, *, administrator: bool = False
+) -> EmbeddingRequest | AdministratorEmbeddingRequest:
     """Read and validate one bounded closed JSON embedding-call body."""
     content_types = request.headers.getlist("content-type")
     if len(content_types) != 1:
@@ -2526,13 +2814,11 @@ async def _embedding_call_body(request: Request) -> EmbeddingRequest:
     encodings = request.headers.getlist("content-encoding")
     if encodings and encodings != ["identity"]:
         raise invalid_request("body", "The body encoding is not supported.")
-    lengths = request.headers.getlist("content-length")
-    if lengths and (
-        len(lengths) != 1
-        or not lengths[0].isdigit()
-        or int(lengths[0]) > _MAXIMUM_EMBEDDING_HTTP_BODY_BYTES
-    ):
-        raise invalid_request("body", "The embedding-call body is too large.")
+    _require_bounded_content_length(
+        request,
+        maximum=_MAXIMUM_EMBEDDING_HTTP_BODY_BYTES,
+        message="The embedding-call body is too large.",
+    )
     raw = bytearray()
     async for chunk in request.stream():
         if len(raw) + len(chunk) > _MAXIMUM_EMBEDDING_HTTP_BODY_BYTES:
@@ -2546,14 +2832,17 @@ async def _embedding_call_body(request: Request) -> EmbeddingRequest:
             object_pairs_hook=_object_without_duplicate_fields,
             parse_constant=_reject_json_constant,
         )
-        return EmbeddingRequest.model_validate(value)
+        model = AdministratorEmbeddingRequest if administrator else EmbeddingRequest
+        return model.model_validate(value)
     except UnicodeDecodeError, ValueError, RecursionError, ValidationError:
         raise invalid_request(
             "body", "The embedding call does not match the contract."
         ) from None
 
 
-async def _media_job_body(request: Request) -> MediaJobRequest:
+async def _media_job_body(
+    request: Request, *, administrator: bool = False
+) -> MediaJobRequest | AdministratorMediaJobRequest:
     """Read and validate one bounded closed JSON media-job body."""
     content_types = request.headers.getlist("content-type")
     if len(content_types) != 1:
@@ -2569,13 +2858,11 @@ async def _media_job_body(request: Request) -> MediaJobRequest:
     encodings = request.headers.getlist("content-encoding")
     if encodings and encodings != ["identity"]:
         raise invalid_request("body", "The body encoding is not supported.")
-    lengths = request.headers.getlist("content-length")
-    if lengths and (
-        len(lengths) != 1
-        or not lengths[0].isdigit()
-        or int(lengths[0]) > _MAXIMUM_MODEL_HTTP_BODY_BYTES
-    ):
-        raise invalid_request("body", "The media-job body is too large.")
+    _require_bounded_content_length(
+        request,
+        maximum=_MAXIMUM_MODEL_HTTP_BODY_BYTES,
+        message="The media-job body is too large.",
+    )
     raw = bytearray()
     async for chunk in request.stream():
         if len(raw) + len(chunk) > _MAXIMUM_MODEL_HTTP_BODY_BYTES:
@@ -2589,7 +2876,8 @@ async def _media_job_body(request: Request) -> MediaJobRequest:
             object_pairs_hook=_object_without_duplicate_fields,
             parse_constant=_reject_json_constant,
         )
-        return MediaJobRequest.model_validate(value)
+        model = AdministratorMediaJobRequest if administrator else MediaJobRequest
+        return model.model_validate(value)
     except UnicodeDecodeError, ValueError, RecursionError, ValidationError:
         raise invalid_request(
             "body", "The media job does not match the contract."
@@ -2893,6 +3181,42 @@ async def _first_stream_event(
     )
 
 
+async def _first_administrator_stream_event(
+    queue: asyncio.Queue[tuple[str, dict[str, object]]],
+    execution: asyncio.Task[CallResult],
+    logical_call_id: uuid.UUID,
+    selector: dict[str, object],
+) -> tuple[str, dict[str, object]]:
+    """Wait for the first administrator stream event or pre-output error."""
+    received = asyncio.create_task(queue.get())
+    try:
+        await asyncio.wait((received, execution), return_when=asyncio.FIRST_COMPLETED)
+    except BaseException:
+        received.cancel()
+        with suppress(asyncio.CancelledError):
+            await received
+        raise
+    if received.done():
+        return received.result()
+    if not queue.empty():
+        received.cancel()
+        with suppress(asyncio.CancelledError):
+            await received
+        return queue.get_nowait()
+    received.cancel()
+    with suppress(asyncio.CancelledError):
+        await received
+    result = execution.result()
+    return (
+        "start",
+        {
+            "logical_call_id": str(logical_call_id),
+            "selector": selector,
+            "provider_model_api_name": result.provider_model_api_name,
+        },
+    )
+
+
 async def _model_stream_body(
     first: tuple[str, dict[str, object]],
     queue: asyncio.Queue[tuple[str, dict[str, object]]],
@@ -2945,6 +3269,69 @@ async def _model_stream_body(
                 await execution
 
 
+async def _administrator_model_stream_body(
+    first: tuple[str, dict[str, object]],
+    queue: asyncio.Queue[tuple[str, dict[str, object]]],
+    execution: asyncio.Task[CallResult],
+    logical_call_id: uuid.UUID,
+    selector: dict[str, object],
+) -> AsyncGenerator[bytes]:
+    """Yield one administrator stream with safe correlation and attempts."""
+    try:
+        yield _sse_event(*first)
+        while not execution.done() or not queue.empty():
+            if not queue.empty():
+                yield _sse_event(*queue.get_nowait())
+                continue
+            received = asyncio.create_task(queue.get())
+            await asyncio.wait(
+                (received, execution), return_when=asyncio.FIRST_COMPLETED
+            )
+            if received.done():
+                yield _sse_event(*received.result())
+            else:
+                received.cancel()
+                with suppress(asyncio.CancelledError):
+                    await received
+        try:
+            result = execution.result()
+        except CallExecutionError as error:
+            yield _sse_event(
+                "error", _administrator_call_error_envelope(error, selector)
+            )
+            return
+        except Exception:  # noqa: BLE001 - Expose one safe terminal error.
+            yield _sse_event(
+                "error",
+                {
+                    "error": {
+                        "code": "internal_error",
+                        "message": "The Router could not complete the operation.",
+                    }
+                },
+            )
+            return
+        yield _sse_event(
+            "completed",
+            {
+                "logical_call_id": str(logical_call_id),
+                "provider_model_api_name": result.provider_model_api_name,
+                "selector": selector,
+                "elapsed_ms": result.elapsed_ms,
+                "attempts": [
+                    item.model_dump(mode="json", exclude_none=True)
+                    for item in administrator_attempt_results(result.attempts)
+                ],
+                "usage": result_usage(result),
+            },
+        )
+    finally:
+        if not execution.done():
+            execution.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await execution
+
+
 def _stream_output(output: ProviderOutput) -> tuple[str, dict[str, object]]:
     """Compose one validated visible provider event."""
     value = json.loads(output.content_json)
@@ -2987,6 +3374,44 @@ def _call_api_error(error: CallExecutionError) -> ApiError:
     )
 
 
+def _administrator_call_error_envelope(
+    error: CallExecutionError, selector: object
+) -> dict[str, object]:
+    """Compose one closed administrator failure after logical-call creation."""
+    public = _call_api_error(error)
+    envelope: dict[str, object] = public.envelope()
+    if error.call_id is not None and error.elapsed_ms is not None:
+        envelope.update(
+            {
+                "logical_call_id": str(error.call_id),
+                "selector": selector,
+                "elapsed_ms": error.elapsed_ms,
+                "attempts": [
+                    item.model_dump(mode="json", exclude_none=True)
+                    for item in administrator_attempt_results(error.attempts)
+                ],
+            }
+        )
+    return envelope
+
+
+def _administrator_call_error_response(
+    error: CallExecutionError, selector: object
+) -> JSONResponse:
+    """Return one safe administrator error without cacheable call content."""
+    public = _call_api_error(error)
+    selector_value = (
+        selector.model_dump(mode="json")
+        if hasattr(selector, "model_dump")
+        else selector
+    )
+    return JSONResponse(
+        _administrator_call_error_envelope(error, selector_value),
+        status_code=public.status_code,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 def _provider_model_cooldowns(request: Request) -> dict[str, dict[str, object]]:
     """Return current safe cooldown data for administrator catalog reads."""
     executor: CallExecutor | None = request.app.state.call_executor
@@ -3004,10 +3429,12 @@ def _provider_model_cooldowns(request: Request) -> dict[str, dict[str, object]]:
 
 def _install_error_handlers(application: FastAPI) -> None:
     @application.exception_handler(ApiError)
-    async def api_error(_request: Request, error: ApiError) -> JSONResponse:
+    async def api_error(request: Request, error: ApiError) -> JSONResponse:
         headers = (
             {"Cache-Control": "no-store", "Retry-After": "1"}
             if error.code == "rate_limited"
+            else {"Cache-Control": "no-store"}
+            if request.url.path.startswith("/v1/admin/playground/")
             else None
         )
         return JSONResponse(

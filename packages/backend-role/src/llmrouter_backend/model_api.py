@@ -24,6 +24,8 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 from referencing import Registry
 
 from llmrouter_backend.calls import (
+    AdministratorAssignmentCallSelector,
+    CallAttemptResult,
     CallRequest,
     CallRequirements,
     CallResult,
@@ -31,7 +33,14 @@ from llmrouter_backend.calls import (
     OutputValidator,
 )
 from llmrouter_backend.diagnostics import CapturedMedia
-from llmrouter_backend.models import ClosedModel, Usage, UsageItem, UsageUnit
+from llmrouter_backend.models import (
+    AdministratorAttemptResult,
+    ClosedModel,
+    Usage,
+    UsageItem,
+    UsageUnit,
+    validate_administrator_attempt_sequence,
+)
 
 _API_NAME_PATTERN = r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$"
 _ASSIGNMENT_NAME_PATTERN = r"^[a-z0-9][a-z0-9._-]{0,126}$"
@@ -82,6 +91,17 @@ class ExactProviderModelSelector(NativeModel):
 
 
 type ModelSelector = AssignmentModelSelector | ExactProviderModelSelector
+
+
+class AdministratorAssignmentModelSelector(AssignmentModelSelector):
+    """Select one assignment with read-only service configuration context."""
+
+    service_api_name: str = Field(pattern=_API_NAME_PATTERN)
+
+
+type AdministratorModelSelector = (
+    AdministratorAssignmentModelSelector | ExactProviderModelSelector
+)
 
 
 class TextInputPart(NativeModel):
@@ -252,11 +272,10 @@ class OutputFormat(NativeModel):
         return self
 
 
-class ModelCallRequest(NativeModel):
-    """One complete closed native model-call body."""
+class _ModelCallBody(NativeModel):
+    """Fields shared by service and administrator model calls."""
 
-    workspace_api_name: str = Field(pattern=_API_NAME_PATTERN)
-    selector: ModelSelector
+    selector: ModelSelector | AdministratorModelSelector
     excluded_provider_model_api_names: list[str] | None = Field(
         default=None, max_length=16
     )
@@ -268,7 +287,7 @@ class ModelCallRequest(NativeModel):
     tags: list[str] | None = Field(default=None, max_length=32)
 
     @model_validator(mode="after")
-    def validate_complete_call(self) -> ModelCallRequest:
+    def validate_complete_call(self) -> _ModelCallBody:
         optional_fields = {
             "excluded_provider_model_api_names",
             "tools",
@@ -330,6 +349,19 @@ class ModelCallRequest(NativeModel):
         return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
+class ModelCallRequest(_ModelCallBody):
+    """One complete closed service model-call body."""
+
+    workspace_api_name: str = Field(pattern=_API_NAME_PATTERN)
+    selector: ModelSelector
+
+
+class AdministratorModelCallRequest(_ModelCallBody):
+    """One complete closed unrestricted administrator model-call body."""
+
+    selector: AdministratorModelSelector
+
+
 class StandardModelCallResult(NativeModel):
     """One normal text or tool-call result."""
 
@@ -351,7 +383,74 @@ class StructuredModelCallResult(NativeModel):
 type ModelCallResult = StandardModelCallResult | StructuredModelCallResult
 
 
-def internal_model_call(body: ModelCallRequest, *, streaming: bool) -> CallRequest:
+class AdministratorModelCallResult(NativeModel):
+    """One complete administrator model result with ordered attempts."""
+
+    logical_call_id: str
+    selector: AdministratorModelSelector
+    elapsed_ms: int = Field(strict=True, ge=0, le=900_000)
+    attempts: list[AdministratorAttemptResult] = Field(min_length=1, max_length=16)
+    result: ModelCallResult
+
+    @model_validator(mode="after")
+    def validate_attempts(self) -> AdministratorModelCallResult:
+        validate_administrator_attempt_sequence(
+            self.attempts,
+            exact=not isinstance(self.selector, AdministratorAssignmentModelSelector),
+            succeeded=True,
+        )
+        return self
+
+
+def administrator_model_call_result(
+    body: AdministratorModelCallRequest, result: CallResult
+) -> AdministratorModelCallResult:
+    """Compose the closed administrator wrapper around the native result."""
+    return AdministratorModelCallResult(
+        logical_call_id=str(result.call_id),
+        selector=body.selector,
+        elapsed_ms=result.elapsed_ms,
+        attempts=administrator_attempt_results(result.attempts),
+        result=model_call_result(result),
+    )
+
+
+def administrator_attempt_results(
+    attempts: tuple[CallAttemptResult, ...],
+) -> list[AdministratorAttemptResult]:
+    """Compose ordered safe attempt results without control values."""
+    values: list[AdministratorAttemptResult] = []
+    for attempt in attempts:
+        document: dict[str, object] = {
+            "provider_model_api_name": attempt.provider_model_api_name,
+            "outcome": attempt.outcome,
+            "elapsed_ms": attempt.elapsed_ms,
+        }
+        if (
+            attempt.usage is not None
+            and attempt.cost is not None
+            and attempt.applied_price is not None
+        ):
+            document["usage"] = {
+                "units": [
+                    {"unit": item.unit, "quantity": _decimal_text(item.quantity)}
+                    for item in attempt.usage
+                ],
+                "cost": _decimal_text(attempt.cost),
+                "currency": attempt.applied_price.currency,
+            }
+        if attempt.error_code is not None:
+            document["error"] = {
+                "code": attempt.error_code,
+                "message": "The provider attempt failed.",
+            }
+        values.append(AdministratorAttemptResult.model_validate(document))
+    return values
+
+
+def internal_model_call(
+    body: ModelCallRequest | AdministratorModelCallRequest, *, streaming: bool
+) -> CallRequest:
     """Translate one validated HTTP body without provider-specific fields."""
     if (
         streaming
@@ -359,11 +458,17 @@ def internal_model_call(body: ModelCallRequest, *, streaming: bool) -> CallReque
         and body.output_format.type == "json_schema"
     ):
         raise ValueError("A model stream cannot request structured JSON output.")
-    selector = (
-        AssignmentSelector(body.selector.assignment_api_name)
-        if isinstance(body.selector, AssignmentModelSelector)
-        else ExactModelSelector(body.selector.provider_model_api_name)
+    selector: (
+        AssignmentSelector | ExactModelSelector | AdministratorAssignmentCallSelector
     )
+    if isinstance(body.selector, AdministratorAssignmentModelSelector):
+        selector = AdministratorAssignmentCallSelector(
+            body.selector.assignment_api_name, body.selector.service_api_name
+        )
+    elif isinstance(body.selector, AssignmentModelSelector):
+        selector = AssignmentSelector(body.selector.assignment_api_name)
+    else:
+        selector = ExactModelSelector(body.selector.provider_model_api_name)
     images = body.images()
     output = (
         "structured_json"
@@ -382,7 +487,9 @@ def internal_model_call(body: ModelCallRequest, *, streaming: bool) -> CallReque
         required_capabilities.add("tool_calling")
     schema_validator = _output_validator(body.output_format)
     return CallRequest(
-        workspace_api_name=body.workspace_api_name,
+        workspace_api_name=(
+            body.workspace_api_name if isinstance(body, ModelCallRequest) else None
+        ),
         selector=selector,
         kind="model",
         requirements=CallRequirements(

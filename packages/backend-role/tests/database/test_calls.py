@@ -1306,6 +1306,22 @@ def test_response_log_accepts_the_complete_contract_bound(
     """Keep a valid response that is larger than the former database bound."""
     response_json = json.dumps("x" * 9_999_998)
     assert len(response_json) == 10_000_000
+    call_id = uuid.uuid4()
+    started_at = datetime.now(tz=UTC)
+    with psycopg.connect(call_context.database_url) as connection:
+        connection.execute(
+            """INSERT INTO router.raw_accounting_calls
+                   (id, service_id, workspace_id, outcome, started_at,
+                    completed_at)
+               VALUES (%s, %s, %s, 'succeeded', %s, %s)""",
+            (
+                call_id,
+                call_context.service_ids["alpha"],
+                call_context.workspace_ids["alpha"],
+                started_at,
+                started_at,
+            ),
+        )
     log_id = diagnostics.write_detailed_log_best_effort(
         call_context.database_url,
         None,
@@ -1317,7 +1333,8 @@ def test_response_log_accepts_the_complete_contract_bound(
             request_json="{}",
             response_json=response_json,
             attempts=(),
-            started_at=datetime.now(tz=UTC),
+            started_at=started_at,
+            accounting_call_id=call_id,
         ),
     )
     assert log_id is not None

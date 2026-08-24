@@ -43,9 +43,12 @@ _MAXIMUM_SOURCE_BYTES = 10_000_000
 _SOURCE_OPERATION_TIMEOUT_SECONDS = 10.0
 _SOURCE_TOTAL_TIMEOUT_SECONDS = 30.0
 _DIMENSION_SQL = {
-    "date": "to_char((attempt.started_at AT TIME ZONE 'UTC')::date, 'YYYY-MM-DD')",
+    "date": "to_char((call.started_at AT TIME ZONE 'UTC')::date, 'YYYY-MM-DD')",
+    "call_actor": "call.call_actor",
     "service": "service.api_name::text",
     "workspace": "workspace.api_name::text",
+    "administrator": "call.administrator_subject",
+    "configuration_service": "call.configuration_service_api_name::text",
     "assignment": "COALESCE(call.assignment_api_name::text, '(exact)')",
     "provider_model": "attempt.provider_model_api_name::text",
     "outcome": "attempt.outcome",
@@ -266,6 +269,7 @@ class AttemptAccountingWrite:
     started_at: datetime
     completed_at: datetime
     failure_class: str | None = None
+    usage_available: bool = True
 
     def __post_init__(self) -> None:
         if self.outcome not in {"succeeded", "failed"}:
@@ -296,14 +300,19 @@ class CallAccountingWrite:
     """One logical call and all provider attempts that it owns."""
 
     id: uuid.UUID
-    service_id: uuid.UUID
-    workspace_id: uuid.UUID
+    service_id: uuid.UUID | None
+    workspace_id: uuid.UUID | None
     assignment_api_name: str | None
     tags: tuple[str, ...]
     outcome: str
     started_at: datetime
     completed_at: datetime
     attempts: tuple[AttemptAccountingWrite, ...]
+    call_actor: Literal["service", "administrator"] = "service"
+    administrator_subject: str | None = None
+    configuration_service_api_name: str | None = None
+    exact_provider_model_api_name: str | None = None
+    kind: Literal["model", "embedding", "media"] = "model"
 
     def __post_init__(self) -> None:
         if self.outcome not in {"succeeded", "failed"}:
@@ -330,6 +339,42 @@ class CallAccountingWrite:
             self.outcome == "failed" and succeeded
         ):
             raise ValueError("The logical call and attempt outcomes do not agree.")
+        if self.call_actor == "service":
+            if (
+                self.service_id is None
+                or self.workspace_id is None
+                or self.administrator_subject is not None
+                or self.configuration_service_api_name is not None
+            ):
+                raise ValueError("The service call ownership is invalid.")
+        elif self.call_actor == "administrator":
+            if (
+                self.service_id is not None
+                or self.workspace_id is not None
+                or self.administrator_subject is None
+            ):
+                raise ValueError("The administrator call ownership is invalid.")
+        else:
+            raise ValueError("The call actor is invalid.")
+        if (
+            self.call_actor == "service"
+            and self.assignment_api_name is None
+            and self.exact_provider_model_api_name is None
+            and self.attempts
+        ):
+            object.__setattr__(
+                self,
+                "exact_provider_model_api_name",
+                self.attempts[-1].provider_model_api_name,
+            )
+        if (self.assignment_api_name is None) == (
+            self.exact_provider_model_api_name is None
+        ):
+            raise ValueError("The call must have one exact or assignment selector.")
+        if (self.configuration_service_api_name is not None) != (
+            self.call_actor == "administrator" and self.assignment_api_name is not None
+        ):
+            raise ValueError("The assignment configuration service is invalid.")
         try:
             normalized = normalize_tags(self.tags)
         except RouterContractError as error:
@@ -555,26 +600,142 @@ def record_call_accounting(
         _record_call_accounting(connection, value)
 
 
+def record_call_admission(
+    connection: Connection[Any],
+    *,
+    call_id: uuid.UUID,
+    call_actor: Literal["service", "administrator"],
+    service_id: uuid.UUID | None,
+    workspace_id: uuid.UUID | None,
+    administrator_subject: str | None,
+    configuration_service_api_name: str | None,
+    assignment_api_name: str | None,
+    exact_provider_model_api_name: str | None,
+    kind: Literal["model", "embedding", "media"],
+    tags: tuple[str, ...],
+    started_at: datetime,
+    selection_snapshot: dict[str, object],
+) -> None:
+    """Create one admitted logical call before provider work starts."""
+    connection.execute(
+        """INSERT INTO router.raw_accounting_calls
+               (id, call_actor, service_id, workspace_id,
+                administrator_subject, configuration_service_api_name,
+                assignment_api_name, exact_provider_model_api_name, kind, tags,
+                started_at, selection_snapshot)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+           ON CONFLICT (id) DO NOTHING""",
+        (
+            call_id,
+            call_actor,
+            service_id,
+            workspace_id,
+            administrator_subject,
+            configuration_service_api_name,
+            assignment_api_name,
+            exact_provider_model_api_name,
+            kind,
+            list(tags),
+            started_at,
+            Jsonb(selection_snapshot),
+        ),
+    )
+    row = connection.execute(
+        """SELECT call_actor, service_id, workspace_id, administrator_subject,
+                  configuration_service_api_name, assignment_api_name,
+                  exact_provider_model_api_name, kind, tags, outcome
+           FROM router.raw_accounting_calls WHERE id = %s FOR KEY SHARE""",
+        (call_id,),
+    ).fetchone()
+    if row is None or row["outcome"] is not None:
+        raise ValueError("The admitted logical call is not pending.")
+    if (
+        row["call_actor"] != call_actor
+        or row["service_id"] != service_id
+        or row["workspace_id"] != workspace_id
+        or row["administrator_subject"] != administrator_subject
+        or row["configuration_service_api_name"] != configuration_service_api_name
+        or row["assignment_api_name"] != assignment_api_name
+        or row["exact_provider_model_api_name"] != exact_provider_model_api_name
+        or row["kind"] != kind
+        or tuple(row["tags"]) != tags
+    ):
+        raise ValueError("The admitted logical call ownership does not match.")
+
+
+def record_call_attempt(
+    connection: Connection[Any],
+    *,
+    call_id: uuid.UUID,
+    position: int,
+    attempt: AttemptAccountingWrite,
+) -> None:
+    """Commit one completed attempt before any later fallback or result."""
+    owner = connection.execute(
+        """SELECT call_actor, service_id, workspace_id, outcome
+           FROM router.raw_accounting_calls WHERE id = %s FOR KEY SHARE""",
+        (call_id,),
+    ).fetchone()
+    if owner is None or owner["outcome"] is not None:
+        raise ValueError("The logical call cannot accept another attempt.")
+    _insert_attempt(
+        connection,
+        call_id=call_id,
+        call_actor=owner["call_actor"],
+        service_id=owner["service_id"],
+        workspace_id=owner["workspace_id"],
+        position=position,
+        attempt=attempt,
+    )
+
+
+def complete_call_accounting(
+    connection: Connection[Any],
+    *,
+    call_id: uuid.UUID,
+    outcome: Literal["succeeded", "failed"],
+    completed_at: datetime,
+) -> None:
+    """Make one admitted logical call terminal after all attempt commits."""
+    row = connection.execute(
+        """UPDATE router.raw_accounting_calls
+           SET outcome = %s, completed_at = %s
+           WHERE id = %s AND outcome IS NULL
+           RETURNING id""",
+        (outcome, completed_at, call_id),
+    ).fetchone()
+    if row is None:
+        raise ValueError("The logical call is missing or already terminal.")
+
+
 def _record_call_accounting(
     connection: Connection[Any], value: CallAccountingWrite
 ) -> None:
-    workspace = connection.execute(
-        """SELECT 1 FROM router.workspaces
-           WHERE service_id = %s AND id = %s FOR KEY SHARE""",
-        (value.service_id, value.workspace_id),
-    ).fetchone()
-    if workspace is None:
-        raise ValueError("The accounting workspace does not exist.")
+    if value.call_actor == "service":
+        workspace = connection.execute(
+            """SELECT 1 FROM router.workspaces
+               WHERE service_id = %s AND id = %s FOR KEY SHARE""",
+            (value.service_id, value.workspace_id),
+        ).fetchone()
+        if workspace is None:
+            raise ValueError("The accounting workspace does not exist.")
     connection.execute(
         """INSERT INTO router.raw_accounting_calls
-               (id, service_id, workspace_id, assignment_api_name, tags,
+               (id, call_actor, service_id, workspace_id,
+                administrator_subject, configuration_service_api_name,
+                assignment_api_name, exact_provider_model_api_name, kind, tags,
                 outcome, started_at, completed_at)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
         (
             value.id,
+            value.call_actor,
             value.service_id,
             value.workspace_id,
+            value.administrator_subject,
+            value.configuration_service_api_name,
             value.assignment_api_name,
+            value.exact_provider_model_api_name,
+            value.kind,
             list(value.tags),
             value.outcome,
             value.started_at,
@@ -582,49 +743,73 @@ def _record_call_accounting(
         ),
     )
     for position, attempt in enumerate(value.attempts):
-        rates = {item.unit: item.amount for item in attempt.applied_price.unit_prices}
-        missing = sorted({item.unit for item in attempt.usage} - rates.keys())
-        if missing:
-            raise ValueError("The applied price does not cover all reported usage.")
-        with localcontext() as context:
-            context.prec = _COST_DECIMAL_PRECISION
-            cost = sum(
-                (item.quantity * rates[item.unit] for item in attempt.usage),
-                start=Decimal(0),
-            )
-            maximum_cost = _MAXIMUM_DECIMAL * _MAXIMUM_DECIMAL
-        if abs(cost) > maximum_cost:
-            raise ValueError("The attempt cost is outside its safe range.")
-        usage = [
-            {"unit": item.unit, "quantity": _decimal_text(item.quantity)}
-            for item in sorted(attempt.usage, key=lambda item: item.unit)
-        ]
-        price = _snapshot_json(attempt.applied_price)
-        connection.execute(
-            """INSERT INTO router.raw_accounting_attempts
-                   (id, call_id, service_id, workspace_id, position,
-                    provider_connection_api_name, provider_model_api_name,
-                    outcome, usage, applied_price,
-                    cost, currency, failure_class, started_at, completed_at)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-            (
-                attempt.id,
-                value.id,
-                value.service_id,
-                value.workspace_id,
-                position,
-                attempt.provider_connection_api_name,
-                attempt.provider_model_api_name,
-                attempt.outcome,
-                Jsonb(usage),
-                Jsonb(price),
-                cost,
-                attempt.applied_price.currency,
-                attempt.failure_class,
-                attempt.started_at,
-                attempt.completed_at,
-            ),
+        _insert_attempt(
+            connection,
+            call_id=value.id,
+            call_actor=value.call_actor,
+            service_id=value.service_id,
+            workspace_id=value.workspace_id,
+            position=position,
+            attempt=attempt,
         )
+
+
+def _insert_attempt(
+    connection: Connection[Any],
+    *,
+    call_id: uuid.UUID,
+    call_actor: Literal["service", "administrator"],
+    service_id: uuid.UUID | None,
+    workspace_id: uuid.UUID | None,
+    position: int,
+    attempt: AttemptAccountingWrite,
+) -> None:
+    rates = {item.unit: item.amount for item in attempt.applied_price.unit_prices}
+    missing = sorted({item.unit for item in attempt.usage} - rates.keys())
+    if missing:
+        raise ValueError("The applied price does not cover all reported usage.")
+    with localcontext() as context:
+        context.prec = _COST_DECIMAL_PRECISION
+        cost = sum(
+            (item.quantity * rates[item.unit] for item in attempt.usage),
+            start=Decimal(0),
+        )
+        maximum_cost = _MAXIMUM_DECIMAL * _MAXIMUM_DECIMAL
+    if abs(cost) > maximum_cost:
+        raise ValueError("The attempt cost is outside its safe range.")
+    usage = [
+        {"unit": item.unit, "quantity": _decimal_text(item.quantity)}
+        for item in sorted(attempt.usage, key=lambda item: item.unit)
+    ]
+    cost_value = cost if attempt.usage_available else None
+    usage_value = Jsonb(usage) if attempt.usage_available else None
+    currency = attempt.applied_price.currency if attempt.usage_available else None
+    connection.execute(
+        """INSERT INTO router.raw_accounting_attempts
+               (id, call_id, call_actor, service_id, workspace_id, position,
+                provider_connection_api_name, provider_model_api_name,
+                outcome, usage, applied_price,
+                cost, currency, failure_class, started_at, completed_at)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+        (
+            attempt.id,
+            call_id,
+            call_actor,
+            service_id,
+            workspace_id,
+            position,
+            attempt.provider_connection_api_name,
+            attempt.provider_model_api_name,
+            attempt.outcome,
+            usage_value,
+            Jsonb(_snapshot_json(attempt.applied_price)),
+            cost_value,
+            currency,
+            attempt.failure_class,
+            attempt.started_at,
+            attempt.completed_at,
+        ),
+    )
 
 
 def rollup_day(
@@ -648,43 +833,73 @@ def _rollup_day(
     )
     connection.execute("DELETE FROM router.daily_accounting WHERE day = %s", (day,))
     connection.execute(
-        """WITH source_attempts AS MATERIALIZED (
-               SELECT attempt.*, call.assignment_api_name, call.tags
-               FROM router.raw_accounting_attempts AS attempt
-               JOIN router.raw_accounting_calls AS call ON call.id = attempt.call_id
-               WHERE attempt.started_at >= (%s::date::timestamp AT TIME ZONE 'UTC')
-                 AND attempt.started_at <
+        """WITH source_calls AS MATERIALIZED (
+               SELECT call.*
+               FROM router.raw_accounting_calls AS call
+               WHERE call.outcome IS NOT NULL
+                 AND call.started_at >= (%s::date::timestamp AT TIME ZONE 'UTC')
+                 AND call.started_at <
                      ((%s::date + 1)::timestamp AT TIME ZONE 'UTC')
+           ), source_rows AS MATERIALIZED (
+               SELECT call.id AS logical_call_id, call.call_actor,
+                      call.service_id, call.workspace_id,
+                      call.administrator_subject,
+                      call.configuration_service_api_name,
+                      call.assignment_api_name,
+                      call.exact_provider_model_api_name, call.tags,
+                      attempt.id AS attempt_id,
+                      attempt.provider_model_api_name,
+                      attempt.outcome, attempt.usage, attempt.applied_price,
+                      attempt.cost, attempt.currency
+               FROM source_calls AS call
+               LEFT JOIN router.raw_accounting_attempts AS attempt
+                 ON attempt.call_id = call.id
            ), inserted AS (
                INSERT INTO router.daily_accounting
-                   (service_id, workspace_id, day, assignment_api_name,
-                    provider_model_api_name, outcome, tags, usage_unit, currency,
-                    calls, attempts, quantity, cost, rolled_up_at)
-               SELECT attempt.service_id, attempt.workspace_id, %s,
-                      attempt.assignment_api_name, attempt.provider_model_api_name,
-                      attempt.outcome, attempt.tags, usage.unit, attempt.currency,
-                      count(DISTINCT attempt.call_id), count(DISTINCT attempt.id),
+                   (call_actor, service_id, workspace_id, administrator_subject,
+                    configuration_service_api_name, day, assignment_api_name,
+                    exact_provider_model_api_name, provider_model_api_name,
+                    outcome, tags, usage_unit, currency, calls, attempts,
+                    quantity, cost, rolled_up_at)
+               SELECT item.call_actor, item.service_id, item.workspace_id,
+                      item.administrator_subject,
+                      item.configuration_service_api_name, %s,
+                      item.assignment_api_name,
+                      item.exact_provider_model_api_name,
+                      item.provider_model_api_name, item.outcome, item.tags,
+                      usage.unit, item.currency,
+                      count(DISTINCT item.logical_call_id),
+                      count(DISTINCT item.attempt_id),
                       COALESCE(sum(usage.quantity), 0),
-                      COALESCE(sum(usage.quantity * price.amount), 0), %s
-               FROM source_attempts AS attempt
-               LEFT JOIN LATERAL jsonb_to_recordset(attempt.usage)
+                      CASE
+                          WHEN count(item.attempt_id) > count(item.cost) THEN NULL
+                          ELSE COALESCE(sum(usage.quantity * price.amount), 0)
+                      END, %s
+               FROM source_rows AS item
+               LEFT JOIN LATERAL jsonb_to_recordset(item.usage)
                    AS usage(unit text, quantity numeric) ON true
                LEFT JOIN LATERAL jsonb_to_recordset(
-                   attempt.applied_price -> 'unit_prices'
+                   item.applied_price -> 'unit_prices'
                ) AS price(unit text, amount numeric) ON price.unit = usage.unit
                WHERE usage.unit IS NULL OR price.unit IS NOT NULL
-               GROUP BY attempt.service_id, attempt.workspace_id,
-                        attempt.assignment_api_name,
-                        attempt.provider_model_api_name, attempt.outcome,
-                        attempt.tags, usage.unit, attempt.currency
+               GROUP BY item.call_actor, item.service_id, item.workspace_id,
+                        item.administrator_subject,
+                        item.configuration_service_api_name,
+                        item.assignment_api_name,
+                        item.exact_provider_model_api_name,
+                        item.provider_model_api_name, item.outcome,
+                        item.tags, usage.unit, item.currency
                RETURNING 1
            )
            INSERT INTO router.accounting_rollups
-               (day, completed_at, attempt_count)
-           SELECT %s, %s, count(*) FROM source_attempts
+               (day, completed_at, attempt_count, call_count)
+           SELECT %s, %s,
+                  (SELECT count(*) FROM source_rows WHERE attempt_id IS NOT NULL),
+                  (SELECT count(*) FROM source_calls)
            ON CONFLICT (day) DO UPDATE
            SET completed_at = EXCLUDED.completed_at,
-               attempt_count = EXCLUDED.attempt_count""",
+               attempt_count = EXCLUDED.attempt_count,
+               call_count = EXCLUDED.call_count""",
         (day, day, day, current, day, current),
     )
 
@@ -698,16 +913,20 @@ def rollup_pending_days(
     if not 1 <= limit <= 366:
         raise ValueError("The rollup batch limit is invalid.")
     rows = connection.execute(
-        """SELECT (attempt.started_at AT TIME ZONE 'UTC')::date AS day
-           FROM router.raw_accounting_attempts AS attempt
+        """SELECT (call.started_at AT TIME ZONE 'UTC')::date AS day
+           FROM router.raw_accounting_calls AS call
            LEFT JOIN router.accounting_rollups AS rollup
-             ON rollup.day = (attempt.started_at AT TIME ZONE 'UTC')::date
-           WHERE attempt.started_at <
+             ON rollup.day = (call.started_at AT TIME ZONE 'UTC')::date
+           LEFT JOIN router.raw_accounting_attempts AS attempt
+             ON attempt.call_id = call.id
+           WHERE call.outcome IS NOT NULL
+             AND call.started_at <
                  (%s::date::timestamp AT TIME ZONE 'UTC')
-           GROUP BY (attempt.started_at AT TIME ZONE 'UTC')::date,
-                    rollup.completed_at, rollup.attempt_count
+           GROUP BY (call.started_at AT TIME ZONE 'UTC')::date,
+                    rollup.completed_at, rollup.attempt_count, rollup.call_count
            HAVING rollup.completed_at IS NULL
-               OR count(*) <> rollup.attempt_count
+               OR count(attempt.id) <> rollup.attempt_count
+               OR count(DISTINCT call.id) <> rollup.call_count
                OR max(attempt.recorded_at) > rollup.completed_at
            ORDER BY day LIMIT %s""",
         (current.astimezone(UTC).date(), limit),
@@ -725,8 +944,11 @@ def statistics(
     to_time: datetime,
     group_by: Sequence[StatisticsDimension],
     service_id: uuid.UUID | None = None,
+    call_actor: str | None = None,
     service: str | None = None,
     workspace: str | None = None,
+    administrator: str | None = None,
+    configuration_service: str | None = None,
     assignment: str | None = None,
     provider_model: str | None = None,
     outcome: str | None = None,
@@ -770,16 +992,24 @@ def statistics(
         """WITH grouped AS (
            SELECT ARRAY[{dimension_select}]::text[] AS dimensions,
                     attempt.currency, count(DISTINCT call.id) AS calls,
-                    count(DISTINCT attempt.id) AS attempts, sum(attempt.cost) AS cost
-             FROM router.raw_accounting_attempts AS attempt
-             JOIN router.raw_accounting_calls AS call ON call.id = attempt.call_id
-             JOIN router.services AS service ON service.id = attempt.service_id
-             JOIN router.workspaces AS workspace ON workspace.id = attempt.workspace_id
+                    count(DISTINCT attempt.id) AS attempts,
+                    CASE WHEN count(attempt.id) = 0 THEN 0
+                         WHEN count(attempt.cost) < count(attempt.id) THEN NULL
+                         ELSE sum(attempt.cost) END AS cost
+             FROM router.raw_accounting_calls AS call
+             LEFT JOIN router.raw_accounting_attempts AS attempt
+               ON call.id = attempt.call_id
+             LEFT JOIN router.services AS service ON service.id = call.service_id
+             LEFT JOIN router.workspaces AS workspace ON workspace.id = call.workspace_id
              {tag_join}
-             WHERE attempt.started_at >= %s AND attempt.started_at < %s
-               AND (%s::uuid IS NULL OR attempt.service_id = %s)
+             WHERE call.started_at >= %s AND call.started_at < %s
+               AND (%s::uuid IS NULL OR call.service_id = %s)
+               AND (%s::text IS NULL OR call.call_actor = %s)
                AND (%s::text IS NULL OR service.api_name = %s)
                AND (%s::text IS NULL OR workspace.api_name = %s)
+               AND (%s::text IS NULL OR call.administrator_subject = %s)
+               AND (%s::text IS NULL OR
+                    call.configuration_service_api_name = %s)
                AND (%s::text IS NULL OR
                     COALESCE(call.assignment_api_name::text, '(exact)') = %s)
                AND (%s::text IS NULL OR attempt.provider_model_api_name = %s)
@@ -789,17 +1019,21 @@ def statistics(
            ), unit_rows AS (
              SELECT ARRAY[{dimension_select}]::text[] AS dimensions,
                     attempt.currency, usage.unit, sum(usage.quantity) AS quantity
-             FROM router.raw_accounting_attempts AS attempt
-             JOIN router.raw_accounting_calls AS call ON call.id = attempt.call_id
-             JOIN router.services AS service ON service.id = attempt.service_id
-             JOIN router.workspaces AS workspace ON workspace.id = attempt.workspace_id
+             FROM router.raw_accounting_calls AS call
+             JOIN router.raw_accounting_attempts AS attempt ON call.id = attempt.call_id
+             LEFT JOIN router.services AS service ON service.id = call.service_id
+             LEFT JOIN router.workspaces AS workspace ON workspace.id = call.workspace_id
              {tag_join}
              CROSS JOIN LATERAL jsonb_to_recordset(attempt.usage)
                  AS usage(unit text, quantity numeric)
-             WHERE attempt.started_at >= %s AND attempt.started_at < %s
-               AND (%s::uuid IS NULL OR attempt.service_id = %s)
+             WHERE call.started_at >= %s AND call.started_at < %s
+               AND (%s::uuid IS NULL OR call.service_id = %s)
+               AND (%s::text IS NULL OR call.call_actor = %s)
                AND (%s::text IS NULL OR service.api_name = %s)
                AND (%s::text IS NULL OR workspace.api_name = %s)
+               AND (%s::text IS NULL OR call.administrator_subject = %s)
+               AND (%s::text IS NULL OR
+                    call.configuration_service_api_name = %s)
                AND (%s::text IS NULL OR
                     COALESCE(call.assignment_api_name::text, '(exact)') = %s)
                AND (%s::text IS NULL OR attempt.provider_model_api_name = %s)
@@ -829,10 +1063,16 @@ def statistics(
         to_time,
         service_id,
         service_id,
+        call_actor,
+        call_actor,
         service,
         service,
         workspace,
         workspace,
+        administrator,
+        administrator,
+        configuration_service,
+        configuration_service,
         assignment,
         assignment,
         provider_model,
@@ -853,8 +1093,8 @@ def statistics(
             calls=row["calls"],
             attempts=row["attempts"],
             units=[UsageItem.model_validate(item) for item in row["units"]],
-            cost=_decimal_text(row["cost"]),
-            currency=row["currency"].strip(),
+            cost=(_decimal_text(row["cost"]) if row["cost"] is not None else None),
+            currency=(row["currency"].strip() if row["currency"] is not None else None),
         )
         for row in rows
     ]

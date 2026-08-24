@@ -1,5 +1,5 @@
 """Best-effort detailed logs, media retention, and cleanup."""
-# ruff: noqa: EM101, TRY003
+# ruff: noqa: EM101, PLR0913, TRY003
 
 from __future__ import annotations
 
@@ -73,8 +73,8 @@ class CapturedMedia:
 class DetailedLogWrite:
     """Typed log input with no field for credentials or HTTP controls."""
 
-    service_id: uuid.UUID
-    workspace_id: uuid.UUID
+    service_id: uuid.UUID | None
+    workspace_id: uuid.UUID | None
     kind: Literal["model", "embedding", "media"]
     outcome: Literal["succeeded", "failed"]
     request_json: str
@@ -86,6 +86,9 @@ class DetailedLogWrite:
     tags: tuple[str, ...] = ()
     media: tuple[CapturedMedia, ...] = ()
     accounting_call_id: uuid.UUID | None = None
+    call_actor: Literal["service", "administrator"] = "service"
+    administrator_subject: str | None = None
+    configuration_service_api_name: str | None = None
 
 
 def write_detailed_log_best_effort(
@@ -106,28 +109,35 @@ def write_detailed_log_best_effort(
             row_factory=dict_row,
             options=_DATABASE_TIMEOUT_OPTIONS,
         ) as connection:
-            row = connection.execute(
-                """SELECT services.api_name AS service_api_name,
-                          workspaces.api_name AS workspace_api_name
-                   FROM router.workspaces
-                   JOIN router.services ON services.id = workspaces.service_id
-                   WHERE workspaces.service_id = %s AND workspaces.id = %s""",
-                (value.service_id, value.workspace_id),
-            ).fetchone()
-            if row is None:
-                return None
+            if value.call_actor == "service":
+                row = connection.execute(
+                    """SELECT services.api_name AS service_api_name,
+                              workspaces.api_name AS workspace_api_name
+                       FROM router.workspaces
+                       JOIN router.services ON services.id = workspaces.service_id
+                       WHERE workspaces.service_id = %s AND workspaces.id = %s""",
+                    (value.service_id, value.workspace_id),
+                ).fetchone()
+                if row is None:
+                    return None
             log_id = value.accounting_call_id or uuid.uuid4()
             connection.execute(
                 """INSERT INTO router.request_logs
-                       (id, service_id, workspace_id, assignment_api_name,
+                       (id, logical_call_id, call_actor, service_id, workspace_id,
+                        administrator_subject, configuration_service_api_name,
+                        assignment_api_name,
                         provider_model_api_name, kind, outcome, tags, request_json,
                         response_json, attempts, started_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s,
-                           %s::jsonb, %s)""",
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                           %s::jsonb, %s, %s, %s::jsonb, %s)""",
                 (
                     log_id,
+                    log_id,
+                    value.call_actor,
                     value.service_id,
                     value.workspace_id,
+                    value.administrator_subject,
+                    value.configuration_service_api_name,
                     value.assignment_api_name,
                     value.provider_model_api_name,
                     value.kind,
@@ -148,7 +158,11 @@ def write_detailed_log_best_effort(
                 for media in value.media:
                     media_id = uuid.uuid4()
                     object_key = _object_key(
-                        value.started_at, value.service_id, value.workspace_id, media_id
+                        value.started_at,
+                        value.service_id,
+                        value.workspace_id,
+                        media_id,
+                        administrator_subject=value.administrator_subject,
                     )
                     try:
                         object_store.put(object_key, media.body, media.media_type)
@@ -164,12 +178,14 @@ def write_detailed_log_best_effort(
                     uploaded.append(object_key)
                     connection.execute(
                         """INSERT INTO router.media_objects
-                               (id, service_id, workspace_id, request_log_id,
+                               (id, call_actor, service_id, workspace_id,
+                                request_log_id,
                                 object_key, media_type, role, size_bytes,
                                 content_sha256)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                         (
                             media_id,
+                            value.call_actor,
                             value.service_id,
                             value.workspace_id,
                             log_id,
@@ -201,6 +217,9 @@ def list_request_logs(
     to_time: datetime,
     limit: int,
     cursor: str | None,
+    call_actor: str | None = None,
+    administrator: str | None = None,
+    configuration_service: str | None = None,
 ) -> tuple[list[dict[str, Any]], str | None]:
     """Read one bounded newest-first administrator log page."""
     _validate_time_range(from_time, to_time)
@@ -219,23 +238,44 @@ def list_request_logs(
             raise invalid_request("cursor", "The cursor is invalid.")
         cursor_time = cast("datetime", cursor_row["started_at"])
     rows = connection.execute(
-        """SELECT request_logs.id, services.api_name AS service_api_name,
+        """SELECT request_logs.id, request_logs.logical_call_id,
+                  request_logs.call_actor,
+                  services.api_name AS service_api_name,
                   workspaces.api_name AS workspace_api_name,
+                  request_logs.administrator_subject,
+                  request_logs.configuration_service_api_name,
                   request_logs.assignment_api_name,
                   request_logs.provider_model_api_name, request_logs.kind,
                   request_logs.outcome, request_logs.tags, request_logs.started_at
            FROM router.request_logs
-           JOIN router.services ON services.id = request_logs.service_id
-           JOIN router.workspaces ON workspaces.id = request_logs.workspace_id
+           LEFT JOIN router.services ON services.id = request_logs.service_id
+           LEFT JOIN router.workspaces ON workspaces.id = request_logs.workspace_id
            CROSS JOIN router.global_settings
            WHERE request_logs.started_at >= %s AND request_logs.started_at < %s
              AND request_logs.started_at >= statement_timestamp()
                  - make_interval(days => global_settings.log_retention_days)
+             AND (%s::text IS NULL OR request_logs.call_actor = %s)
+             AND (%s::text IS NULL OR request_logs.administrator_subject = %s)
+             AND (%s::text IS NULL OR
+                  request_logs.configuration_service_api_name = %s)
              AND (%s::timestamptz IS NULL OR
                   (request_logs.started_at, request_logs.id) < (%s, %s))
            ORDER BY request_logs.started_at DESC, request_logs.id DESC
            LIMIT %s""",
-        (from_time, to_time, cursor_time, cursor_time, cursor_id, limit + 1),
+        (
+            from_time,
+            to_time,
+            call_actor,
+            call_actor,
+            administrator,
+            administrator,
+            configuration_service,
+            configuration_service,
+            cursor_time,
+            cursor_time,
+            cursor_id,
+            limit + 1,
+        ),
     ).fetchall()
     return _page(rows, limit)
 
@@ -245,16 +285,20 @@ def get_request_log(
 ) -> dict[str, Any]:
     """Read one complete administrator-only log without storage identifiers."""
     row = connection.execute(
-        """SELECT request_logs.id, services.api_name AS service_api_name,
+        """SELECT request_logs.id, request_logs.logical_call_id,
+                  request_logs.call_actor,
+                  services.api_name AS service_api_name,
                   workspaces.api_name AS workspace_api_name,
+                  request_logs.administrator_subject,
+                  request_logs.configuration_service_api_name,
                   request_logs.assignment_api_name,
                   request_logs.provider_model_api_name, request_logs.kind,
                   request_logs.outcome, request_logs.tags, request_logs.started_at,
                   request_logs.request_json, request_logs.response_json,
                   request_logs.attempts
            FROM router.request_logs
-           JOIN router.services ON services.id = request_logs.service_id
-           JOIN router.workspaces ON workspaces.id = request_logs.workspace_id
+           LEFT JOIN router.services ON services.id = request_logs.service_id
+           LEFT JOIN router.workspaces ON workspaces.id = request_logs.workspace_id
            CROSS JOIN router.global_settings
            WHERE request_logs.id = %s
              AND request_logs.started_at >= statement_timestamp()
@@ -273,8 +317,12 @@ def get_request_log(
         name: row.pop(name)
         for name in (
             "id",
+            "logical_call_id",
+            "call_actor",
             "service_api_name",
             "workspace_api_name",
+            "administrator_subject",
+            "configuration_service_api_name",
             "assignment_api_name",
             "provider_model_api_name",
             "kind",
@@ -284,6 +332,7 @@ def get_request_log(
         )
     }
     summary["id"] = str(summary["id"])
+    summary["logical_call_id"] = str(summary["logical_call_id"])
     for item in media:
         item["id"] = str(item["id"])
     result = {"summary": summary, **row}
@@ -395,6 +444,17 @@ def apply_retention_and_cleanup(
            )""",
         (cutoff, batch),
     ).rowcount
+    expired_administrator_jobs = connection.execute(
+        """DELETE FROM router.media_jobs WHERE id IN (
+               SELECT id FROM router.media_jobs
+               WHERE call_actor = 'administrator'
+                 AND state IN ('succeeded', 'failed')
+                 AND created_at < %s
+               ORDER BY created_at, id LIMIT %s
+               FOR UPDATE SKIP LOCKED
+           )""",
+        (cutoff, batch),
+    ).rowcount
     connection.execute(
         """DELETE FROM router.activity_events WHERE id IN (
                SELECT id FROM router.activity_events
@@ -407,7 +467,9 @@ def apply_retention_and_cleanup(
     # row locks and makes the public retention boundary effective at once.
     connection.commit()
     deleted_objects = _drain_object_deletions(connection, object_store, batch=batch)
-    return len(expired_media) + expired_logs, deleted_objects
+    return len(
+        expired_media
+    ) + expired_logs + expired_administrator_jobs, deleted_objects
 
 
 def cleanup_health(
@@ -432,6 +494,12 @@ def cleanup_health(
                     SELECT 1 FROM router.media_objects, router.global_settings
                     WHERE media_objects.created_at < statement_timestamp()
                           - make_interval(days => global_settings.log_retention_days)
+                  ) OR EXISTS (
+                    SELECT 1 FROM router.media_jobs, router.global_settings
+                    WHERE media_jobs.call_actor = 'administrator'
+                      AND media_jobs.state IN ('succeeded', 'failed')
+                      AND media_jobs.created_at < statement_timestamp()
+                          - make_interval(days => global_settings.log_retention_days)
                   ) AS expired_diagnostics,
                   EXISTS (
                     SELECT 1 FROM router.request_logs, router.global_settings
@@ -448,6 +516,14 @@ def cleanup_health(
                   ) OR EXISTS (
                     SELECT 1 FROM router.media_objects, router.global_settings
                     WHERE media_objects.created_at < statement_timestamp()
+                          - make_interval(
+                              days => global_settings.log_retention_days + 1
+                            )
+                  ) OR EXISTS (
+                    SELECT 1 FROM router.media_jobs, router.global_settings
+                    WHERE media_jobs.call_actor = 'administrator'
+                      AND media_jobs.state IN ('succeeded', 'failed')
+                      AND media_jobs.created_at < statement_timestamp()
                           - make_interval(
                               days => global_settings.log_retention_days + 1
                             )
@@ -572,6 +648,8 @@ def _page(
     selected = rows[:limit]
     for row in selected:
         row["id"] = str(row["id"])
+        if row.get("logical_call_id") is not None:
+            row["logical_call_id"] = str(row["logical_call_id"])
     if len(rows) <= limit:
         return selected, None
     return selected, str(selected[-1]["id"])
@@ -579,12 +657,19 @@ def _page(
 
 def _object_key(
     started_at: datetime,
-    service_id: uuid.UUID,
-    workspace_id: uuid.UUID,
+    service_id: uuid.UUID | None,
+    workspace_id: uuid.UUID | None,
     media_id: uuid.UUID,
+    *,
+    administrator_subject: str | None = None,
 ) -> str:
     day = started_at.astimezone(UTC).date().isoformat()
-    return f"{day}/{service_id}/{workspace_id}/{media_id}"
+    partition = (
+        f"service/{service_id}/{workspace_id}"
+        if service_id is not None and workspace_id is not None
+        else f"administrator/{administrator_subject}"
+    )
+    return f"{day}/{partition}/{media_id}"
 
 
 def _queue_orphaned_object_best_effort(

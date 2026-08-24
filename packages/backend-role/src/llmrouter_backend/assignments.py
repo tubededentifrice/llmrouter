@@ -362,6 +362,66 @@ def resolve_assignment_for_call(
     return resolved, tuple(routes)
 
 
+def resolve_assignment_snapshot_for_administrator(
+    connection: Connection[Any],
+    *,
+    service_id: uuid.UUID,
+    assignment_api_name: str,
+    required_inputs: frozenset[str],
+    required_output: str,
+    required_capabilities: frozenset[str],
+    embedding_dimension: int | None = None,
+    input_image_sizes: Sequence[int] = (),
+    output_duration_seconds: int | None = None,
+    excluded_provider_model_api_names: Sequence[str] = (),
+    allow_empty: bool = False,
+) -> tuple[ResolvedAssignment, tuple[ProviderRoute, ...]]:
+    """Resolve one read-only administrator assignment admission snapshot."""
+    _require_assignment_name(assignment_api_name)
+    _validate_actual_bounds(
+        required_inputs=required_inputs,
+        required_output=required_output,
+        embedding_dimension=embedding_dimension,
+        input_image_sizes=input_image_sizes,
+        output_duration_seconds=output_duration_seconds,
+    )
+    # Use the same serialization boundary as assignment and catalog writes. The
+    # selected chain and all routes therefore come from one current state.
+    _lock_writes(connection)
+    resolved = resolve_assignment(
+        connection, service_id=service_id, api_name=assignment_api_name
+    )
+    if resolved is None:
+        raise not_found("assignment")
+    routes: list[ProviderRoute] = []
+    excluded = frozenset(excluded_provider_model_api_names)
+    for candidate in resolved.effective_chain:
+        if candidate in excluded:
+            continue
+        try:
+            route = catalog.resolve_provider_route(
+                connection,
+                candidate,
+                required_inputs=required_inputs,
+                required_output=required_output,
+                required_capabilities=required_capabilities,
+                reasoning_level=resolved.reasoning_level,
+            )
+            catalog.validate_route_constraints(
+                route,
+                embedding_dimension=embedding_dimension,
+                input_image_sizes=input_image_sizes,
+                output_duration_seconds=output_duration_seconds,
+            )
+            routes.append(route)
+        except ApiError as error:
+            if error.code not in {"invalid_request", "provider_unavailable"}:
+                raise
+    if not routes and not allow_empty:
+        raise provider_unavailable()
+    return resolved, tuple(routes)
+
+
 def validate_all_assignments(connection: Connection[Any]) -> None:
     """Reject cycles, missing parents, and invalid effective reasoning."""
     _lock_writes(connection)

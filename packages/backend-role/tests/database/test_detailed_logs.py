@@ -186,6 +186,22 @@ class LogContext:
         media: tuple[CapturedMedia, ...] | None = None,
     ) -> uuid.UUID:
         """Write one complete default detailed log."""
+        call_id = uuid.uuid4()
+        call_started = started_at or datetime.now(tz=UTC)
+        with psycopg.connect(self.database_url) as connection:
+            connection.execute(
+                """INSERT INTO router.raw_accounting_calls
+                       (id, service_id, workspace_id, assignment_api_name,
+                        outcome, started_at, completed_at)
+                   VALUES (%s, %s, %s, 'default', 'succeeded', %s, %s)""",
+                (
+                    call_id,
+                    self.service_id,
+                    self.workspace_id,
+                    call_started,
+                    call_started,
+                ),
+            )
         value = DetailedLogWrite(
             service_id=self.service_id,
             workspace_id=self.workspace_id,
@@ -197,10 +213,11 @@ class LogContext:
             response_json='{"content":"complete model result"}',
             attempts=(_attempt(),),
             tags=("zeta", "alpha", "alpha"),
-            started_at=started_at or datetime.now(tz=UTC),
+            started_at=call_started,
             media=media
             if media is not None
             else (CapturedMedia(MEDIA_BYTES, "image/png", "input"),),
+            accounting_call_id=call_id,
         )
         result = write_detailed_log_best_effort(
             self.database_url, cast("ObjectStore", self.objects), value
@@ -518,11 +535,28 @@ def test_retention_reads_hide_backlog_immediately(
     target_activity_id = uuid.uuid4()
     with psycopg.connect(database_url) as connection:
         connection.execute(
-            """INSERT INTO router.request_logs
-                   (service_id, workspace_id, kind, outcome, request_json, started_at)
-               SELECT %s, %s, 'model', 'failed', '{}', %s - series * interval '1 second'
-               FROM generate_series(1, 1200) AS series""",
-            (context.service_id, context.workspace_id, started_at),
+            """WITH calls AS (
+                   INSERT INTO router.raw_accounting_calls
+                       (service_id, workspace_id, outcome, started_at, completed_at)
+                   SELECT %s, %s, 'failed',
+                          %s - series * interval '1 second',
+                          %s - series * interval '1 second'
+                   FROM generate_series(1, 1200) AS series
+                   RETURNING id, started_at
+               )
+               INSERT INTO router.request_logs
+                   (logical_call_id, service_id, workspace_id, kind, outcome,
+                    request_json, started_at)
+               SELECT id, %s, %s, 'model', 'failed', '{}', started_at
+               FROM calls""",
+            (
+                context.service_id,
+                context.workspace_id,
+                started_at,
+                started_at,
+                context.service_id,
+                context.workspace_id,
+            ),
         )
         connection.execute(
             """INSERT INTO router.activity_events
@@ -701,6 +735,15 @@ def test_transaction_rollback_removes_uploaded_orphans(
                BEFORE INSERT ON router.media_objects
                FOR EACH ROW EXECUTE FUNCTION router.reject_proof_media()"""
         )
+        accounting_call_id = uuid.uuid4()
+        connection.execute(
+            """INSERT INTO router.raw_accounting_calls
+                   (id, service_id, workspace_id, outcome, started_at,
+                    completed_at)
+               VALUES (%s, %s, %s, 'succeeded', statement_timestamp(),
+                       statement_timestamp())""",
+            (accounting_call_id, context.service_id, context.workspace_id),
+        )
     value = DetailedLogWrite(
         service_id=context.service_id,
         workspace_id=context.workspace_id,
@@ -711,6 +754,7 @@ def test_transaction_rollback_removes_uploaded_orphans(
         attempts=(_attempt(),),
         started_at=datetime.now(tz=UTC),
         media=(CapturedMedia(MEDIA_BYTES, "image/png", "input"),),
+        accounting_call_id=accounting_call_id,
     )
     context.objects.fail_delete = True
     assert (

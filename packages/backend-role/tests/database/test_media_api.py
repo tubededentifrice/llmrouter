@@ -633,20 +633,26 @@ def test_media_worker_claims_concurrent_jobs_once_and_expires_deadlines(
         )
 
     assert asyncio.run(run_both()) == [True, True]
-    expired_id = context.client.post(
-        "/v1/media-jobs", json=_request(), headers=context.headers("alpha")
-    ).json()["id"]
     with psycopg.connect(context.database_url, row_factory=dict_row) as connection:
         assert connection.execute(
             "SELECT count(*) FROM router.raw_accounting_calls"
         ).fetchone() == {"count": 2}
-        connection.execute(
-            """UPDATE router.media_jobs
-               SET created_at = statement_timestamp() - interval '2 seconds',
-                   deadline_at = statement_timestamp() - interval '1 second'
-               WHERE id = %s""",
-            (expired_id,),
-        )
+        expired = connection.execute(
+            """INSERT INTO router.media_jobs
+                   (service_id, workspace_id, provider_model_api_name, kind,
+                    payload, created_at, deadline_at)
+               SELECT service.id, workspace.id, 'media-primary', 'image', '{}',
+                      statement_timestamp() - interval '2 seconds',
+                      statement_timestamp() - interval '1 second'
+               FROM router.services AS service
+               JOIN router.workspaces AS workspace
+                 ON workspace.service_id = service.id
+               WHERE service.api_name = 'alpha'
+                 AND workspace.api_name = 'main'
+               RETURNING id"""
+        ).fetchone()
+        assert expired is not None
+        expired_id = expired["id"]
     assert not asyncio.run(
         run_media_worker_once(
             context.database_url, context.executor, cast("ObjectStore", context.objects)

@@ -33,13 +33,18 @@ from llmrouter_backend.accounting import (
     AttemptAccountingWrite,
     AttemptPriceSnapshot,
     CallAccountingWrite,
+    PriceRate,
     UsageAmount,
 )
-from llmrouter_backend.assignments import resolve_assignment_for_call
+from llmrouter_backend.assignments import (
+    ResolvedAssignment,
+    resolve_assignment_for_call,
+    resolve_assignment_snapshot_for_administrator,
+)
 from llmrouter_backend.database import DatabaseConnectionLimitError
-from llmrouter_backend.errors import ApiError, not_found
-from llmrouter_backend.models import RequestAttempt
-from llmrouter_backend.store import ServiceActor
+from llmrouter_backend.errors import ApiError, not_found, provider_unavailable
+from llmrouter_backend.models import ModelConstraints, RequestAttempt
+from llmrouter_backend.store import AdministratorActor, ServiceActor
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
@@ -67,6 +72,7 @@ type OutputKind = Literal[
 type OutputValidator = Callable[[object], bool | Awaitable[bool]]
 type VisibleOutputWriter = Callable[[ProviderOutput], Awaitable[None]]
 type VisibleOutputStart = Callable[[str], Awaitable[None]]
+type CallActor = ServiceActor | AdministratorActor
 
 _API_NAME = re.compile(r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _INPUTS = frozenset({"text", "image"})
@@ -128,6 +134,20 @@ _LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
+class AdministratorAssignmentCallSelector:
+    """Select an assignment with service configuration context only."""
+
+    assignment_api_name: str
+    service_api_name: str
+
+    def __post_init__(self) -> None:
+        if not 1 <= len(self.assignment_api_name) <= 127:
+            raise ValueError("The assignment API name is invalid.")
+        if _API_NAME.fullmatch(self.service_api_name) is None:
+            raise ValueError("The service API name is invalid.")
+
+
+@dataclass(frozen=True, slots=True)
 class CallRequirements:
     """One validated set of actual call capabilities and modalities."""
 
@@ -179,8 +199,10 @@ class CallRequirements:
 class CallRequest:
     """One internal native call after HTTP shape validation."""
 
-    workspace_api_name: str
-    selector: AssignmentSelector | ExactModelSelector
+    workspace_api_name: str | None
+    selector: (
+        AssignmentSelector | ExactModelSelector | AdministratorAssignmentCallSelector
+    )
     kind: CallKind
     requirements: CallRequirements
     request_json: str
@@ -194,10 +216,27 @@ class CallRequest:
     def __post_init__(self) -> None:
         if self.kind not in {"model", "embedding", "media"}:
             raise ValueError("The call kind is invalid.")
-        if _API_NAME.fullmatch(self.workspace_api_name) is None:
+        if self.workspace_api_name is not None and (
+            _API_NAME.fullmatch(self.workspace_api_name) is None
+        ):
             raise ValueError("The workspace API name is invalid.")
-        if not isinstance(self.selector, AssignmentSelector | ExactModelSelector):
+        if not isinstance(
+            self.selector,
+            AssignmentSelector
+            | ExactModelSelector
+            | AdministratorAssignmentCallSelector,
+        ):
             raise TypeError("The call selector is invalid.")
+        if (
+            isinstance(self.selector, AssignmentSelector)
+            and self.workspace_api_name is None
+        ):
+            raise ValueError("A service assignment call requires one workspace.")
+        if (
+            isinstance(self.selector, AdministratorAssignmentCallSelector)
+            and self.workspace_api_name is not None
+        ):
+            raise ValueError("An administrator assignment call has no workspace.")
         try:
             parsed = _load_json(self.request_json)
         except (ValueError, RecursionError) as error:
@@ -220,7 +259,9 @@ class CallRequest:
             or any(_API_NAME.fullmatch(name) is None for name in excluded)
         ):
             raise ValueError("The excluded provider-model list is invalid.")
-        if excluded and not isinstance(self.selector, AssignmentSelector):
+        if excluded and not isinstance(
+            self.selector, AssignmentSelector | AdministratorAssignmentCallSelector
+        ):
             raise ValueError("Only an assignment call can exclude candidates.")
         if self.streaming and (
             self.kind != "model"
@@ -408,16 +449,35 @@ class CallExecutionError(RuntimeError):
         phase: CallFailurePhase,
         field: str | None = None,
         reason: str | None = None,
+        call_id: uuid.UUID | None = None,
+        attempts: tuple[CallAttemptResult, ...] = (),
+        elapsed_ms: int | None = None,
     ) -> None:
         self.code = code
         self.phase = phase
         self.field = field
         self.reason = reason
+        self.call_id = call_id
+        self.attempts = attempts
+        self.elapsed_ms = elapsed_ms
         super().__init__(message)
 
 
 class OutputValidationUnavailableError(RuntimeError):
     """Stop fallback when the Router cannot safely validate provider output."""
+
+
+@dataclass(frozen=True, slots=True)
+class CallAttemptResult:
+    """One safe completed attempt for administrator result composition."""
+
+    provider_model_api_name: str
+    outcome: Literal["succeeded", "failed"]
+    elapsed_ms: int
+    usage: tuple[UsageAmount, ...] | None
+    applied_price: AttemptPriceSnapshot | None
+    cost: Decimal | None
+    error_code: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -430,6 +490,8 @@ class CallResult:
     usage: tuple[UsageAmount, ...]
     applied_price: AttemptPriceSnapshot
     cost: Decimal
+    attempts: tuple[CallAttemptResult, ...] = ()
+    elapsed_ms: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -588,8 +650,9 @@ class _FrozenCandidate:
 @dataclass(frozen=True, slots=True)
 class _AdmittedCall:
     connection: psycopg.Connection[Any] | None
-    workspace_id: uuid.UUID
+    workspace_id: uuid.UUID | None
     assignment_name: str | None
+    configuration_service_api_name: str | None
     candidates: tuple[_FrozenCandidate, ...]
     admission_error: CallExecutionError | None
 
@@ -639,19 +702,45 @@ class CallExecutor:
         """Expose only the safe best-effort cooldown cache."""
         return self._cooldowns
 
+    def media_selection_snapshot(
+        self,
+        connection: psycopg.Connection[Any],
+        request: CallRequest,
+        routes: tuple[ProviderRoute, ...],
+        resolved_assignment: ResolvedAssignment | None = None,
+    ) -> dict[str, object]:
+        """Freeze one durable media route and price selection without credentials."""
+        candidates = tuple(
+            candidate
+            for route in routes
+            if (candidate := self._freeze_candidate(connection, route, request))
+            is not None
+        )
+        if not candidates:
+            raise provider_unavailable()
+        return _selection_snapshot(candidates, request, resolved_assignment)
+
     async def execute(
         self,
-        actor: ServiceActor,
+        actor: CallActor,
         request: CallRequest,
         *,
         write_visible_output: VisibleOutputWriter | None = None,
         start_visible_output: VisibleOutputStart | None = None,
+        call_id: uuid.UUID | None = None,
     ) -> CallResult:
-        """Run one connection-lifetime call for one authenticated service."""
-        if not isinstance(actor, ServiceActor):
+        """Run one call for one authenticated service or administrator."""
+        if not isinstance(actor, ServiceActor | AdministratorActor):
             raise CallExecutionError(
                 "permission_denied",
-                "A service API key must authorize the call.",
+                "An authenticated call actor must authorize the call.",
+                phase=CallFailurePhase.BEFORE_VISIBLE_OUTPUT,
+            )
+        administrator_call = isinstance(actor, AdministratorActor)
+        if administrator_call != (request.workspace_api_name is None):
+            raise CallExecutionError(
+                "permission_denied",
+                "The call actor does not match the call ownership.",
                 phase=CallFailurePhase.BEFORE_VISIBLE_OUTPUT,
             )
         if request.streaming and write_visible_output is None:
@@ -682,7 +771,11 @@ class CallExecutor:
                 )
         try:
             result = await self._execute(
-                actor, request, write_visible_output, start_visible_output
+                actor,
+                request,
+                write_visible_output,
+                start_visible_output,
+                call_id=call_id,
             )
         except asyncio.CancelledError:
             if self._metrics is not None:
@@ -724,12 +817,14 @@ class CallExecutor:
 
     async def _execute(
         self,
-        actor: ServiceActor,
+        actor: CallActor,
         request: CallRequest,
         write_visible_output: VisibleOutputWriter | None,
         start_visible_output: VisibleOutputStart | None,
+        *,
+        call_id: uuid.UUID | None,
     ) -> CallResult:
-        call_id = self._uuid_factory()
+        call_id = call_id or self._uuid_factory()
         call_started = self._now()
         connection_timeout = (
             self._limits.media_connection_timeout_seconds
@@ -748,7 +843,9 @@ class CallExecutor:
         cancelled: asyncio.CancelledError | None = None
 
         admission_task = asyncio.create_task(
-            asyncio.to_thread(self._open_admitted, actor, request)
+            asyncio.to_thread(
+                self._open_admitted, actor, request, call_id, call_started
+            )
         )
         try:
             admitted = await asyncio.shield(admission_task)
@@ -758,6 +855,13 @@ class CallExecutor:
                 if admitted_after_cancel.connection is not None:
                     await asyncio.to_thread(
                         self._rollback_and_close, admitted_after_cancel.connection
+                    )
+                elif isinstance(actor, AdministratorActor):
+                    await asyncio.to_thread(
+                        self._complete_administrator_call,
+                        call_id,
+                        "failed",
+                        self._now(),
                     )
             raise
         except ApiError:
@@ -779,7 +883,47 @@ class CallExecutor:
         connection = admitted.connection
         workspace_id = admitted.workspace_id
         assignment_name = admitted.assignment_name
+        configuration_service_api_name = admitted.configuration_service_api_name
         admission_error = admitted.admission_error
+
+        async def commit_administrator_attempt(
+            value: AttemptAccountingWrite, *, visible: bool
+        ) -> CallExecutionError | None:
+            if not isinstance(actor, AdministratorActor):
+                return None
+            task = asyncio.create_task(
+                asyncio.to_thread(
+                    self._record_administrator_attempt,
+                    call_id,
+                    len(attempt_writes) - 1,
+                    value,
+                )
+            )
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                try:
+                    await task
+                except Exception:
+                    return CallExecutionError(
+                        "internal_error",
+                        "The Router could not record the provider attempt.",
+                        phase=CallFailurePhase.UNCERTAIN,
+                    )
+                nonlocal cancelled
+                cancelled = asyncio.CancelledError()
+            except Exception:
+                return CallExecutionError(
+                    "internal_error",
+                    "The Router could not record the provider attempt.",
+                    phase=(
+                        CallFailurePhase.AFTER_VISIBLE_OUTPUT
+                        if visible
+                        else CallFailurePhase.BEFORE_VISIBLE_OUTPUT
+                    ),
+                )
+            return None
+
         try:
             seen: set[str] = set()
             for candidate in admitted.candidates:
@@ -816,11 +960,17 @@ class CallExecutor:
                     detailed_attempts.append(detailed)
                     self._observe_attempt(request.kind, accounting_write)
                     final_outputs = attempt_failure.outputs
-                    failure = CallExecutionError(
-                        "internal_error",
-                        "The Router could not validate the provider output.",
-                        phase=CallFailurePhase.BEFORE_VISIBLE_OUTPUT,
+                    failure = await commit_administrator_attempt(
+                        accounting_write, visible=attempt_failure.visible
                     )
+                    if cancelled is not None:
+                        break
+                    if failure is None:
+                        failure = CallExecutionError(
+                            "internal_error",
+                            "The Router could not validate the provider output.",
+                            phase=CallFailurePhase.BEFORE_VISIBLE_OUTPUT,
+                        )
                     break
                 except _AttemptCancelled as error:
                     attempt_failure = error.failure
@@ -831,7 +981,13 @@ class CallExecutor:
                     detailed_attempts.append(detailed)
                     self._observe_attempt(request.kind, accounting_write)
                     final_outputs = attempt_failure.outputs
-                    cancelled = asyncio.CancelledError()
+                    failure = await commit_administrator_attempt(
+                        accounting_write, visible=attempt_failure.visible
+                    )
+                    if cancelled is not None:
+                        break
+                    if failure is None:
+                        cancelled = asyncio.CancelledError()
                     break
                 except _AttemptError as attempt_failure:
                     accounting_write, detailed = _failed_attempt_values(
@@ -841,6 +997,13 @@ class CallExecutor:
                     detailed_attempts.append(detailed)
                     self._observe_attempt(request.kind, accounting_write)
                     final_outputs = attempt_failure.outputs
+                    failure = await commit_administrator_attempt(
+                        accounting_write, visible=attempt_failure.visible
+                    )
+                    if cancelled is not None:
+                        break
+                    if failure is not None:
+                        break
                     self._cooldowns.record_failure(name, attempt_failure.failure_class)
                     if attempt_failure.visible:
                         failure = CallExecutionError(
@@ -866,6 +1029,13 @@ class CallExecutor:
                 final_outputs = result.outputs
                 final_usage = result.usage
                 selected_price = price
+                failure = await commit_administrator_attempt(
+                    accounting_write, visible=result.visible
+                )
+                if cancelled is not None:
+                    break
+                if failure is not None:
+                    break
                 succeeded = True
                 break
 
@@ -889,9 +1059,26 @@ class CallExecutor:
             call_outcome = "succeeded" if succeeded else "failed"
             accounting_value = CallAccountingWrite(
                 id=call_id,
-                service_id=actor.service_id,
+                call_actor=(
+                    "administrator"
+                    if isinstance(actor, AdministratorActor)
+                    else "service"
+                ),
+                service_id=(
+                    actor.service_id if isinstance(actor, ServiceActor) else None
+                ),
                 workspace_id=workspace_id,
+                administrator_subject=(
+                    actor.subject if isinstance(actor, AdministratorActor) else None
+                ),
+                configuration_service_api_name=configuration_service_api_name,
                 assignment_api_name=assignment_name,
+                exact_provider_model_api_name=(
+                    request.selector.provider_model_api_name
+                    if isinstance(request.selector, ExactModelSelector)
+                    else None
+                ),
+                kind=request.kind,
                 tags=request.tags,
                 outcome=call_outcome,
                 started_at=call_started,
@@ -900,6 +1087,13 @@ class CallExecutor:
             )
             accounting_task = asyncio.create_task(
                 asyncio.to_thread(
+                    self._complete_administrator_call,
+                    call_id,
+                    cast("Literal['succeeded', 'failed']", call_outcome),
+                    call_completed,
+                )
+                if isinstance(actor, AdministratorActor)
+                else asyncio.to_thread(
                     self._record_accounting_new_connection,
                     accounting_value,
                 )
@@ -918,6 +1112,11 @@ class CallExecutor:
                         "internal_error",
                         "The Router could not record the call.",
                         phase=CallFailurePhase.UNCERTAIN,
+                        call_id=call_id,
+                        attempts=tuple(
+                            _public_attempt(item) for item in attempt_writes
+                        ),
+                        elapsed_ms=_elapsed_milliseconds(call_started, call_completed),
                     ) from error
                 cancelled = asyncio.CancelledError()
             except Exception as error:
@@ -925,6 +1124,9 @@ class CallExecutor:
                     "internal_error",
                     "The Router could not record the call.",
                     phase=CallFailurePhase.UNCERTAIN,
+                    call_id=call_id,
+                    attempts=tuple(_public_attempt(item) for item in attempt_writes),
+                    elapsed_ms=_elapsed_milliseconds(call_started, call_completed),
                 ) from error
         except BaseException:
             if connection is not None:
@@ -935,12 +1137,21 @@ class CallExecutor:
             _response_json(final_outputs) if call_outcome == "succeeded" else None
         )
         detailed_value = diagnostics.DetailedLogWrite(
-            service_id=actor.service_id,
+            call_actor=(
+                "administrator" if isinstance(actor, AdministratorActor) else "service"
+            ),
+            service_id=(actor.service_id if isinstance(actor, ServiceActor) else None),
             workspace_id=workspace_id,
+            administrator_subject=(
+                actor.subject if isinstance(actor, AdministratorActor) else None
+            ),
+            configuration_service_api_name=configuration_service_api_name,
             assignment_api_name=assignment_name,
             provider_model_api_name=(
                 selected_route.provider_model_api_name
                 if selected_route is not None
+                else request.selector.provider_model_api_name
+                if isinstance(request.selector, ExactModelSelector)
                 else None
             ),
             kind=request.kind,
@@ -970,7 +1181,12 @@ class CallExecutor:
             )
         if cancelled is not None:
             raise cancelled
+        public_attempts = tuple(_public_attempt(item) for item in attempt_writes)
+        elapsed_ms = _elapsed_milliseconds(call_started, call_completed)
         if failure is not None:
+            failure.call_id = call_id
+            failure.attempts = public_attempts
+            failure.elapsed_ms = elapsed_ms
             raise failure
         if selected_route is None or selected_price is None:
             raise RuntimeError("A successful call has no selected provider-model.")
@@ -981,36 +1197,107 @@ class CallExecutor:
             usage=final_usage,
             applied_price=selected_price,
             cost=_usage_cost(final_usage, selected_price),
+            attempts=public_attempts,
+            elapsed_ms=elapsed_ms,
         )
 
     def _open_admitted(
         self,
-        actor: ServiceActor,
+        actor: CallActor,
         request: CallRequest,
+        call_id: uuid.UUID,
+        call_started: datetime,
     ) -> _AdmittedCall:
         connection = self._connect()
         try:
-            workspace = connection.execute(
-                """SELECT workspace.id
-                   FROM router.workspaces AS workspace
-                   JOIN router.services AS service ON service.id = workspace.service_id
-                   WHERE workspace.service_id = %s AND workspace.api_name = %s
-                   FOR KEY SHARE OF workspace, service""",
-                (actor.service_id, request.workspace_api_name),
-            ).fetchone()
-            if workspace is None:
-                raise not_found("workspace")
+            workspace_id: uuid.UUID | None = None
+            configuration_service_api_name: str | None = None
             assignment_name: str | None = None
+            resolved_assignment: ResolvedAssignment | None = None
+            if isinstance(actor, AdministratorActor) and request.kind == "media":
+                persisted = connection.execute(
+                    """SELECT selection_snapshot
+                       FROM router.raw_accounting_calls
+                       WHERE id = %s AND call_actor = 'administrator'
+                         AND kind = 'media' AND outcome IS NULL
+                       FOR KEY SHARE""",
+                    (call_id,),
+                ).fetchone()
+                if persisted is not None:
+                    assignment_name = (
+                        request.selector.assignment_api_name
+                        if isinstance(
+                            request.selector, AdministratorAssignmentCallSelector
+                        )
+                        else None
+                    )
+                    configuration_service_api_name = (
+                        request.selector.service_api_name
+                        if isinstance(
+                            request.selector, AdministratorAssignmentCallSelector
+                        )
+                        else None
+                    )
+                    candidates = self._candidates_from_selection_snapshot(
+                        cast("dict[str, object]", persisted["selection_snapshot"]),
+                        request,
+                    )
+                    accounting.record_call_admission(
+                        connection,
+                        call_id=call_id,
+                        call_actor="administrator",
+                        service_id=None,
+                        workspace_id=None,
+                        administrator_subject=actor.subject,
+                        configuration_service_api_name=(configuration_service_api_name),
+                        assignment_api_name=assignment_name,
+                        exact_provider_model_api_name=(
+                            request.selector.provider_model_api_name
+                            if isinstance(request.selector, ExactModelSelector)
+                            else None
+                        ),
+                        kind="media",
+                        tags=request.tags,
+                        started_at=call_started,
+                        selection_snapshot=cast(
+                            "dict[str, object]", persisted["selection_snapshot"]
+                        ),
+                    )
+                    connection.commit()
+                    connection.close()
+                    return _AdmittedCall(
+                        None,
+                        None,
+                        assignment_name,
+                        configuration_service_api_name,
+                        candidates,
+                        None,
+                    )
+            if isinstance(actor, ServiceActor):
+                workspace = connection.execute(
+                    """SELECT workspace.id
+                       FROM router.workspaces AS workspace
+                       JOIN router.services AS service
+                         ON service.id = workspace.service_id
+                       WHERE workspace.service_id = %s AND workspace.api_name = %s
+                       FOR KEY SHARE OF workspace, service""",
+                    (actor.service_id, request.workspace_api_name),
+                ).fetchone()
+                if workspace is None:
+                    raise not_found("workspace")
+                workspace_id = cast("uuid.UUID", workspace["id"])
             routes: tuple[ProviderRoute, ...] = ()
             admission_error: CallExecutionError | None = None
             requirements = request.requirements
             if isinstance(request.selector, AssignmentSelector):
+                if not isinstance(actor, ServiceActor):
+                    raise TypeError("A service assignment requires a service actor.")
                 assignment_name = request.selector.assignment_api_name
                 try:
                     _resolved, routes = resolve_assignment_for_call(
                         connection,
                         service_id=actor.service_id,
-                        workspace_api_name=request.workspace_api_name,
+                        workspace_api_name=cast("str", request.workspace_api_name),
                         assignment_api_name=assignment_name,
                         required_inputs=requirements.required_inputs,
                         required_output=requirements.required_output,
@@ -1024,6 +1311,44 @@ class CallExecutor:
                         ),
                         commit_evidence=False,
                     )
+                except ApiError as error:
+                    if error.code != "provider_unavailable":
+                        raise
+                    admission_error = _api_call_error(error)
+            elif isinstance(request.selector, AdministratorAssignmentCallSelector):
+                if not isinstance(actor, AdministratorActor):
+                    raise TypeError(
+                        "An administrator assignment requires an administrator actor."
+                    )
+                service = connection.execute(
+                    """SELECT id, api_name FROM router.services
+                       WHERE api_name = %s FOR KEY SHARE""",
+                    (request.selector.service_api_name,),
+                ).fetchone()
+                if service is None:
+                    raise not_found("service")
+                assignment_name = request.selector.assignment_api_name
+                configuration_service_api_name = cast("str", service["api_name"])
+                try:
+                    resolved_assignment, routes = (
+                        resolve_assignment_snapshot_for_administrator(
+                            connection,
+                            service_id=cast("uuid.UUID", service["id"]),
+                            assignment_api_name=assignment_name,
+                            required_inputs=requirements.required_inputs,
+                            required_output=requirements.required_output,
+                            required_capabilities=requirements.required_capabilities,
+                            embedding_dimension=requirements.embedding_dimension,
+                            input_image_sizes=requirements.input_image_sizes,
+                            output_duration_seconds=requirements.output_duration_seconds,
+                            excluded_provider_model_api_names=(
+                                request.excluded_provider_model_api_names
+                            ),
+                            allow_empty=True,
+                        )
+                    )
+                    if not routes:
+                        admission_error = _api_call_error(provider_unavailable())
                 except ApiError as error:
                     if error.code != "provider_unavailable":
                         raise
@@ -1056,21 +1381,55 @@ class CallExecutor:
                 if (candidate := self._freeze_candidate(connection, route, request))
                 is not None
             )
-            # Commit assignment evidence and release the shared catalog lock only
-            # after route, price, and credential values are immutable in memory.
+            if isinstance(actor, AdministratorActor):
+                accounting.record_call_admission(
+                    connection,
+                    call_id=call_id,
+                    call_actor="administrator",
+                    service_id=None,
+                    workspace_id=None,
+                    administrator_subject=actor.subject,
+                    configuration_service_api_name=configuration_service_api_name,
+                    assignment_api_name=assignment_name,
+                    exact_provider_model_api_name=(
+                        request.selector.provider_model_api_name
+                        if isinstance(request.selector, ExactModelSelector)
+                        else None
+                    ),
+                    kind=request.kind,
+                    tags=request.tags,
+                    started_at=call_started,
+                    selection_snapshot=_selection_snapshot(
+                        candidates, request, resolved_assignment
+                    ),
+                )
+                connection.commit()
+                connection.close()
+                return _AdmittedCall(
+                    None,
+                    None,
+                    assignment_name,
+                    configuration_service_api_name,
+                    candidates,
+                    admission_error,
+                )
+            # Commit service evidence and release configuration locks only after
+            # route, price, and call controls are immutable in process memory.
             connection.commit()
-            workspace_query = (
-                """SELECT id FROM router.workspaces
-                   WHERE service_id = %s AND api_name = %s"""
-                if request.kind == "media"
-                else """SELECT id FROM router.workspaces
-                         WHERE service_id = %s AND api_name = %s FOR KEY SHARE"""
-            )
-            workspace = connection.execute(
-                workspace_query, (actor.service_id, request.workspace_api_name)
-            ).fetchone()
-            if workspace is None:
-                raise not_found("workspace")
+            if isinstance(actor, ServiceActor):
+                workspace_query = (
+                    """SELECT id FROM router.workspaces
+                       WHERE service_id = %s AND api_name = %s"""
+                    if request.kind == "media"
+                    else """SELECT id FROM router.workspaces
+                             WHERE service_id = %s AND api_name = %s FOR KEY SHARE"""
+                )
+                workspace = connection.execute(
+                    workspace_query, (actor.service_id, request.workspace_api_name)
+                ).fetchone()
+                if workspace is None:
+                    raise not_found("workspace")
+                workspace_id = cast("uuid.UUID", workspace["id"])
             admitted_connection: psycopg.Connection[Any] | None = connection
             if request.kind == "media":
                 connection.commit()
@@ -1078,8 +1437,9 @@ class CallExecutor:
                 admitted_connection = None
             return _AdmittedCall(
                 admitted_connection,
-                cast("uuid.UUID", workspace["id"]),
+                workspace_id,
                 assignment_name,
+                configuration_service_api_name,
                 candidates,
                 admission_error,
             )
@@ -1125,13 +1485,104 @@ class CallExecutor:
             raise ValueError("The provider adapter usage declaration is invalid.")
         if not usage_units <= {item.unit for item in price.unit_prices}:
             return None
-        try:
-            credential = self._credential(connection, route)
-        except ApiError, RuntimeError, ValueError:
-            return _FrozenCandidate(
-                route, price, adapter, None, usage_units, "authentication"
+        # Do not freeze credential bytes in an admitted fallback chain. Each
+        # attempt gets the current credential when it starts, so a committed
+        # replacement or deletion applies to every not-yet-started attempt.
+        return _FrozenCandidate(route, price, adapter, None, usage_units)
+
+    def _candidates_from_selection_snapshot(
+        self, snapshot: dict[str, object], request: CallRequest
+    ) -> tuple[_FrozenCandidate, ...]:
+        """Restore one accepted media selection without current catalog reads."""
+        _validate_selection_snapshot_context(snapshot, request)
+        documents = snapshot.get("candidates")
+        if not isinstance(documents, list) or not 1 <= len(documents) <= 16:
+            raise ValueError("The admitted media selection is invalid.")
+        candidates: list[_FrozenCandidate] = []
+        for document in documents:
+            if not isinstance(document, dict):
+                raise TypeError("The admitted media candidate is invalid.")
+            route = catalog.ProviderRoute(
+                provider_model_api_name=cast(
+                    "str", document["provider_model_api_name"]
+                ),
+                provider_connection_api_name=cast(
+                    "str", document["provider_connection_api_name"]
+                ),
+                adapter=cast("str", document["adapter"]),
+                endpoint=cast("str | None", document.get("endpoint")),
+                provider_model_name=cast("str", document["provider_model_name"]),
+                credential_api_name=cast(
+                    "str | None", document.get("credential_api_name")
+                ),
+                constraints=ModelConstraints.model_validate(document["constraints"]),
+                reasoning_level=cast("Any", document.get("reasoning_level")),
+                provider_reasoning_value=cast(
+                    "str | None", document.get("provider_reasoning_value")
+                ),
             )
-        return _FrozenCandidate(route, price, adapter, credential, usage_units)
+            price_document = cast("dict[str, object]", document["price"])
+            unit_documents = cast("list[dict[str, str]]", price_document["unit_prices"])
+            synchronized = price_document.get("synchronized_at")
+            price = AttemptPriceSnapshot(
+                currency=cast("str", price_document["currency"]),
+                unit_prices=tuple(
+                    PriceRate(item["unit"], Decimal(item["amount"]))
+                    for item in unit_documents
+                ),
+                source=cast("str | None", price_document.get("source")),
+                synchronized_at=(
+                    datetime.fromisoformat(cast("str", synchronized))
+                    if synchronized is not None
+                    else None
+                ),
+            )
+            raw_usage_units = document.get("usage_units")
+            raw_admission_failure = document.get("admission_failure")
+            if (
+                not isinstance(raw_usage_units, list)
+                or len(raw_usage_units) != len(set(raw_usage_units))
+                or any(
+                    not isinstance(unit, str) or unit not in _USAGE_UNITS
+                    for unit in raw_usage_units
+                )
+                or raw_admission_failure not in {None, *_FAILURE_CLASSES}
+                or (not raw_usage_units and raw_admission_failure is None)
+            ):
+                raise ValueError("The admitted media usage contract is invalid.")
+            usage_units = frozenset(cast("list[str]", raw_usage_units))
+            admission_failure = cast(
+                "ProviderFailureClass | None", raw_admission_failure
+            )
+            if not usage_units <= {item.unit for item in price.unit_prices}:
+                raise ValueError("The admitted media price contract is invalid.")
+            adapter = self._adapters.get(route.adapter)
+            if adapter is None:
+                candidates.append(
+                    _FrozenCandidate(
+                        route, price, None, None, usage_units, "unavailable"
+                    )
+                )
+                continue
+            current_usage_units = frozenset(
+                adapter.usage_units_for(_provider_operation(request))
+            )
+            if admission_failure is None and (
+                current_usage_units != usage_units
+                or not current_usage_units <= adapter.usage_units
+            ):
+                raise ValueError("The admitted media usage contract is invalid.")
+            candidates.append(
+                _FrozenCandidate(
+                    route,
+                    price,
+                    adapter,
+                    None,
+                    usage_units,
+                    admission_failure,
+                )
+            )
+        return tuple(candidates)
 
     @staticmethod
     def _record_accounting_and_close(
@@ -1158,6 +1609,52 @@ class CallExecutor:
             row_factory=dict_row,
         )
         self._record_accounting_and_close(connection, value)
+
+    def _record_administrator_attempt(
+        self,
+        call_id: uuid.UUID,
+        position: int,
+        value: AttemptAccountingWrite,
+    ) -> None:
+        with self._final_database_connect(
+            self._database_url,
+            connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
+            application_name=_DATABASE_APPLICATION_NAME,
+            options=(
+                f"-c statement_timeout={_DATABASE_STATEMENT_TIMEOUT_MILLISECONDS} "
+                f"-c lock_timeout={_DATABASE_LOCK_TIMEOUT_MILLISECONDS}"
+            ),
+            row_factory=dict_row,
+        ) as connection:
+            accounting.record_call_attempt(
+                connection,
+                call_id=call_id,
+                position=position,
+                attempt=value,
+            )
+
+    def _complete_administrator_call(
+        self,
+        call_id: uuid.UUID,
+        outcome: Literal["succeeded", "failed"],
+        completed_at: datetime,
+    ) -> None:
+        with self._final_database_connect(
+            self._database_url,
+            connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
+            application_name=_DATABASE_APPLICATION_NAME,
+            options=(
+                f"-c statement_timeout={_DATABASE_STATEMENT_TIMEOUT_MILLISECONDS} "
+                f"-c lock_timeout={_DATABASE_LOCK_TIMEOUT_MILLISECONDS}"
+            ),
+            row_factory=dict_row,
+        ) as connection:
+            accounting.complete_call_accounting(
+                connection,
+                call_id=call_id,
+                outcome=outcome,
+                completed_at=completed_at,
+            )
 
     @staticmethod
     def _rollback_and_close(connection: psycopg.Connection[Any]) -> None:
@@ -1194,9 +1691,13 @@ class CallExecutor:
         adapter = candidate.adapter
         if adapter is None:
             raise RuntimeError("An admitted candidate has no provider adapter.")
-        attempt_request = _provider_attempt_request(
-            route, request, candidate.credential
-        )
+        try:
+            credential = await asyncio.to_thread(self._credential_for_attempt, route)
+        except Exception:
+            raise _AttemptError(
+                route, "authentication", (), (), False, started_at, self._now()
+            ) from None
+        attempt_request = _provider_attempt_request(route, request, credential)
         remaining = deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
             raise _AttemptError(
@@ -1411,6 +1912,14 @@ class CallExecutor:
         return catalog.resolve_credential(
             connection, route.credential_api_name, self._credential_keys
         )
+
+    def _credential_for_attempt(self, route: ProviderRoute) -> str | None:
+        connection = self._connect()
+        try:
+            return self._credential(connection, route)
+        finally:
+            connection.rollback()
+            connection.close()
 
     def _now(self) -> datetime:
         value = self._wall_clock()
@@ -1698,6 +2207,7 @@ def _failed_attempt_values(
         failure_class=failure.failure_class,
         started_at=failure.started_at,
         completed_at=failure.completed_at,
+        usage_available=bool(failure.usage),
     )
     return accounting_value, _request_attempt(accounting_value, failure.outputs)
 
@@ -1711,14 +2221,6 @@ def _request_attempt(
         "outcome": value.outcome,
         "started_at": value.started_at,
         "completed_at": value.completed_at,
-        "usage": {
-            "units": [
-                {"unit": item.unit, "quantity": _decimal_text(item.quantity)}
-                for item in value.usage
-            ],
-            "cost": _decimal_text(cost),
-            "currency": value.applied_price.currency,
-        },
         "applied_prices": {
             "currency": value.applied_price.currency,
             "unit_prices": [
@@ -1727,6 +2229,15 @@ def _request_attempt(
             ],
         },
     }
+    if value.usage_available:
+        document["usage"] = {
+            "units": [
+                {"unit": item.unit, "quantity": _decimal_text(item.quantity)}
+                for item in value.usage
+            ],
+            "cost": _decimal_text(cost),
+            "currency": value.applied_price.currency,
+        }
     if value.applied_price.source is not None:
         document["applied_prices"]["source"] = value.applied_price.source
     if value.applied_price.synchronized_at is not None:
@@ -1767,6 +2278,199 @@ def _decimal_text(value: Decimal) -> str:
     if "." in text:
         text = text.rstrip("0").rstrip(".")
     return text or "0"
+
+
+def _public_attempt(value: AttemptAccountingWrite) -> CallAttemptResult:
+    """Return one safe attempt result with no provider or control detail."""
+    return CallAttemptResult(
+        provider_model_api_name=value.provider_model_api_name,
+        outcome=cast('Literal["succeeded", "failed"]', value.outcome),
+        elapsed_ms=_elapsed_milliseconds(value.started_at, value.completed_at),
+        usage=value.usage if value.usage_available else None,
+        applied_price=value.applied_price if value.usage_available else None,
+        cost=(
+            _usage_cost(value.usage, value.applied_price)
+            if value.usage_available
+            else None
+        ),
+        error_code=(
+            None
+            if value.failure_class is None
+            else "rate_limited"
+            if value.failure_class == "rate_limited"
+            else "upstream_failed"
+        ),
+    )
+
+
+def _selection_snapshot(
+    candidates: tuple[_FrozenCandidate, ...],
+    request: CallRequest,
+    resolved_assignment: ResolvedAssignment | None,
+) -> dict[str, object]:
+    """Store bounded selection and call controls without content or secrets."""
+    return {
+        "selector": _selector_snapshot(request, resolved_assignment),
+        "controls": _call_control_snapshot(request),
+        "candidates": [
+            {
+                "provider_model_api_name": candidate.route.provider_model_api_name,
+                "provider_connection_api_name": (
+                    candidate.route.provider_connection_api_name
+                ),
+                "adapter": candidate.route.adapter,
+                "endpoint": candidate.route.endpoint,
+                "provider_model_name": candidate.route.provider_model_name,
+                "credential_api_name": candidate.route.credential_api_name,
+                "constraints": candidate.route.constraints.model_dump(
+                    mode="json", exclude_none=True
+                ),
+                "reasoning_level": candidate.route.reasoning_level,
+                "provider_reasoning_value": (candidate.route.provider_reasoning_value),
+                "price": {
+                    "currency": candidate.price.currency,
+                    "unit_prices": [
+                        {"unit": item.unit, "amount": str(item.amount)}
+                        for item in candidate.price.unit_prices
+                    ],
+                    "source": candidate.price.source,
+                    "synchronized_at": (
+                        candidate.price.synchronized_at.isoformat()
+                        if candidate.price.synchronized_at is not None
+                        else None
+                    ),
+                },
+                "usage_units": sorted(candidate.usage_units),
+                "admission_failure": candidate.admission_failure,
+            }
+            for candidate in candidates
+        ],
+    }
+
+
+def _call_control_snapshot(request: CallRequest) -> dict[str, object]:
+    requirements = request.requirements
+    return {
+        "call_kind": request.kind,
+        "required_inputs": sorted(requirements.required_inputs),
+        "required_output": requirements.required_output,
+        "required_capabilities": sorted(requirements.required_capabilities),
+        "embedding_dimension": requirements.embedding_dimension,
+        "input_image_sizes": list(requirements.input_image_sizes),
+        "input_image_count": len(requirements.input_image_sizes),
+        "output_duration_seconds": requirements.output_duration_seconds,
+        "streaming": request.streaming,
+        "excluded_provider_model_api_names": list(
+            request.excluded_provider_model_api_names
+        ),
+        "expected_embedding_count": request.expected_embedding_count,
+    }
+
+
+def _selector_snapshot(
+    request: CallRequest, resolved_assignment: ResolvedAssignment | None
+) -> dict[str, object]:
+    selector = request.selector
+    if isinstance(selector, ExactModelSelector):
+        if resolved_assignment is not None:
+            raise ValueError("An exact selection cannot have assignment facts.")
+        return {
+            "kind": "exact",
+            "provider_model_api_name": selector.provider_model_api_name,
+        }
+    if not isinstance(selector, AdministratorAssignmentCallSelector):
+        raise TypeError("Only administrator selections can be retained.")
+    if resolved_assignment is None:
+        raise ValueError("An assignment selection needs resolution facts.")
+    return {
+        "kind": "assignment",
+        "service_api_name": selector.service_api_name,
+        "assignment_api_name": selector.assignment_api_name,
+        "definition_kind": resolved_assignment.definition_kind,
+        "defined_by_service_api_name": (
+            resolved_assignment.defined_by_service_api_name
+        ),
+        "inherits_assignment_api_name": (
+            resolved_assignment.inherits_assignment_api_name
+        ),
+        "direct_chain": (
+            list(resolved_assignment.direct_chain)
+            if resolved_assignment.direct_chain is not None
+            else None
+        ),
+        "effective_chain": list(resolved_assignment.effective_chain),
+        "reasoning_level": resolved_assignment.reasoning_level,
+    }
+
+
+def _validate_selection_snapshot_context(
+    snapshot: dict[str, object], request: CallRequest
+) -> None:
+    """Reject a restart snapshot that does not match the admitted safe controls."""
+    if snapshot.get("controls") != _call_control_snapshot(request):
+        raise ValueError("The admitted media controls do not match.")
+    selector = snapshot.get("selector")
+    if not isinstance(selector, dict):
+        raise TypeError("The admitted media selector is invalid.")
+    request_selector = request.selector
+    if isinstance(request_selector, ExactModelSelector):
+        expected = {
+            "kind": "exact",
+            "provider_model_api_name": request_selector.provider_model_api_name,
+        }
+        if selector != expected:
+            raise ValueError("The admitted exact media selector does not match.")
+        return
+    if not isinstance(request_selector, AdministratorAssignmentCallSelector):
+        raise TypeError("The admitted media selector is invalid.")
+    expected_keys = {
+        "kind",
+        "service_api_name",
+        "assignment_api_name",
+        "definition_kind",
+        "defined_by_service_api_name",
+        "inherits_assignment_api_name",
+        "direct_chain",
+        "effective_chain",
+        "reasoning_level",
+    }
+    if (
+        set(selector) != expected_keys
+        or selector.get("kind") != "assignment"
+        or selector.get("service_api_name") != request_selector.service_api_name
+        or selector.get("assignment_api_name") != request_selector.assignment_api_name
+    ):
+        raise ValueError("The admitted assignment media selector does not match.")
+    effective = selector.get("effective_chain")
+    direct = selector.get("direct_chain")
+    if (
+        not isinstance(effective, list)
+        or not 1 <= len(effective) <= 16
+        or any(
+            not isinstance(name, str) or _API_NAME.fullmatch(name) is None
+            for name in effective
+        )
+        or (
+            direct is not None
+            and (
+                not isinstance(direct, list)
+                or not 1 <= len(direct) <= 16
+                or any(
+                    not isinstance(name, str) or _API_NAME.fullmatch(name) is None
+                    for name in direct
+                )
+            )
+        )
+        or selector.get("definition_kind")
+        not in {"direct_chain", "inherited_assignment", "implicit"}
+        or selector.get("reasoning_level")
+        not in {None, "none", "low", "medium", "high"}
+    ):
+        raise ValueError("The admitted assignment resolution is invalid.")
+
+
+def _elapsed_milliseconds(started_at: datetime, completed_at: datetime) -> int:
+    return max(0, int((completed_at - started_at).total_seconds() * 1000))
 
 
 def _load_json(value: str) -> object:

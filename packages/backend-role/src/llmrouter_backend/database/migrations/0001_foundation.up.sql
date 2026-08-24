@@ -240,8 +240,15 @@ CREATE TABLE router.assignment_candidates (
 
 CREATE TABLE router.request_logs (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    service_id uuid NOT NULL,
-    workspace_id uuid NOT NULL,
+    logical_call_id uuid UNIQUE NOT NULL,
+    call_actor text NOT NULL DEFAULT 'service'
+        CHECK (call_actor IN ('service', 'administrator')),
+    service_id uuid,
+    workspace_id uuid,
+    administrator_subject text CHECK (
+        administrator_subject IS NULL OR char_length(administrator_subject) BETWEEN 1 AND 500
+    ),
+    configuration_service_api_name router.api_name,
     assignment_api_name router.assignment_name,
     provider_model_api_name router.api_name,
     kind text NOT NULL CHECK (kind IN ('model', 'embedding', 'media')),
@@ -255,8 +262,27 @@ CREATE TABLE router.request_logs (
     started_at timestamptz NOT NULL,
     created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
     UNIQUE (service_id, workspace_id, id),
+    UNIQUE (call_actor, id),
     FOREIGN KEY (service_id, workspace_id)
-        REFERENCES router.workspaces(service_id, id) ON DELETE CASCADE
+        REFERENCES router.workspaces(service_id, id) ON DELETE CASCADE,
+    CHECK (
+        (call_actor = 'service' AND service_id IS NOT NULL
+         AND workspace_id IS NOT NULL AND administrator_subject IS NULL
+         AND configuration_service_api_name IS NULL)
+        OR
+        (call_actor = 'administrator' AND service_id IS NULL
+         AND workspace_id IS NULL AND administrator_subject IS NOT NULL
+         AND logical_call_id IS NOT NULL)
+    ),
+    CHECK (
+        call_actor = 'service'
+        OR (
+            ((assignment_api_name IS NULL) =
+             (configuration_service_api_name IS NULL))
+            AND (assignment_api_name IS NOT NULL
+                 OR provider_model_api_name IS NOT NULL)
+        )
+    )
 );
 
 CREATE INDEX request_logs_time
@@ -280,37 +306,75 @@ FOR EACH ROW EXECUTE FUNCTION router.reject_request_log_update();
 
 CREATE TABLE router.raw_accounting_calls (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    service_id uuid NOT NULL,
-    workspace_id uuid NOT NULL,
+    call_actor text NOT NULL DEFAULT 'service'
+        CHECK (call_actor IN ('service', 'administrator')),
+    service_id uuid,
+    workspace_id uuid,
+    administrator_subject text CHECK (
+        administrator_subject IS NULL OR char_length(administrator_subject) BETWEEN 1 AND 500
+    ),
+    configuration_service_api_name router.api_name,
     assignment_api_name router.assignment_name,
+    exact_provider_model_api_name router.api_name,
+    kind text NOT NULL DEFAULT 'model'
+        CHECK (kind IN ('model', 'embedding', 'media')),
     tags text[] NOT NULL DEFAULT '{}',
-    outcome text NOT NULL CHECK (outcome IN ('succeeded', 'failed')),
+    outcome text CHECK (outcome IN ('succeeded', 'failed')),
     started_at timestamptz NOT NULL,
-    completed_at timestamptz NOT NULL,
-    CHECK (completed_at >= started_at),
+    completed_at timestamptz,
+    selection_snapshot jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (
+        jsonb_typeof(selection_snapshot) = 'object'
+        AND octet_length(selection_snapshot::text) <= 1000000
+    ),
+    CHECK ((outcome IS NULL) = (completed_at IS NULL)),
+    CHECK (completed_at IS NULL OR completed_at >= started_at),
     CHECK (cardinality(tags) BETWEEN 0 AND 32),
     CHECK (router.text_array_is_unique(tags)),
     UNIQUE (service_id, workspace_id, id),
+    UNIQUE (call_actor, id),
     FOREIGN KEY (service_id, workspace_id)
-        REFERENCES router.workspaces(service_id, id) ON DELETE CASCADE
+        REFERENCES router.workspaces(service_id, id) ON DELETE CASCADE,
+    CHECK (
+        (call_actor = 'service' AND service_id IS NOT NULL
+         AND workspace_id IS NOT NULL AND administrator_subject IS NULL
+         AND configuration_service_api_name IS NULL)
+        OR
+        (call_actor = 'administrator' AND service_id IS NULL
+         AND workspace_id IS NULL AND administrator_subject IS NOT NULL)
+    ),
+    CHECK (
+        call_actor = 'service'
+        OR ((assignment_api_name IS NULL) <> (exact_provider_model_api_name IS NULL))
+    ),
+    CHECK (
+        (call_actor = 'administrator' AND assignment_api_name IS NOT NULL)
+        = (configuration_service_api_name IS NOT NULL)
+    )
 );
 
 CREATE INDEX raw_accounting_calls_scope_time
     ON router.raw_accounting_calls(service_id, started_at, id);
 
+ALTER TABLE router.request_logs
+    ADD CONSTRAINT request_logs_actor_logical_call_fkey
+    FOREIGN KEY (call_actor, logical_call_id)
+    REFERENCES router.raw_accounting_calls(call_actor, id) ON DELETE CASCADE;
+
 CREATE TABLE router.raw_accounting_attempts (
     id uuid PRIMARY KEY,
     call_id uuid NOT NULL,
-    service_id uuid NOT NULL,
-    workspace_id uuid NOT NULL,
+    call_actor text NOT NULL DEFAULT 'service'
+        CHECK (call_actor IN ('service', 'administrator')),
+    service_id uuid,
+    workspace_id uuid,
     position integer NOT NULL CHECK (position BETWEEN 0 AND 15),
     provider_connection_api_name router.api_name NOT NULL,
     provider_model_api_name router.api_name NOT NULL,
     outcome text NOT NULL CHECK (outcome IN ('succeeded', 'failed')),
-    usage jsonb NOT NULL CHECK (jsonb_typeof(usage) = 'array'),
+    usage jsonb CHECK (usage IS NULL OR jsonb_typeof(usage) = 'array'),
     applied_price jsonb NOT NULL CHECK (jsonb_typeof(applied_price) = 'object'),
-    cost numeric(76, 36) NOT NULL CHECK (cost >= 0),
-    currency char(3) NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
+    cost numeric(76, 36) CHECK (cost >= 0),
+    currency char(3) CHECK (currency ~ '^[A-Z]{3}$'),
     failure_class text CHECK (failure_class IN (
         'authentication', 'rate_limited', 'timeout', 'transport',
         'unavailable', 'refusal', 'incompatible', 'invalid_response',
@@ -320,12 +384,28 @@ CREATE TABLE router.raw_accounting_attempts (
     completed_at timestamptz NOT NULL,
     recorded_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
     CHECK (completed_at >= started_at),
+    CHECK ((usage IS NULL) = (cost IS NULL)),
+    CHECK ((cost IS NULL) = (currency IS NULL)),
     CHECK ((outcome = 'succeeded') = (failure_class IS NULL)),
     UNIQUE (call_id, position),
+    FOREIGN KEY (call_id) REFERENCES router.raw_accounting_calls(id)
+        ON DELETE CASCADE,
+    FOREIGN KEY (call_actor, call_id)
+        REFERENCES router.raw_accounting_calls(call_actor, id)
+        ON DELETE CASCADE,
     FOREIGN KEY (service_id, workspace_id, call_id)
         REFERENCES router.raw_accounting_calls(service_id, workspace_id, id)
-        ON DELETE CASCADE
+        ON DELETE CASCADE,
+    CHECK ((service_id IS NULL) = (workspace_id IS NULL)),
+    CHECK (
+        (call_actor = 'service' AND service_id IS NOT NULL
+         AND workspace_id IS NOT NULL)
+        OR
+        (call_actor = 'administrator' AND service_id IS NULL
+         AND workspace_id IS NULL)
+    )
 );
+
 
 CREATE INDEX raw_accounting_attempts_scope_time
     ON router.raw_accounting_attempts(service_id, started_at, id);
@@ -335,6 +415,23 @@ LANGUAGE plpgsql
 SET search_path = pg_catalog, router
 AS $$
 BEGIN
+    IF OLD.outcome IS NULL
+       AND NEW.outcome IN ('succeeded', 'failed')
+       AND NEW.completed_at IS NOT NULL
+       AND NEW.id = OLD.id
+       AND NEW.call_actor = OLD.call_actor
+       AND NEW.service_id IS NOT DISTINCT FROM OLD.service_id
+       AND NEW.workspace_id IS NOT DISTINCT FROM OLD.workspace_id
+       AND NEW.administrator_subject IS NOT DISTINCT FROM OLD.administrator_subject
+       AND NEW.configuration_service_api_name IS NOT DISTINCT FROM OLD.configuration_service_api_name
+       AND NEW.assignment_api_name IS NOT DISTINCT FROM OLD.assignment_api_name
+       AND NEW.exact_provider_model_api_name IS NOT DISTINCT FROM OLD.exact_provider_model_api_name
+       AND NEW.kind = OLD.kind
+       AND NEW.tags = OLD.tags
+       AND NEW.started_at = OLD.started_at
+       AND NEW.selection_snapshot = OLD.selection_snapshot THEN
+        RETURN NEW;
+    END IF;
     RAISE EXCEPTION 'Raw accounting facts are immutable.'
         USING ERRCODE = '23514', CONSTRAINT = 'raw_accounting_immutable';
 END;
@@ -344,35 +441,62 @@ CREATE TRIGGER raw_accounting_calls_reject_update
 BEFORE UPDATE ON router.raw_accounting_calls
 FOR EACH ROW EXECUTE FUNCTION router.reject_raw_accounting_update();
 
+CREATE FUNCTION router.reject_raw_accounting_attempt_update() RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, router
+AS $$
+BEGIN
+    RAISE EXCEPTION 'Raw accounting facts are immutable.'
+        USING ERRCODE = '23514', CONSTRAINT = 'raw_accounting_immutable';
+END;
+$$;
+
 CREATE TRIGGER raw_accounting_attempts_reject_update
 BEFORE UPDATE ON router.raw_accounting_attempts
-FOR EACH ROW EXECUTE FUNCTION router.reject_raw_accounting_update();
+FOR EACH ROW EXECUTE FUNCTION router.reject_raw_accounting_attempt_update();
 
 CREATE TABLE router.daily_accounting (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    service_id uuid NOT NULL,
-    workspace_id uuid NOT NULL,
+    call_actor text NOT NULL DEFAULT 'service'
+        CHECK (call_actor IN ('service', 'administrator')),
+    service_id uuid,
+    workspace_id uuid,
+    administrator_subject text CHECK (
+        administrator_subject IS NULL OR char_length(administrator_subject) BETWEEN 1 AND 500
+    ),
+    configuration_service_api_name router.api_name,
     day date NOT NULL,
     assignment_api_name router.assignment_name,
-    provider_model_api_name router.api_name NOT NULL,
-    outcome text NOT NULL CHECK (outcome IN ('succeeded', 'failed')),
+    exact_provider_model_api_name router.api_name,
+    provider_model_api_name router.api_name,
+    outcome text CHECK (outcome IN ('succeeded', 'failed')),
     tags text[] NOT NULL,
     usage_unit text CHECK (usage_unit IN (
         'input_token', 'output_token', 'cached_input_token', 'image',
         'video_second', 'audio_second', 'request', 'provider_unit'
     )),
-    currency char(3) NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
+    currency char(3) CHECK (currency ~ '^[A-Z]{3}$'),
     calls bigint NOT NULL CHECK (calls >= 0),
     attempts bigint NOT NULL CHECK (attempts >= 0),
     quantity numeric(76, 18) NOT NULL CHECK (quantity >= 0),
-    cost numeric(112, 36) NOT NULL CHECK (cost >= 0),
+    cost numeric(112, 36) CHECK (cost >= 0),
     rolled_up_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
     UNIQUE NULLS NOT DISTINCT (
-        service_id, workspace_id, day, assignment_api_name,
+        call_actor, service_id, workspace_id, administrator_subject,
+        configuration_service_api_name, day, assignment_api_name,
+        exact_provider_model_api_name,
         provider_model_api_name, outcome, tags, usage_unit, currency
     ),
     FOREIGN KEY (service_id, workspace_id)
-        REFERENCES router.workspaces(service_id, id) ON DELETE CASCADE
+        REFERENCES router.workspaces(service_id, id) ON DELETE CASCADE,
+    CHECK (
+        (call_actor = 'service' AND service_id IS NOT NULL
+         AND workspace_id IS NOT NULL AND administrator_subject IS NULL
+         AND configuration_service_api_name IS NULL)
+        OR
+        (call_actor = 'administrator' AND service_id IS NULL
+         AND workspace_id IS NULL AND administrator_subject IS NOT NULL)
+    )
 );
 
 CREATE INDEX daily_accounting_scope_day
@@ -381,7 +505,8 @@ CREATE INDEX daily_accounting_scope_day
 CREATE TABLE router.accounting_rollups (
     day date PRIMARY KEY,
     completed_at timestamptz NOT NULL,
-    attempt_count bigint NOT NULL CHECK (attempt_count >= 0)
+    attempt_count bigint NOT NULL CHECK (attempt_count >= 0),
+    call_count bigint NOT NULL DEFAULT 0 CHECK (call_count >= 0)
 );
 
 CREATE TABLE router.price_synchronizations (
@@ -400,8 +525,17 @@ CREATE UNIQUE INDEX price_synchronizations_one_scheduled_utc_day
 
 CREATE TABLE router.media_jobs (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    service_id uuid NOT NULL,
-    workspace_id uuid NOT NULL,
+    logical_call_id uuid UNIQUE,
+    call_actor text NOT NULL DEFAULT 'service'
+        CHECK (call_actor IN ('service', 'administrator')),
+    service_id uuid,
+    workspace_id uuid,
+    administrator_subject text CHECK (
+        administrator_subject IS NULL OR char_length(administrator_subject) BETWEEN 1 AND 500
+    ),
+    configuration_service_api_name router.api_name,
+    assignment_api_name router.assignment_name,
+    exact_provider_model_api_name router.api_name,
     state text NOT NULL DEFAULT 'pending'
         CHECK (state IN ('pending', 'running', 'succeeded', 'failed')),
     provider_model_api_name router.api_name NOT NULL,
@@ -412,6 +546,11 @@ CREATE TABLE router.media_jobs (
     ),
     error_code text CHECK (char_length(error_code) BETWEEN 1 AND 200),
     error_message text CHECK (char_length(error_message) BETWEEN 1 AND 1000),
+    attempts jsonb NOT NULL DEFAULT '[]'::jsonb CHECK (
+        jsonb_typeof(attempts) = 'array' AND jsonb_array_length(attempts) <= 16
+    ),
+    elapsed_ms integer CHECK (elapsed_ms BETWEEN 0 AND 86400000),
+    usage jsonb CHECK (usage IS NULL OR jsonb_typeof(usage) = 'object'),
     created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
     deadline_at timestamptz NOT NULL DEFAULT transaction_timestamp() + interval '24 hours',
     completed_at timestamptz,
@@ -425,8 +564,29 @@ CREATE TABLE router.media_jobs (
         OR (state = 'failed' AND error_code IS NOT NULL AND completed_at IS NOT NULL)
     ),
     UNIQUE (service_id, workspace_id, id),
+    UNIQUE (call_actor, id),
     FOREIGN KEY (service_id, workspace_id)
-        REFERENCES router.workspaces(service_id, id) ON DELETE CASCADE
+        REFERENCES router.workspaces(service_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (call_actor, logical_call_id)
+        REFERENCES router.raw_accounting_calls(call_actor, id),
+    CHECK (
+        (call_actor = 'service' AND service_id IS NOT NULL
+         AND workspace_id IS NOT NULL AND administrator_subject IS NULL
+         AND logical_call_id IS NULL)
+        OR
+        (call_actor = 'administrator' AND service_id IS NULL
+         AND workspace_id IS NULL AND administrator_subject IS NOT NULL
+         AND logical_call_id IS NOT NULL)
+    ),
+    CHECK (
+        call_actor = 'service'
+        OR ((assignment_api_name IS NULL) <>
+            (exact_provider_model_api_name IS NULL))
+    ),
+    CHECK (
+        (call_actor = 'administrator' AND assignment_api_name IS NOT NULL)
+        = (configuration_service_api_name IS NOT NULL)
+    )
 );
 
 CREATE INDEX media_jobs_pending_deadline
@@ -437,9 +597,37 @@ LANGUAGE plpgsql
 SET search_path = pg_catalog, router
 AS $$
 BEGIN
+    IF ROW(
+        NEW.id, NEW.logical_call_id, NEW.call_actor, NEW.service_id,
+        NEW.workspace_id, NEW.administrator_subject,
+        NEW.configuration_service_api_name, NEW.assignment_api_name,
+        NEW.exact_provider_model_api_name, NEW.kind, NEW.created_at,
+        NEW.deadline_at
+    ) IS DISTINCT FROM ROW(
+        OLD.id, OLD.logical_call_id, OLD.call_actor, OLD.service_id,
+        OLD.workspace_id, OLD.administrator_subject,
+        OLD.configuration_service_api_name, OLD.assignment_api_name,
+        OLD.exact_provider_model_api_name, OLD.kind, OLD.created_at,
+        OLD.deadline_at
+    ) THEN
+        RAISE EXCEPTION 'A media job identity and selection are immutable.'
+            USING ERRCODE = '23514', CONSTRAINT = 'media_jobs_identity_immutable';
+    END IF;
     IF OLD.state IN ('succeeded', 'failed') AND NEW IS DISTINCT FROM OLD THEN
         RAISE EXCEPTION 'A terminal media job cannot change.'
             USING ERRCODE = '23514', CONSTRAINT = 'media_jobs_terminal_immutable';
+    END IF;
+    IF NEW.state IN ('pending', 'running') AND ROW(
+        NEW.provider_model_api_name, NEW.payload, NEW.error_code,
+        NEW.error_message, NEW.attempts, NEW.elapsed_ms, NEW.usage,
+        NEW.completed_at
+    ) IS DISTINCT FROM ROW(
+        OLD.provider_model_api_name, OLD.payload, OLD.error_code,
+        OLD.error_message, OLD.attempts, OLD.elapsed_ms, OLD.usage,
+        OLD.completed_at
+    ) THEN
+        RAISE EXCEPTION 'A nonterminal media job can change only its state.'
+            USING ERRCODE = '23514', CONSTRAINT = 'media_jobs_nonterminal_immutable';
     END IF;
     IF (NEW.state = 'failed' AND (
             NEW.error_code IS NULL OR NEW.completed_at IS NULL
@@ -469,8 +657,10 @@ FOR EACH ROW EXECUTE FUNCTION router.enforce_media_job_state_transition();
 
 CREATE TABLE router.media_objects (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    service_id uuid NOT NULL,
-    workspace_id uuid NOT NULL,
+    call_actor text NOT NULL DEFAULT 'service'
+        CHECK (call_actor IN ('service', 'administrator')),
+    service_id uuid,
+    workspace_id uuid,
     media_job_id uuid,
     request_log_id uuid,
     object_key text NOT NULL UNIQUE CHECK (octet_length(object_key) BETWEEN 1 AND 1024),
@@ -481,10 +671,29 @@ CREATE TABLE router.media_objects (
     created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
     FOREIGN KEY (service_id, workspace_id)
         REFERENCES router.workspaces(service_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (request_log_id)
+        REFERENCES router.request_logs(id) ON DELETE CASCADE,
+    FOREIGN KEY (media_job_id)
+        REFERENCES router.media_jobs(id) ON DELETE CASCADE,
+    FOREIGN KEY (call_actor, request_log_id)
+        REFERENCES router.request_logs(call_actor, id) ON DELETE CASCADE,
+    FOREIGN KEY (call_actor, media_job_id)
+        REFERENCES router.media_jobs(call_actor, id) ON DELETE CASCADE,
     FOREIGN KEY (service_id, workspace_id, request_log_id)
-        REFERENCES router.request_logs(service_id, workspace_id, id) ON DELETE CASCADE,
+        REFERENCES router.request_logs(service_id, workspace_id, id)
+        ON DELETE CASCADE,
     FOREIGN KEY (service_id, workspace_id, media_job_id)
-        REFERENCES router.media_jobs(service_id, workspace_id, id) ON DELETE CASCADE
+        REFERENCES router.media_jobs(service_id, workspace_id, id)
+        ON DELETE CASCADE,
+    CHECK ((service_id IS NULL) = (workspace_id IS NULL)),
+    CHECK (
+        (call_actor = 'service' AND service_id IS NOT NULL
+         AND workspace_id IS NOT NULL)
+        OR
+        (call_actor = 'administrator' AND service_id IS NULL
+         AND workspace_id IS NULL)
+    ),
+    CHECK ((media_job_id IS NULL) <> (request_log_id IS NULL))
 );
 
 CREATE INDEX media_objects_request_log

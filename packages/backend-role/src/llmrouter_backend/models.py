@@ -709,8 +709,11 @@ class Usage(ClosedModel):
 
 StatisticsDimension = Literal[
     "date",
+    "call_actor",
     "service",
     "workspace",
+    "administrator",
+    "configuration_service",
     "assignment",
     "provider_model",
     "outcome",
@@ -721,12 +724,12 @@ StatisticsDimension = Literal[
 class StatisticsBucket(ClosedModel):
     """One exact accounting statistics group."""
 
-    dimensions: list[str]
+    dimensions: list[str | None] = Field(max_length=8)
     calls: int = Field(ge=0)
     attempts: int = Field(ge=0)
     units: list[UsageItem]
-    cost: str = Field(pattern=r"^[0-9]+(?:\.[0-9]+)?$")
-    currency: str = Field(pattern=r"^[A-Z]{3}$")
+    cost: str | None = Field(pattern=r"^[0-9]+(?:\.[0-9]+)?$")
+    currency: str | None = Field(pattern=r"^[A-Z]{3}$")
 
 
 class StatisticsResult(ClosedModel):
@@ -781,14 +784,52 @@ class SafeError(ClosedModel):
     details: SafeErrorDetails | None = None
 
 
+class AdministratorAttemptResult(ClosedModel):
+    """One safe ordered administrator provider-attempt result."""
+
+    provider_model_api_name: str = Field(pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+    outcome: Literal["succeeded", "failed"]
+    elapsed_ms: int = Field(strict=True, ge=0, le=86_400_000)
+    usage: Usage | None = None
+    error: SafeError | None = None
+
+    @model_validator(mode="after")
+    def validate_outcome(self) -> AdministratorAttemptResult:
+        """Require a safe error only for a failed attempt."""
+        if (self.outcome == "failed") != (self.error is not None):
+            raise ValueError("The administrator attempt outcome is invalid.")
+        return self
+
+
+def validate_administrator_attempt_sequence(
+    attempts: list[AdministratorAttemptResult],
+    *,
+    exact: bool,
+    succeeded: bool,
+) -> None:
+    """Validate one ordered administrator response attempt sequence."""
+    if exact and len(attempts) > 1:
+        raise ValueError("An exact administrator call can have only one attempt.")
+    succeeded_positions = [
+        position
+        for position, attempt in enumerate(attempts)
+        if attempt.outcome == "succeeded"
+    ]
+    if succeeded:
+        if succeeded_positions != [len(attempts) - 1]:
+            raise ValueError("A successful administrator call needs one final success.")
+    elif succeeded_positions:
+        raise ValueError("An unsuccessful administrator call cannot have a success.")
+
+
 class RequestAttempt(ClosedModel):
     """One provider attempt in a complete detailed log."""
 
     provider_model_api_name: str = Field(pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$")
     outcome: Literal["succeeded", "failed"]
     started_at: datetime
-    completed_at: datetime | None = None
-    usage: Usage
+    completed_at: datetime
+    usage: Usage | None = None
     applied_prices: AppliedPrice
     response_json: str | None = Field(default=None, max_length=10_000_000)
     error: SafeError | None = None
@@ -798,14 +839,43 @@ class RequestLogSummary(ClosedModel):
     """Bounded list data for one detailed request log."""
 
     id: str
-    service_api_name: str
-    workspace_api_name: str
+    logical_call_id: str
+    call_actor: Literal["service", "administrator"]
+    service_api_name: str | None = None
+    workspace_api_name: str | None = None
+    administrator_subject: str | None = Field(default=None, max_length=500)
+    configuration_service_api_name: str | None = None
     assignment_api_name: str | None = None
     provider_model_api_name: str | None = None
     kind: Literal["model", "embedding", "media"]
     outcome: Literal["succeeded", "failed"]
     tags: list[str] | None = None
     started_at: datetime
+
+    @model_validator(mode="after")
+    def validate_actor_shape(self) -> RequestLogSummary:
+        """Keep service and administrator detailed-log ownership separate."""
+        if self.call_actor == "service":
+            if (
+                self.service_api_name is None
+                or self.workspace_api_name is None
+                or self.administrator_subject is not None
+                or self.configuration_service_api_name is not None
+            ):
+                raise ValueError("The service request-log ownership is invalid.")
+        elif (
+            self.service_api_name is not None
+            or self.workspace_api_name is not None
+            or self.administrator_subject is None
+        ):
+            raise ValueError("The administrator request-log ownership is invalid.")
+        if self.call_actor == "administrator":
+            exact = self.assignment_api_name is None
+            if exact != (self.configuration_service_api_name is None):
+                raise ValueError("The administrator request-log selector is invalid.")
+            if exact and self.provider_model_api_name is None:
+                raise ValueError("An exact administrator log needs its provider-model.")
+        return self
 
 
 class LogMedia(ClosedModel):

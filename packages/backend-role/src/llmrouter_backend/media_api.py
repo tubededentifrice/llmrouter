@@ -19,12 +19,14 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
-from llmrouter_backend import catalog
+from llmrouter_backend import accounting, catalog
 from llmrouter_backend.assignments import (
     ResolvedAssignment,
     resolve_assignment_for_call,
+    resolve_assignment_snapshot_for_administrator,
 )
 from llmrouter_backend.calls import (
+    AdministratorAssignmentCallSelector,
     CallExecutionError,
     CallExecutor,
     CallRequest,
@@ -38,21 +40,32 @@ from llmrouter_backend.errors import (
     content_unavailable,
     invalid_request,
     not_found,
+    provider_unavailable,
 )
 from llmrouter_backend.model_api import (
+    AdministratorAssignmentModelSelector,
+    AdministratorModelSelector,
     AssignmentModelSelector,
     ImageInputPart,
     ModelSelector,
     _validate_tags,
+    administrator_attempt_results,
+    result_usage,
 )
-from llmrouter_backend.models import ClosedModel, SafeError
+from llmrouter_backend.models import (
+    AdministratorAttemptResult,
+    ClosedModel,
+    SafeError,
+    Usage,
+    validate_administrator_attempt_sequence,
+)
 from llmrouter_backend.object_store import (
     ObjectNotFoundError,
     ObjectStore,
     ObjectStoreError,
     StoredObject,
 )
-from llmrouter_backend.store import ServiceActor
+from llmrouter_backend.store import AdministratorActor, ServiceActor
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -75,6 +88,18 @@ class _MediaAdmissionSnapshot:
     workspace_id: uuid.UUID
     provider_model_api_name: str
     route_state: tuple[object, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _AdministratorMediaAdmissionSnapshot:
+    """Immutable administrator selector and first route at admission."""
+
+    configuration_service_api_name: str | None
+    assignment_api_name: str | None
+    exact_provider_model_api_name: str | None
+    provider_model_api_name: str
+    route_state: tuple[object, ...]
+    resolved_assignment: ResolvedAssignment | None
 
 
 class NativeMediaModel(ClosedModel):
@@ -114,6 +139,38 @@ class MediaJobRequest(NativeMediaModel):
         return self
 
 
+class AdministratorMediaJobRequest(NativeMediaModel):
+    """One administrator media job without service ownership fields."""
+
+    selector: AdministratorModelSelector
+    kind: MediaKind
+    prompt: str = Field(min_length=1, max_length=1_000_000)
+    input_images: list[ImageInputPart] | None = Field(default=None, max_length=8)
+    tags: list[str] | None = Field(default=None, max_length=32)
+
+    @field_validator("prompt")
+    @classmethod
+    def require_utf8_prompt(cls, value: str) -> str:
+        value.encode("utf-8")
+        return value
+
+    @model_validator(mode="after")
+    def validate_media_shape(self) -> AdministratorMediaJobRequest:
+        if self.kind == "audio" and "input_images" in self.model_fields_set:
+            raise ValueError("Audio generation cannot contain input images.")
+        if "input_images" in self.model_fields_set and self.input_images is None:
+            raise ValueError("The optional input-images field cannot be null.")
+        if "tags" in self.model_fields_set and self.tags is None:
+            raise ValueError("The optional tags field cannot be null.")
+        _validate_tags(self.tags or [])
+        if (
+            sum(len(item.decoded_body()) for item in self.input_images or [])
+            > 50 * 1024 * 1024
+        ):
+            raise ValueError("The total input-image byte size is invalid.")
+        return self
+
+
 class MediaContent(NativeMediaModel):
     """Safe metadata for one retained generated result."""
 
@@ -135,18 +192,73 @@ class MediaJob(NativeMediaModel):
     completed_at: datetime | None = None
 
 
-def internal_media_call(body: MediaJobRequest) -> CallRequest:
+class AdministratorMediaJob(NativeMediaModel):
+    """One global administrator media job without storage controls."""
+
+    id: str
+    logical_call_id: str
+    selector: AdministratorModelSelector
+    provider_model_api_name: str = Field(pattern=_API_NAME_PATTERN)
+    kind: MediaKind
+    state: Literal["pending", "running", "succeeded", "failed"]
+    attempts: list[AdministratorAttemptResult] = Field(max_length=16)
+    elapsed_ms: int | None = Field(default=None, strict=True, ge=0, le=86_400_000)
+    usage: Usage | None = None
+    content: MediaContent | None = None
+    error: SafeError | None = None
+    created_at: datetime
+    completed_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def validate_state_result(self) -> AdministratorMediaJob:
+        """Keep pending and terminal media result shapes closed."""
+        terminal = self.state in {"succeeded", "failed"}
+        if terminal != (self.completed_at is not None and self.elapsed_ms is not None):
+            raise ValueError("The administrator media-job timing is invalid.")
+        provider_succeeded = any(
+            attempt.outcome == "succeeded" for attempt in self.attempts
+        )
+        validate_administrator_attempt_sequence(
+            self.attempts,
+            exact=not isinstance(self.selector, AdministratorAssignmentModelSelector),
+            succeeded=self.state == "succeeded"
+            or (self.state == "failed" and provider_succeeded),
+        )
+        if self.state == "succeeded":
+            if self.content is None or self.error is not None:
+                raise ValueError("The successful media-job result is invalid.")
+            if not self.attempts or self.attempts[-1].outcome != "succeeded":
+                raise ValueError("The successful media-job attempts are invalid.")
+        elif self.state == "failed":
+            if self.error is None or self.content is not None:
+                raise ValueError("The failed media-job result is invalid.")
+        elif self.content is not None or self.error is not None:
+            raise ValueError("A pending media job cannot contain a result.")
+        return self
+
+
+def internal_media_call(
+    body: MediaJobRequest | AdministratorMediaJobRequest,
+) -> CallRequest:
     """Translate one validated job without provider or storage fields."""
     images = tuple(_captured_image(item) for item in (body.input_images or []))
-    selector = (
-        AssignmentSelector(body.selector.assignment_api_name)
-        if isinstance(body.selector, AssignmentModelSelector)
-        else ExactModelSelector(body.selector.provider_model_api_name)
+    selector: (
+        AssignmentSelector | ExactModelSelector | AdministratorAssignmentCallSelector
     )
+    if isinstance(body.selector, AdministratorAssignmentModelSelector):
+        selector = AdministratorAssignmentCallSelector(
+            body.selector.assignment_api_name, body.selector.service_api_name
+        )
+    elif isinstance(body.selector, AssignmentModelSelector):
+        selector = AssignmentSelector(body.selector.assignment_api_name)
+    else:
+        selector = ExactModelSelector(body.selector.provider_model_api_name)
     logged_body = body.model_dump(mode="json", exclude_none=True)
     logged_body.pop("input_images", None)
     return CallRequest(
-        workspace_api_name=body.workspace_api_name,
+        workspace_api_name=(
+            body.workspace_api_name if isinstance(body, MediaJobRequest) else None
+        ),
         selector=selector,
         kind="media",
         requirements=CallRequirements(
@@ -297,6 +409,163 @@ def create_media_job(
     }
 
 
+def create_administrator_media_job(
+    *,
+    database_url: str,
+    object_store: ObjectStore | None,
+    executor: CallExecutor,
+    actor: AdministratorActor,
+    body: AdministratorMediaJobRequest,
+    deadline_seconds: int,
+    database_connect: Callable[..., psycopg.Connection[Any]] = psycopg.connect,
+    cleanup_database_connect: Callable[..., psycopg.Connection[Any]] | None = None,
+) -> dict[str, Any]:
+    """Create one administrator-only job with an immutable selector snapshot."""
+    connection: psycopg.Connection[Any] | None = None
+    uploaded: list[str] = []
+    cleanup_connect = cleanup_database_connect or database_connect
+    try:
+        call = internal_media_call(body)
+        with database_connect(
+            database_url,
+            connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
+            row_factory=dict_row,
+            options=_DATABASE_OPTIONS,
+        ) as snapshot_connection:
+            snapshot = _resolve_administrator_media_admission(snapshot_connection, call)
+        retained_objects = _required_object_store(object_store)
+        job_id = uuid.uuid4()
+        logical_call_id = uuid.uuid4()
+        created_at = datetime.now(tz=UTC)
+        payload: dict[str, object] = body.model_dump(
+            mode="json", exclude={"input_images"}, exclude_none=True
+        )
+        payload["input_media_ids"] = []
+        media_rows: list[tuple[object, ...]] = []
+        for image in call.media:
+            media_id = uuid.uuid4()
+            object_key = _administrator_object_key(
+                created_at, actor.subject, job_id, media_id
+            )
+            uploaded.append(object_key)
+            retained_objects.put(object_key, image.body, image.media_type)
+            media_rows.append(
+                (
+                    media_id,
+                    job_id,
+                    object_key,
+                    image.media_type,
+                    len(image.body),
+                    hashlib.sha256(image.body).digest(),
+                )
+            )
+            cast("list[str]", payload["input_media_ids"]).append(str(media_id))
+        connection = database_connect(
+            database_url,
+            connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
+            row_factory=dict_row,
+            options=_DATABASE_OPTIONS,
+        )
+        current = _resolve_administrator_media_admission(connection, call)
+        if current != snapshot:
+            raise invalid_request(
+                "selector", "The media route changed during job admission."
+            )
+        accounting.record_call_admission(
+            connection,
+            call_id=logical_call_id,
+            call_actor="administrator",
+            service_id=None,
+            workspace_id=None,
+            administrator_subject=actor.subject,
+            configuration_service_api_name=(snapshot.configuration_service_api_name),
+            assignment_api_name=snapshot.assignment_api_name,
+            exact_provider_model_api_name=(snapshot.exact_provider_model_api_name),
+            kind="media",
+            tags=call.tags,
+            started_at=created_at,
+            selection_snapshot=_administrator_media_selection_snapshot(
+                executor, connection, call, snapshot
+            ),
+        )
+        connection.execute(
+            """INSERT INTO router.media_jobs
+                   (id, logical_call_id, call_actor, administrator_subject,
+                    configuration_service_api_name, assignment_api_name,
+                    exact_provider_model_api_name, provider_model_api_name,
+                    kind, payload, created_at, deadline_at)
+               VALUES (%s, %s, 'administrator', %s, %s, %s, %s, %s, %s,
+                       %s, %s, %s)""",
+            (
+                job_id,
+                logical_call_id,
+                actor.subject,
+                snapshot.configuration_service_api_name,
+                snapshot.assignment_api_name,
+                snapshot.exact_provider_model_api_name,
+                snapshot.provider_model_api_name,
+                body.kind,
+                Jsonb(payload),
+                created_at,
+                created_at + timedelta(seconds=deadline_seconds),
+            ),
+        )
+        for media_row in media_rows:
+            connection.execute(
+                """INSERT INTO router.media_objects
+                       (id, call_actor, media_job_id, object_key, media_type, role,
+                        size_bytes, content_sha256)
+                   VALUES (%s, 'administrator', %s, %s, %s, 'input', %s, %s)""",
+                media_row,
+            )
+        connection.commit()
+    except ApiError:
+        if connection is not None:
+            _rollback_media_admission(connection)
+            connection.close()
+            connection = None
+        for object_key in uploaded:
+            _delete_or_queue(database_url, object_store, object_key, cleanup_connect)
+        raise
+    except DatabaseConnectionLimitError as error:
+        if connection is not None:
+            _rollback_media_admission(connection)
+            connection.close()
+            connection = None
+        for object_key in uploaded:
+            _delete_or_queue(database_url, object_store, object_key, cleanup_connect)
+        raise ApiError(
+            429,
+            "rate_limited",
+            "The Router database connection limit is full.",
+        ) from error
+    except Exception as error:
+        if connection is not None:
+            _rollback_media_admission(connection)
+            connection.close()
+            connection = None
+        for object_key in uploaded:
+            _delete_or_queue(database_url, object_store, object_key, cleanup_connect)
+        raise ApiError(
+            500,
+            "internal_error",
+            "The Router could not retain the uploaded media.",
+        ) from error
+    finally:
+        if connection is not None:
+            connection.close()
+    return {
+        "id": str(job_id),
+        "logical_call_id": str(logical_call_id),
+        "selector": body.selector.model_dump(mode="json"),
+        "provider_model_api_name": snapshot.provider_model_api_name,
+        "kind": body.kind,
+        "state": "pending",
+        "attempts": [],
+        "created_at": created_at,
+    }
+
+
 def _validated_internal_media_call(body: MediaJobRequest) -> CallRequest:
     try:
         return internal_media_call(body)
@@ -384,6 +653,75 @@ def get_media_job_content(
     return stored
 
 
+def get_administrator_media_job(
+    connection: psycopg.Connection[Any], *, job_id: uuid.UUID
+) -> dict[str, Any]:
+    """Read one current global administrator media job."""
+    row = connection.execute(
+        """SELECT media_jobs.*, media_objects.media_type,
+                  media_objects.size_bytes
+           FROM router.media_jobs
+           CROSS JOIN router.global_settings
+           LEFT JOIN router.media_objects
+             ON media_objects.media_job_id = media_jobs.id
+            AND media_objects.role = 'output'
+            AND media_objects.created_at >= statement_timestamp()
+                - make_interval(days => global_settings.log_retention_days)
+           WHERE media_jobs.id = %s
+             AND media_jobs.call_actor = 'administrator'""",
+        (job_id,),
+    ).fetchone()
+    if row is None:
+        raise not_found("media job")
+    return _public_administrator_job(row)
+
+
+def get_administrator_media_job_content(
+    database_url: str,
+    object_store: ObjectStore | None,
+    *,
+    job_id: uuid.UUID,
+    database_connect: Callable[..., psycopg.Connection[Any]] = psycopg.connect,
+) -> StoredObject:
+    """Read metadata briefly, then fetch administrator media without a DB slot."""
+    with database_connect(
+        database_url,
+        connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
+        row_factory=dict_row,
+        options=_DATABASE_OPTIONS,
+    ) as connection:
+        row = connection.execute(
+            """SELECT media_jobs.state, media_objects.object_key,
+                      media_objects.media_type, media_objects.size_bytes,
+                      media_objects.content_sha256
+               FROM router.media_jobs
+               CROSS JOIN router.global_settings
+               LEFT JOIN router.media_objects
+                 ON media_objects.media_job_id = media_jobs.id
+                AND media_objects.role = 'output'
+                AND media_objects.created_at >= statement_timestamp()
+                    - make_interval(days => global_settings.log_retention_days)
+               WHERE media_jobs.id = %s
+                 AND media_jobs.call_actor = 'administrator'""",
+            (job_id,),
+        ).fetchone()
+    if row is None:
+        raise not_found("media job")
+    if row["state"] != "succeeded" or row["object_key"] is None or object_store is None:
+        raise content_unavailable()
+    try:
+        stored = object_store.get(row["object_key"], maximum_bytes=row["size_bytes"])
+    except ObjectNotFoundError, ObjectStoreError:
+        raise content_unavailable() from None
+    if (
+        stored.content_type != row["media_type"]
+        or len(stored.body) != row["size_bytes"]
+        or hashlib.sha256(stored.body).digest() != row["content_sha256"]
+    ):
+        raise content_unavailable()
+    return stored
+
+
 async def run_media_worker_once(
     database_url: str,
     executor: CallExecutor,
@@ -403,18 +741,38 @@ async def run_media_worker_once(
             claimed,
             database_connect,
         )
-        actor = ServiceActor(
-            cast("uuid.UUID", claimed["service_id"]),
-            cast("str", claimed["service_api_name"]),
-            uuid.UUID(int=0),
-        )
+        actor: ServiceActor | AdministratorActor
+        if claimed["call_actor"] == "administrator":
+            actor = AdministratorActor(
+                b"",
+                "media-job",
+                cast("str", claimed["administrator_subject"]),
+                "Media job",
+                cast("datetime", claimed["deadline_at"]),
+                "",
+                b"",
+            )
+        else:
+            actor = ServiceActor(
+                cast("uuid.UUID", claimed["service_id"]),
+                cast("str", claimed["service_api_name"]),
+                uuid.UUID(int=0),
+            )
         remaining = (
             cast("datetime", claimed["deadline_at"]) - datetime.now(tz=UTC)
         ).total_seconds()
         if remaining <= 0:
             raise TimeoutError
         async with asyncio.timeout(remaining):
-            result = await executor.execute(actor, call)
+            result = await executor.execute(
+                actor,
+                call,
+                call_id=(
+                    cast("uuid.UUID", claimed["logical_call_id"])
+                    if claimed["call_actor"] == "administrator"
+                    else None
+                ),
+            )
         await asyncio.to_thread(
             _complete_job,
             database_url,
@@ -442,6 +800,7 @@ async def run_media_worker_once(
             error.code,
             str(error),
             database_connect,
+            error=error,
         )
     except Exception:
         await asyncio.to_thread(
@@ -536,7 +895,7 @@ def _resolve_media_admission(
         resolved, routes = resolve_assignment_for_call(
             connection,
             service_id=actor.service_id,
-            workspace_api_name=call.workspace_api_name,
+            workspace_api_name=cast("str", call.workspace_api_name),
             assignment_api_name=call.selector.assignment_api_name,
             required_inputs=requirements.required_inputs,
             required_output=requirements.required_output,
@@ -553,6 +912,8 @@ def _resolve_media_admission(
             routes,
         )
     else:
+        if not isinstance(call.selector, ExactModelSelector):
+            raise TypeError("A service media job has an invalid selector.")
         connection.execute("SELECT pg_advisory_xact_lock(%s)", (_CATALOG_WRITE_LOCK,))
         route = catalog.resolve_provider_route(
             connection,
@@ -577,6 +938,67 @@ def _resolve_media_admission(
     )
 
 
+def _resolve_administrator_media_admission(
+    connection: psycopg.Connection[Any], call: CallRequest
+) -> _AdministratorMediaAdmissionSnapshot:
+    """Resolve one read-only global administrator media selection."""
+    requirements = call.requirements
+    if isinstance(call.selector, AdministratorAssignmentCallSelector):
+        service = connection.execute(
+            "SELECT id FROM router.services WHERE api_name = %s FOR KEY SHARE",
+            (call.selector.service_api_name,),
+        ).fetchone()
+        if service is None:
+            raise not_found("service")
+        resolved, routes = resolve_assignment_snapshot_for_administrator(
+            connection,
+            service_id=cast("uuid.UUID", service["id"]),
+            assignment_api_name=call.selector.assignment_api_name,
+            required_inputs=requirements.required_inputs,
+            required_output=requirements.required_output,
+            required_capabilities=requirements.required_capabilities,
+            embedding_dimension=requirements.embedding_dimension,
+            input_image_sizes=requirements.input_image_sizes,
+            output_duration_seconds=requirements.output_duration_seconds,
+            excluded_provider_model_api_names=(call.excluded_provider_model_api_names),
+        )
+        if not routes:
+            raise provider_unavailable()
+        return _AdministratorMediaAdmissionSnapshot(
+            call.selector.service_api_name,
+            call.selector.assignment_api_name,
+            None,
+            routes[0].provider_model_api_name,
+            ("assignment", _assignment_route_state(resolved), routes),
+            resolved,
+        )
+    if not isinstance(call.selector, ExactModelSelector):
+        raise TypeError("An administrator media job has an invalid selector.")
+    connection.execute("SELECT pg_advisory_xact_lock(%s)", (_CATALOG_WRITE_LOCK,))
+    route = catalog.resolve_provider_route(
+        connection,
+        call.selector.provider_model_api_name,
+        required_inputs=requirements.required_inputs,
+        required_output=requirements.required_output,
+        required_capabilities=requirements.required_capabilities,
+        reasoning_level=None,
+    )
+    catalog.validate_route_constraints(
+        route,
+        embedding_dimension=requirements.embedding_dimension,
+        input_image_sizes=requirements.input_image_sizes,
+        output_duration_seconds=requirements.output_duration_seconds,
+    )
+    return _AdministratorMediaAdmissionSnapshot(
+        None,
+        None,
+        call.selector.provider_model_api_name,
+        route.provider_model_api_name,
+        ("exact", route),
+        None,
+    )
+
+
 def _assignment_route_state(resolved: ResolvedAssignment) -> tuple[object, ...]:
     return (
         resolved.definition_kind,
@@ -585,6 +1007,26 @@ def _assignment_route_state(resolved: ResolvedAssignment) -> tuple[object, ...]:
         resolved.direct_chain,
         resolved.effective_chain,
         resolved.reasoning_level,
+    )
+
+
+def _administrator_media_selection_snapshot(
+    executor: CallExecutor,
+    connection: psycopg.Connection[Any],
+    call: CallRequest,
+    snapshot: _AdministratorMediaAdmissionSnapshot,
+) -> dict[str, object]:
+    """Store the complete safe admitted media selection without credentials."""
+    routes = (
+        snapshot.route_state[2]
+        if snapshot.route_state[0] == "assignment"
+        else (snapshot.route_state[1],)
+    )
+    return executor.media_selection_snapshot(
+        connection,
+        call,
+        cast("tuple[catalog.ProviderRoute, ...]", routes),
+        snapshot.resolved_assignment,
     )
 
 
@@ -599,26 +1041,37 @@ def _claim_job(
         options=_DATABASE_OPTIONS,
     ) as connection:
         connection.execute(
-            """UPDATE router.media_jobs
-               SET state = 'failed', payload = '{}'::jsonb,
-                   error_code = 'upstream_failed',
-                   error_message = 'The media-job deadline expired.',
-                   completed_at = statement_timestamp()
-               WHERE id IN (
-                   SELECT id FROM router.media_jobs
-                   WHERE state IN ('pending', 'running')
-                     AND deadline_at <= statement_timestamp()
-                   ORDER BY deadline_at, id LIMIT 100
-                   FOR UPDATE SKIP LOCKED
-               )"""
+            """WITH expired AS (
+                   UPDATE router.media_jobs
+                   SET state = 'failed', payload = '{}'::jsonb,
+                       error_code = 'upstream_failed',
+                       error_message = 'The media-job deadline expired.',
+                       completed_at = statement_timestamp()
+                   WHERE id IN (
+                       SELECT id FROM router.media_jobs
+                       WHERE state IN ('pending', 'running')
+                         AND deadline_at <= statement_timestamp()
+                       ORDER BY deadline_at, id LIMIT 100
+                       FOR UPDATE SKIP LOCKED
+                   )
+                   RETURNING call_actor, logical_call_id, completed_at
+               )
+               UPDATE router.raw_accounting_calls AS call
+               SET outcome = 'failed', completed_at = expired.completed_at
+               FROM expired
+               WHERE expired.call_actor = 'administrator'
+                 AND call.call_actor = 'administrator'
+                 AND call.id = expired.logical_call_id
+                 AND call.outcome IS NULL"""
         )
         row = connection.execute(
-            """SELECT media_jobs.id, media_jobs.service_id,
+            """SELECT media_jobs.id, media_jobs.logical_call_id,
+                      media_jobs.call_actor, media_jobs.service_id,
                       media_jobs.workspace_id, media_jobs.payload,
-                      media_jobs.deadline_at,
+                      media_jobs.deadline_at, media_jobs.administrator_subject,
                       services.api_name AS service_api_name
                FROM router.media_jobs
-               JOIN router.services ON services.id = media_jobs.service_id
+               LEFT JOIN router.services ON services.id = media_jobs.service_id
                WHERE media_jobs.id = (
                    SELECT id FROM router.media_jobs
                    WHERE state = 'pending' AND deadline_at > statement_timestamp()
@@ -692,6 +1145,10 @@ def _call_from_claimed_job(
             )
     if images:
         document["input_images"] = images
+    if claimed["call_actor"] == "administrator":
+        return internal_media_call(
+            AdministratorMediaJobRequest.model_validate(document)
+        )
     return internal_media_call(MediaJobRequest.model_validate(document))
 
 
@@ -714,6 +1171,7 @@ def _complete_job(
             "content_unavailable",
             "The generated media could not be retained.",
             database_connect,
+            result=result,
         )
         return
     output = result.outputs[0]
@@ -721,13 +1179,21 @@ def _complete_job(
     body = cast("bytes", output.media_body)
     media_id = uuid.uuid4()
     created_at = datetime.now(tz=UTC)
-    object_key = _object_key(
-        created_at,
-        cast("uuid.UUID", claimed["service_id"]),
-        cast("uuid.UUID", claimed["workspace_id"]),
-        cast("uuid.UUID", claimed["id"]),
-        media_id,
-    )
+    if claimed["call_actor"] == "administrator":
+        object_key = _administrator_object_key(
+            created_at,
+            cast("str", claimed["administrator_subject"]),
+            cast("uuid.UUID", claimed["id"]),
+            media_id,
+        )
+    else:
+        object_key = _object_key(
+            created_at,
+            cast("uuid.UUID", claimed["service_id"]),
+            cast("uuid.UUID", claimed["workspace_id"]),
+            cast("uuid.UUID", claimed["id"]),
+            media_id,
+        )
     try:
         object_store.put(object_key, body, cast("str", metadata["media_type"]))
         with database_connect(
@@ -739,21 +1205,35 @@ def _complete_job(
             row = connection.execute(
                 """UPDATE router.media_jobs
                    SET state = 'succeeded', provider_model_api_name = %s,
-                       payload = '{}'::jsonb,
+                       payload = '{}'::jsonb, attempts = %s, elapsed_ms = %s,
+                       usage = %s,
                        completed_at = statement_timestamp()
                    WHERE id = %s AND state = 'running'
-                   RETURNING service_id, workspace_id""",
-                (result.provider_model_api_name, claimed["id"]),
+                   RETURNING call_actor, service_id, workspace_id""",
+                (
+                    result.provider_model_api_name,
+                    Jsonb(
+                        [
+                            value.model_dump(mode="json", exclude_none=True)
+                            for value in administrator_attempt_results(result.attempts)
+                        ]
+                    ),
+                    result.elapsed_ms,
+                    Jsonb(result_usage(result)),
+                    claimed["id"],
+                ),
             ).fetchone()
             if row is None:
                 raise LookupError
             connection.execute(
                 """INSERT INTO router.media_objects
-                       (id, service_id, workspace_id, media_job_id, object_key,
+                       (id, call_actor, service_id, workspace_id, media_job_id,
+                        object_key,
                         media_type, role, size_bytes, content_sha256)
-                   VALUES (%s, %s, %s, %s, %s, %s, 'output', %s, %s)""",
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, 'output', %s, %s)""",
                 (
                     media_id,
+                    row["call_actor"],
                     row["service_id"],
                     row["workspace_id"],
                     claimed["id"],
@@ -771,6 +1251,7 @@ def _complete_job(
             "content_unavailable",
             "The generated media could not be retained.",
             database_connect,
+            result=result,
         )
 
 
@@ -780,6 +1261,9 @@ def _fail_job(
     code: str,
     message: str,
     database_connect: Callable[..., psycopg.Connection[Any]] = psycopg.connect,
+    *,
+    error: CallExecutionError | None = None,
+    result: CallResult | None = None,
 ) -> None:
     safe_codes = {
         "provider_unavailable",
@@ -790,19 +1274,66 @@ def _fail_job(
     }
     safe_code = code if code in safe_codes else "upstream_failed"
     safe_message = message[:1000] if code in safe_codes else "The media job failed."
+    attempt_values = administrator_attempt_results(
+        error.attempts
+        if error is not None
+        else result.attempts
+        if result is not None
+        else ()
+    )
+    terminal_provider_model = (
+        attempt_values[-1].provider_model_api_name if attempt_values else None
+    )
     with database_connect(
         database_url,
         connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
         options=_DATABASE_OPTIONS,
     ) as connection:
-        connection.execute(
+        row = connection.execute(
             """UPDATE router.media_jobs
                SET state = 'failed', payload = '{}'::jsonb,
+                   provider_model_api_name = COALESCE(%s, provider_model_api_name),
                    error_code = %s, error_message = %s,
+                   attempts = %s, usage = %s,
+                   elapsed_ms = COALESCE(
+                       %s,
+                       LEAST(86400000, GREATEST(0,
+                           EXTRACT(EPOCH FROM
+                               (statement_timestamp() - created_at)) * 1000
+                       ))::integer
+                   ),
                    completed_at = statement_timestamp()
-               WHERE id = %s AND state = 'running'""",
-            (safe_code, safe_message, job_id),
-        )
+               WHERE id = %s AND state = 'running'
+               RETURNING call_actor, logical_call_id, completed_at""",
+            (
+                terminal_provider_model,
+                safe_code,
+                safe_message,
+                Jsonb(
+                    [
+                        value.model_dump(mode="json", exclude_none=True)
+                        for value in attempt_values
+                    ]
+                ),
+                Jsonb(result_usage(result)) if result is not None else None,
+                (
+                    error.elapsed_ms
+                    if error is not None
+                    else result.elapsed_ms
+                    if result is not None
+                    else None
+                ),
+                job_id,
+            ),
+        ).fetchone()
+        if row is not None and row[0] == "administrator" and row[1] is not None:
+            connection.execute(
+                """UPDATE router.raw_accounting_calls
+                   SET outcome = 'failed', completed_at = %s
+                   WHERE id = %s AND call_actor = 'administrator'
+                     AND outcome IS NULL""",
+                (row[2], row[1]),
+            )
 
 
 def _public_job(row: dict[str, Any]) -> dict[str, Any]:
@@ -832,6 +1363,41 @@ def _public_job(row: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _public_administrator_job(row: dict[str, Any]) -> dict[str, Any]:
+    """Return one closed administrator media-job document."""
+    if row["assignment_api_name"] is not None:
+        selector: dict[str, str] = {
+            "assignment_api_name": row["assignment_api_name"],
+            "service_api_name": row["configuration_service_api_name"],
+        }
+    else:
+        selector = {"provider_model_api_name": row["exact_provider_model_api_name"]}
+    result: dict[str, Any] = {
+        "id": str(row["id"]),
+        "logical_call_id": str(row["logical_call_id"]),
+        "selector": selector,
+        "provider_model_api_name": row["provider_model_api_name"],
+        "kind": row["kind"],
+        "state": row["state"],
+        "attempts": row["attempts"],
+        "created_at": row["created_at"],
+    }
+    for name in ("elapsed_ms", "usage", "completed_at"):
+        if row.get(name) is not None:
+            result[name] = row[name]
+    if row.get("media_type") is not None:
+        result["content"] = {
+            "media_type": row["media_type"],
+            "size_bytes": row["size_bytes"],
+        }
+    if row.get("error_code") is not None:
+        result["error"] = {
+            "code": row["error_code"],
+            "message": row["error_message"],
+        }
+    return result
+
+
 def _captured_image(value: ImageInputPart) -> CapturedMedia:
     return CapturedMedia(value.decoded_body(), value.media_type, "input")
 
@@ -845,6 +1411,19 @@ def _object_key(
 ) -> str:
     return (
         f"{created_at.date().isoformat()}/{service_id}/{workspace_id}/"
+        f"media-jobs/{job_id}/{media_id}"
+    )
+
+
+def _administrator_object_key(
+    created_at: datetime,
+    administrator_subject: str,
+    job_id: uuid.UUID,
+    media_id: uuid.UUID,
+) -> str:
+    subject_hash = hashlib.sha256(administrator_subject.encode("utf-8")).hexdigest()
+    return (
+        f"{created_at.date().isoformat()}/administrators/{subject_hash}/"
         f"media-jobs/{job_id}/{media_id}"
     )
 
