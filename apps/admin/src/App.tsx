@@ -19,6 +19,7 @@ import {
   Button,
   ConfirmationDialog,
   DataTable,
+  DateTime,
   Icon,
   MobileNavigation,
   NavigationItem,
@@ -180,12 +181,24 @@ function withUnauthorizedSessionHandler(
   });
   /* eslint-enable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return */
 }
-function displayTime(value: string | null | undefined): string {
+function displayTimeText(value: string | null | undefined): string {
   if (value == null) return "Never";
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime())
     ? "Unavailable"
     : parsed.toLocaleString();
+}
+function RouterDateTime({
+  value,
+}: {
+  readonly value: string | null | undefined;
+}) {
+  return (
+    <DateTime
+      fallback={value == null ? "Never" : "Unavailable"}
+      value={value}
+    />
+  );
 }
 function formText(form: FormData, name: string): string {
   const value = form.get(name);
@@ -215,7 +228,7 @@ const requestLogColumns: readonly DataTableColumn<RequestLogSummary>[] = [
     key: "started",
     header: "Started",
     width: "12rem",
-    render: ({ row }) => displayTime(row.started_at),
+    render: ({ row }) => <RouterDateTime value={row.started_at} />,
   },
   {
     key: "actor",
@@ -309,7 +322,7 @@ const activityColumns: readonly DataTableColumn<ActivityEvent>[] = [
     key: "time",
     header: "Time",
     width: "12rem",
-    render: ({ row }) => displayTime(row.occurred_at),
+    render: ({ row }) => <RouterDateTime value={row.occurred_at} />,
   },
   {
     key: "actor",
@@ -451,7 +464,11 @@ function Overview({ data }: { readonly data: AppData }) {
       </section>
       <Panel>
         <PanelHeader
-          description={`Checked ${displayTime(data.health.checked_at)}`}
+          description={
+            <>
+              Checked <RouterDateTime value={data.health.checked_at} />
+            </>
+          }
           title="Small health summary"
         />
         <ul className="health-list">
@@ -543,7 +560,9 @@ function RequestLogDetail({
             </div>
             <div>
               <dt>Started</dt>
-              <dd>{displayTime(detail.summary.started_at)}</dd>
+              <dd>
+                <RouterDateTime value={detail.summary.started_at} />
+              </dd>
             </div>
             <div>
               <dt>Tags</dt>
@@ -575,8 +594,8 @@ function RequestLogDetail({
                   {item.provider_model_api_name} · {item.outcome}
                 </strong>
                 <span>
-                  {displayTime(item.started_at)} through{" "}
-                  {displayTime(item.completed_at)}
+                  <RouterDateTime value={item.started_at} /> through{" "}
+                  <RouterDateTime value={item.completed_at} />
                 </span>
                 <span>
                   {item.usage === undefined
@@ -593,9 +612,15 @@ function RequestLogDetail({
                   {typeof item.applied_prices.source === "string"
                     ? ` · source ${item.applied_prices.source}`
                     : ""}
-                  {item.applied_prices.synchronized_at === undefined
-                    ? ""
-                    : ` · synchronized ${displayTime(item.applied_prices.synchronized_at)}`}
+                  {item.applied_prices.synchronized_at === undefined ? null : (
+                    <>
+                      {" "}
+                      · synchronized{" "}
+                      <RouterDateTime
+                        value={item.applied_prices.synchronized_at}
+                      />
+                    </>
+                  )}
                 </span>
                 {item.error == null ? null : (
                   <span>
@@ -1221,7 +1246,7 @@ function StatisticsPage({
         liveMessage={
           result === null
             ? undefined
-            : `${String(buckets.length)} accounting groups loaded for ${displayTime(result.from)} through ${displayTime(result.to)}.`
+            : `${String(buckets.length)} accounting groups loaded for ${displayTimeText(result.from)} through ${displayTimeText(result.to)}.`
         }
         maxRows={STATISTICS_GROUP_MAXIMUM}
         minimumWidth="56rem"
@@ -1427,7 +1452,7 @@ function OperationsPage({
       <div className="administration-sections">
         <Panel>
           <PanelHeader
-            description={displayTime(health.checked_at)}
+            description={<RouterDateTime value={health.checked_at} />}
             title="Health components"
           />
           <ul className="health-list">
@@ -1482,7 +1507,7 @@ function OperationsPage({
                   <strong>{item.api_name}</strong>
                   <small>
                     {item.cooldown?.reason} · until{" "}
-                    {displayTime(item.cooldown?.until)}
+                    <RouterDateTime value={item.cooldown?.until} />
                   </small>
                 </span>
                 <StatusPill tone="amber">cooldown</StatusPill>
@@ -1660,7 +1685,11 @@ function AuthenticatedAdministration({
         <>
           <AccountMenu
             avatar={session.display_name.slice(0, 2).toUpperCase()}
-            detail={`Expires ${displayTime(session.expires_at)}`}
+            detail={
+              <>
+                Expires <RouterDateTime value={session.expires_at} />
+              </>
+            }
             name={session.display_name}
           />
           <Button

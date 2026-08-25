@@ -694,13 +694,29 @@ class OidcMock:
         }
         self.nonce = ""
         self.code_mode = "valid"
+        self.request_paths: list[str] = []
         self.token_form: dict[str, list[str]] = {}
         self.token_authorization = ""
         self.transport = httpx.MockTransport(self.handle)
 
-    def handle(self, request: httpx.Request) -> httpx.Response:  # noqa: PLR0911
+    def handle(self, request: httpx.Request) -> httpx.Response:  # noqa: C901, PLR0911
         """Serve discovery, token, and JWKS responses."""
+        self.request_paths.append(request.url.path)
         if request.url.path == "/.well-known/openid-configuration":
+            if self.code_mode == "redirect_discovery":
+                return httpx.Response(
+                    HTTPStatus.FOUND,
+                    headers={"Location": f"{ISSUER}/redirected-discovery"},
+                )
+            if self.code_mode == "duplicate_response_headers":
+                return httpx.Response(
+                    HTTPStatus.OK,
+                    headers=[
+                        ("Content-Type", "application/json"),
+                        ("Content-Type", "application/json"),
+                    ],
+                    content=b"{}",
+                )
             if self.code_mode == "oversized_discovery":
                 return httpx.Response(200, headers={"Content-Length": "1000001"})
             if self.code_mode == "duplicate_discovery":
@@ -727,6 +743,9 @@ class OidcMock:
                     else f"{ISSUER}/token"
                 ),
                 "jwks_uri": f"{ISSUER}/jwks",
+                "response_types_supported": ["code"],
+                "code_challenge_methods_supported": ["S256"],
+                "id_token_signing_alg_values_supported": ["RS256"],
             }
             if self.code_mode != "omitted_token_auth":
                 document["token_endpoint_auth_methods_supported"] = token_auth_methods
@@ -744,7 +763,7 @@ class OidcMock:
             return httpx.Response(200, json={"id_token": self._token()})
         return httpx.Response(404)
 
-    def _token(self) -> str:  # noqa: C901
+    def _token(self) -> str:  # noqa: C901, PLR0912
         now = datetime.now(tz=UTC).timestamp()
         claims: dict[str, Any] = {
             "iss": ISSUER,
@@ -765,6 +784,11 @@ class OidcMock:
             claims["nonce"] = "other"
         elif self.code_mode == "subject":
             claims["sub"] = "not-allowed"
+        elif self.code_mode == "preferred_username":
+            claims.pop("name")
+            claims["preferred_username"] = "Preferred administrator"
+        elif self.code_mode == "missing_display_name":
+            claims.pop("name")
         elif self.code_mode == "issued_at":
             claims.pop("iat")
         elif self.code_mode == "duplicate_audience":
@@ -1147,6 +1171,11 @@ def test_oidc_rejects_invalid_identity_controls(
     assert "location" not in response.headers
     assert "test-client-secret-value" not in response.text
     assert ADMIN_SUBJECT not in response.text
+    assert response.json()["error"]["code"] == (
+        "permission_denied"
+        if expected_status == HTTPStatus.FORBIDDEN
+        else "authentication_required"
+    )
     replay = context.client.get(
         "/v1/admin/oidc/callback",
         params={"code": "code", "state": query["state"][0]},
@@ -1166,6 +1195,54 @@ def test_oidc_rejects_an_oversized_provider_document(
     response = context.client.post("/v1/admin/session/start", json={"return_to": "/"})
     assert response.status_code == HTTPStatus.UNAUTHORIZED
     assert "location" not in response.headers
+
+
+@pytest.mark.parametrize("mode", ["redirect_discovery", "duplicate_response_headers"])
+def test_oidc_transport_rejects_redirects_and_duplicate_critical_headers(
+    migrated_database: str, identity_settings: Settings, mode: str
+) -> None:
+    """Reject redirected or ambiguous provider responses."""
+    provider = OidcMock()
+    provider.code_mode = mode
+    context = IdentityTestContext(
+        migrated_database, identity_settings, transport=provider.transport
+    )
+    response = context.client.post("/v1/admin/session/start", json={"return_to": "/"})
+    assert response.status_code == HTTPStatus.UNAUTHORIZED
+    assert response.json()["error"]["code"] == "authentication_required"
+    assert provider.request_paths == ["/.well-known/openid-configuration"]
+
+
+@pytest.mark.parametrize(
+    ("mode", "display_name"),
+    [
+        ("preferred_username", "Preferred administrator"),
+        ("missing_display_name", "Pocket ID administrator"),
+    ],
+)
+def test_oidc_preserves_router_display_name_fallback(
+    migrated_database: str,
+    identity_settings: Settings,
+    mode: str,
+    display_name: str,
+) -> None:
+    """Keep Router display data separate from verified identity authority."""
+    provider = OidcMock()
+    provider.code_mode = mode
+    context = IdentityTestContext(
+        migrated_database, identity_settings, transport=provider.transport
+    )
+    started = context.client.post("/v1/admin/session/start", json={"return_to": "/"})
+    query = parse_qs(urlsplit(started.json()["authorization_url"]).query)
+    provider.nonce = query["nonce"][0]
+    completed = context.client.get(
+        "/v1/admin/oidc/callback",
+        params={"code": "code", "state": query["state"][0]},
+    )
+    assert completed.status_code == HTTPStatus.SEE_OTHER
+    session = context.client.get("/v1/admin/session")
+    assert session.status_code == HTTPStatus.OK
+    assert session.json()["display_name"] == display_name
 
 
 @pytest.mark.parametrize(

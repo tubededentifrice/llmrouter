@@ -13,7 +13,11 @@ import {
 import {
   Button,
   ConfirmationDialog,
+  DateTime,
   EditableTable,
+  FormActions,
+  FormField,
+  FormSection,
   GraphEdge,
   GraphEdges,
   GraphEmptyState,
@@ -23,7 +27,10 @@ import {
   GraphViewport,
   GraphWorkspace,
   Icon,
+  InlineAlert,
   PageSurface,
+  SearchableSelect,
+  SecretRevealPanel,
   StatePanel,
   layoutTree,
   treeEdgePath,
@@ -54,11 +61,15 @@ function formText(form: FormData, name: string): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function displayTime(value: string | null | undefined): string {
-  if (value == null) return "Never";
-  const date = new Date(value);
-  return Number.isNaN(date.valueOf()) ? value : date.toLocaleString();
+function ServiceDateTime({
+  value,
+}: {
+  readonly value: string | null | undefined;
+}) {
+  return <DateTime fallback={value ?? "Never"} value={value} />;
 }
+
+const NO_PARENT_OPTION = "__no_parent__";
 
 function descendants(
   services: readonly Service[],
@@ -134,13 +145,13 @@ type LoadPhase = "loading" | "ready" | "error";
 interface WorkspaceDraft {
   readonly apiName: string;
   readonly displayName: string;
-  readonly createdAt: string;
+  readonly createdAt: string | null;
 }
 
 interface KeyDraft {
   readonly name: string;
-  readonly createdAt: string;
-  readonly lastUsedAt: string;
+  readonly createdAt: string | null;
+  readonly lastUsedAt: string | null | undefined;
 }
 
 interface ServiceAccessState {
@@ -220,7 +231,7 @@ const workspaceColumns: readonly EditableTableColumn<WorkspaceDraft>[] = [
     key: "created",
     header: "Created",
     width: "24%",
-    renderRead: ({ row }) => row.draft.createdAt,
+    renderRead: ({ row }) => <ServiceDateTime value={row.draft.createdAt} />,
     renderEdit: () => "After creation",
   },
 ];
@@ -248,14 +259,14 @@ const keyColumns: readonly EditableTableColumn<KeyDraft>[] = [
     key: "created",
     header: "Created",
     width: "26%",
-    renderRead: ({ row }) => row.draft.createdAt,
+    renderRead: ({ row }) => <ServiceDateTime value={row.draft.createdAt} />,
     renderEdit: () => "After creation",
   },
   {
     key: "last-use",
     header: "Last use",
     width: "26%",
-    renderRead: ({ row }) => row.draft.lastUsedAt,
+    renderRead: ({ row }) => <ServiceDateTime value={row.draft.lastUsedAt} />,
     renderEdit: () => "Never",
   },
 ];
@@ -292,39 +303,27 @@ function OneTimeKey({
   readonly secret: string;
 }) {
   return (
-    <section aria-labelledby="one-time-key" className="secret-panel">
-      <h3 id="one-time-key">Copy this key now</h3>
-      <p>
-        The Router will not show it again. Deploy it to the service backend, and
-        then clear this value.
-      </p>
-      <output>{secret}</output>
-      <div className="service-secret-actions">
-        <Button
-          onClick={() => {
-            void Promise.resolve()
-              .then(() => navigator.clipboard.writeText(secret))
-              .then(
-                () => {
-                  onNotice("success", "The key was copied.");
-                },
-                () => {
-                  onNotice(
-                    "error",
-                    "The browser could not copy the key. Select and copy it manually.",
-                  );
-                },
-              );
-          }}
-          variant="secondary"
-        >
-          Copy key
-        </Button>
-        <Button onClick={onClear} variant="quiet">
-          Clear key
-        </Button>
-      </div>
-    </section>
+    <SecretRevealPanel
+      copiedLabel="Key copied"
+      copyLabel="Copy key"
+      copySecret={async (value) => {
+        await navigator.clipboard.writeText(value);
+        onNotice("success", "The key was copied.");
+      }}
+      description="The Router will not show it again. Deploy it to the service backend, and then clear this value."
+      dismissLabel="Clear key"
+      headingLevel="h3"
+      onCopyError={() => {
+        onNotice(
+          "error",
+          "The browser could not copy the key. Select and copy it manually.",
+        );
+      }}
+      onDismiss={onClear}
+      secret={secret}
+      secretLabel="Service API key"
+      title="Copy this key now"
+    />
   );
 }
 
@@ -748,7 +747,7 @@ function ServiceAccessSections({
         draft: {
           apiName: workspace.api_name,
           displayName: workspace.display_name,
-          createdAt: displayTime(workspace.created_at),
+          createdAt: workspace.created_at,
         },
       })),
       ...(workspaceDraft === null
@@ -776,8 +775,8 @@ function ServiceAccessSections({
         label: key.name,
         draft: {
           name: key.name,
-          createdAt: displayTime(key.created_at),
-          lastUsedAt: displayTime(key.last_used_at),
+          createdAt: key.created_at,
+          lastUsedAt: key.last_used_at,
         },
       })),
       ...(keyDraft === null
@@ -887,6 +886,13 @@ function ServiceInspector({
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deletePending, setDeletePending] = useState(false);
+  const [parentSelection, setParentSelection] = useReducer(
+    (_current: string, next: string) => next,
+    selected.parent_service_api_name ?? NO_PARENT_OPTION,
+  );
+  useEffect(() => {
+    setParentSelection(selected.parent_service_api_name ?? NO_PARENT_OPTION);
+  }, [selected.api_name, selected.parent_service_api_name]);
   const keyLifecycleActive = keyLifecycle !== null;
   const blockedParents = descendants(services, selected.api_name);
   const hasChildren = services.some(
@@ -922,9 +928,7 @@ function ServiceInspector({
         <div>
           <dt>Created</dt>
           <dd>
-            <time dateTime={selected.created_at}>
-              {displayTime(selected.created_at)}
-            </time>
+            <ServiceDateTime value={selected.created_at} />
           </dd>
         </div>
       </dl>
@@ -948,40 +952,50 @@ function ServiceInspector({
           ).then(setMutationError);
         }}
       >
-        <label>
-          Display name
-          <input
-            defaultValue={selected.display_name}
-            maxLength={200}
-            name="display_name"
-            required
+        <FormSection legend="Service details">
+          <FormField label="Display name" requirement="required">
+            <input
+              defaultValue={selected.display_name}
+              maxLength={200}
+              name="display_name"
+              required
+            />
+          </FormField>
+          <SearchableSelect
+            label="Parent service"
+            onChange={(value) => {
+              setParentSelection(value);
+            }}
+            options={[
+              { label: "No parent", value: NO_PARENT_OPTION },
+              ...parentOptions.map((item) => ({
+                description: item.api_name,
+                label: item.display_name,
+                value: item.api_name,
+              })),
+            ]}
+            placeholder="Search parent services"
+            value={parentSelection}
           />
-        </label>
-        <label>
-          Parent service
-          <select
-            defaultValue={selected.parent_service_api_name ?? ""}
+          <input
             name="parent"
+            type="hidden"
+            value={parentSelection === NO_PARENT_OPTION ? "" : parentSelection}
+          />
+        </FormSection>
+        <FormActions alignment="start">
+          <Button
+            disabled={busy || accessPending || keyLifecycleActive}
+            type="submit"
           >
-            <option value="">No parent</option>
-            {parentOptions.map((item) => (
-              <option key={item.api_name} value={item.api_name}>
-                {item.display_name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <Button
-          disabled={busy || accessPending || keyLifecycleActive}
-          type="submit"
-        >
-          Save service
-        </Button>
+            Save service
+          </Button>
+        </FormActions>
       </form>
       {mutationError === null ? null : (
-        <StatePanel kind="error" title="The service change failed">
+        <InlineAlert title="The service change failed" tone="error">
           {mutationError} Correct the values and try again.
-        </StatePanel>
+        </InlineAlert>
       )}
       <ServiceAccessSections
         client={client}
@@ -1026,9 +1040,9 @@ function ServiceInspector({
               logs, accounting, jobs, and retained media.
             </p>
             {deleteError === null ? null : (
-              <p className="field-error" role="alert">
+              <InlineAlert title="The service was not deleted" tone="error">
                 {deleteError} Correct the problem and try again.
-              </p>
+              </InlineAlert>
             )}
           </>
         }
@@ -1297,6 +1311,7 @@ function CreateServiceInspector({
   readonly returnFocusRef: RefObject<HTMLElement | null>;
   readonly services: readonly Service[];
 }) {
+  const [parentSelection, setParentSelection] = useState(NO_PARENT_OPTION);
   return (
     <GraphInspector
       activationKey="create-service"
@@ -1309,39 +1324,51 @@ function CreateServiceInspector({
       tone="lime"
     >
       <form className="service-create-form" onSubmit={onSubmit}>
-        <label>
-          API name
-          <input
-            maxLength={63}
-            name="api_name"
-            pattern="[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?"
-            ref={inputRef}
-            required
+        <FormSection legend="Service details">
+          <FormField label="API name" requirement="required">
+            <input
+              maxLength={63}
+              name="api_name"
+              pattern="[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?"
+              ref={inputRef}
+              required
+            />
+          </FormField>
+          <FormField label="Display name" requirement="required">
+            <input maxLength={200} name="display_name" required />
+          </FormField>
+          <SearchableSelect
+            label="Parent service"
+            onChange={(value) => {
+              setParentSelection(value);
+            }}
+            options={[
+              { label: "No parent", value: NO_PARENT_OPTION },
+              ...services.map((service) => ({
+                description: service.api_name,
+                label: service.display_name,
+                value: service.api_name,
+              })),
+            ]}
+            placeholder="Search parent services"
+            value={parentSelection}
           />
-        </label>
-        <label>
-          Display name
-          <input maxLength={200} name="display_name" required />
-        </label>
-        <label>
-          Parent service
-          <select name="parent">
-            <option value="">No parent</option>
-            {services.map((service) => (
-              <option key={service.api_name} value={service.api_name}>
-                {service.display_name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <Button disabled={busy} type="submit">
-          {busy ? "Creating service…" : "Create service"}
-        </Button>
+          <input
+            name="parent"
+            type="hidden"
+            value={parentSelection === NO_PARENT_OPTION ? "" : parentSelection}
+          />
+        </FormSection>
+        <FormActions alignment="start">
+          <Button disabled={busy} type="submit">
+            {busy ? "Creating service…" : "Create service"}
+          </Button>
+        </FormActions>
       </form>
       {error === null ? null : (
-        <StatePanel kind="error" title="The service was not created">
+        <InlineAlert title="The service was not created" tone="error">
           {error} Correct the values and try again.
-        </StatePanel>
+        </InlineAlert>
       )}
     </GraphInspector>
   );

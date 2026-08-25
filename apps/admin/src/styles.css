@@ -330,50 +330,6 @@ textarea:focus {
   font-size: 12px;
 }
 
-.secret-panel {
-  overflow: hidden;
-  border: 1px solid var(--od-color-border);
-  border-radius: var(--od-radius-lg);
-  background: var(--od-color-surface);
-  box-shadow: 0 8px 24px var(--od-shadow);
-}
-
-.secret-panel {
-  padding-inline: 22px;
-}
-
-.secret-panel {
-  padding-block: 20px;
-  border-color: var(--od-color-amber);
-  background: var(--od-color-amber-soft);
-}
-
-.secret-panel h3,
-.secret-panel p {
-  margin: 0;
-}
-
-.secret-panel p {
-  margin-top: 5px;
-  color: var(--od-color-muted-strong);
-  font-size: 12px;
-}
-
-.secret-panel output {
-  display: block;
-  max-height: 160px;
-  margin: 16px 0;
-  padding: 13px;
-  overflow: auto;
-  border: 1px solid var(--od-color-amber);
-  border-radius: var(--od-radius-sm);
-  background: var(--od-color-surface);
-  font-family: var(--od-font-mono), monospace;
-  overflow-wrap: anywhere;
-  user-select: all;
-}
-
-.secret-panel > div,
 .assignment-actions {
   display: flex;
   flex-wrap: wrap;

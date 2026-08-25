@@ -898,7 +898,7 @@ wheels = [
 [[package]]
 name = "opendle-lib"
 version = "0.0.0"
-source = { git = "https://github.com/opendle/opendle-lib.git?rev=main#82f5a981fe97a5458a5f9850c9fcd4afea2fc03d" }
+source = { git = "https://github.com/opendle/opendle-lib.git?rev=main#5a50872a61cf2bb1aa9d47b706986adba39f6846" }
 
 [[package]]
 name = "packageurl-python"

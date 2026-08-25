@@ -352,6 +352,36 @@ describe("accepted administration composition", () => {
     expect(markup).toContain("Loading workspaces");
     expect(markup).toContain("Loading service API keys");
     expect(markup).toContain("Move or delete each child");
+    expect(markup).toContain('aria-expanded="false"');
+    expect(markup).toContain("od-form-section");
+    expect(markup).toContain("od-form-actions");
+    expect(markup).toContain('name="parent"');
+    expect(markup).toContain('dateTime="2026-08-24T00:00:00.000Z"');
+  });
+
+  it("keeps the exact service timestamp fallback without an invalid attribute", () => {
+    const markup = renderToStaticMarkup(
+      <ServiceManagement
+        client={client()}
+        csrf="csrf"
+        onNotice={vi.fn()}
+        onRefresh={vi.fn()}
+        onSelect={vi.fn()}
+        selectedService="invalid-time"
+        services={[
+          {
+            api_name: "invalid-time",
+            display_name: "Invalid time",
+            parent_service_api_name: null,
+            created_at: "not-a-timestamp",
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("od-date-time-invalid");
+    expect(markup).toContain("not-a-timestamp");
+    expect(markup).not.toContain('dateTime="not-a-timestamp"');
   });
 
   it("renders the empty service tree without resetting an empty focus target", () => {
@@ -384,6 +414,13 @@ describe("accepted administration composition", () => {
     expect(applicationSource).not.toContain("function AccessPage");
     expect(serviceSource).toContain("EditableTable");
     expect(serviceSource).toContain("ConfirmationDialog");
+    expect(serviceSource).toContain("SecretRevealPanel");
+    expect(serviceSource).toContain("SearchableSelect");
+    expect(serviceSource).toContain("FormField");
+    expect(serviceSource).toContain("FormActions");
+    expect(serviceSource).toContain("FormSection");
+    expect(serviceSource).toContain("InlineAlert");
+    expect(serviceSource).toContain("<DateTime");
     expect(serviceSource).not.toContain("globalThis.confirm");
     expect(serviceSource).toContain("Copy this key now");
     expect(serviceSource).toContain(
@@ -399,6 +436,7 @@ describe("accepted administration composition", () => {
     expect(serviceSource).not.toContain("localStorage");
     expect(serviceSource).not.toContain("sessionStorage");
     expect(serviceSource).not.toContain("Use in playground");
+    expect(applicationSource).toContain("<DateTime");
   });
 
   it("uses a create-row identity that no workspace API name can use", () => {
@@ -519,6 +557,8 @@ describe("accepted administration composition", () => {
     );
     expect(shownMarkup).toContain("one-time-secret");
     expect(shownMarkup).toContain("Clear key");
+    expect(shownMarkup).toContain("od-secret-reveal-panel");
+    expect(shownMarkup).toContain("Service API key");
   });
 
   it("starts in a session loading state", () => {
@@ -534,6 +574,7 @@ describe("accepted administration composition", () => {
     );
     expect(styles).toContain(".administration-form");
     expect(styles).toContain(".health-list");
+    expect(styles).not.toContain(".secret-panel");
     expect(styles).not.toMatch(/\.(?:mt|mb|px|py|flex|grid)-\d/);
     for (const layoutHelper of [
       ".page-stack",
