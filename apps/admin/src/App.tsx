@@ -40,9 +40,12 @@ import {
 } from "@opendle/ui";
 import {
   AdministrationApiError,
+  administrationListMaximum,
+  continuedPageCursor,
   createAdministrationClient,
   errorMessage,
   isoRange,
+  mergeBoundedRows,
   type ActivityEvent,
   type AdministrationClient,
   type AdministratorHealth,
@@ -198,7 +201,6 @@ function tone(value: string): "green" | "amber" | "red" | "blue" {
   if (["failed", "unavailable", "disabled"].includes(value)) return "red";
   return "blue";
 }
-const COMPLETE_ADMINISTRATION_LIST_MAXIMUM = 20_000;
 const STATISTICS_GROUP_MAXIMUM = 1_000;
 
 function usageLabel(item: StatisticsBucket): string {
@@ -251,7 +253,9 @@ const requestLogColumns: readonly DataTableColumn<RequestLogSummary>[] = [
     header: "Outcome",
     width: "8rem",
     render: ({ row }) => (
-      <StatusPill tone={tone(row.outcome)}>{row.outcome}</StatusPill>
+      <StatusPill tone={tone(row.outcome)}>
+        {row.outcome}
+      </StatusPill>
     ),
   },
 ];
@@ -261,7 +265,12 @@ const statisticsColumns: readonly DataTableColumn<StatisticsBucket>[] = [
     key: "dimensions",
     header: "Dimensions",
     width: "32%",
-    render: ({ row }) => row.dimensions.join(" / ") || "Total",
+    render: ({ row }) =>
+      row.dimensions.length === 0
+        ? "Total"
+        : row.dimensions
+            .map((dimension) => dimension ?? "Not applicable")
+            .join(" / "),
   },
   {
     align: "end",
@@ -288,7 +297,12 @@ const statisticsColumns: readonly DataTableColumn<StatisticsBucket>[] = [
     key: "cost",
     header: "Cost",
     width: "10rem",
-    render: ({ row }) => `${row.currency} ${row.cost}`,
+    render: ({ row }) =>
+      row.cost === null
+        ? "Unavailable"
+        : row.currency === null
+          ? `${row.cost} (no currency)`
+          : `${row.currency} ${row.cost}`,
   },
 ];
 
@@ -323,7 +337,9 @@ const activityColumns: readonly DataTableColumn<ActivityEvent>[] = [
     header: "Result",
     width: "8rem",
     render: ({ row }) => (
-      <StatusPill tone={tone(row.result)}>{row.result}</StatusPill>
+      <StatusPill tone={tone(row.result)}>
+        {row.result}
+      </StatusPill>
     ),
   },
 ];
@@ -449,7 +465,9 @@ function Overview({ data }: { readonly data: AppData }) {
                 <strong>{item.name.replaceAll("_", " ")}</strong>
                 {item.message == null ? null : <small>{item.message}</small>}
               </span>
-              <StatusPill tone={tone(item.status)}>{item.status}</StatusPill>
+              <StatusPill tone={tone(item.status)}>
+                {item.status}
+              </StatusPill>
             </li>
           ))}
         </ul>
@@ -465,6 +483,12 @@ interface LogsPageState {
   readonly detailId: string | null;
   readonly detail: RequestLog | null;
   readonly detailFailure: string | null;
+  readonly loadMoreFailure: string | null;
+  readonly loadMorePending: boolean;
+  readonly loadedFrom: string | null;
+  readonly loadedPages: number;
+  readonly loadedTo: string | null;
+  readonly nextCursor: string | null;
   readonly phase: "unqueried" | "loading" | "ready" | "error";
 }
 
@@ -500,6 +524,45 @@ function RequestLogDetail({
       />
       <div className="log-detail">
         <section>
+          <h3>Request facts</h3>
+          <dl className="log-detail-facts">
+            <div>
+              <dt>Logical call</dt>
+              <dd>{detail.summary.logical_call_id}</dd>
+            </div>
+            <div>
+              <dt>Actor and scope</dt>
+              <dd>
+                {requestLogActorLabel(detail.summary)} ·{" "}
+                {requestLogScopeLabel(detail.summary)}
+              </dd>
+            </div>
+            <div>
+              <dt>Route</dt>
+              <dd>{requestLogRouteLabel(detail.summary)}</dd>
+            </div>
+            <div>
+              <dt>Kind and outcome</dt>
+              <dd>
+                {detail.summary.kind} · {detail.summary.outcome}
+              </dd>
+            </div>
+            <div>
+              <dt>Started</dt>
+              <dd>{displayTime(detail.summary.started_at)}</dd>
+            </div>
+            <div>
+              <dt>Tags</dt>
+              <dd>
+                {detail.summary.tags === undefined ||
+                detail.summary.tags.length === 0
+                  ? "None"
+                  : detail.summary.tags.join(", ")}
+              </dd>
+            </div>
+          </dl>
+        </section>
+        <section>
           <h3>Request content</h3>
           <pre>{detail.request_json}</pre>
         </section>
@@ -511,12 +574,16 @@ function RequestLogDetail({
         </section>
         <section>
           <h3>Attempts</h3>
-          <ol>
+          <ol className="log-attempt-list">
             {detail.attempts.map((item, index) => (
               <li key={`${item.provider_model_api_name}-${String(index)}`}>
                 <strong>
                   {item.provider_model_api_name} · {item.outcome}
                 </strong>
+                <span>
+                  {displayTime(item.started_at)} through{" "}
+                  {displayTime(item.completed_at)}
+                </span>
                 <span>
                   {item.usage === undefined
                     ? "Usage unavailable"
@@ -524,10 +591,31 @@ function RequestLogDetail({
                         .map((unit) => `${unit.unit} ${unit.quantity}`)
                         .join(", ")}`}
                 </span>
+                <span>
+                  Applied prices: {item.applied_prices.currency} ·{" "}
+                  {item.applied_prices.unit_prices
+                    .map((price) => `${price.unit} ${price.amount}`)
+                    .join(", ")}
+                  {typeof item.applied_prices.source === "string"
+                    ? ` · source ${item.applied_prices.source}`
+                    : ""}
+                  {item.applied_prices.synchronized_at === undefined
+                    ? ""
+                    : ` · synchronized ${displayTime(item.applied_prices.synchronized_at)}`}
+                </span>
                 {item.error == null ? null : (
                   <span>
                     {item.error.code}: {item.error.message}
+                    {item.error.details?.field === undefined
+                      ? ""
+                      : ` · field ${item.error.details.field}`}
+                    {item.error.details?.reason === undefined
+                      ? ""
+                      : ` · ${item.error.details.reason}`}
                   </span>
+                )}
+                {item.response_json === undefined ? null : (
+                  <pre>{item.response_json}</pre>
                 )}
               </li>
             ))}
@@ -551,11 +639,14 @@ function RequestLogDetail({
                     }}
                     variant="quiet"
                   >
-                    Prepare retained media
+                    Prepare retained media download
                   </Button>
                   {mediaLink?.id === item.id ? (
-                    <a href={mediaLink.url} rel="noreferrer" target="_blank">
-                      Open retained media
+                    <a
+                      download={`request-log-media-${item.id}`}
+                      href={mediaLink.url}
+                    >
+                      Download retained media
                     </a>
                   ) : null}
                 </li>
@@ -568,6 +659,7 @@ function RequestLogDetail({
   );
 }
 
+// react-doctor-disable-next-line react-doctor/no-giant-component -- This page coordinates one cursor walk, selected-detail focus, stale-load rejection, and retained-media URL revocation; its render-only detail is already separate.
 function LogsPage({
   client,
   onNotice,
@@ -590,6 +682,12 @@ function LogsPage({
         detailId: null,
         detail: null,
         detailFailure: null,
+        loadMoreFailure: null,
+        loadMorePending: false,
+        loadedFrom: null,
+        loadedPages: 0,
+        loadedTo: null,
+        nextCursor: null,
         phase: "unqueried",
       };
     },
@@ -597,6 +695,7 @@ function LogsPage({
   const mediaUrl = useRef<string | null>(null);
   const mediaLoadGuard = useRef(createScopeLoadGuard());
   const listLoadGuard = useRef(createScopeLoadGuard());
+  const listCursors = useRef(new Set<string>());
   const detailLoadGuard = useRef(createScopeLoadGuard());
   const detailReturnFocus = useRef<HTMLButtonElement | null>(null);
   const [mediaLink, setMediaLink] = useState<{
@@ -638,22 +737,111 @@ function LogsPage({
   }
   function load(): Promise<void> {
     const generation = listLoadGuard.current.begin();
-    updateLogs({ items: [], phase: "loading" });
+    globalThis.document.getElementById("request-log-load")?.focus();
+    listCursors.current.clear();
+    detailLoadGuard.current.invalidate();
+    detailReturnFocus.current = null;
+    setMediaLink(null);
+    mediaUrl.current = invalidateRetainedMediaLoad(
+      mediaLoadGuard.current,
+      mediaUrl.current,
+      (url) => {
+        URL.revokeObjectURL(url);
+      },
+    );
+    updateLogs({
+      detail: null,
+      detailFailure: null,
+      detailId: null,
+      items: [],
+      loadMoreFailure: null,
+      loadMorePending: false,
+      loadedFrom: null,
+      loadedPages: 0,
+      loadedTo: null,
+      nextCursor: null,
+      phase: "loading",
+    });
     return Promise.resolve()
-      .then(() =>
-        client.requestLogs(
-          new Date(logs.from).toISOString(),
-          new Date(logs.to).toISOString(),
-        ),
-      )
+      .then(async () => {
+        const loadedFrom = new Date(logs.from).toISOString();
+        const loadedTo = new Date(logs.to).toISOString();
+        return {
+          loadedFrom,
+          loadedTo,
+          page: await client.requestLogsPage(loadedFrom, loadedTo),
+        };
+      })
+      .then(({ loadedFrom, loadedTo, page }) => {
+        if (!listLoadGuard.current.isCurrent(generation)) return;
+        const items = mergeBoundedRows(
+          [],
+          page.items,
+          (item) => item.id,
+          "The request-log list",
+        );
+        const nextCursor = continuedPageCursor(
+          page,
+          1,
+          listCursors.current,
+          "The request-log list",
+        );
+        updateLogs({
+          items,
+          loadedFrom,
+          loadedPages: 1,
+          loadedTo,
+          nextCursor,
+          phase: "ready",
+        });
+      })
+      .catch((error: unknown) => {
+        if (!listLoadGuard.current.isCurrent(generation)) return;
+        updateLogs({ phase: "error" });
+        onNotice(
+          "error",
+          error instanceof AdministrationApiError
+            ? errorMessage(error)
+            : error instanceof Error
+              ? error.message
+              : "The request-log query is inconsistent.",
+        );
+      });
+  }
+  function loadMore(): Promise<void> {
+    const cursor = logs.nextCursor;
+    if (
+      cursor === null ||
+      logs.loadedFrom === null ||
+      logs.loadedTo === null ||
+      logs.loadMorePending
+    )
+      return Promise.resolve();
+    const generation = listLoadGuard.current.begin();
+    listCursors.current.add(cursor);
+    updateLogs({ loadMoreFailure: null, loadMorePending: true });
+    return client
+      .requestLogsPage(logs.loadedFrom, logs.loadedTo, cursor)
       .then(
         (page) => {
-          const items = page.items;
           if (!listLoadGuard.current.isCurrent(generation)) return;
-          if (
+          const items = mergeBoundedRows(
+            logs.items,
+            page.items,
+            (item) => item.id,
+            "The request-log list",
+          );
+          const nextCursor = continuedPageCursor(
+            page,
+            logs.loadedPages + 1,
+            listCursors.current,
+            "The request-log list",
+          );
+          const detailUnavailable =
+            nextCursor === null &&
             logs.detailId !== null &&
-            !items.some((item) => item.id === logs.detailId)
-          ) {
+            !items.some((item) => item.id === logs.detailId);
+          if (detailUnavailable) {
             detailLoadGuard.current.invalidate();
             setMediaLink(null);
             mediaUrl.current = invalidateRetainedMediaLoad(
@@ -663,23 +851,40 @@ function LogsPage({
                 URL.revokeObjectURL(url);
               },
             );
-            updateLogs({
-              detail: null,
-              detailFailure:
-                "The selected request log is not available in the loaded range.",
-              items,
-              phase: "ready",
-            });
-            return;
           }
-          updateLogs({ items, phase: "ready" });
+          updateLogs({
+            ...(detailUnavailable
+              ? {
+                  detail: null,
+                  detailFailure:
+                    "The selected request log is not available in the loaded range.",
+                }
+              : {}),
+            items,
+            loadMoreFailure: null,
+            loadMorePending: false,
+            loadedPages: logs.loadedPages + 1,
+            nextCursor,
+          });
         },
         (error: unknown) => {
           if (!listLoadGuard.current.isCurrent(generation)) return;
-          updateLogs({ phase: "error" });
-          onNotice("error", errorMessage(error));
+          updateLogs({
+            loadMoreFailure: errorMessage(error),
+            loadMorePending: false,
+          });
         },
-      );
+      )
+      .catch((error: unknown) => {
+        if (!listLoadGuard.current.isCurrent(generation)) return;
+        updateLogs({
+          loadMoreFailure:
+            error instanceof Error
+              ? error.message
+              : "The request-log page is inconsistent.",
+          loadMorePending: false,
+        });
+      });
   }
   const inspectActions: readonly DataTableAction<RequestLogSummary>[] = [
     {
@@ -758,12 +963,30 @@ function LogsPage({
                 value={logs.to}
               />
             </label>
-            <Button type="submit">Load logs</Button>
+            <Button id="request-log-load" type="submit">
+              Load logs
+            </Button>
           </form>
         }
         getRowId={(item) => item.id}
         getRowLabel={(item) => `Request ${item.id}`}
-        maxRows={COMPLETE_ADMINISTRATION_LIST_MAXIMUM}
+        liveMessage={`${String(logs.items.length)} detailed logs loaded.`}
+        {...(logs.phase !== "ready" || logs.items.length === 0
+          ? {}
+          : {
+              loadMore: {
+                ...(logs.loadMoreFailure === null
+                  ? {}
+                  : { error: logs.loadMoreFailure }),
+                hasMore: logs.nextCursor !== null,
+                loadedLabel: `${String(logs.items.length)} detailed logs loaded`,
+                loading: logs.loadMorePending,
+                onLoadMore: loadMore,
+                onRetry: loadMore,
+                completeLabel: "The loaded date range is complete",
+              },
+            })}
+        maxRows={administrationListMaximum}
         minimumWidth="74rem"
         rows={logs.items}
         state={
@@ -786,7 +1009,10 @@ function LogsPage({
                   }
                 : {
                     kind: "ready",
-                    message: `${String(logs.items.length)} detailed logs loaded. The bounded query is complete.`,
+                    message:
+                      logs.nextCursor === null
+                        ? "The detailed-log query is complete."
+                        : "More detailed logs are available.",
                   }
         }
         toolbarLabel="Detailed request log filters"
@@ -824,7 +1050,9 @@ function LogsPage({
                 if (!mediaLoadGuard.current.isCurrent(generation)) return;
                 if (mediaUrl.current !== null)
                   URL.revokeObjectURL(mediaUrl.current);
-                mediaUrl.current = URL.createObjectURL(blob);
+                mediaUrl.current = URL.createObjectURL(
+                  new Blob([blob], { type: "application/octet-stream" }),
+                );
                 setMediaLink({ id: item.id, url: mediaUrl.current });
               })
               .catch((error: unknown) => {
@@ -985,10 +1213,16 @@ function StatisticsPage({
           </form>
         }
         getRowId={(item, index) =>
-          `${String(index)}:${item.dimensions.join("\u0000")}:${item.currency}`
+          `${String(index)}:${JSON.stringify([item.dimensions, item.currency])}`
         }
         getRowLabel={(item) =>
-          `Statistics group ${item.dimensions.join(" / ") || "Total"}`
+          `Statistics group ${
+            item.dimensions.length === 0
+              ? "Total"
+              : item.dimensions
+                  .map((dimension) => dimension ?? "Not applicable")
+                  .join(" / ")
+          }`
         }
         liveMessage={
           result === null
@@ -1026,6 +1260,7 @@ function StatisticsPage({
   );
 }
 
+// react-doctor-disable-next-line react-doctor/no-giant-component -- This retained page coordinates health, retention writes, cooldowns, and one incremental activity walk; each shared panel and table owns its render behavior.
 function OperationsPage({
   client,
   csrf,
@@ -1044,28 +1279,121 @@ function OperationsPage({
   readonly retentionDays: number;
 }) {
   const range = useMemo(() => isoRange(7), []);
-  const [activity, setActivity] = useState<readonly ActivityEvent[]>([]);
-  const [activityPhase, setActivityPhase] = useState<
-    "loading" | "ready" | "error"
-  >("loading");
+  const [activityState, updateActivity] = useReducer(
+    (
+      current: {
+        readonly items: readonly ActivityEvent[];
+        readonly loadMoreFailure: string | null;
+        readonly loadMorePending: boolean;
+        readonly nextCursor: string | null;
+        readonly phase: "loading" | "ready" | "error";
+      },
+      patch: Partial<typeof current>,
+    ) => ({ ...current, ...patch }),
+    {
+      items: [],
+      loadMoreFailure: null,
+      loadMorePending: false,
+      nextCursor: null,
+      phase: "loading",
+    },
+  );
+  const {
+    items: activity,
+    loadMoreFailure: activityLoadMoreFailure,
+    loadMorePending: activityLoadMorePending,
+    nextCursor: activityNextCursor,
+    phase: activityPhase,
+  } = activityState;
+  const activityLoadedPages = useRef(0);
   const activityLoadGuard = useRef(createScopeLoadGuard());
+  const activityCursors = useRef(new Set<string>());
   const loadActivity = useCallback(() => {
     const generation = activityLoadGuard.current.begin();
-    setActivityPhase("loading");
+    activityCursors.current.clear();
+    activityLoadedPages.current = 0;
+    updateActivity({
+      loadMoreFailure: null,
+      loadMorePending: false,
+      nextCursor: null,
+      phase: "loading",
+    });
     return client
-      .activity(range.from, range.to)
+      .activityPage(range.from, range.to)
       .then((page) => {
         if (!activityLoadGuard.current.isCurrent(generation)) return;
-        setActivity(page.items);
-        setActivityPhase("ready");
+        const items = mergeBoundedRows(
+          [],
+          page.items,
+          (item) => item.id,
+          "The activity list",
+        );
+        updateActivity({
+          items,
+          nextCursor: continuedPageCursor(
+            page,
+            1,
+            activityCursors.current,
+            "The activity list",
+          ),
+          phase: "ready",
+        });
+        activityLoadedPages.current = 1;
       })
       .catch((error: unknown) => {
         if (!activityLoadGuard.current.isCurrent(generation)) return;
-        setActivity([]);
-        setActivityPhase("error");
-        onNotice("error", errorMessage(error));
+        updateActivity({ items: [], phase: "error" });
+        onNotice(
+          "error",
+          error instanceof AdministrationApiError
+            ? errorMessage(error)
+            : error instanceof Error
+              ? error.message
+              : "The activity query is inconsistent.",
+        );
       });
   }, [client, onNotice, range.from, range.to]);
+  function loadMoreActivity(): Promise<void> {
+    const cursor = activityNextCursor;
+    if (cursor === null || activityLoadMorePending) return Promise.resolve();
+    const generation = activityLoadGuard.current.begin();
+    activityCursors.current.add(cursor);
+    updateActivity({ loadMoreFailure: null, loadMorePending: true });
+    return client
+      .activityPage(range.from, range.to, cursor)
+      .then((page) => {
+        if (!activityLoadGuard.current.isCurrent(generation)) return;
+        const items = mergeBoundedRows(
+          activity,
+          page.items,
+          (item) => item.id,
+          "The activity list",
+        );
+        updateActivity({
+          items,
+          loadMorePending: false,
+          nextCursor: continuedPageCursor(
+            page,
+            activityLoadedPages.current + 1,
+            activityCursors.current,
+            "The activity list",
+          ),
+        });
+        activityLoadedPages.current += 1;
+      })
+      .catch((error: unknown) => {
+        if (!activityLoadGuard.current.isCurrent(generation)) return;
+        updateActivity({
+          loadMoreFailure:
+            error instanceof AdministrationApiError
+              ? errorMessage(error)
+              : error instanceof Error
+                ? error.message
+                : "The activity page is inconsistent.",
+          loadMorePending: false,
+        });
+      });
+  }
   useEffect(() => {
     const loadGuard = activityLoadGuard.current;
     const timer = globalThis.setTimeout(() => {
@@ -1115,7 +1443,9 @@ function OperationsPage({
                   <strong>{item.name.replaceAll("_", " ")}</strong>
                   <small>{item.message ?? "No corrective message"}</small>
                 </span>
-                <StatusPill tone={tone(item.status)}>{item.status}</StatusPill>
+                <StatusPill tone={tone(item.status)}>
+                  {item.status}
+                </StatusPill>
               </li>
             ))}
           </ul>
@@ -1191,7 +1521,23 @@ function OperationsPage({
           getRowLabel={(item) =>
             `${item.action} for ${item.resource_api_name ?? item.resource_id ?? item.resource_type}`
           }
-          maxRows={COMPLETE_ADMINISTRATION_LIST_MAXIMUM}
+          liveMessage={`${String(activity.length)} activity records loaded.`}
+          {...(activityPhase !== "ready" || activity.length === 0
+            ? {}
+            : {
+                loadMore: {
+                  completeLabel: "The retained activity range is complete",
+                  ...(activityLoadMoreFailure === null
+                    ? {}
+                    : { error: activityLoadMoreFailure }),
+                  hasMore: activityNextCursor !== null,
+                  loadedLabel: `${String(activity.length)} activity records loaded`,
+                  loading: activityLoadMorePending,
+                  onLoadMore: loadMoreActivity,
+                  onRetry: loadMoreActivity,
+                },
+              })}
+          maxRows={administrationListMaximum}
           minimumWidth="56rem"
           rows={activity}
           state={
@@ -1211,7 +1557,10 @@ function OperationsPage({
                     }
                   : {
                       kind: "ready",
-                      message: `${String(activity.length)} activity records loaded. The bounded query is complete.`,
+                      message:
+                        activityNextCursor === null
+                          ? "The activity query is complete."
+                          : "More retained activity is available.",
                     }
           }
         />
@@ -1790,7 +2139,10 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
         ? ""
         : `?service=${encodeURIComponent(selectedService)}`;
     globalThis.history.pushState({}, "", `/${next}${query}`);
-    globalThis.document.getElementById("main-content")?.focus();
+    globalThis.scrollTo({ behavior: "auto", left: 0, top: 0 });
+    globalThis.document
+      .getElementById("main-content")
+      ?.focus({ preventScroll: true });
   }
   if (sessionState.status === "loading")
     return (

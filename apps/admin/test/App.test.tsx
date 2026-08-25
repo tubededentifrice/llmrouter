@@ -17,6 +17,12 @@ import type {
   Service,
 } from "../src/api.js";
 import {
+  administrationListMaximum,
+  administrationListPageMaximum,
+  continuedPageCursor,
+  mergeBoundedRows,
+} from "../src/api.js";
+import {
   createScopeLoadGuard,
   protectedServiceApiName,
   reduceKeyCreationLifecycle,
@@ -85,8 +91,10 @@ function client(): AdministrationClient {
     importOpenRouterModel: vi.fn(),
     synchronizePrices: vi.fn(),
     activity: vi.fn().mockResolvedValue(emptyPage),
+    activityPage: vi.fn().mockResolvedValue(emptyPage),
     statistics: vi.fn(),
     requestLogs: vi.fn().mockResolvedValue(emptyPage),
+    requestLogsPage: vi.fn().mockResolvedValue(emptyPage),
     requestLog: vi.fn(),
     requestLogMedia: vi.fn(),
     retention: vi.fn().mockResolvedValue({ duration_days: 7 }),
@@ -228,10 +236,12 @@ describe("accepted administration composition", () => {
     expect(application).toContain('ariaLabel="Detailed request logs"');
     expect(application).toContain('ariaLabel="Usage and cost statistics"');
     expect(application).toContain('ariaLabel="Configuration activity"');
-    expect(application).toContain(
-      "COMPLETE_ADMINISTRATION_LIST_MAXIMUM = 20_000",
-    );
+    expect(administrationListMaximum).toBe(20_000);
+    expect(administrationListPageMaximum).toBe(100);
     expect(application).toContain("STATISTICS_GROUP_MAXIMUM = 1_000");
+    expect(application).toContain("requestLogsPage(");
+    expect(application).toContain("activityPage(");
+    expect(application.match(/loadMore: \{/g)).toHaveLength(2);
     expect(styles).not.toContain(".administration-table-region");
     expect(styles).toContain(".administration-data-table");
     expect(styles).toContain("padding-block: 32px 76px");
@@ -254,14 +264,50 @@ describe("accepted administration composition", () => {
         /detailReturnFocus\.current = context\?\.trigger \?\? null;/g,
       ),
     ).toHaveLength(1);
-    expect(application).toContain(
-      "The selected request log is not available in the loaded range.",
-    );
     expect(application).toContain("Usage unavailable");
+    expect(application).toContain("detailLoadGuard.current.invalidate()");
+    expect(application).toContain("detailReturnFocus.current = null");
     expect(application).toContain(
-      'updateLogs({ items: [], phase: "loading" })',
+      'getElementById("request-log-load")?.focus()',
     );
     expect(application).toContain("setResult(null)");
+  });
+
+  it("rejects inconsistent incremental pages without changing loaded rows", () => {
+    const current = [{ id: "one" }];
+    expect(() =>
+      mergeBoundedRows(current, [{ id: "one" }], (item) => item.id, "Records"),
+    ).toThrow("repeated record one");
+    expect(current).toEqual([{ id: "one" }]);
+
+    const progressingCursors = new Set(
+      Array.from({ length: 98 }, (_, index) => `page-${String(index + 1)}`),
+    );
+    expect(
+      continuedPageCursor(
+        { items: [], page: { has_more: true, next_cursor: "page-100" } },
+        99,
+        progressingCursors,
+        "Records",
+      ),
+    ).toBe("page-100");
+    progressingCursors.add("page-100");
+    expect(() =>
+      continuedPageCursor(
+        { items: [], page: { has_more: true, next_cursor: "page-101" } },
+        100,
+        progressingCursors,
+        "Records",
+      ),
+    ).toThrow("100 page safety limit");
+    expect(() =>
+      continuedPageCursor(
+        { items: [], page: { has_more: true, next_cursor: "repeat" } },
+        2,
+        new Set(["repeat"]),
+        "Records",
+      ),
+    ).toThrow("repeated a continuation cursor");
   });
 
   it("does not restore removed product surfaces", () => {

@@ -429,6 +429,43 @@ textarea:focus {
   font-size: 14px;
 }
 
+.log-detail-facts {
+  display: grid;
+  min-width: 0;
+  margin: 0;
+  gap: 10px;
+}
+
+.log-detail-facts div {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(7rem, 0.3fr) minmax(0, 1fr);
+  gap: 10px;
+}
+
+.log-detail-facts dt {
+  color: var(--od-color-muted-strong);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.log-detail-facts dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.log-attempt-list li {
+  display: grid;
+  align-items: stretch;
+}
+
+.log-attempt-list pre {
+  width: 100%;
+  margin-top: 8px;
+}
+
 .log-detail pre {
   max-width: 100%;
   max-height: 420px;
@@ -790,7 +827,13 @@ textarea:focus {
   }
 }
 
-@media (max-width: 760px) {
+@media (max-width: 70rem) {
+  .od-application-topbar-title {
+    display: none;
+  }
+}
+
+@media (max-width: 48rem) {
   .administration-content {
     padding-block: 20px 92px;
   }
@@ -798,10 +841,6 @@ textarea:focus {
   .administration-topbar-actions {
     width: 100%;
     align-items: stretch;
-  }
-
-  .od-application-topbar-title {
-    display: none;
   }
 
   .administration-topbar-actions label {
@@ -844,6 +883,11 @@ textarea:focus {
 
   .record-facts div {
     grid-template-columns: 1fr;
+    gap: 3px;
+  }
+
+  .log-detail-facts div {
+    grid-template-columns: minmax(0, 1fr);
     gap: 3px;
   }
 

@@ -77,6 +77,21 @@ describe("native administration client", () => {
     expect(result.attempts[0]?.usage).toBeUndefined();
   });
 
+  it("rejects request-log detail for a different selected identifier", async () => {
+    const log = validRequestLog();
+    const client = createAdministrationClient(
+      vi.fn(() => Promise.resolve(json(log))),
+    );
+
+    await expect(client.requestLog("different-log")).rejects.toMatchObject({
+      code: "invalid_response",
+      status: 502,
+      details: {
+        reason: "The request-log detail does not match the selected log.",
+      },
+    });
+  });
+
   it.each([
     {
       name: "attempt usage",
@@ -240,6 +255,124 @@ describe("native administration client", () => {
     ]);
   });
 
+  it("reads one incremental log or activity page with an encoded cursor", async () => {
+    const paths: string[] = [];
+    const fetcher = vi.fn((input: string | URL | Request) => {
+      paths.push(url(input));
+      return Promise.resolve(
+        json({ items: [], page: { has_more: false, next_cursor: null } }),
+      );
+    });
+    const client = createAdministrationClient(fetcher);
+
+    await client.requestLogsPage("from", "to", "next log");
+    await client.activityPage("from", "to", "next activity");
+
+    expect(paths).toEqual([
+      "/v1/admin/request-logs?from=from&to=to&limit=200&cursor=next+log",
+      "/v1/admin/activity?from=from&to=to&limit=200&cursor=next+activity",
+    ]);
+  });
+
+  it("rejects an unsafe continuation page before it reaches the table", async () => {
+    const client = createAdministrationClient(
+      vi.fn(() =>
+        Promise.resolve(
+          json({ items: [], page: { has_more: true, next_cursor: "" } }),
+        ),
+      ),
+    );
+
+    const error: unknown = await client
+      .requestLogsPage("from", "to")
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(AdministrationApiError);
+    if (!(error instanceof AdministrationApiError)) throw error;
+    expect(error.code).toBe("invalid_response");
+    expect(error.status).toBe(502);
+    expect(error.details?.reason).toContain("cursor contract");
+  });
+
+  it("rejects extra fields in a closed request-log page", async () => {
+    const client = createAdministrationClient(
+      vi.fn(() =>
+        Promise.resolve(
+          json({
+            items: [],
+            page: { has_more: false, next_cursor: null },
+            unexpected: true,
+          }),
+        ),
+      ),
+    );
+
+    await expect(client.requestLogsPage("from", "to")).rejects.toMatchObject({
+      code: "invalid_response",
+      status: 502,
+      details: {
+        reason: "The list page does not match the native cursor contract.",
+      },
+    });
+  });
+
+  it("rejects activity records that do not match the closed event contract", async () => {
+    const client = createAdministrationClient(
+      vi.fn(() =>
+        Promise.resolve(
+          json({
+            items: [
+              {
+                id: "activity-1",
+                actor_subject: "administrator",
+                action: "service.updated",
+                resource_type: "service",
+                result: "succeeded",
+                occurred_at: "2026-08-25T00:00:00Z",
+                unexpected: "unsafe",
+              },
+            ],
+            page: { has_more: false, next_cursor: null },
+          }),
+        ),
+      ),
+    );
+
+    await expect(client.activityPage("from", "to")).rejects.toMatchObject({
+      code: "invalid_response",
+      status: 502,
+      details: {
+        reason: "An activity event does not match its closed contract.",
+      },
+    });
+  });
+
+  it("accepts a bounded activity record with a stable resource identity", async () => {
+    const event = {
+      id: "activity-1",
+      actor_subject: "administrator",
+      action: "service.updated",
+      resource_type: "service",
+      resource_api_name: "billing",
+      result: "succeeded",
+      occurred_at: "2026-08-25T00:00:00Z",
+    };
+    const client = createAdministrationClient(
+      vi.fn(() =>
+        Promise.resolve(
+          json({
+            items: [event],
+            page: { has_more: false, next_cursor: null },
+          }),
+        ),
+      ),
+    );
+
+    await expect(client.activityPage("from", "to")).resolves.toEqual({
+      items: [event],
+      page: { has_more: false, next_cursor: null },
+    });
+  });
+
   it("collects every bounded cursor page in order", async () => {
     const paths: string[] = [];
     const fetcher = vi.fn((input: string | URL | Request) => {
@@ -278,9 +411,20 @@ describe("native administration client", () => {
       const base = path.split("&cursor=", 1)[0] ?? path;
       const page = pages.get(base) ?? 0;
       pages.set(base, page + 1);
+      const item = path.startsWith("/v1/admin/activity")
+        ? {
+            id: `activity-${String(page)}`,
+            actor_subject: "administrator",
+            action: "service.updated",
+            resource_type: "service",
+            resource_api_name: "billing",
+            result: "succeeded",
+            occurred_at: "2026-08-25T00:00:00Z",
+          }
+        : { page };
       return Promise.resolve(
         json({
-          items: [{ page }],
+          items: [item],
           page:
             page === 0
               ? { has_more: true, next_cursor: "next" }

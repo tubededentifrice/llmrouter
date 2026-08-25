@@ -27,6 +27,49 @@ export interface Page<T> {
     readonly loaded_pages: number;
   };
 }
+export const administrationListMaximum = 20_000;
+export const administrationListPageMaximum = 100;
+
+export function mergeBoundedRows<T>(
+  current: readonly T[],
+  incoming: readonly T[],
+  getRowId: (item: T) => string,
+  label: string,
+): readonly T[] {
+  if (current.length + incoming.length > administrationListMaximum)
+    throw new Error(
+      `${label} reached the ${String(administrationListMaximum)} record safety limit. Narrow the date range and load it again.`,
+    );
+  const identifiers = new Set<string>();
+  for (const item of [...current, ...incoming]) {
+    const identifier = getRowId(item);
+    if (typeof identifier !== "string" || identifier.trim() === "")
+      throw new Error(`${label} returned an empty record identifier.`);
+    if (identifiers.has(identifier))
+      throw new Error(`${label} repeated record ${identifier}.`);
+    identifiers.add(identifier);
+  }
+  return [...current, ...incoming];
+}
+
+export function continuedPageCursor<T>(
+  page: Page<T>,
+  loadedPages: number,
+  seenCursors: ReadonlySet<string>,
+  label: string,
+): string | null {
+  if (!page.page.has_more) return null;
+  if (loadedPages >= administrationListPageMaximum)
+    throw new Error(
+      `${label} reached the ${String(administrationListPageMaximum)} page safety limit. Narrow the date range and load it again.`,
+    );
+  const cursor = page.page.next_cursor;
+  if (typeof cursor !== "string" || cursor.length < 1 || cursor.length > 500)
+    throw new Error(`${label} did not return a safe continuation cursor.`);
+  if (seenCursors.has(cursor))
+    throw new Error(`${label} repeated a continuation cursor.`);
+  return cursor;
+}
 export interface AdministratorSession {
   readonly subject: string;
   readonly display_name: string;
@@ -308,12 +351,12 @@ export interface Usage {
   readonly currency: string;
 }
 export interface StatisticsBucket {
-  readonly dimensions: readonly string[];
+  readonly dimensions: readonly (string | null)[];
   readonly calls: number;
   readonly attempts: number;
   readonly units: readonly UsageItem[];
-  readonly cost: string;
-  readonly currency: string;
+  readonly cost: string | null;
+  readonly currency: string | null;
 }
 export interface StatisticsResult {
   readonly from: string;
@@ -1944,8 +1987,18 @@ export interface AdministrationClient {
   ): Promise<AdministratorPlaygroundMediaJob>;
   playgroundMediaContent?(id: string, signal?: AbortSignal): Promise<Blob>;
   activity(from: string, to: string): Promise<Page<ActivityEvent>>;
+  activityPage(
+    from: string,
+    to: string,
+    cursor?: string,
+  ): Promise<Page<ActivityEvent>>;
   statistics(filters: StatisticsFilters): Promise<StatisticsResult>;
   requestLogs(from: string, to: string): Promise<Page<RequestLogSummary>>;
+  requestLogsPage(
+    from: string,
+    to: string,
+    cursor?: string,
+  ): Promise<Page<RequestLogSummary>>;
   requestLog(id: string): Promise<RequestLog>;
   requestLogMedia(id: string, mediaId: string): Promise<Blob>;
   retention(): Promise<{ readonly duration_days: number }>;
@@ -2427,6 +2480,111 @@ export function createAdministrationClient(
         : {}),
     };
   }
+  function parseActivityEvent(value: unknown): ActivityEvent {
+    if (typeof value !== "object" || value === null || Array.isArray(value))
+      throw invalidListResponse("An activity event is not an object.");
+    const event = value as Record<string, unknown>;
+    const requiredKeys = [
+      "id",
+      "actor_subject",
+      "action",
+      "resource_type",
+      "result",
+      "occurred_at",
+    ];
+    const allowedKeys = new Set([
+      ...requiredKeys,
+      "service_api_name",
+      "resource_api_name",
+      "resource_id",
+    ]);
+    if (
+      requiredKeys.some((key) => !(key in event)) ||
+      Object.keys(event).some((key) => !allowedKeys.has(key)) ||
+      (!isBoundedString(event.resource_api_name, 63) &&
+        !isBoundedString(event.resource_id, 200)) ||
+      !isBoundedString(event.id, 200) ||
+      !isBoundedString(event.actor_subject, 500) ||
+      !isBoundedString(event.action, 200) ||
+      !isBoundedString(event.resource_type, 200) ||
+      (event.service_api_name !== undefined &&
+        (typeof event.service_api_name !== "string" ||
+          !apiNamePattern.test(event.service_api_name))) ||
+      (event.resource_api_name !== undefined &&
+        (typeof event.resource_api_name !== "string" ||
+          !apiNamePattern.test(event.resource_api_name))) ||
+      (event.resource_id !== undefined &&
+        !isBoundedString(event.resource_id, 200)) ||
+      (event.result !== "succeeded" && event.result !== "failed") ||
+      !validTimestamp(event.occurred_at)
+    )
+      throw invalidListResponse(
+        "An activity event does not match its closed contract.",
+      );
+    return event as unknown as ActivityEvent;
+  }
+  function parseListPage<T>(
+    value: unknown,
+    parseItem?: (item: unknown) => T,
+  ): Page<T> {
+    if (
+      typeof value !== "object" ||
+      value === null ||
+      Array.isArray(value) ||
+      Object.keys(value).some((key) => key !== "items" && key !== "page") ||
+      !("items" in value) ||
+      !Array.isArray(value.items) ||
+      !("page" in value) ||
+      typeof value.page !== "object" ||
+      value.page === null ||
+      Array.isArray(value.page) ||
+      Object.keys(value.page).some(
+        (key) => key !== "has_more" && key !== "next_cursor",
+      ) ||
+      !("has_more" in value.page) ||
+      typeof value.page.has_more !== "boolean" ||
+      ("next_cursor" in value.page &&
+        value.page.next_cursor !== null &&
+        (typeof value.page.next_cursor !== "string" ||
+          value.page.next_cursor.length < 1 ||
+          value.page.next_cursor.length > 500))
+    )
+      throw invalidListResponse(
+        "The list page does not match the native cursor contract.",
+      );
+    const page = value.page as Record<string, unknown>;
+    if (value.items.length > listLimit)
+      throw invalidListResponse(
+        `The list page exceeds the requested ${String(listLimit)} item limit.`,
+      );
+    const nextCursor = page.next_cursor;
+    if (page.has_more && (nextCursor === undefined || nextCursor === null))
+      throw invalidListResponse(
+        "The list says that more items exist, but it has no next cursor.",
+      );
+    return {
+      items:
+        parseItem === undefined
+          ? (value.items as readonly T[])
+          : value.items.map(parseItem),
+      page: {
+        has_more: page.has_more as boolean,
+        ...(typeof nextCursor === "string"
+          ? { next_cursor: nextCursor }
+          : { next_cursor: null }),
+      },
+    };
+  }
+  function listPage<T>(
+    path: string,
+    filters: Record<string, string | readonly string[] | null | undefined>,
+    cursor: string | undefined,
+    parseItem?: (item: unknown) => T,
+  ): Promise<Page<T>> {
+    return request<unknown>(
+      `${path}${query({ ...filters, limit: String(listLimit), cursor })}`,
+    ).then((value) => parseListPage(value, parseItem));
+  }
   async function allPages<T>(
     path: string,
     filters: Record<string, string | readonly string[] | null | undefined> = {},
@@ -2442,34 +2600,9 @@ export function createAdministrationClient(
           `${path}${query({ ...filters, limit: String(listLimit), cursor })}`,
           { signal },
         );
-        if (
-          typeof response !== "object" ||
-          response === null ||
-          !("items" in response) ||
-          !Array.isArray(response.items) ||
-          !("page" in response) ||
-          typeof response.page !== "object" ||
-          response.page === null ||
-          !("has_more" in response.page) ||
-          typeof response.page.has_more !== "boolean" ||
-          ("next_cursor" in response.page &&
-            response.page.next_cursor !== null &&
-            typeof response.page.next_cursor !== "string")
-        )
-          throw invalidListResponse(
-            "The list page does not match the native cursor contract.",
-          );
-        const current = response as Page<unknown>;
+        const current = parseListPage(response, parseItem);
         loadedPages += 1;
-        if (current.items.length > listLimit)
-          throw invalidListResponse(
-            `The list page exceeds the requested ${String(listLimit)} item limit.`,
-          );
-        items.push(
-          ...(parseItem === undefined
-            ? (current.items as readonly T[])
-            : current.items.map(parseItem)),
-        );
+        items.push(...current.items);
         if (items.length > maximumListItems)
           throw invalidListResponse(
             `The list exceeds the ${String(maximumListItems)} item safety limit. Narrow the scope and try again.`,
@@ -2489,14 +2622,8 @@ export function createAdministrationClient(
             },
           };
         const nextCursor = current.page.next_cursor;
-        if (
-          nextCursor === undefined ||
-          nextCursor === null ||
-          nextCursor === ""
-        )
-          throw invalidListResponse(
-            "The list says that more items exist, but it has no next cursor.",
-          );
+        if (nextCursor === undefined || nextCursor === null)
+          throw invalidListResponse("The list has no next cursor.");
         if (seenCursors.has(nextCursor))
           throw invalidListResponse(
             "The list repeated a cursor and could not make progress.",
@@ -2765,19 +2892,36 @@ export function createAdministrationClient(
         mediaContentDeadline,
         callerSignal,
       ),
-    activity: (from, to) => allPages("/v1/admin/activity", { from, to }),
+    activity: (from, to) =>
+      allPages("/v1/admin/activity", { from, to }, parseActivityEvent),
+    activityPage: (from, to, cursor) =>
+      listPage("/v1/admin/activity", { from, to }, cursor, parseActivityEvent),
     statistics: (filters) =>
       request(
         `/v1/admin/statistics${query({ from: filters.from, to: filters.to, service: filters.service, workspace: filters.workspace, assignment: filters.assignment, provider_model: filters.provider_model, outcome: filters.outcome, tag: filters.tag, group_by: filters.group_by })}`,
       ),
     requestLogs: (from, to) =>
       allPages("/v1/admin/request-logs", { from, to }, parseRequestLogSummary),
+    requestLogsPage: (from, to, cursor) =>
+      listPage(
+        "/v1/admin/request-logs",
+        { from, to },
+        cursor,
+        parseRequestLogSummary,
+      ),
     requestLog: (id) =>
       request(
         `/v1/admin/request-logs/${encode(id)}`,
         {},
         administrationDeadline,
-        parseRequestLog,
+        (value) => {
+          const log = parseRequestLog(value);
+          if (log.summary.id !== id)
+            throw invalidRequestLogResponse(
+              "The request-log detail does not match the selected log.",
+            );
+          return log;
+        },
       ),
     async requestLogMedia(id, mediaId) {
       return withClientDeadline(async (signal) => {
