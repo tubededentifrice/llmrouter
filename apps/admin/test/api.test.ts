@@ -480,6 +480,20 @@ describe("native administration client", () => {
       },
       "csrf",
     );
+    await client.putProviderModel(
+      "mapping",
+      {
+        api_name: "mapping",
+        provider_api_name: "provider",
+        model_api_name: "model",
+        provider_model_name: "wire-model",
+        enabled: true,
+        price_source: null,
+        price_lookup_key: null,
+        manual_price: null,
+      },
+      "csrf",
+    );
     await client.synchronizePrices(null, "csrf");
     expect(calls).toEqual([
       {
@@ -494,6 +508,16 @@ describe("native administration client", () => {
           input_modalities: ["text"],
           output_modalities: ["text"],
           capabilities: [],
+        },
+      },
+      {
+        path: "/v1/admin/provider-models/mapping",
+        body: {
+          api_name: "mapping",
+          provider_api_name: "provider",
+          model_api_name: "model",
+          provider_model_name: "wire-model",
+          enabled: true,
         },
       },
       { path: "/v1/admin/prices/synchronize", body: {} },

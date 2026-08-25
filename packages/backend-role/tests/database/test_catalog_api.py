@@ -132,6 +132,20 @@ class RouterSdkTestTransport:
         return RouterStreamResponse(response.status, response.headers, (response.body,))
 
 
+def assert_admin_provider_model_reads(
+    context: CatalogContext, api_name: str, expected: dict[str, object]
+) -> None:
+    """Require the administrator item and list to return one exact mapping."""
+    item = context.client.get(
+        f"/v1/admin/provider-models/{api_name}", headers=context.read_headers
+    )
+    assert item.status_code == HTTPStatus.OK
+    assert item.json() == expected
+    page = context.client.get("/v1/admin/provider-models", headers=context.read_headers)
+    assert page.status_code == HTTPStatus.OK
+    assert page.json()["items"] == [expected]
+
+
 def assert_service_provider_model_sdk_contract(
     client: TestClient, service_key: str
 ) -> None:
@@ -926,6 +940,7 @@ def test_provider_model_price_override_replaces_complete_canonical_authority(
 ) -> None:
     """Do not combine one inherited source with a mapping manual price."""
     context = CatalogContext(catalog_database, catalog_settings)
+
     assert (
         context.client.post(
             "/v1/admin/providers",
@@ -977,10 +992,12 @@ def test_provider_model_price_override_replaces_complete_canonical_authority(
     assert "configured_price_lookup_key" not in created.json()
     assert created.json()["configured_manual_price"] == manual_mapping["manual_price"]
     assert created.json()["effective_price"]["currency"] == "USD"
+    assert_admin_provider_model_reads(context, "priced", created.json())
 
     selected_source = {
-        **manual_mapping,
-        "manual_price": None,
+        **{
+            key: value for key, value in manual_mapping.items() if key != "manual_price"
+        },
         "price_source": "wavespeed",
         "price_lookup_key": "source-media-model",
     }
@@ -995,13 +1012,14 @@ def test_provider_model_price_override_replaces_complete_canonical_authority(
     assert replaced.json()["configured_price_lookup_key"] == "source-media-model"
     assert "configured_manual_price" not in replaced.json()
     assert "effective_price" not in replaced.json()
+    assert_admin_provider_model_reads(context, "priced", replaced.json())
 
     inherited = context.client.put(
         "/v1/admin/provider-models/priced",
         json={
-            **selected_source,
-            "price_source": None,
-            "price_lookup_key": None,
+            key: value
+            for key, value in selected_source.items()
+            if key not in {"price_source", "price_lookup_key"}
         },
         headers=context.write_headers,
     )
@@ -1012,6 +1030,7 @@ def test_provider_model_price_override_replaces_complete_canonical_authority(
     assert inherited.json()["price_source"] == "openrouter"
     assert inherited.json()["price_lookup_key"] == "source-model"
     assert "effective_price" not in inherited.json()
+    assert_admin_provider_model_reads(context, "priced", inherited.json())
 
     assert (
         context.client.post(
@@ -1030,10 +1049,12 @@ def test_provider_model_price_override_replaces_complete_canonical_authority(
     no_price = context.client.put(
         "/v1/admin/provider-models/priced",
         json={
-            **selected_source,
+            **{
+                key: value
+                for key, value in selected_source.items()
+                if key not in {"price_source", "price_lookup_key"}
+            },
             "model_api_name": "unpriced",
-            "price_source": None,
-            "price_lookup_key": None,
         },
         headers=context.write_headers,
     )
@@ -1047,6 +1068,7 @@ def test_provider_model_price_override_replaces_complete_canonical_authority(
         "effective_price",
     ):
         assert price_field not in no_price.json()
+    assert_admin_provider_model_reads(context, "priced", no_price.json())
 
     mixed_authority = context.client.put(
         "/v1/admin/provider-models/priced",
@@ -1061,8 +1083,7 @@ def test_provider_model_price_override_replaces_complete_canonical_authority(
     current = context.client.get(
         "/v1/admin/provider-models/priced", headers=context.read_headers
     ).json()
-    assert "price_source" not in current
-    assert "effective_price" not in current
+    assert current == no_price.json()
     with psycopg.connect(catalog_database, row_factory=dict_row) as connection:
         available, next_cursor = catalog.list_available_provider_models(
             connection, limit=50, cursor=None

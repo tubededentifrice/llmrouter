@@ -215,6 +215,20 @@ describe("configuration policy", () => {
       price_source: "wavespeed",
       price_lookup_key: "media/model",
     });
+    expect(() => configuredPriceValue("", "orphan", "", "")).toThrow(
+      "Enter a price source",
+    );
+    expect(() => configuredPriceValue("openrouter", "", "", "")).toThrow(
+      "Enter the source model identifier",
+    );
+    expect(() =>
+      configuredPriceValue(
+        "openrouter",
+        "vendor/model",
+        "USD",
+        "input_token=0.001",
+      ),
+    ).toThrow("not both");
   });
 
   it("keeps a confirmed create until the refreshed list contains it", () => {

@@ -84,6 +84,12 @@ export function configuredPriceValue(
   const source = sourceValue.trim();
   const lookupKey = lookupKeyValue.trim();
   const manualPrice = parseManualPrice(currencyValue, unitPriceValue);
+  if (source === "" && lookupKey !== "")
+    throw new Error("Enter a price source for the source model identifier.");
+  if (source !== "" && lookupKey === "")
+    throw new Error("Enter the source model identifier for the price source.");
+  if (source !== "" && manualPrice !== null)
+    throw new Error("Use a price source or a manual price, not both.");
   return {
     ...(source === ""
       ? {}
