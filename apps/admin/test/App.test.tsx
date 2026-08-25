@@ -11,7 +11,11 @@ import {
   MissingProtectedKeyInspector,
   ServiceManagement,
 } from "../src/ServiceManagement.js";
-import type { AdministrationClient, Service } from "../src/api.js";
+import type {
+  AdministrationClient,
+  RequestLogSummary,
+  Service,
+} from "../src/api.js";
 import {
   createScopeLoadGuard,
   protectedServiceApiName,
@@ -27,6 +31,11 @@ import {
   validateInputImageSelection,
 } from "../src/formContracts.js";
 import { scheduleSessionExpiry } from "../src/sessionExpiry.js";
+import {
+  requestLogActorLabel,
+  requestLogRouteLabel,
+  requestLogScopeLabel,
+} from "../src/logPresentation.js";
 
 const emptyPage = { items: [], page: { has_more: false, next_cursor: null } };
 
@@ -106,6 +115,65 @@ const services: readonly Service[] = [
 ];
 
 describe("accepted administration composition", () => {
+  it("labels service and administrator log rows from their immutable actor", () => {
+    const common = {
+      id: "log-1",
+      logical_call_id: "call-1",
+      kind: "model" as const,
+      outcome: "succeeded" as const,
+      started_at: "2026-08-25T00:00:00Z",
+    };
+    const cases: readonly {
+      readonly summary: RequestLogSummary;
+      readonly actor: string;
+      readonly scope: string;
+      readonly route: string;
+    }[] = [
+      {
+        summary: {
+          ...common,
+          call_actor: "service",
+          service_api_name: "billing",
+          workspace_api_name: "production",
+          assignment_api_name: "summarize",
+        },
+        actor: "Service",
+        scope: "billing / production",
+        route: "summarize",
+      },
+      {
+        summary: {
+          ...common,
+          call_actor: "administrator",
+          administrator_subject: "pocket-id-subject",
+          provider_model_api_name: "primary-text",
+        },
+        actor: "Administrator",
+        scope: "pocket-id-subject / global exact route",
+        route: "primary-text",
+      },
+      {
+        summary: {
+          ...common,
+          call_actor: "administrator",
+          administrator_subject: "pocket-id-subject",
+          assignment_api_name: "summarize",
+          configuration_service_api_name: "billing",
+          provider_model_api_name: "fallback-text",
+        },
+        actor: "Administrator",
+        scope: "pocket-id-subject / configuration billing",
+        route: "summarize",
+      },
+    ];
+
+    for (const item of cases) {
+      expect(requestLogActorLabel(item.summary)).toBe(item.actor);
+      expect(requestLogScopeLabel(item.summary)).toBe(item.scope);
+      expect(requestLogRouteLabel(item.summary)).toBe(item.route);
+    }
+  });
+
   it("uses one configuration graph as the only LLM configuration entry", () => {
     const application = readFileSync(
       new URL("../src/App.tsx", import.meta.url),
@@ -139,6 +207,61 @@ describe("accepted administration composition", () => {
     expect(configuration).not.toContain(
       "Playground available after configuration delivery",
     );
+  });
+
+  it("uses the shared page and table contracts for each retained page", () => {
+    const application = readFileSync(
+      new URL("../src/App.tsx", import.meta.url),
+      "utf8",
+    );
+    const styles = readFileSync(
+      new URL("../src/styles.css", import.meta.url),
+      "utf8",
+    );
+
+    expect(
+      application.match(/<PageSurface className="administration-page">/g),
+    ).toHaveLength(7);
+    expect(application.match(/<DataTable/g)).toHaveLength(3);
+    expect(application).not.toContain("<table");
+    expect(application).not.toContain("EmptyTable");
+    expect(application).toContain('ariaLabel="Detailed request logs"');
+    expect(application).toContain('ariaLabel="Usage and cost statistics"');
+    expect(application).toContain('ariaLabel="Configuration activity"');
+    expect(application).toContain(
+      "COMPLETE_ADMINISTRATION_LIST_MAXIMUM = 20_000",
+    );
+    expect(application).toContain("STATISTICS_GROUP_MAXIMUM = 1_000");
+    expect(styles).not.toContain(".administration-table-region");
+    expect(styles).toContain(".administration-data-table");
+    expect(styles).toContain("padding-block: 32px 76px");
+  });
+
+  it("keeps an unavailable selected log explicit and recoverable", () => {
+    const application = readFileSync(
+      new URL("../src/App.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(application).toContain("detailFailure");
+    expect(application).toContain("The selected request log is unavailable.");
+    expect(application).toContain("detailReturnFocus.current");
+    expect(application).toContain('id="request-log-close"');
+    expect(application).toContain(
+      "[logs.detail, logs.detailFailure, logs.detailId]",
+    );
+    expect(
+      application.match(
+        /detailReturnFocus\.current = context\?\.trigger \?\? null;/g,
+      ),
+    ).toHaveLength(1);
+    expect(application).toContain(
+      "The selected request log is not available in the loaded range.",
+    );
+    expect(application).toContain("Usage unavailable");
+    expect(application).toContain(
+      'updateLogs({ items: [], phase: "loading" })',
+    );
+    expect(application).toContain("setResult(null)");
   });
 
   it("does not restore removed product surfaces", () => {

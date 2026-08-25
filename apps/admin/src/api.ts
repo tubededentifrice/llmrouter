@@ -332,17 +332,42 @@ export interface ActivityEvent {
   readonly result: Outcome;
   readonly occurred_at: string;
 }
-export interface RequestLogSummary {
+interface RequestLogSummaryBase {
   readonly id: string;
-  readonly service_api_name: string;
-  readonly workspace_api_name: string;
-  readonly assignment_api_name?: string | null;
-  readonly provider_model_api_name?: string | null;
+  readonly logical_call_id: string;
   readonly kind: "model" | "embedding" | "media";
   readonly outcome: Outcome;
-  readonly tags?: readonly string[] | null;
+  readonly tags?: readonly string[];
   readonly started_at: string;
 }
+export type RequestLogSummary =
+  | (RequestLogSummaryBase & {
+      readonly call_actor: "service";
+      readonly service_api_name: string;
+      readonly workspace_api_name: string;
+      readonly administrator_subject?: never;
+      readonly configuration_service_api_name?: never;
+      readonly assignment_api_name?: string;
+      readonly provider_model_api_name?: string;
+    })
+  | (RequestLogSummaryBase & {
+      readonly call_actor: "administrator";
+      readonly administrator_subject: string;
+      readonly provider_model_api_name: string;
+      readonly service_api_name?: never;
+      readonly workspace_api_name?: never;
+      readonly assignment_api_name?: never;
+      readonly configuration_service_api_name?: never;
+    })
+  | (RequestLogSummaryBase & {
+      readonly call_actor: "administrator";
+      readonly administrator_subject: string;
+      readonly assignment_api_name: string;
+      readonly configuration_service_api_name: string;
+      readonly provider_model_api_name?: string;
+      readonly service_api_name?: never;
+      readonly workspace_api_name?: never;
+    });
 export interface SafeError {
   readonly code: string;
   readonly message: string;
@@ -355,11 +380,11 @@ export interface RequestAttempt {
   readonly provider_model_api_name: string;
   readonly outcome: Outcome;
   readonly started_at: string;
-  readonly completed_at?: string | null;
-  readonly usage: Usage;
+  readonly completed_at: string;
+  readonly usage?: Usage;
   readonly applied_prices: Price;
-  readonly response_json?: string | null;
-  readonly error?: SafeError | null;
+  readonly response_json?: string;
+  readonly error?: SafeError;
 }
 export interface LogMedia {
   readonly id: string;
@@ -370,9 +395,9 @@ export interface LogMedia {
 export interface RequestLog {
   readonly summary: RequestLogSummary;
   readonly request_json: string;
-  readonly response_json?: string | null;
+  readonly response_json?: string;
   readonly attempts: readonly RequestAttempt[];
-  readonly media?: readonly LogMedia[] | null;
+  readonly media?: readonly LogMedia[];
 }
 export interface AdministratorHealth {
   readonly status: HealthStatus;
@@ -2040,9 +2065,372 @@ export function createAdministrationClient(
       "The Router returned an invalid list response.",
       { reason },
     );
+  const invalidRequestLogResponse = (reason: string) =>
+    new AdministrationApiError(
+      502,
+      "invalid_response",
+      "The Router returned an invalid request-log response.",
+      { reason },
+    );
+  function parseRequestLogSummary(value: unknown): RequestLogSummary {
+    if (typeof value !== "object" || value === null || Array.isArray(value))
+      throw invalidRequestLogResponse(
+        "A request-log summary is not an object.",
+      );
+    const summary = value as Record<string, unknown>;
+    const requiredKeys = [
+      "id",
+      "logical_call_id",
+      "call_actor",
+      "kind",
+      "outcome",
+      "started_at",
+    ];
+    const allowedKeys = new Set([
+      ...requiredKeys,
+      "service_api_name",
+      "workspace_api_name",
+      "administrator_subject",
+      "configuration_service_api_name",
+      "assignment_api_name",
+      "provider_model_api_name",
+      "tags",
+    ]);
+    if (
+      requiredKeys.some((key) => !(key in summary)) ||
+      Object.keys(summary).some((key) => !allowedKeys.has(key))
+    )
+      throw invalidRequestLogResponse(
+        "A request-log summary does not match its closed schema.",
+      );
+    if (
+      !isBoundedString(summary.id, 200) ||
+      !isBoundedString(summary.logical_call_id, 200) ||
+      (summary.kind !== "model" &&
+        summary.kind !== "embedding" &&
+        summary.kind !== "media") ||
+      (summary.outcome !== "succeeded" && summary.outcome !== "failed") ||
+      !validTimestamp(summary.started_at)
+    )
+      throw invalidRequestLogResponse(
+        "A request-log summary has invalid common fields.",
+      );
+    for (const [key, pattern] of [
+      ["service_api_name", apiNamePattern],
+      ["workspace_api_name", apiNamePattern],
+      ["configuration_service_api_name", apiNamePattern],
+      ["provider_model_api_name", apiNamePattern],
+      ["assignment_api_name", assignmentNamePattern],
+    ] as const) {
+      const field = summary[key];
+      if (
+        field !== undefined &&
+        (typeof field !== "string" || !pattern.test(field))
+      )
+        throw invalidRequestLogResponse(
+          `A request-log summary has an invalid ${key.replaceAll("_", " ")}.`,
+        );
+    }
+    if (summary.tags !== undefined) {
+      const encoder = new TextEncoder();
+      if (!Array.isArray(summary.tags) || summary.tags.length > 32)
+        throw invalidRequestLogResponse(
+          "A request-log summary has invalid bounded tags.",
+        );
+      const tags: readonly unknown[] = summary.tags;
+      let totalTagBytes = 0;
+      for (const tag of tags) {
+        if (!isBoundedString(tag, 128) || encoder.encode(tag).byteLength > 128)
+          throw invalidRequestLogResponse(
+            "A request-log summary has invalid bounded tags.",
+          );
+        totalTagBytes += encoder.encode(tag).byteLength;
+      }
+      if (totalTagBytes > 2_048)
+        throw invalidRequestLogResponse(
+          "A request-log summary has invalid bounded tags.",
+        );
+    }
+    if (summary.call_actor === "service") {
+      if (
+        typeof summary.service_api_name !== "string" ||
+        typeof summary.workspace_api_name !== "string" ||
+        summary.administrator_subject !== undefined ||
+        summary.configuration_service_api_name !== undefined
+      )
+        throw invalidRequestLogResponse(
+          "A service request-log summary has invalid ownership fields.",
+        );
+    } else if (summary.call_actor === "administrator") {
+      if (
+        !isBoundedString(summary.administrator_subject, 500) ||
+        summary.service_api_name !== undefined ||
+        summary.workspace_api_name !== undefined
+      )
+        throw invalidRequestLogResponse(
+          "An administrator request-log summary has invalid ownership fields.",
+        );
+      const isExact =
+        typeof summary.provider_model_api_name === "string" &&
+        summary.assignment_api_name === undefined &&
+        summary.configuration_service_api_name === undefined;
+      const isAssignment =
+        typeof summary.assignment_api_name === "string" &&
+        typeof summary.configuration_service_api_name === "string";
+      if (isExact === isAssignment)
+        throw invalidRequestLogResponse(
+          "An administrator request-log summary must identify one exact or assignment target.",
+        );
+    } else {
+      throw invalidRequestLogResponse(
+        "A request-log summary has an invalid call actor.",
+      );
+    }
+    return summary as unknown as RequestLogSummary;
+  }
+  function requestLogObject(
+    value: unknown,
+    required: readonly string[],
+    optional: readonly string[],
+    description: string,
+  ): Record<string, unknown> {
+    if (typeof value !== "object" || value === null || Array.isArray(value))
+      throw invalidRequestLogResponse(`${description} is not an object.`);
+    const object = value as Record<string, unknown>;
+    const allowed = new Set([...required, ...optional]);
+    if (
+      required.some((key) => !(key in object)) ||
+      Object.keys(object).some((key) => !allowed.has(key))
+    )
+      throw invalidRequestLogResponse(
+        `${description} does not match its closed schema.`,
+      );
+    return object;
+  }
+  function parseRequestLogUsage(value: unknown): Usage {
+    const usage = requestLogObject(
+      value,
+      ["units", "cost", "currency"],
+      [],
+      "Request-log usage",
+    );
+    if (
+      !Array.isArray(usage.units) ||
+      typeof usage.cost !== "string" ||
+      !decimalPattern.test(usage.cost) ||
+      typeof usage.currency !== "string" ||
+      !currencyPattern.test(usage.currency)
+    )
+      throw invalidRequestLogResponse("Request-log usage is invalid.");
+    const units = usage.units.map((value) => {
+      const item = requestLogObject(
+        value,
+        ["unit", "quantity"],
+        [],
+        "Request-log usage item",
+      );
+      if (
+        typeof item.unit !== "string" ||
+        !usageUnits.has(item.unit as UsageUnit) ||
+        typeof item.quantity !== "string" ||
+        !decimalPattern.test(item.quantity)
+      )
+        throw invalidRequestLogResponse("A request-log usage item is invalid.");
+      return { unit: item.unit as UsageUnit, quantity: item.quantity };
+    });
+    return { units, cost: usage.cost, currency: usage.currency };
+  }
+  function parseRequestLogPrice(value: unknown): Price {
+    const price = requestLogObject(
+      value,
+      ["currency", "unit_prices"],
+      ["source", "synchronized_at"],
+      "Request-log applied price",
+    );
+    if (
+      typeof price.currency !== "string" ||
+      !currencyPattern.test(price.currency) ||
+      !Array.isArray(price.unit_prices) ||
+      price.unit_prices.length < 1 ||
+      price.unit_prices.length > 16 ||
+      (price.source !== undefined &&
+        (typeof price.source !== "string" || price.source.length > 500)) ||
+      (price.synchronized_at !== undefined &&
+        !validTimestamp(price.synchronized_at))
+    )
+      throw invalidRequestLogResponse(
+        "A request-log applied price is invalid.",
+      );
+    const unitPrices = price.unit_prices.map((value) => {
+      const item = requestLogObject(
+        value,
+        ["unit", "amount"],
+        [],
+        "Request-log unit price",
+      );
+      if (
+        typeof item.unit !== "string" ||
+        !usageUnits.has(item.unit as UsageUnit) ||
+        typeof item.amount !== "string" ||
+        item.amount.length > 64 ||
+        !decimalPattern.test(item.amount)
+      )
+        throw invalidRequestLogResponse("A request-log unit price is invalid.");
+      return { unit: item.unit as UsageUnit, amount: item.amount };
+    });
+    if (
+      new Set(unitPrices.map((item) => `${item.unit}\u0000${item.amount}`))
+        .size !== unitPrices.length
+    )
+      throw invalidRequestLogResponse(
+        "A request-log applied price has duplicate unit prices.",
+      );
+    return {
+      currency: price.currency,
+      unit_prices: unitPrices,
+      ...(typeof price.source === "string" ? { source: price.source } : {}),
+      ...(typeof price.synchronized_at === "string"
+        ? { synchronized_at: price.synchronized_at }
+        : {}),
+    };
+  }
+  function parseRequestLogError(value: unknown): SafeError {
+    const error = requestLogObject(
+      value,
+      ["code", "message"],
+      ["details"],
+      "Request-log error",
+    );
+    if (
+      typeof error.code !== "string" ||
+      !streamErrorCodes.has(error.code) ||
+      !isBoundedString(error.message, 1_000)
+    )
+      throw invalidRequestLogResponse("A request-log error is invalid.");
+    let details: SafeError["details"];
+    if (error.details !== undefined) {
+      const item = requestLogObject(
+        error.details,
+        [],
+        ["field", "reason"],
+        "Request-log error details",
+      );
+      if (
+        (item.field !== undefined && !isBoundedString(item.field, 200)) ||
+        (item.reason !== undefined && !isBoundedString(item.reason, 500))
+      )
+        throw invalidRequestLogResponse(
+          "Request-log error details are invalid.",
+        );
+      details = {
+        ...(typeof item.field === "string" ? { field: item.field } : {}),
+        ...(typeof item.reason === "string" ? { reason: item.reason } : {}),
+      };
+    }
+    return {
+      code: error.code,
+      message: error.message,
+      ...(details === undefined ? {} : { details }),
+    };
+  }
+  function parseRequestLogAttempt(value: unknown): RequestAttempt {
+    const attempt = requestLogObject(
+      value,
+      [
+        "provider_model_api_name",
+        "outcome",
+        "started_at",
+        "completed_at",
+        "applied_prices",
+      ],
+      ["usage", "response_json", "error"],
+      "Request-log attempt",
+    );
+    if (
+      typeof attempt.provider_model_api_name !== "string" ||
+      !apiNamePattern.test(attempt.provider_model_api_name) ||
+      (attempt.outcome !== "succeeded" && attempt.outcome !== "failed") ||
+      !validTimestamp(attempt.started_at) ||
+      !validTimestamp(attempt.completed_at) ||
+      (attempt.response_json !== undefined &&
+        (typeof attempt.response_json !== "string" ||
+          attempt.response_json.length > 10_000_000)) ||
+      (attempt.outcome === "succeeded" && attempt.error !== undefined) ||
+      (attempt.outcome === "failed" && attempt.error === undefined)
+    )
+      throw invalidRequestLogResponse("A request-log attempt is invalid.");
+    return {
+      provider_model_api_name: attempt.provider_model_api_name,
+      outcome: attempt.outcome,
+      started_at: attempt.started_at,
+      completed_at: attempt.completed_at,
+      applied_prices: parseRequestLogPrice(attempt.applied_prices),
+      ...(attempt.usage === undefined
+        ? {}
+        : { usage: parseRequestLogUsage(attempt.usage) }),
+      ...(typeof attempt.response_json === "string"
+        ? { response_json: attempt.response_json }
+        : {}),
+      ...(attempt.error === undefined
+        ? {}
+        : { error: parseRequestLogError(attempt.error) }),
+    };
+  }
+  function parseRequestLogMedia(value: unknown): LogMedia {
+    const media = requestLogObject(
+      value,
+      ["id", "media_type", "role", "size_bytes"],
+      [],
+      "Request-log media",
+    );
+    if (
+      !isBoundedString(media.id, 200) ||
+      !isBoundedString(media.media_type, 200) ||
+      (media.role !== "input" && media.role !== "output") ||
+      !isIntegerInRange(media.size_bytes, 0, Number.MAX_SAFE_INTEGER)
+    )
+      throw invalidRequestLogResponse("Request-log media is invalid.");
+    return {
+      id: media.id,
+      media_type: media.media_type,
+      role: media.role,
+      size_bytes: media.size_bytes,
+    };
+  }
+  function parseRequestLog(value: unknown): RequestLog {
+    const log = requestLogObject(
+      value,
+      ["summary", "request_json", "attempts"],
+      ["response_json", "media"],
+      "Request log",
+    );
+    if (
+      typeof log.request_json !== "string" ||
+      log.request_json.length > 5_000_000 ||
+      (log.response_json !== undefined &&
+        (typeof log.response_json !== "string" ||
+          log.response_json.length > 10_000_000)) ||
+      !Array.isArray(log.attempts) ||
+      log.attempts.length > 16 ||
+      (log.media !== undefined && !Array.isArray(log.media))
+    )
+      throw invalidRequestLogResponse("A request log is invalid.");
+    return {
+      summary: parseRequestLogSummary(log.summary),
+      request_json: log.request_json,
+      attempts: log.attempts.map(parseRequestLogAttempt),
+      ...(typeof log.response_json === "string"
+        ? { response_json: log.response_json }
+        : {}),
+      ...(Array.isArray(log.media)
+        ? { media: log.media.map(parseRequestLogMedia) }
+        : {}),
+    };
+  }
   async function allPages<T>(
     path: string,
     filters: Record<string, string | readonly string[] | null | undefined> = {},
+    parseItem?: (value: unknown) => T,
   ): Promise<Page<T>> {
     return withClientDeadline(async (signal) => {
       const items: T[] = [];
@@ -2071,13 +2459,17 @@ export function createAdministrationClient(
           throw invalidListResponse(
             "The list page does not match the native cursor contract.",
           );
-        const current = response as Page<T>;
+        const current = response as Page<unknown>;
         loadedPages += 1;
         if (current.items.length > listLimit)
           throw invalidListResponse(
             `The list page exceeds the requested ${String(listLimit)} item limit.`,
           );
-        items.push(...current.items);
+        items.push(
+          ...(parseItem === undefined
+            ? (current.items as readonly T[])
+            : current.items.map(parseItem)),
+        );
         if (items.length > maximumListItems)
           throw invalidListResponse(
             `The list exceeds the ${String(maximumListItems)} item safety limit. Narrow the scope and try again.`,
@@ -2378,8 +2770,15 @@ export function createAdministrationClient(
       request(
         `/v1/admin/statistics${query({ from: filters.from, to: filters.to, service: filters.service, workspace: filters.workspace, assignment: filters.assignment, provider_model: filters.provider_model, outcome: filters.outcome, tag: filters.tag, group_by: filters.group_by })}`,
       ),
-    requestLogs: (from, to) => allPages("/v1/admin/request-logs", { from, to }),
-    requestLog: (id) => request(`/v1/admin/request-logs/${encode(id)}`),
+    requestLogs: (from, to) =>
+      allPages("/v1/admin/request-logs", { from, to }, parseRequestLogSummary),
+    requestLog: (id) =>
+      request(
+        `/v1/admin/request-logs/${encode(id)}`,
+        {},
+        administrationDeadline,
+        parseRequestLog,
+      ),
     async requestLogMedia(id, mediaId) {
       return withClientDeadline(async (signal) => {
         const response = await fetcher(

@@ -94,13 +94,16 @@ textarea,
 
 .administration-topbar-actions {
   display: flex;
+  width: min(42rem, 62vw);
+  max-width: 100%;
   align-items: end;
   gap: 10px;
 }
 
 .administration-topbar-actions label {
   display: grid;
-  min-width: min(320px, 42vw);
+  min-width: 0;
+  flex: 1;
   gap: 4px;
   color: var(--od-color-muted-strong);
   font-size: 11px;
@@ -109,7 +112,8 @@ textarea,
 
 .administration-content {
   width: 100%;
-  padding: 32px clamp(18px, 4vw, 52px) 76px;
+  min-width: 0;
+  padding-block: 32px 76px;
 }
 
 .administration-page {
@@ -174,6 +178,12 @@ textarea,
   border-top: 0;
 }
 
+.od-data-table-toolbar .administration-form {
+  width: 100%;
+  padding: 0;
+  border: 0;
+}
+
 .administration-form label,
 .service-inspector-form label,
 .statistics-form fieldset {
@@ -228,48 +238,22 @@ textarea:focus {
   min-height: 18px;
 }
 
-.administration-table-region {
+.administration-data-table,
+.administration-panel-table {
   width: 100%;
-  overflow-x: auto;
-  overscroll-behavior-inline: contain;
+  min-width: 0;
 }
 
-table {
-  width: 100%;
-  min-width: 720px;
-  border-collapse: collapse;
-  text-align: left;
+.administration-panel-table {
+  padding: 0 20px 20px;
 }
 
-th,
-td {
-  max-width: 420px;
-  padding: 13px 15px;
-  border-top: 1px solid var(--od-color-border);
+.administration-data-table .od-data-table-cell,
+.administration-data-table .od-data-table-card-value dd,
+.administration-panel-table .od-data-table-cell,
+.administration-panel-table .od-data-table-card-value dd {
   overflow-wrap: anywhere;
-  vertical-align: top;
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-thead th {
-  color: var(--od-color-muted-strong);
-  background: color-mix(in srgb, var(--od-color-surface) 75%, transparent);
-  font-size: 10px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-tbody th strong,
-tbody th small {
-  display: block;
-}
-
-tbody th small {
-  margin-top: 3px;
-  color: var(--od-color-muted);
-  font-family: var(--od-font-mono), monospace;
-  font-size: 10px;
+  word-break: break-word;
 }
 
 .health-list,
@@ -808,12 +792,16 @@ tbody th small {
 
 @media (max-width: 760px) {
   .administration-content {
-    padding: 20px 14px 92px;
+    padding-block: 20px 92px;
   }
 
   .administration-topbar-actions {
     width: 100%;
     align-items: stretch;
+  }
+
+  .od-application-topbar-title {
+    display: none;
   }
 
   .administration-topbar-actions label {
@@ -837,6 +825,14 @@ tbody th small {
   .administration-form,
   .service-inspector-form {
     padding: 16px;
+  }
+
+  .od-data-table-toolbar .administration-form {
+    padding: 0;
+  }
+
+  .administration-panel-table {
+    padding: 0 16px 16px;
   }
 
   .health-list li,

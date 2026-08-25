@@ -18,10 +18,12 @@ import {
   ApplicationTopbar,
   Button,
   ConfirmationDialog,
+  DataTable,
   Icon,
   MobileNavigation,
   NavigationItem,
   PageHeading,
+  PageSurface,
   Panel,
   PanelHeader,
   SessionCard,
@@ -32,6 +34,8 @@ import {
   StatusPill,
   Toast,
   WorkspaceSelector,
+  type DataTableAction,
+  type DataTableColumn,
   type IconName,
 } from "@opendle/ui";
 import {
@@ -52,6 +56,7 @@ import {
   type RequestLog,
   type RequestLogSummary,
   type Service,
+  type StatisticsBucket,
   type StatisticsResult,
 } from "./api.js";
 import { ServiceManagement } from "./ServiceManagement.js";
@@ -63,6 +68,11 @@ import {
   updateRetentionDuration,
 } from "./administrationSafety.js";
 import { scheduleSessionExpiry } from "./sessionExpiry.js";
+import {
+  requestLogActorLabel,
+  requestLogRouteLabel,
+  requestLogScopeLabel,
+} from "./logPresentation.js";
 
 type Section =
   | "overview"
@@ -188,19 +198,135 @@ function tone(value: string): "green" | "amber" | "red" | "blue" {
   if (["failed", "unavailable", "disabled"].includes(value)) return "red";
   return "blue";
 }
-function EmptyTable({
-  columns,
-  text,
-}: {
-  readonly columns: number;
-  readonly text: string;
-}) {
+const COMPLETE_ADMINISTRATION_LIST_MAXIMUM = 20_000;
+const STATISTICS_GROUP_MAXIMUM = 1_000;
+
+function usageLabel(item: StatisticsBucket): string {
   return (
-    <tr>
-      <td colSpan={columns}>{text}</td>
-    </tr>
+    item.units.map((unit) => `${unit.unit} ${unit.quantity}`).join(", ") ||
+    "None"
   );
 }
+
+const requestLogColumns: readonly DataTableColumn<RequestLogSummary>[] = [
+  {
+    key: "started",
+    header: "Started",
+    width: "12rem",
+    render: ({ row }) => displayTime(row.started_at),
+  },
+  {
+    key: "actor",
+    header: "Actor",
+    width: "8rem",
+    render: ({ row }) => requestLogActorLabel(row),
+  },
+  {
+    key: "scope",
+    header: "Scope",
+    width: "18%",
+    render: ({ row }) => requestLogScopeLabel(row),
+  },
+  {
+    key: "kind",
+    header: "Kind",
+    width: "7rem",
+    render: ({ row }) => row.kind,
+  },
+  {
+    key: "route",
+    header: "Route",
+    width: "20%",
+    render: ({ row }) => requestLogRouteLabel(row),
+  },
+  {
+    key: "tags",
+    header: "Tags",
+    width: "20%",
+    render: ({ row }) =>
+      row.tags == null || row.tags.length === 0 ? "None" : row.tags.join(", "),
+  },
+  {
+    key: "outcome",
+    header: "Outcome",
+    width: "8rem",
+    render: ({ row }) => (
+      <StatusPill tone={tone(row.outcome)}>{row.outcome}</StatusPill>
+    ),
+  },
+];
+
+const statisticsColumns: readonly DataTableColumn<StatisticsBucket>[] = [
+  {
+    key: "dimensions",
+    header: "Dimensions",
+    width: "32%",
+    render: ({ row }) => row.dimensions.join(" / ") || "Total",
+  },
+  {
+    align: "end",
+    key: "calls",
+    header: "Calls",
+    width: "7rem",
+    render: ({ row }) => row.calls,
+  },
+  {
+    align: "end",
+    key: "attempts",
+    header: "Attempts",
+    width: "7rem",
+    render: ({ row }) => row.attempts,
+  },
+  {
+    key: "usage",
+    header: "Typed usage",
+    width: "32%",
+    render: ({ row }) => usageLabel(row),
+  },
+  {
+    align: "end",
+    key: "cost",
+    header: "Cost",
+    width: "10rem",
+    render: ({ row }) => `${row.currency} ${row.cost}`,
+  },
+];
+
+const activityColumns: readonly DataTableColumn<ActivityEvent>[] = [
+  {
+    key: "time",
+    header: "Time",
+    width: "12rem",
+    render: ({ row }) => displayTime(row.occurred_at),
+  },
+  {
+    key: "actor",
+    header: "Actor",
+    width: "24%",
+    render: ({ row }) => row.actor_subject,
+  },
+  {
+    key: "action",
+    header: "Action",
+    width: "18%",
+    render: ({ row }) => row.action,
+  },
+  {
+    key: "target",
+    header: "Target",
+    width: "30%",
+    render: ({ row }) =>
+      `${row.resource_type} · ${row.resource_api_name ?? row.resource_id ?? "Unavailable"}`,
+  },
+  {
+    key: "result",
+    header: "Result",
+    width: "8rem",
+    render: ({ row }) => (
+      <StatusPill tone={tone(row.result)}>{row.result}</StatusPill>
+    ),
+  },
+];
 function LoadingPage({
   title = "Loading administration data",
 }: {
@@ -228,6 +354,14 @@ function FailurePage({
       {message}
     </StatePanel>
   );
+}
+
+function AdministrationStatePage({
+  children,
+}: {
+  readonly children: ReactNode;
+}) {
+  return <PageSurface className="administration-page">{children}</PageSurface>;
 }
 
 function SignIn({
@@ -275,7 +409,7 @@ function SignIn({
 function Overview({ data }: { readonly data: AppData }) {
   const cooldowns = data.providerModels.filter((item) => item.cooldown != null);
   return (
-    <div className="administration-page">
+    <PageSurface className="administration-page">
       <PageHeading
         description="Inspect the current global calling service."
         eyebrow="Global administration"
@@ -320,7 +454,7 @@ function Overview({ data }: { readonly data: AppData }) {
           ))}
         </ul>
       </Panel>
-    </div>
+    </PageSurface>
   );
 }
 
@@ -328,8 +462,10 @@ interface LogsPageState {
   readonly from: string;
   readonly to: string;
   readonly items: readonly RequestLogSummary[];
+  readonly detailId: string | null;
   readonly detail: RequestLog | null;
-  readonly phase: "idle" | "loading" | "error";
+  readonly detailFailure: string | null;
+  readonly phase: "unqueried" | "loading" | "ready" | "error";
 }
 
 function RequestLogDetail({
@@ -359,7 +495,7 @@ function RequestLogDetail({
             Close
           </Button>
         }
-        description={`${detail.summary.service_api_name} / ${detail.summary.workspace_api_name}`}
+        description={`${requestLogActorLabel(detail.summary)} · ${requestLogScopeLabel(detail.summary)}`}
         title={`Request ${detail.summary.id}`}
       />
       <div className="log-detail">
@@ -382,10 +518,11 @@ function RequestLogDetail({
                   {item.provider_model_api_name} · {item.outcome}
                 </strong>
                 <span>
-                  {item.usage.currency} {item.usage.cost} ·{" "}
-                  {item.usage.units
-                    .map((unit) => `${unit.unit} ${unit.quantity}`)
-                    .join(", ")}
+                  {item.usage === undefined
+                    ? "Usage unavailable"
+                    : `${item.usage.currency} ${item.usage.cost} · ${item.usage.units
+                        .map((unit) => `${unit.unit} ${unit.quantity}`)
+                        .join(", ")}`}
                 </span>
                 {item.error == null ? null : (
                   <span>
@@ -450,8 +587,10 @@ function LogsPage({
         from: initial.from.slice(0, 16),
         to: initial.to.slice(0, 16),
         items: [],
+        detailId: null,
         detail: null,
-        phase: "idle",
+        detailFailure: null,
+        phase: "unqueried",
       };
     },
   );
@@ -479,12 +618,12 @@ function LogsPage({
     [],
   );
   useEffect(() => {
-    if (logs.detail !== null)
+    if (logs.detailId !== null)
       globalThis.document.getElementById("request-log-close")?.focus();
-  }, [logs.detail]);
+  }, [logs.detail, logs.detailFailure, logs.detailId]);
   function closeDetail(): void {
     detailLoadGuard.current.invalidate();
-    updateLogs({ detail: null });
+    updateLogs({ detail: null, detailFailure: null, detailId: null });
     setMediaLink(null);
     mediaUrl.current = invalidateRetainedMediaLoad(
       mediaLoadGuard.current,
@@ -497,152 +636,182 @@ function LogsPage({
     if (target?.isConnected) target.focus();
     detailReturnFocus.current = null;
   }
-  async function load() {
+  function load(): Promise<void> {
     const generation = listLoadGuard.current.begin();
-    updateLogs({ phase: "loading" });
-    try {
-      const items = (
-        await client.requestLogs(
+    updateLogs({ items: [], phase: "loading" });
+    return Promise.resolve()
+      .then(() =>
+        client.requestLogs(
           new Date(logs.from).toISOString(),
           new Date(logs.to).toISOString(),
-        )
-      ).items;
-      if (listLoadGuard.current.isCurrent(generation))
-        updateLogs({ items, phase: "idle" });
-    } catch (error) {
-      if (!listLoadGuard.current.isCurrent(generation)) return;
-      updateLogs({ phase: "error" });
-      onNotice("error", errorMessage(error));
-    }
+        ),
+      )
+      .then(
+        (page) => {
+          const items = page.items;
+          if (!listLoadGuard.current.isCurrent(generation)) return;
+          if (
+            logs.detailId !== null &&
+            !items.some((item) => item.id === logs.detailId)
+          ) {
+            detailLoadGuard.current.invalidate();
+            setMediaLink(null);
+            mediaUrl.current = invalidateRetainedMediaLoad(
+              mediaLoadGuard.current,
+              mediaUrl.current,
+              (url) => {
+                URL.revokeObjectURL(url);
+              },
+            );
+            updateLogs({
+              detail: null,
+              detailFailure:
+                "The selected request log is not available in the loaded range.",
+              items,
+              phase: "ready",
+            });
+            return;
+          }
+          updateLogs({ items, phase: "ready" });
+        },
+        (error: unknown) => {
+          if (!listLoadGuard.current.isCurrent(generation)) return;
+          updateLogs({ phase: "error" });
+          onNotice("error", errorMessage(error));
+        },
+      );
   }
+  const inspectActions: readonly DataTableAction<RequestLogSummary>[] = [
+    {
+      key: "inspect",
+      label: () => "Inspect",
+      onAction: (item, _index, context) => {
+        const generation = detailLoadGuard.current.begin();
+        detailReturnFocus.current = context?.trigger ?? null;
+        mediaUrl.current = invalidateRetainedMediaLoad(
+          mediaLoadGuard.current,
+          mediaUrl.current,
+          (url) => {
+            URL.revokeObjectURL(url);
+          },
+        );
+        setMediaLink(null);
+        updateLogs({
+          detail: null,
+          detailFailure: null,
+          detailId: item.id,
+        });
+        return client.requestLog(item.id).then(
+          (value) => {
+            if (!detailLoadGuard.current.isCurrent(generation)) return;
+            updateLogs({ detail: value });
+          },
+          (error: unknown) => {
+            if (!detailLoadGuard.current.isCurrent(generation)) return;
+            updateLogs({
+              detailFailure: `The selected request log is unavailable. ${errorMessage(error)}`,
+            });
+          },
+        );
+      },
+    },
+  ];
   const detail = logs.detail;
   return (
-    <div className="administration-page">
+    <PageSurface className="administration-page">
       <PageHeading
         description="Only global administrators can read complete retained model content and media."
         eyebrow="Best-effort diagnostics"
         title="Detailed request logs"
       />
-      <Panel>
-        <form
-          className="administration-form request-log-filter-form"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void load();
-          }}
+      <DataTable
+        actions={inspectActions}
+        actionsLabel="Request actions"
+        ariaLabel="Detailed request logs"
+        className="administration-data-table"
+        columns={requestLogColumns}
+        filters={
+          <form
+            className="administration-form request-log-filter-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void load();
+            }}
+          >
+            <label>
+              From
+              <input
+                onChange={(event) => {
+                  updateLogs({ from: event.currentTarget.value });
+                }}
+                type="datetime-local"
+                value={logs.from}
+              />
+            </label>
+            <label>
+              To
+              <input
+                onChange={(event) => {
+                  updateLogs({ to: event.currentTarget.value });
+                }}
+                type="datetime-local"
+                value={logs.to}
+              />
+            </label>
+            <Button type="submit">Load logs</Button>
+          </form>
+        }
+        getRowId={(item) => item.id}
+        getRowLabel={(item) => `Request ${item.id}`}
+        maxRows={COMPLETE_ADMINISTRATION_LIST_MAXIMUM}
+        minimumWidth="74rem"
+        rows={logs.items}
+        state={
+          logs.phase === "loading"
+            ? { kind: "loading", message: "Loading detailed logs" }
+            : logs.phase === "error"
+              ? {
+                  kind: "error",
+                  message: "Detailed logs are unavailable.",
+                  onRetry: load,
+                  retryLabel: "Try loading logs again",
+                }
+              : logs.items.length === 0
+                ? {
+                    kind: "empty",
+                    message:
+                      logs.phase === "unqueried"
+                        ? "Choose a date range and load detailed logs."
+                        : "No logs are in this range.",
+                  }
+                : {
+                    kind: "ready",
+                    message: `${String(logs.items.length)} detailed logs loaded. The bounded query is complete.`,
+                  }
+        }
+        toolbarLabel="Detailed request log filters"
+      />
+      {logs.detailId === null ? null : detail === null ? (
+        <StatePanel
+          actions={
+            <Button
+              id="request-log-close"
+              onClick={closeDetail}
+              variant="quiet"
+            >
+              Close
+            </Button>
+          }
+          kind={logs.detailFailure === null ? "loading" : "error"}
+          title={
+            logs.detailFailure === null
+              ? `Loading request ${logs.detailId}`
+              : `Request ${logs.detailId} is unavailable`
+          }
         >
-          <label>
-            From
-            <input
-              onChange={(event) => {
-                updateLogs({ from: event.currentTarget.value });
-              }}
-              type="datetime-local"
-              value={logs.from}
-            />
-          </label>
-          <label>
-            To
-            <input
-              onChange={(event) => {
-                updateLogs({ to: event.currentTarget.value });
-              }}
-              type="datetime-local"
-              value={logs.to}
-            />
-          </label>
-          <Button type="submit">Load logs</Button>
-        </form>
-        {logs.phase === "loading" ? (
-          <LoadingPage title="Loading detailed logs" />
-        ) : (
-          <div className="administration-table-region">
-            <table>
-              <thead>
-                <tr>
-                  <th>Started</th>
-                  <th>Scope</th>
-                  <th>Kind</th>
-                  <th>Route</th>
-                  <th>Tags</th>
-                  <th>Outcome</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {logs.items.length === 0 ? (
-                  <EmptyTable
-                    columns={7}
-                    text={
-                      logs.phase === "error"
-                        ? "Logs are unavailable"
-                        : "No logs in this range"
-                    }
-                  />
-                ) : (
-                  logs.items.map((item) => (
-                    <tr key={item.id}>
-                      <td>{displayTime(item.started_at)}</td>
-                      <td>
-                        {item.service_api_name} / {item.workspace_api_name}
-                      </td>
-                      <td>{item.kind}</td>
-                      <td>
-                        {item.assignment_api_name ??
-                          item.provider_model_api_name ??
-                          "Unavailable"}
-                      </td>
-                      <td>{item.tags?.join(", ") ?? "None"}</td>
-                      <td>
-                        <StatusPill tone={tone(item.outcome)}>
-                          {item.outcome}
-                        </StatusPill>
-                      </td>
-                      <td>
-                        <Button
-                          onClick={(event) => {
-                            const generation = detailLoadGuard.current.begin();
-                            detailReturnFocus.current = event.currentTarget;
-                            mediaUrl.current = invalidateRetainedMediaLoad(
-                              mediaLoadGuard.current,
-                              mediaUrl.current,
-                              (url) => {
-                                URL.revokeObjectURL(url);
-                              },
-                            );
-                            setMediaLink(null);
-                            updateLogs({ detail: null });
-                            void client
-                              .requestLog(item.id)
-                              .then((value) => {
-                                if (
-                                  !detailLoadGuard.current.isCurrent(generation)
-                                )
-                                  return;
-                                updateLogs({ detail: value });
-                              })
-                              .catch((error: unknown) => {
-                                if (
-                                  !detailLoadGuard.current.isCurrent(generation)
-                                )
-                                  return;
-                                onNotice("error", errorMessage(error));
-                              });
-                          }}
-                          variant="quiet"
-                        >
-                          Inspect
-                        </Button>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Panel>
-      {detail === null ? null : (
+          {logs.detailFailure ?? "Wait while the Router reads retained detail."}
+        </StatePanel>
+      ) : (
         <RequestLogDetail
           detail={detail}
           mediaLink={mediaLink}
@@ -668,7 +837,7 @@ function LogsPage({
           }}
         />
       )}
-    </div>
+    </PageSurface>
   );
 }
 
@@ -683,6 +852,9 @@ function StatisticsPage({
 }) {
   const initial = useMemo(() => isoRange(30), []);
   const [result, setResult] = useState<StatisticsResult | null>(null);
+  const [phase, setPhase] = useState<
+    "unqueried" | "loading" | "ready" | "error"
+  >("unqueried");
   const loadGuard = useRef(createScopeLoadGuard());
   useEffect(
     () => () => {
@@ -695,6 +867,8 @@ function StatisticsPage({
     const generation = loadGuard.current.begin();
     const form = new FormData(event.currentTarget);
     const outcome = formText(form, "outcome");
+    setResult(null);
+    setPhase("loading");
     try {
       const nextResult = await client.statistics({
         from: new Date(formText(form, "from")).toISOString(),
@@ -715,143 +889,140 @@ function StatisticsPage({
         ...(formText(form, "tag") === "" ? {} : { tag: formText(form, "tag") }),
         group_by: form.getAll("group_by").map(String),
       });
-      if (loadGuard.current.isCurrent(generation)) setResult(nextResult);
+      if (loadGuard.current.isCurrent(generation)) {
+        setResult(nextResult);
+        setPhase("ready");
+      }
     } catch (error) {
       if (!loadGuard.current.isCurrent(generation)) return;
+      setPhase("error");
       onNotice("error", errorMessage(error));
     }
   }
+  const buckets = result?.buckets ?? [];
   return (
-    <div className="administration-page">
+    <PageSurface className="administration-page">
       <PageHeading
         description="Group calls, attempts, typed units, and fixed-decimal cost across at most 366 days."
         eyebrow="Durable accounting"
         title="Usage and cost statistics"
       />
-      <Panel>
-        <form
-          className="administration-form statistics-form"
-          onSubmit={(event) => void load(event)}
-        >
-          <label>
-            From
-            <input
-              defaultValue={initial.from.slice(0, 16)}
-              name="from"
-              type="datetime-local"
-            />
-          </label>
-          <label>
-            To
-            <input
-              defaultValue={initial.to.slice(0, 16)}
-              name="to"
-              type="datetime-local"
-            />
-          </label>
-          <label>
-            Service
-            <select name="service">
-              <option value="">All services</option>
-              {services.map((item) => (
-                <option key={item.api_name}>{item.api_name}</option>
+      <DataTable
+        ariaLabel="Usage and cost statistics"
+        className="administration-data-table"
+        columns={statisticsColumns}
+        filters={
+          <form
+            className="administration-form statistics-form"
+            onSubmit={(event) => void load(event)}
+          >
+            <label>
+              From
+              <input
+                defaultValue={initial.from.slice(0, 16)}
+                name="from"
+                type="datetime-local"
+              />
+            </label>
+            <label>
+              To
+              <input
+                defaultValue={initial.to.slice(0, 16)}
+                name="to"
+                type="datetime-local"
+              />
+            </label>
+            <label>
+              Service
+              <select name="service">
+                <option value="">All services</option>
+                {services.map((item) => (
+                  <option key={item.api_name}>{item.api_name}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Workspace
+              <input name="workspace" />
+            </label>
+            <label>
+              Assignment
+              <input name="assignment" placeholder="Name or (exact)" />
+            </label>
+            <label>
+              Provider-model
+              <input name="provider_model" />
+            </label>
+            <label>
+              Outcome
+              <select name="outcome">
+                <option value="">All outcomes</option>
+                <option>succeeded</option>
+                <option>failed</option>
+              </select>
+            </label>
+            <label>
+              Tag
+              <input name="tag" />
+            </label>
+            <fieldset>
+              <legend>Group by</legend>
+              {[
+                "date",
+                "service",
+                "workspace",
+                "assignment",
+                "provider_model",
+                "outcome",
+                "tag",
+              ].map((item) => (
+                <label className="checkbox-field" key={item}>
+                  <input name="group_by" type="checkbox" value={item} /> {item}
+                </label>
               ))}
-            </select>
-          </label>
-          <label>
-            Workspace
-            <input name="workspace" />
-          </label>
-          <label>
-            Assignment
-            <input name="assignment" placeholder="Name or (exact)" />
-          </label>
-          <label>
-            Provider-model
-            <input name="provider_model" />
-          </label>
-          <label>
-            Outcome
-            <select name="outcome">
-              <option value="">All outcomes</option>
-              <option>succeeded</option>
-              <option>failed</option>
-            </select>
-          </label>
-          <label>
-            Tag
-            <input name="tag" />
-          </label>
-          <fieldset>
-            <legend>Group by</legend>
-            {[
-              "date",
-              "service",
-              "workspace",
-              "assignment",
-              "provider_model",
-              "outcome",
-              "tag",
-            ].map((item) => (
-              <label className="checkbox-field" key={item}>
-                <input name="group_by" type="checkbox" value={item} /> {item}
-              </label>
-            ))}
-          </fieldset>
-          <Button type="submit">Run statistics</Button>
-        </form>
-      </Panel>
-      {result === null ? (
-        <StatePanel kind="empty" title="No statistics query">
-          Choose filters and run the statistics query.
-        </StatePanel>
-      ) : (
-        <Panel>
-          <PanelHeader
-            description={`${displayTime(result.from)} through ${displayTime(result.to)}`}
-            title="Statistics result"
-          />
-          <div className="administration-table-region">
-            <table>
-              <thead>
-                <tr>
-                  <th>Dimensions</th>
-                  <th>Calls</th>
-                  <th>Attempts</th>
-                  <th>Typed usage</th>
-                  <th>Cost</th>
-                </tr>
-              </thead>
-              <tbody>
-                {result.buckets.length === 0 ? (
-                  <EmptyTable columns={5} text="No accounting groups" />
-                ) : (
-                  result.buckets.map((item, index) => (
-                    <tr
-                      key={`${item.currency}-${item.dimensions.join("-")}-${String(index)}`}
-                    >
-                      <th scope="row">
-                        {item.dimensions.join(" / ") || "Total"}
-                      </th>
-                      <td>{item.calls}</td>
-                      <td>{item.attempts}</td>
-                      <td>
-                        {item.units
-                          .map((unit) => `${unit.unit} ${unit.quantity}`)
-                          .join(", ") || "None"}
-                      </td>
-                      <td>
-                        {item.currency} {item.cost}
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </Panel>
-      )}
-    </div>
+            </fieldset>
+            <Button type="submit">Run statistics</Button>
+          </form>
+        }
+        getRowId={(item, index) =>
+          `${String(index)}:${item.dimensions.join("\u0000")}:${item.currency}`
+        }
+        getRowLabel={(item) =>
+          `Statistics group ${item.dimensions.join(" / ") || "Total"}`
+        }
+        liveMessage={
+          result === null
+            ? undefined
+            : `${String(buckets.length)} accounting groups loaded for ${displayTime(result.from)} through ${displayTime(result.to)}.`
+        }
+        maxRows={STATISTICS_GROUP_MAXIMUM}
+        minimumWidth="56rem"
+        rows={buckets}
+        state={
+          phase === "loading"
+            ? { kind: "loading", message: "Loading accounting groups" }
+            : phase === "error"
+              ? {
+                  kind: "error",
+                  message:
+                    "The statistics query failed. Review the filters and run it again.",
+                }
+              : buckets.length === 0
+                ? {
+                    kind: "empty",
+                    message:
+                      phase === "unqueried"
+                        ? "Choose filters and run the statistics query."
+                        : "No accounting groups match these filters.",
+                  }
+                : {
+                    kind: "ready",
+                    message: `${String(buckets.length)} accounting groups loaded.`,
+                  }
+        }
+        toolbarLabel="Usage and cost filters"
+      />
+    </PageSurface>
   );
 }
 
@@ -925,7 +1096,7 @@ function OperationsPage({
     }
   }
   return (
-    <div className="administration-page">
+    <PageSurface className="administration-page">
       <PageHeading
         description="Inspect current health, best-effort cooldowns, retention, and basic configuration activity."
         eyebrow="Operations"
@@ -1012,52 +1183,40 @@ function OperationsPage({
           description="This is a basic activity record. It is not immutable configuration history."
           title="Configuration activity, last 7 days"
         />
-        <div aria-live="polite" className="administration-table-region">
-          <table>
-            <thead>
-              <tr>
-                <th>Time</th>
-                <th>Actor</th>
-                <th>Action</th>
-                <th>Target</th>
-                <th>Result</th>
-              </tr>
-            </thead>
-            <tbody>
-              {activity.length === 0 ? (
-                <EmptyTable
-                  columns={5}
-                  text={
-                    activityPhase === "loading"
-                      ? "Loading retained activity"
-                      : activityPhase === "error"
-                        ? "Retained activity is unavailable"
-                        : "No retained activity"
+        <DataTable
+          ariaLabel="Configuration activity"
+          className="administration-panel-table"
+          columns={activityColumns}
+          getRowId={(item) => item.id}
+          getRowLabel={(item) =>
+            `${item.action} for ${item.resource_api_name ?? item.resource_id ?? item.resource_type}`
+          }
+          maxRows={COMPLETE_ADMINISTRATION_LIST_MAXIMUM}
+          minimumWidth="56rem"
+          rows={activity}
+          state={
+            activityPhase === "loading"
+              ? { kind: "loading", message: "Loading retained activity" }
+              : activityPhase === "error"
+                ? {
+                    kind: "error",
+                    message: "Retained activity is unavailable.",
+                    onRetry: loadActivity,
+                    retryLabel: "Try loading activity again",
                   }
-                />
-              ) : (
-                activity.map((item) => (
-                  <tr key={item.id}>
-                    <td>{displayTime(item.occurred_at)}</td>
-                    <td>{item.actor_subject}</td>
-                    <td>{item.action}</td>
-                    <td>
-                      {item.resource_type} ·{" "}
-                      {item.resource_api_name ?? item.resource_id}
-                    </td>
-                    <td>
-                      <StatusPill tone={tone(item.result)}>
-                        {item.result}
-                      </StatusPill>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+                : activity.length === 0
+                  ? {
+                      kind: "empty",
+                      message: "No retained activity is available.",
+                    }
+                  : {
+                      kind: "ready",
+                      message: `${String(activity.length)} activity records loaded. The bounded query is complete.`,
+                    }
+          }
+        />
       </Panel>
-    </div>
+    </PageSurface>
   );
 }
 
@@ -1243,22 +1402,24 @@ function AuthenticatedAdministration({
   );
   let content: ReactNode =
     data === null ? (
-      failure === null ? (
-        <LoadingPage />
-      ) : (
-        <FailurePage
-          message={failure}
-          onRetry={() => {
-            void loadGlobal();
-          }}
-        />
-      )
+      <AdministrationStatePage>
+        {failure === null ? (
+          <LoadingPage />
+        ) : (
+          <FailurePage
+            message={failure}
+            onRetry={() => {
+              void loadGlobal();
+            }}
+          />
+        )}
+      </AdministrationStatePage>
     ) : (
       <Overview data={data} />
     );
   if (data !== null && section === "services")
     content = (
-      <div className="administration-page">
+      <PageSurface className="administration-page">
         <PageHeading
           description="Create, move, inspect, and delete services in the one-parent tree."
           eyebrow="Global administration"
@@ -1273,11 +1434,11 @@ function AuthenticatedAdministration({
           selectedService={selectedService}
           services={data.services}
         />
-      </div>
+      </PageSurface>
     );
   if (data !== null && section === "configuration")
     content = (
-      <div className="administration-page">
+      <PageSurface className="administration-page">
         <PageHeading
           description="Manage global providers, canonical models, provider-model mappings, prices, credentials, and the selected service assignments in one graph."
           eyebrow="Global catalog and selected service context"
@@ -1299,7 +1460,7 @@ function AuthenticatedAdministration({
           providers={data.providers}
           selectedService={selectedService}
         />
-      </div>
+      </PageSurface>
     );
   if (data !== null && section === "logs")
     content = <LogsPage client={client} onNotice={notify} />;

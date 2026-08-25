@@ -27,7 +27,171 @@ function url(input: string | URL | Request): string {
   return input instanceof URL ? input.toString() : input.url;
 }
 
+function validRequestLog() {
+  return {
+    summary: {
+      id: "administrator-log",
+      logical_call_id: "call-1",
+      call_actor: "administrator",
+      administrator_subject: "pocket-id-subject",
+      provider_model_api_name: "primary-text",
+      kind: "model",
+      outcome: "succeeded",
+      started_at: "2026-08-25T00:00:00Z",
+    },
+    request_json: '{"messages":[]}',
+    response_json: '{"content":[]}',
+    attempts: [
+      {
+        provider_model_api_name: "primary-text",
+        outcome: "succeeded",
+        started_at: "2026-08-25T00:00:00Z",
+        completed_at: "2026-08-25T00:00:01Z",
+        applied_prices: {
+          currency: "USD",
+          unit_prices: [{ unit: "request", amount: "0.01" }],
+          source: "catalog",
+          synchronized_at: "2026-08-24T00:00:00Z",
+        },
+      },
+    ],
+    media: [
+      {
+        id: "media-1",
+        media_type: "image/png",
+        role: "output",
+        size_bytes: 123,
+      },
+    ],
+  };
+}
+
 describe("native administration client", () => {
+  it("validates a complete request log with optional attempt usage absent", async () => {
+    const log = validRequestLog();
+    const result = await createAdministrationClient(
+      vi.fn(() => Promise.resolve(json(log))),
+    ).requestLog("administrator-log");
+
+    expect(result).toEqual(log);
+    expect(result.attempts[0]?.usage).toBeUndefined();
+  });
+
+  it.each([
+    {
+      name: "attempt usage",
+      mutate: (log: ReturnType<typeof validRequestLog>) => {
+        Object.assign(log.attempts[0] ?? {}, {
+          usage: {
+            units: [{ unit: "untrusted-unit", quantity: "1" }],
+            cost: "0.01",
+            currency: "USD",
+          },
+        });
+      },
+    },
+    {
+      name: "media role",
+      mutate: (log: ReturnType<typeof validRequestLog>) => {
+        Object.assign(log.media[0] ?? {}, { role: "preview" });
+      },
+    },
+  ])(
+    "rejects malformed request-log $name before rendering",
+    async ({ mutate }) => {
+      const log = validRequestLog();
+      mutate(log);
+      const client = createAdministrationClient(
+        vi.fn(() => Promise.resolve(json(log))),
+      );
+
+      await expect(
+        client.requestLog("administrator-log"),
+      ).rejects.toMatchObject({
+        code: "invalid_response",
+        status: 502,
+        message: "The Router returned an invalid request-log response.",
+      });
+    },
+  );
+
+  it("accepts each closed service and administrator request-log summary", async () => {
+    const common = {
+      logical_call_id: "call-1",
+      kind: "model",
+      outcome: "succeeded",
+      tags: ["scheduled"],
+      started_at: "2026-08-25T00:00:00Z",
+    };
+    const items = [
+      {
+        ...common,
+        id: "service-log",
+        call_actor: "service",
+        service_api_name: "billing",
+        workspace_api_name: "production",
+        assignment_api_name: "summarize",
+      },
+      {
+        ...common,
+        id: "administrator-exact-log",
+        call_actor: "administrator",
+        administrator_subject: "pocket-id-subject",
+        provider_model_api_name: "primary-text",
+      },
+      {
+        ...common,
+        id: "administrator-assignment-log",
+        call_actor: "administrator",
+        administrator_subject: "pocket-id-subject",
+        assignment_api_name: "summarize",
+        configuration_service_api_name: "billing",
+        provider_model_api_name: "fallback-text",
+      },
+    ];
+    const result = await createAdministrationClient(
+      vi.fn(() =>
+        Promise.resolve(
+          json({ items, page: { has_more: false, next_cursor: null } }),
+        ),
+      ),
+    ).requestLogs("from", "to");
+
+    expect(result.items).toEqual(items);
+  });
+
+  it("rejects an administrator request-log summary with service ownership", async () => {
+    const client = createAdministrationClient(
+      vi.fn(() =>
+        Promise.resolve(
+          json({
+            items: [
+              {
+                id: "invalid-log",
+                logical_call_id: "call-1",
+                call_actor: "administrator",
+                administrator_subject: "pocket-id-subject",
+                service_api_name: "billing",
+                workspace_api_name: "production",
+                provider_model_api_name: "primary-text",
+                kind: "model",
+                outcome: "succeeded",
+                started_at: "2026-08-25T00:00:00Z",
+              },
+            ],
+            page: { has_more: false, next_cursor: null },
+          }),
+        ),
+      ),
+    );
+
+    await expect(client.requestLogs("from", "to")).rejects.toMatchObject({
+      code: "invalid_response",
+      status: 502,
+      message: "The Router returned an invalid request-log response.",
+    });
+  });
+
   it("uses the current administrator session and bounded native lists", async () => {
     const paths: string[] = [];
     const fetcher = vi.fn((input: string | URL | Request) => {
@@ -161,7 +325,16 @@ describe("native administration client", () => {
       page += 1;
       return Promise.resolve(
         json({
-          items: Array.from({ length: 200 }, (_, index) => ({ index })),
+          items: Array.from({ length: 200 }, (_, index) => ({
+            id: `log-${String(page)}-${String(index)}`,
+            logical_call_id: `call-${String(page)}-${String(index)}`,
+            call_actor: "service",
+            service_api_name: "billing",
+            workspace_api_name: "production",
+            kind: "model",
+            outcome: "succeeded",
+            started_at: "2026-08-25T00:00:00Z",
+          })),
           page: { has_more: true, next_cursor: `cursor-${String(page)}` },
         }),
       );
