@@ -40,8 +40,11 @@ import {
   type Workspace,
 } from "./api.js";
 import {
+  createScopeLoadGuard,
   protectedServiceApiName,
   reduceKeyCreationLifecycle,
+  serviceInteractionLocked,
+  uniqueDraftRowId,
   type KeyCreationLifecycle,
   type KeyCreationLifecycleAction,
 } from "./accessState.js";
@@ -92,6 +95,34 @@ function visibleTreeOrder(services: readonly Service[]): readonly Service[] {
     if (service.parent_service_api_name == null) append(service);
   for (const service of services) append(service);
   return ordered;
+}
+
+function serviceTreeLevel(
+  servicesByName: ReadonlyMap<string, Service>,
+  service: Service,
+): number {
+  const visited = new Set([service.api_name]);
+  let level = 1;
+  let parentName = service.parent_service_api_name ?? null;
+  while (parentName !== null) {
+    if (visited.has(parentName)) return level;
+    visited.add(parentName);
+    const parent = servicesByName.get(parentName);
+    if (parent === undefined) return level;
+    level += 1;
+    parentName = parent.parent_service_api_name ?? null;
+  }
+  return level;
+}
+
+function focusFirstServiceControl(): void {
+  const firstNode = globalThis.document.querySelector<HTMLElement>(
+    ".service-management [data-service-api-name]",
+  );
+  const createButton = globalThis.document.querySelector<HTMLElement>(
+    ".service-management .od-graph-toolbar-actions button",
+  );
+  (firstNode ?? createButton)?.focus();
 }
 
 type Mutate = (
@@ -145,7 +176,7 @@ const initialServiceAccess: ServiceAccessState = {
 };
 
 const WORKSPACE_CREATE_ROW_ID = "__new_workspace__";
-const KEY_CREATE_ROW_ID = "__new_service_key__";
+const KEY_CREATE_ROW_ID_PREFIX = "__new_service_key__";
 
 const workspaceColumns: readonly EditableTableColumn<WorkspaceDraft>[] = [
   {
@@ -301,6 +332,8 @@ function WorkspaceAccessSection({
   client,
   csrf,
   load,
+  onMutationBegin,
+  onMutationEnd,
   onNotice,
   phase,
   rows,
@@ -312,6 +345,8 @@ function WorkspaceAccessSection({
   readonly client: AdministrationClient;
   readonly csrf: string;
   readonly load: () => Promise<void>;
+  readonly onMutationBegin: () => boolean;
+  readonly onMutationEnd: () => void;
   readonly onNotice: NoticeHandler;
   readonly phase: LoadPhase;
   readonly rows: readonly EditableTableRow<WorkspaceDraft>[];
@@ -363,6 +398,10 @@ function WorkspaceAccessSection({
           update({ workspaceDraft: null });
         }}
         onCreate={async (_rowId, draft) => {
+          if (!onMutationBegin())
+            throw new Error(
+              "Wait for the current service request to finish before you create a workspace.",
+            );
           try {
             const created = await client.createWorkspace(
               service.api_name,
@@ -383,9 +422,15 @@ function WorkspaceAccessSection({
             const message = errorMessage(error);
             onNotice("error", message);
             throw new Error(message);
+          } finally {
+            onMutationEnd();
           }
         }}
         onDelete={async (rowId) => {
+          if (!onMutationBegin())
+            throw new Error(
+              "Wait for the current service request to finish before you delete a workspace.",
+            );
           try {
             await client.deleteWorkspace(service.api_name, rowId, csrf);
             update((current) => ({
@@ -398,6 +443,8 @@ function WorkspaceAccessSection({
             const message = errorMessage(error);
             onNotice("error", message);
             throw new Error(message);
+          } finally {
+            onMutationEnd();
           }
         }}
         onDraftChange={(_rowId, patch) => {
@@ -443,6 +490,8 @@ function KeyAccessSection({
   onKeyCreated,
   onKeyCreationBegin,
   onKeyCreationFailed,
+  onMutationBegin,
+  onMutationEnd,
   onNotice,
   phase,
   rows,
@@ -458,6 +507,8 @@ function KeyAccessSection({
   readonly onKeyCreated: (serviceApiName: string, secret: string) => void;
   readonly onKeyCreationBegin: (serviceApiName: string) => boolean;
   readonly onKeyCreationFailed: (serviceApiName: string) => void;
+  readonly onMutationBegin: () => boolean;
+  readonly onMutationEnd: () => void;
   readonly onNotice: NoticeHandler;
   readonly phase: LoadPhase;
   readonly rows: readonly EditableTableRow<KeyDraft>[];
@@ -505,6 +556,10 @@ function KeyAccessSection({
           update({ keyDraft: null });
         }}
         onCreate={async (_rowId, draft) => {
+          if (!onMutationBegin())
+            throw new Error(
+              "Wait for the current service request to finish before you create a key.",
+            );
           try {
             if (!onKeyCreationBegin(service.api_name))
               throw new Error(
@@ -528,9 +583,15 @@ function KeyAccessSection({
             const message = errorMessage(error);
             onNotice("error", message);
             throw new Error(message);
+          } finally {
+            onMutationEnd();
           }
         }}
         onDelete={async (rowId) => {
+          if (!onMutationBegin())
+            throw new Error(
+              "Wait for the current service request to finish before you revoke a key.",
+            );
           try {
             await client.revokeKey(service.api_name, rowId, csrf);
             update((current) => ({
@@ -541,6 +602,8 @@ function KeyAccessSection({
             const message = errorMessage(error);
             onNotice("error", message);
             throw new Error(message);
+          } finally {
+            onMutationEnd();
           }
         }}
         onDraftChange={(_rowId, patch) => {
@@ -582,6 +645,8 @@ function ServiceAccessSections({
   onKeyCreated,
   onKeyCreationBegin,
   onKeyCreationFailed,
+  onMutationBegin,
+  onMutationEnd,
   onNotice,
   service,
 }: {
@@ -592,6 +657,8 @@ function ServiceAccessSections({
   readonly onKeyCreated: (serviceApiName: string, secret: string) => void;
   readonly onKeyCreationBegin: (serviceApiName: string) => boolean;
   readonly onKeyCreationFailed: (serviceApiName: string) => void;
+  readonly onMutationBegin: () => boolean;
+  readonly onMutationEnd: () => void;
   readonly onNotice: (tone: "success" | "error", message: string) => void;
   readonly service: Service;
 }) {
@@ -607,55 +674,69 @@ function ServiceAccessSections({
     workspacePhase,
     workspaces,
   } = access;
+  const workspaceLoadGuard = useRef(createScopeLoadGuard());
+  const keyLoadGuard = useRef(createScopeLoadGuard());
 
   async function loadWorkspaces(): Promise<void> {
+    const generation = workspaceLoadGuard.current.begin();
     updateAccess({ workspacePhase: "loading" });
     try {
+      // react-doctor-disable-next-line react-doctor/async-defer-await -- The continuation must reject a stale service load after this request settles.
       const page = await client.workspaces(service.api_name);
+      if (!workspaceLoadGuard.current.isCurrent(generation)) return;
       updateAccess({ workspaces: page.items, workspacePhase: "ready" });
     } catch (error) {
+      if (!workspaceLoadGuard.current.isCurrent(generation)) return;
       updateAccess({ workspacePhase: "error" });
       onNotice("error", errorMessage(error));
     }
   }
 
   async function loadKeys(): Promise<void> {
+    const generation = keyLoadGuard.current.begin();
     updateAccess({ keyPhase: "loading" });
     try {
+      // react-doctor-disable-next-line react-doctor/async-defer-await -- The continuation must reject a stale service load after this request settles.
       const page = await client.keys(service.api_name);
+      if (!keyLoadGuard.current.isCurrent(generation)) return;
       updateAccess({ keys: page.items, keyPhase: "ready" });
     } catch (error) {
+      if (!keyLoadGuard.current.isCurrent(generation)) return;
       updateAccess({ keyPhase: "error" });
       onNotice("error", errorMessage(error));
     }
   }
 
   useEffect(() => {
-    let current = true;
+    const workspaceGuard = workspaceLoadGuard.current;
+    const keyGuard = keyLoadGuard.current;
+    const workspaceGeneration = workspaceGuard.begin();
+    const keyGeneration = keyGuard.begin();
     void client
       .workspaces(service.api_name)
       .then((page) => {
-        if (!current) return;
+        if (!workspaceGuard.isCurrent(workspaceGeneration)) return;
         updateAccess({ workspaces: page.items, workspacePhase: "ready" });
       })
       .catch((error: unknown) => {
-        if (!current) return;
+        if (!workspaceGuard.isCurrent(workspaceGeneration)) return;
         updateAccess({ workspacePhase: "error" });
         onNotice("error", errorMessage(error));
       });
     void client
       .keys(service.api_name)
       .then((page) => {
-        if (!current) return;
+        if (!keyGuard.isCurrent(keyGeneration)) return;
         updateAccess({ keys: page.items, keyPhase: "ready" });
       })
       .catch((error: unknown) => {
-        if (!current) return;
+        if (!keyGuard.isCurrent(keyGeneration)) return;
         updateAccess({ keyPhase: "error" });
         onNotice("error", errorMessage(error));
       });
     return () => {
-      current = false;
+      workspaceGuard.invalidate();
+      keyGuard.invalidate();
     };
   }, [client, onNotice, service.api_name]);
 
@@ -684,8 +765,12 @@ function ServiceAccessSections({
     ],
     [workspaceDraft, workspaces],
   );
-  const keyRows = useMemo<readonly EditableTableRow<KeyDraft>[]>(
-    () => [
+  const keyRows = useMemo<readonly EditableTableRow<KeyDraft>[]>(() => {
+    const keyCreateRowId = uniqueDraftRowId(
+      keys.map((key) => key.id),
+      KEY_CREATE_ROW_ID_PREFIX,
+    );
+    return [
       ...keys.map((key) => ({
         id: key.id,
         label: key.name,
@@ -699,16 +784,15 @@ function ServiceAccessSections({
         ? []
         : [
             {
-              id: KEY_CREATE_ROW_ID,
+              id: keyCreateRowId,
               label: "New service API key",
               draft: keyDraft,
               dirty: true,
               isNew: true,
             },
           ]),
-    ],
-    [keyDraft, keys],
-  );
+    ];
+  }, [keyDraft, keys]);
 
   return (
     <div className="service-access-sections">
@@ -728,6 +812,8 @@ function ServiceAccessSections({
         client={client}
         csrf={csrf}
         load={loadWorkspaces}
+        onMutationBegin={onMutationBegin}
+        onMutationEnd={onMutationEnd}
         onNotice={onNotice}
         phase={workspacePhase}
         rows={workspaceRows}
@@ -746,6 +832,8 @@ function ServiceAccessSections({
         onKeyCreated={onKeyCreated}
         onKeyCreationBegin={onKeyCreationBegin}
         onKeyCreationFailed={onKeyCreationFailed}
+        onMutationBegin={onMutationBegin}
+        onMutationEnd={onMutationEnd}
         onNotice={onNotice}
         phase={keyPhase}
         rows={keyRows}
@@ -757,6 +845,7 @@ function ServiceAccessSections({
 }
 
 function ServiceInspector({
+  accessPending,
   busy,
   csrf,
   client,
@@ -768,11 +857,14 @@ function ServiceInspector({
   onKeyCreated,
   onKeyCreationBegin,
   onKeyCreationFailed,
+  onMutationBegin,
+  onMutationEnd,
   onNotice,
   returnFocusRef,
   selected,
   services,
 }: {
+  readonly accessPending: boolean;
   readonly busy: boolean;
   readonly csrf: string;
   readonly client: AdministrationClient;
@@ -784,6 +876,8 @@ function ServiceInspector({
   readonly onKeyCreated: (serviceApiName: string, secret: string) => void;
   readonly onKeyCreationBegin: (serviceApiName: string) => boolean;
   readonly onKeyCreationFailed: (serviceApiName: string) => void;
+  readonly onMutationBegin: () => boolean;
+  readonly onMutationEnd: () => void;
   readonly onNotice: (tone: "success" | "error", message: string) => void;
   readonly returnFocusRef: RefObject<HTMLElement | null>;
   readonly selected: Service;
@@ -811,7 +905,7 @@ function ServiceInspector({
           ? "Root service"
           : "Child service"
       }
-      {...(keyLifecycleActive || busy ? {} : { onClose })}
+      {...(keyLifecycleActive || accessPending || busy ? {} : { onClose })}
       returnFocusRef={returnFocusRef}
       title={selected.display_name}
       tone="lime"
@@ -877,7 +971,10 @@ function ServiceInspector({
             ))}
           </select>
         </label>
-        <Button disabled={busy} type="submit">
+        <Button
+          disabled={busy || accessPending || keyLifecycleActive}
+          type="submit"
+        >
           Save service
         </Button>
       </form>
@@ -894,6 +991,8 @@ function ServiceInspector({
         onKeyCreated={onKeyCreated}
         onKeyCreationBegin={onKeyCreationBegin}
         onKeyCreationFailed={onKeyCreationFailed}
+        onMutationBegin={onMutationBegin}
+        onMutationEnd={onMutationEnd}
         onNotice={onNotice}
         service={selected}
       />
@@ -903,7 +1002,7 @@ function ServiceInspector({
       >
         <h3 id="delete-service-title">Delete service</h3>
         <Button
-          disabled={busy || hasChildren || keyLifecycleActive}
+          disabled={busy || accessPending || hasChildren || keyLifecycleActive}
           onClick={() => {
             setDeleteError(null);
             setDeleteOpen(true);
@@ -1015,6 +1114,10 @@ function ServiceGraph({
   readonly services: readonly Service[];
 }) {
   const ordered = useMemo(() => visibleTreeOrder(services), [services]);
+  const servicesByName = useMemo(
+    () => new Map(services.map((service) => [service.api_name, service])),
+    [services],
+  );
   const initialActive = services.some(
     (service) => service.api_name === selectedService,
   )
@@ -1139,14 +1242,12 @@ function ServiceGraph({
           );
           return (
             <GraphNode
-              aria-label={`${service.display_name}, API name ${service.api_name}, ${
+              aria-label={`${service.display_name}, API name ${service.api_name}, tree level ${String(serviceTreeLevel(servicesByName, service))}, ${
                 parent === undefined
                   ? "root service with no parent"
                   : `child service of ${parent.display_name}`
               }`}
-              aria-disabled={
-                selectionLocked && selectedService !== service.api_name
-              }
+              aria-disabled={selectionLocked}
               data-service-api-name={service.api_name}
               eyebrow={parent === undefined ? "Root service" : "Child service"}
               key={service.api_name}
@@ -1264,12 +1365,17 @@ export function ServiceManagement({
   readonly services: readonly Service[];
 }) {
   const [busy, setBusy] = useState(false);
+  const [accessPendingCount, changeAccessPendingCount] = useReducer(
+    (current: number, change: 1 | -1) => Math.max(0, current + change),
+    0,
+  );
   const [showCreate, setShowCreate] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [keyLifecycle, setKeyLifecycle] = useState<KeyCreationLifecycle | null>(
     null,
   );
   const busyRef = useRef(false);
+  const accessPendingCountRef = useRef(0);
   const keyLifecycleRef = useRef<KeyCreationLifecycle | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const createInputRef = useRef<HTMLInputElement | null>(null);
@@ -1326,6 +1432,13 @@ export function ServiceManagement({
       );
       return;
     }
+    if (accessPendingCountRef.current > 0) {
+      onNotice(
+        "error",
+        "Wait for each workspace or key request to finish before you close this service.",
+      );
+      return;
+    }
     onSelect("");
     returnFocusRef.current = null;
   }
@@ -1343,7 +1456,13 @@ export function ServiceManagement({
     action: () => Promise<unknown>,
     message: string,
   ): Promise<string | null> {
-    if (busyRef.current) {
+    if (
+      serviceInteractionLocked(
+        busyRef.current,
+        accessPendingCountRef.current,
+        keyLifecycleRef.current,
+      )
+    ) {
       const correction =
         "Wait for the current service request to finish before you try again.";
       onNotice("error", correction);
@@ -1392,6 +1511,7 @@ export function ServiceManagement({
         keyLifecycle={keyLifecycle}
         onClearKey={() => {
           changeKeyLifecycle({ type: "clear" });
+          globalThis.requestAnimationFrame(focusFirstServiceControl);
         }}
         onNotice={onNotice}
       />
@@ -1409,6 +1529,7 @@ export function ServiceManagement({
       />
     ) : selected === null ? undefined : (
       <ServiceInspector
+        accessPending={accessPendingCount > 0}
         busy={busy}
         client={client}
         csrf={csrf}
@@ -1443,6 +1564,19 @@ export function ServiceManagement({
         onKeyCreationFailed={(serviceApiName) => {
           changeKeyLifecycle({ type: "failed", serviceApiName });
         }}
+        onMutationBegin={() => {
+          if (busyRef.current) return false;
+          accessPendingCountRef.current += 1;
+          changeAccessPendingCount(1);
+          return true;
+        }}
+        onMutationEnd={() => {
+          accessPendingCountRef.current = Math.max(
+            0,
+            accessPendingCountRef.current - 1,
+          );
+          changeAccessPendingCount(-1);
+        }}
         onNotice={onNotice}
         returnFocusRef={returnFocusRef}
         selected={selected}
@@ -1455,19 +1589,37 @@ export function ServiceManagement({
         inspector={inspector}
         layout={layout}
         onCreate={(trigger) => {
-          if (keyLifecycleRef.current !== null || busyRef.current) return;
+          if (
+            serviceInteractionLocked(
+              busyRef.current,
+              accessPendingCountRef.current,
+              keyLifecycleRef.current,
+            )
+          )
+            return;
           returnFocusRef.current = trigger;
           setCreateError(null);
           setShowCreate(true);
         }}
         onSelect={(name, trigger) => {
-          if (keyLifecycleRef.current !== null || busyRef.current) return;
+          if (
+            serviceInteractionLocked(
+              busyRef.current,
+              accessPendingCountRef.current,
+              keyLifecycleRef.current,
+            )
+          )
+            return;
           returnFocusRef.current = trigger;
           setShowCreate(false);
           setCreateError(null);
           onSelect(name);
         }}
-        selectionLocked={keyLifecycle !== null || busy}
+        selectionLocked={serviceInteractionLocked(
+          busy,
+          accessPendingCount,
+          keyLifecycle,
+        )}
         selectedService={protectedService}
         services={services}
       />

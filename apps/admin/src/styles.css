@@ -120,6 +120,11 @@ textarea,
   gap: 22px;
 }
 
+.od-page-description,
+.service-management .od-graph-inspector-eyebrow {
+  color: var(--od-color-muted-strong);
+}
+
 .resource-totals {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -330,7 +335,7 @@ tbody th small {
 }
 
 .record-facts dt {
-  color: var(--od-color-muted);
+  color: var(--od-color-muted-strong);
   font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
@@ -510,7 +515,7 @@ tbody th small {
 
 .service-access-heading p {
   margin-top: 3px;
-  color: var(--od-color-muted);
+  color: var(--od-color-muted-strong);
   font-size: 11px;
 }
 

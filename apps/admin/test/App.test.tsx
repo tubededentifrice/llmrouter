@@ -22,6 +22,8 @@ import {
   createScopeLoadGuard,
   protectedServiceApiName,
   reduceKeyCreationLifecycle,
+  serviceInteractionLocked,
+  uniqueDraftRowId,
   type KeyCreationLifecycle,
 } from "../src/accessState.js";
 import {
@@ -153,6 +155,8 @@ describe("accepted administration composition", () => {
     expect(markup.match(/tabindex="0"/g)).toHaveLength(1);
     expect(markup).toContain("Root");
     expect(markup).toContain("Child");
+    expect(markup).toContain("tree level 1");
+    expect(markup).toContain("tree level 2");
     expect(markup).toContain("Workspaces");
     expect(markup).toContain("Service API keys");
     expect(markup).toContain("Loading workspaces");
@@ -176,11 +180,9 @@ describe("accepted administration composition", () => {
     expect(serviceSource).not.toContain("globalThis.confirm");
     expect(serviceSource).toContain("Copy this key now");
     expect(serviceSource).toContain(
-      "keyLifecycleActive || busy ? {} : { onClose }",
+      "keyLifecycleActive || accessPending || busy ? {} : { onClose }",
     );
-    expect(serviceSource).toContain(
-      "selectionLocked={keyLifecycle !== null || busy}",
-    );
+    expect(serviceSource).toContain("serviceInteractionLocked");
     expect(serviceSource).toContain("MissingProtectedKeyInspector");
     expect(serviceSource).toContain("busyRef.current");
     expect(serviceSource).toContain(
@@ -201,6 +203,30 @@ describe("accepted administration composition", () => {
       'const WORKSPACE_CREATE_ROW_ID = "__new_workspace__"',
     );
     expect(serviceSource).not.toContain('id: "new-workspace"');
+  });
+
+  it("allocates a key create-row identity outside the current opaque IDs", () => {
+    expect(uniqueDraftRowId([], "__new_service_key__")).toBe(
+      "__new_service_key__",
+    );
+    expect(
+      uniqueDraftRowId(
+        ["__new_service_key__", "__new_service_key___"],
+        "__new_service_key__",
+      ),
+    ).toBe("__new_service_key____");
+  });
+
+  it("locks graph actions synchronously for each pending host operation", () => {
+    expect(serviceInteractionLocked(false, 0, null)).toBe(false);
+    expect(serviceInteractionLocked(true, 0, null)).toBe(true);
+    expect(serviceInteractionLocked(false, 1, null)).toBe(true);
+    expect(
+      serviceInteractionLocked(false, 0, {
+        phase: "pending",
+        serviceApiName: "root",
+      }),
+    ).toBe(true);
   });
 
   it("keeps a key request and one-time secret bound to its service", () => {

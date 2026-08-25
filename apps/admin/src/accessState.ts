@@ -20,6 +20,16 @@ export function createScopeLoadGuard(): ScopeLoadGuard {
   };
 }
 
+export function uniqueDraftRowId(
+  existingIds: readonly string[],
+  prefix: string,
+): string {
+  const existing = new Set(existingIds);
+  let candidate = prefix;
+  while (existing.has(candidate)) candidate += "_";
+  return candidate;
+}
+
 export type KeyCreationLifecycle =
   | {
       readonly phase: "pending";
@@ -40,6 +50,14 @@ export type KeyCreationLifecycleAction =
     }
   | { readonly type: "failed"; readonly serviceApiName: string }
   | { readonly type: "clear" };
+
+export function serviceInteractionLocked(
+  busy: boolean,
+  accessPendingCount: number,
+  lifecycle: KeyCreationLifecycle | null,
+): boolean {
+  return busy || accessPendingCount > 0 || lifecycle !== null;
+}
 
 export function protectedServiceApiName(
   selectedService: string,
