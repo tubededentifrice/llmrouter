@@ -1650,6 +1650,9 @@ function useConfigurationController({
               updateMediaRecovery(current, playgroundTarget, job),
             );
           }}
+          onRefreshTarget={async () => {
+            await Promise.all([onRefreshGlobal(), onRefreshAssignments()]);
+          }}
           onUncertainMediaAdmissionChange={(uncertain) => {
             setPlaygroundUncertainMediaAdmissions((current) => {
               const key = playgroundTargetKey(playgroundTarget);

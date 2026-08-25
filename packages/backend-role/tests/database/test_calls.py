@@ -371,44 +371,40 @@ def test_administrator_admission_rejects_a_reused_call_with_a_new_snapshot(
     """Permit media resume only when the immutable selection still matches."""
     call_id = uuid.uuid4()
     first_started = datetime.now(tz=UTC)
-    snapshot = {
+    snapshot: dict[str, object] = {
         "selector": {"kind": "exact", "provider_model_api_name": "plain"},
         "controls": {"call_kind": "media"},
         "candidates": [],
     }
-    values = {
-        "call_id": call_id,
-        "call_actor": "administrator",
-        "service_id": None,
-        "workspace_id": None,
-        "administrator_subject": "administrator-subject",
-        "configuration_service_api_name": None,
-        "assignment_api_name": None,
-        "exact_provider_model_api_name": "plain",
-        "kind": "media",
-        "tags": (),
-    }
     with psycopg.connect(call_context.database_url, row_factory=dict_row) as connection:
-        accounting.record_call_admission(
-            connection,
-            **values,
-            started_at=first_started,
-            selection_snapshot=snapshot,
-        )
-        connection.commit()
-        accounting.record_call_admission(
-            connection,
-            **values,
-            started_at=datetime.now(tz=UTC),
-            selection_snapshot=snapshot,
-        )
-        connection.commit()
-        with pytest.raises(ValueError, match="snapshot does not match"):
+
+        def record_admission(
+            started_at: datetime, selection_snapshot: dict[str, object]
+        ) -> None:
             accounting.record_call_admission(
                 connection,
-                **values,
-                started_at=datetime.now(tz=UTC),
-                selection_snapshot={**snapshot, "controls": {"call_kind": "model"}},
+                call_id=call_id,
+                call_actor="administrator",
+                service_id=None,
+                workspace_id=None,
+                administrator_subject="administrator-subject",
+                configuration_service_api_name=None,
+                assignment_api_name=None,
+                exact_provider_model_api_name="plain",
+                kind="media",
+                tags=(),
+                started_at=started_at,
+                selection_snapshot=selection_snapshot,
+            )
+
+        record_admission(first_started, snapshot)
+        connection.commit()
+        record_admission(datetime.now(tz=UTC), snapshot)
+        connection.commit()
+        with pytest.raises(ValueError, match="snapshot does not match"):
+            record_admission(
+                datetime.now(tz=UTC),
+                {**snapshot, "controls": {"call_kind": "model"}},
             )
         connection.rollback()
         row = connection.execute(

@@ -101,6 +101,7 @@ export function projectConfigurationGraph(
   const assignmentIds = sortedAssignments.map((item) =>
     configurationNodeId.assignment(item.api_name),
   );
+  const nodeIds = new Set([...providerIds, ...catalogIds, ...assignmentIds]);
   const relationships = [
     ...sortedMappings.map((mapping) => ({
       id: `provider-mapping:${mapping.provider_api_name}:${mapping.api_name}`,
@@ -116,7 +117,10 @@ export function projectConfigurationGraph(
         targetId: configurationNodeId.assignment(assignment.api_name),
       })),
     ),
-  ];
+  ].filter(
+    (relationship) =>
+      nodeIds.has(relationship.sourceId) && nodeIds.has(relationship.targetId),
+  );
   return { providerIds, catalogIds, assignmentIds, relationships };
 }
 

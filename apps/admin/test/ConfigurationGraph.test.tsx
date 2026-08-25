@@ -113,6 +113,18 @@ describe("configuration graph projection", () => {
       "mapping:openrouter-reasoning",
     ]);
   });
+
+  it("keeps assignments but omits edges to mappings that are unavailable", () => {
+    const result = projectConfigurationGraph(
+      [provider],
+      [model],
+      [],
+      [assignment],
+    );
+
+    expect(result.assignmentIds).toEqual(["assignment:default"]);
+    expect(result.relationships).toEqual([]);
+  });
 });
 
 describe("configuration policy", () => {

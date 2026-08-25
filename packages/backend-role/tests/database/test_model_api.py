@@ -1123,9 +1123,9 @@ def test_administrator_media_admits_only_the_final_transaction_selection(
         context.objects.put = original_put  # type: ignore[method-assign]
     assert response.status_code == HTTPStatus.ACCEPTED
     assert response.json()["provider_model_api_name"] == "media"
-    with psycopg.connect(context.database_url, row_factory=dict_row) as connection:
+    with psycopg.connect(context.database_url, row_factory=dict_row) as read_connection:
         snapshot = _required(
-            connection.execute(
+            read_connection.execute(
                 """SELECT selection_snapshot FROM router.raw_accounting_calls
                    WHERE id = %s""",
                 (response.json()["logical_call_id"],),

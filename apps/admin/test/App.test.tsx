@@ -354,6 +354,23 @@ describe("accepted administration composition", () => {
     expect(markup).toContain("Move or delete each child");
   });
 
+  it("renders the empty service tree without resetting an empty focus target", () => {
+    const markup = renderToStaticMarkup(
+      <ServiceManagement
+        client={client()}
+        csrf="csrf"
+        onNotice={vi.fn()}
+        onRefresh={vi.fn()}
+        onSelect={vi.fn()}
+        selectedService=""
+        services={[]}
+      />,
+    );
+
+    expect(markup).toContain("No services");
+    expect(markup).toContain("Create a root service");
+  });
+
   it("keeps workspaces and keys in the service inspector", () => {
     const applicationSource = readFileSync(
       new URL("../src/App.tsx", import.meta.url),

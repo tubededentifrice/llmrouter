@@ -966,10 +966,10 @@ describe("native administration client", () => {
     });
   });
 
-  it("creates a stable bounded UTC range", () => {
-    expect(isoRange(7, new Date("2026-08-24T12:00:00Z"))).toEqual({
-      from: "2026-08-17T12:00:00.000Z",
-      to: "2026-08-24T12:00:00.000Z",
+  it("creates a stable range that includes the complete current minute", () => {
+    expect(isoRange(7, new Date("2026-08-24T12:00:59.999Z"))).toEqual({
+      from: "2026-08-17T12:00:59.999Z",
+      to: "2026-08-24T12:01:00.000Z",
     });
   });
 });

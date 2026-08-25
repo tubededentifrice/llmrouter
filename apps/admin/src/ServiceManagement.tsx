@@ -1128,9 +1128,9 @@ function ServiceGraph({
     activeNode: initialActive,
   });
   const selectionChanged = rovingState.selection !== selectedService;
-  const activeNodeUnavailable = !services.some(
-    (service) => service.api_name === rovingState.activeNode,
-  );
+  const activeNodeUnavailable =
+    rovingState.activeNode !== "" &&
+    !services.some((service) => service.api_name === rovingState.activeNode);
   const resetActiveNode = selectionChanged || activeNodeUnavailable;
   const activeNode = resetActiveNode ? initialActive : rovingState.activeNode;
   if (resetActiveNode)

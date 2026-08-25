@@ -2952,8 +2952,11 @@ export function isoRange(
   days = 7,
   now = new Date(),
 ): { readonly from: string; readonly to: string } {
+  const endOfCurrentMinute = new Date(now);
+  endOfCurrentMinute.setUTCSeconds(0, 0);
+  endOfCurrentMinute.setUTCMinutes(endOfCurrentMinute.getUTCMinutes() + 1);
   return {
     from: new Date(now.getTime() - days * 86_400_000).toISOString(),
-    to: now.toISOString(),
+    to: endOfCurrentMinute.toISOString(),
   };
 }

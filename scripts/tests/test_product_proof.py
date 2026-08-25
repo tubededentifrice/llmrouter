@@ -101,6 +101,48 @@ def test_live_proof_covers_sdk_harness_and_native_operation_families() -> None:
         'Path("/usr/bin/google-chrome")',
         '"Services\\n2"',
         '"Provider connections\\n1"',
+        '"/v1/admin/playground/model-calls"',
+        '"/v1/admin/playground/model-streams"',
+        '"/v1/admin/playground/embeddings"',
+        '"/v1/admin/playground/media-jobs"',
+        '"/v1/admin/request-logs"',
+        '"/v1/admin/statistics"',
+        "expired_admin_session",
+        "_prove_administrator_logout(",
+        "_assert_axe(",
+        "Accessibility.getFullAXTree",
+        "forced-colors",
+        "prefers-reduced-motion",
+        "_prove_service_tree(",
+        "_prove_configuration_graph(",
+        "_prove_other_playground_operations(",
+        "_prove_observation_pages(",
+        "_prove_route_and_state_matrix(",
+        '"/providers", "/models", "/assignments", "/playground"',
+        '"loading" && listPaths.has(url.pathname)',
+        'mode === "error"',
+        'mode === "empty"',
+        "A failed refresh did not retain and label the current configuration graph",
+        'mode === "remove-text"',
+        "Target unavailable",
+        "Refresh target",
+        "Prepare retained media download",
     ):
         assert evidence in source
     assert "if opcode == 9:\n                self._send_frame(10, payload)" in source
+
+
+def test_browser_proof_keeps_authentication_and_provider_work_safe() -> None:
+    """Keep browser proof on localhost with the real session and fake routes."""
+    source = LIVE_PROOF.read_text(encoding="utf-8")
+    assert '"url": ADMIN_ORIGIN' in source
+    assert '"httpOnly": True' in source
+    assert '"sameSite": "Lax"' in source
+    assert '"secure": False' in source
+    assert '"provider_model_api_name": "text"' in source
+    assert '"provider_model_api_name": "embedding"' in source
+    assert '"provider_model_api_name": "media"' in source
+    assert 'Service API key" not in modal_text' in source
+    assert 'Workspace" not in modal_text' in source
+    assert 'Permission scope" not in modal_text' in source
+    assert "https://llmrouter.opendle.dev" not in source

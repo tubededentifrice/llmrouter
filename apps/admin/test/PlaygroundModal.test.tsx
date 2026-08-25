@@ -526,6 +526,7 @@ describe("administrator playground input", () => {
         currentTarget={target}
         onClose={vi.fn()}
         onMediaJobChange={vi.fn()}
+        onRefreshTarget={vi.fn()}
         onUncertainMediaAdmissionChange={vi.fn()}
         retainedMediaJob={null}
         retainedUncertainMediaAdmission={false}
@@ -539,10 +540,40 @@ describe("administrator playground input", () => {
     expect(markup).toContain("Stream model output");
     expect(markup).toContain("Validate structured JSON output");
     expect(markup).toContain("Tool definitions JSON");
+    expect(markup).toContain("Refresh target");
     expect(markup).not.toContain("Route selection");
     expect(markup).not.toContain("service key");
     expect(markup).not.toContain("Workspace");
     expect(markup).not.toContain("Permission scope");
+  });
+
+  it("keeps prepared controls visible when a refreshed target is unavailable", () => {
+    const target = mappingPlaygroundTarget(
+      mapping.api_name,
+      [mapping],
+      [provider],
+      [model],
+    );
+    if (target === null) throw new Error("Missing test target.");
+    const markup = renderToStaticMarkup(
+      <PlaygroundModal
+        client={createAdministrationClient(vi.fn())}
+        csrf="csrf"
+        currentTarget={null}
+        onClose={vi.fn()}
+        onMediaJobChange={vi.fn()}
+        onRefreshTarget={vi.fn()}
+        onUncertainMediaAdmissionChange={vi.fn()}
+        retainedMediaJob={null}
+        retainedUncertainMediaAdmission={false}
+        returnFocusRef={{ current: null }}
+        target={target}
+      />,
+    );
+
+    expect(markup).toContain("Target unavailable");
+    expect(markup).toContain("Refresh target");
+    expect(markup).toContain("disabled");
   });
 
   it("blocks duplicate generation and offers recovery for an admitted job", () => {
@@ -560,6 +591,7 @@ describe("administrator playground input", () => {
         currentTarget={target}
         onClose={vi.fn()}
         onMediaJobChange={vi.fn()}
+        onRefreshTarget={vi.fn()}
         onUncertainMediaAdmissionChange={vi.fn()}
         retainedMediaJob={{
           id: "job-retained",
@@ -597,6 +629,7 @@ describe("administrator playground input", () => {
         currentTarget={target}
         onClose={vi.fn()}
         onMediaJobChange={vi.fn()}
+        onRefreshTarget={vi.fn()}
         onUncertainMediaAdmissionChange={vi.fn()}
         retainedMediaJob={null}
         retainedUncertainMediaAdmission
@@ -625,6 +658,7 @@ describe("administrator playground input", () => {
         currentTarget={target}
         onClose={vi.fn()}
         onMediaJobChange={vi.fn()}
+        onRefreshTarget={vi.fn()}
         onUncertainMediaAdmissionChange={vi.fn()}
         retainedMediaJob={{
           id: "job-content-retry",
@@ -671,6 +705,7 @@ describe("administrator playground input", () => {
         currentTarget={target}
         onClose={vi.fn()}
         onMediaJobChange={vi.fn()}
+        onRefreshTarget={vi.fn()}
         onUncertainMediaAdmissionChange={vi.fn()}
         retainedMediaJob={{
           id: "job-failed",

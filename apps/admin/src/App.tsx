@@ -253,9 +253,7 @@ const requestLogColumns: readonly DataTableColumn<RequestLogSummary>[] = [
     header: "Outcome",
     width: "8rem",
     render: ({ row }) => (
-      <StatusPill tone={tone(row.outcome)}>
-        {row.outcome}
-      </StatusPill>
+      <StatusPill tone={tone(row.outcome)}>{row.outcome}</StatusPill>
     ),
   },
 ];
@@ -337,9 +335,7 @@ const activityColumns: readonly DataTableColumn<ActivityEvent>[] = [
     header: "Result",
     width: "8rem",
     render: ({ row }) => (
-      <StatusPill tone={tone(row.result)}>
-        {row.result}
-      </StatusPill>
+      <StatusPill tone={tone(row.result)}>{row.result}</StatusPill>
     ),
   },
 ];
@@ -465,9 +461,7 @@ function Overview({ data }: { readonly data: AppData }) {
                 <strong>{item.name.replaceAll("_", " ")}</strong>
                 {item.message == null ? null : <small>{item.message}</small>}
               </span>
-              <StatusPill tone={tone(item.status)}>
-                {item.status}
-              </StatusPill>
+              <StatusPill tone={tone(item.status)}>{item.status}</StatusPill>
             </li>
           ))}
         </ul>
@@ -1443,9 +1437,7 @@ function OperationsPage({
                   <strong>{item.name.replaceAll("_", " ")}</strong>
                   <small>{item.message ?? "No corrective message"}</small>
                 </span>
-                <StatusPill tone={tone(item.status)}>
-                  {item.status}
-                </StatusPill>
+                <StatusPill tone={tone(item.status)}>{item.status}</StatusPill>
               </li>
             ))}
           </ul>

@@ -36,6 +36,7 @@ interface PlaygroundModalProps {
   readonly onMediaJobChange: (
     job: AdministratorPlaygroundMediaJob | null,
   ) => void;
+  readonly onRefreshTarget: () => Promise<void>;
   readonly onUncertainMediaAdmissionChange: (uncertain: boolean) => void;
   readonly retainedMediaJob: AdministratorPlaygroundMediaJob | null;
   readonly retainedUncertainMediaAdmission: boolean;
@@ -76,6 +77,7 @@ interface PlaygroundModalState {
   readonly runState: PlaygroundRunState;
   readonly diagnostics: PlaygroundDiagnostics | null;
   readonly inputImages: readonly InputImageRecord[];
+  readonly refreshing: boolean;
   readonly stream: boolean;
   readonly structured: boolean;
   readonly schema: string;
@@ -343,6 +345,7 @@ export function PlaygroundModal({
   currentTarget,
   onClose,
   onMediaJobChange,
+  onRefreshTarget,
   onUncertainMediaAdmissionChange,
   retainedMediaJob,
   retainedUncertainMediaAdmission,
@@ -372,6 +375,7 @@ export function PlaygroundModal({
       diagnostics:
         retainedMediaJob === null ? null : mediaDiagnostics(retainedMediaJob),
       inputImages: [],
+      refreshing: false,
       stream: false,
       structured: target.requiresStructuredOutput,
       schema: '{"type":"object","additionalProperties":false,"properties":{}}',
@@ -382,6 +386,7 @@ export function PlaygroundModal({
   const {
     diagnostics,
     inputImages,
+    refreshing,
     runState,
     schema,
     stream,
@@ -853,8 +858,27 @@ export function PlaygroundModal({
     onClose();
   }
 
+  async function refreshTarget(): Promise<void> {
+    if (running || refreshing) return;
+    patchState({ refreshing: true });
+    try {
+      await onRefreshTarget();
+    } finally {
+      if (mountedRef.current) patchState({ refreshing: false });
+    }
+  }
+
   return (
     <Dialog
+      actions={
+        <Button
+          disabled={running || refreshing}
+          onClick={() => void refreshTarget()}
+          variant="secondary"
+        >
+          {refreshing ? "Refreshing target…" : "Refresh target"}
+        </Button>
+      }
       bodyClassName="configuration-playground-dialog-body"
       closeDisabled={false}
       description="Run one unrestricted global administrator call. Assignment service context selects configuration only."
