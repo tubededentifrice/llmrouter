@@ -128,6 +128,8 @@ describe("accepted administration composition", () => {
     expect(application).not.toContain("function PlaygroundPage");
     expect(configuration).toContain("RelationshipGraph");
     expect(configuration).toContain("Global models and mappings");
+    expect(application).not.toContain("key={selectedService}");
+    expect(application).toContain("assignmentPending");
     expect(configuration).toContain(
       "Playground available after configuration delivery",
     );

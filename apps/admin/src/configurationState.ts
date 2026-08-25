@@ -153,8 +153,13 @@ export function validateAssignmentChain(
 export function includeConfirmedRecords<
   T extends { readonly api_name: string },
 >(records: readonly T[], confirmed: readonly T[]): readonly T[] {
+  if (confirmed.length === 0) return records;
+  const overlays = new Map(confirmed.map((item) => [item.api_name, item]));
   const known = new Set(records.map((item) => item.api_name));
-  return [...records, ...confirmed.filter((item) => !known.has(item.api_name))];
+  return [
+    ...records.map((item) => overlays.get(item.api_name) ?? item),
+    ...confirmed.filter((item) => !known.has(item.api_name)),
+  ];
 }
 
 export function retainConfirmedRecord<T extends { readonly api_name: string }>(
@@ -167,12 +172,50 @@ export function retainConfirmedRecord<T extends { readonly api_name: string }>(
   ];
 }
 
+export function retainDeletedRecord(
+  deleted: readonly string[],
+  apiName: string,
+): readonly string[] {
+  return deleted.includes(apiName) ? deleted : [...deleted, apiName];
+}
+
+export function discardDeletedRecord(
+  deleted: readonly string[],
+  apiName: string,
+): readonly string[] {
+  const retained = deleted.filter((item) => item !== apiName);
+  return retained.length === deleted.length ? deleted : retained;
+}
+
+export function excludeDeletedRecords<T extends { readonly api_name: string }>(
+  records: readonly T[],
+  deleted: readonly string[],
+): readonly T[] {
+  if (deleted.length === 0) return records;
+  const hidden = new Set(deleted);
+  return records.filter((item) => !hidden.has(item.api_name));
+}
+
+export function pruneAcknowledgedDeletions(
+  authoritative: readonly { readonly api_name: string }[],
+  deleted: readonly string[],
+): readonly string[] {
+  if (deleted.length === 0) return deleted;
+  const present = new Set(authoritative.map((item) => item.api_name));
+  const retained = deleted.filter((apiName) => present.has(apiName));
+  return retained.length === deleted.length ? deleted : retained;
+}
+
 export function pruneAcknowledgedRecords<
   T extends { readonly api_name: string },
 >(authoritative: readonly T[], confirmed: readonly T[]): readonly T[] {
   if (confirmed.length === 0) return confirmed;
-  const known = new Set(authoritative.map((item) => item.api_name));
-  const retained = confirmed.filter((item) => !known.has(item.api_name));
+  const current = new Map(
+    authoritative.map((item) => [item.api_name, JSON.stringify(item)]),
+  );
+  const retained = confirmed.filter(
+    (item) => current.get(item.api_name) !== JSON.stringify(item),
+  );
   return retained.length === confirmed.length ? confirmed : retained;
 }
 

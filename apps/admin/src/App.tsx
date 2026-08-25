@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useEffectEvent,
   useMemo,
   useReducer,
   useRef,
@@ -1067,6 +1068,7 @@ const defaultAdministrationClient = createAdministrationClient();
 
 interface MainState {
   readonly assignments: readonly Assignment[];
+  readonly assignmentPending: boolean;
   readonly data: AppData | null;
   readonly failure: string | null;
   readonly notice: Notice | null;
@@ -1085,6 +1087,7 @@ interface MainState {
 function initialMainState(): MainState {
   return {
     assignments: [],
+    assignmentPending: false,
     data: null,
     failure: null,
     notice: null,
@@ -1098,6 +1101,7 @@ function initialMainState(): MainState {
 
 function AuthenticatedAdministration({
   assignments,
+  assignmentPending,
   client,
   data,
   failure,
@@ -1108,12 +1112,14 @@ function AuthenticatedAdministration({
   notify,
   onDismissNotice,
   onAssignmentDirtyChange,
+  onAssignmentPendingChange,
   section,
   selectService,
   selectedService,
   session,
 }: {
   readonly assignments: readonly Assignment[];
+  readonly assignmentPending: boolean;
   readonly client: AdministrationClient;
   readonly data: AppData | null;
   readonly failure: string | null;
@@ -1124,6 +1130,7 @@ function AuthenticatedAdministration({
   readonly notify: (tone: "success" | "error", message: string) => void;
   readonly onDismissNotice: () => void;
   readonly onAssignmentDirtyChange: (dirty: boolean) => void;
+  readonly onAssignmentPendingChange: (pending: boolean) => void;
   readonly section: Section;
   readonly selectService: (value: string) => void;
   readonly selectedService: string;
@@ -1206,6 +1213,7 @@ function AuthenticatedAdministration({
             Service
             <select
               aria-label="Selected service"
+              disabled={assignmentPending}
               onChange={(event) => {
                 selectService(event.currentTarget.value);
               }}
@@ -1220,6 +1228,7 @@ function AuthenticatedAdministration({
             </select>
           </label>
           <Button
+            disabled={assignmentPending}
             onClick={() => {
               void Promise.all([loadGlobal(), loadScope()]);
             }}
@@ -1280,9 +1289,9 @@ function AuthenticatedAdministration({
           credentials={data.credentials}
           csrf={session.csrf_token}
           globalPhase={data.configurationPhase}
-          key={selectedService}
           models={data.models}
           onAssignmentDirtyChange={onAssignmentDirtyChange}
+          onAssignmentPendingChange={onAssignmentPendingChange}
           onNotice={notify}
           onRefreshAssignments={loadScope}
           onRefreshGlobal={loadGlobal}
@@ -1361,6 +1370,7 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
   );
   const {
     assignments,
+    assignmentPending,
     assignmentDirty,
     data,
     failure,
@@ -1388,10 +1398,25 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
       `/configuration${globalThis.location.search}`,
     );
   }, []);
+  const preventUnsafeLocationRestore = useEffectEvent((): boolean => {
+    if (!assignmentDirty && !assignmentPending) return false;
+    const service = selectedServiceRef.current;
+    const query =
+      service === "" ? "" : `?service=${encodeURIComponent(service)}`;
+    globalThis.history.replaceState({}, "", `/${section}${query}`);
+    notify(
+      "error",
+      assignmentPending
+        ? "Wait for the selected service assignment write to finish."
+        : "Close the assignment form and confirm that you want to discard its changes before you change pages or services.",
+    );
+    return true;
+  });
   const expireAdministratorSession = useCallback(() => {
     expireAdministratorSessionLoads(globalLoadGuard, scopeLoadGuard, () => {
       update({
         assignments: [],
+        assignmentPending: false,
         data: null,
         sessionState: { status: "expired" },
       });
@@ -1492,7 +1517,6 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
       update({ assignments: [] });
       return Promise.resolve();
     }
-    update({ assignments: [] });
     return authenticatedClient
       .assignments(selectedService)
       .then((assignmentPage) => {
@@ -1501,7 +1525,6 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
       })
       .catch((error: unknown) => {
         if (!scopeLoadGuard.isCurrent(generation)) return;
-        update({ assignments: [] });
         notify("error", errorMessage(error));
       });
   }, [authenticatedClient, notify, scopeLoadGuard, selectedService]);
@@ -1538,6 +1561,7 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
   useEffect(() => {
     replaceLegacyConfigurationPath();
     const restoreLocation = () => {
+      if (preventUnsafeLocationRestore()) return;
       replaceLegacyConfigurationPath();
       scopeLoadGuard.invalidate();
       selectedServiceRef.current = selectedServiceFromLocation();
@@ -1557,6 +1581,7 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
     selectedServiceRef.current = value;
     update({
       assignments: [],
+      assignmentPending: false,
       assignmentDirty: false,
       pendingService: null,
       selectedService: value,
@@ -1568,6 +1593,13 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
   }
   function selectService(value: string) {
     if (value === selectedService) return;
+    if (assignmentPending) {
+      notify(
+        "error",
+        "Wait for the selected service assignment write to finish.",
+      );
+      return;
+    }
     if (assignmentDirty) {
       update({ pendingService: value });
       return;
@@ -1577,6 +1609,20 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
   function navigate(id: string) {
     const next = routes.find((item) => item.id === id)?.id;
     if (next === undefined) return;
+    if (assignmentPending) {
+      notify(
+        "error",
+        "Wait for the selected service assignment write to finish.",
+      );
+      return;
+    }
+    if (assignmentDirty && next !== section) {
+      notify(
+        "error",
+        "Close the assignment form and confirm that you want to discard its changes before you leave this page.",
+      );
+      return;
+    }
     update({ section: next });
     const query =
       selectedService === ""
@@ -1649,6 +1695,7 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
     <>
       <AuthenticatedAdministration
         assignments={assignments}
+        assignmentPending={assignmentPending}
         client={authenticatedClient}
         data={data}
         failure={failure}
@@ -1659,6 +1706,9 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
         notify={notify}
         onAssignmentDirtyChange={(dirty) => {
           update({ assignmentDirty: dirty });
+        }}
+        onAssignmentPendingChange={(pending) => {
+          update({ assignmentPending: pending });
         }}
         onDismissNotice={() => {
           update({ notice: null });
@@ -1679,6 +1729,7 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
           if (pendingService !== null) applyServiceSelection(pendingService);
         }}
         open={pendingService !== null}
+        pending={assignmentPending}
         title="Discard assignment changes?"
       />
     </>

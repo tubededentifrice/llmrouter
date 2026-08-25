@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useEffect,
   useMemo,
   useReducer,
   useRef,
@@ -39,12 +40,16 @@ import {
 } from "./api.js";
 import {
   adapterFieldPolicy,
+  discardDeletedRecord,
   discardConfirmedRecord,
+  excludeDeletedRecords,
   includeConfirmedRecords,
   parseConfigurationNodeId,
   projectConfigurationGraph,
+  pruneAcknowledgedDeletions,
   pruneAcknowledgedRecords,
   retainConfirmedRecord,
+  retainDeletedRecord,
   validateAssignmentChain,
   type ConfigurationLoadPhase,
   type ConfigurationRecordKind,
@@ -59,6 +64,7 @@ interface ConfigurationGraphProps {
   readonly globalPhase?: ConfigurationLoadPhase;
   readonly models: readonly Model[];
   readonly onAssignmentDirtyChange: (dirty: boolean) => void;
+  readonly onAssignmentPendingChange?: (pending: boolean) => void;
   readonly onNotice: (tone: "success" | "error", message: string) => void;
   readonly onRefreshAssignments: () => Promise<void>;
   readonly onRefreshGlobal: () => Promise<void>;
@@ -72,11 +78,23 @@ interface Inspector {
   readonly apiName: string | null;
   readonly providerApiName?: string;
   readonly modelApiName?: string;
+  readonly serviceApiName?: string;
+}
+
+interface InspectorTransition {
+  readonly chainRows?: readonly EditableTableRow<ChainDraft>[];
+  readonly inspector: Inspector | null;
+  readonly selectedNodeId: string | null;
+  readonly trigger: HTMLElement | null;
 }
 
 interface DeleteTarget {
   readonly kind:
-    ConfigurationRecordKind | "credential" | "requirement" | "draft";
+    | ConfigurationRecordKind
+    | "credential"
+    | "credential-replace"
+    | "requirement"
+    | "draft";
   readonly apiName: string;
   readonly impact: string;
   readonly requirement?: ObservedRequirement;
@@ -86,10 +104,32 @@ interface ChainDraft {
   readonly providerModel: string;
 }
 
+function orderChainRows(
+  rows: readonly EditableTableRow<ChainDraft>[],
+): readonly EditableTableRow<ChainDraft>[] {
+  return rows.map((row, index) => ({
+    ...row,
+    label: `Fallback ${String(index + 1)}`,
+  }));
+}
+
 interface ConfirmedGlobalRecords {
   readonly providers: readonly Provider[];
   readonly models: readonly Model[];
   readonly mappings: readonly ProviderModel[];
+}
+
+interface DeletedGlobalRecords {
+  readonly credentials: readonly string[];
+  readonly providers: readonly string[];
+  readonly models: readonly string[];
+  readonly mappings: readonly string[];
+}
+
+interface ConfirmedAssignmentRecords {
+  readonly serviceApiName: string;
+  readonly records: readonly Assignment[];
+  readonly deleted: readonly string[];
 }
 
 interface ConfigurationViewState {
@@ -121,6 +161,8 @@ interface ConfigurationInspectorContext {
   readonly modelByName: ReadonlyMap<string, Model>;
   readonly models: readonly Model[];
   readonly onAssignmentDirtyChange: (dirty: boolean) => void;
+  readonly beginPending: (assignmentOperation?: boolean) => boolean;
+  readonly finishPending: () => void;
   readonly onNotice: (tone: "success" | "error", message: string) => void;
   readonly onRefreshAssignments: () => Promise<void>;
   readonly onRefreshGlobal: () => Promise<void>;
@@ -149,8 +191,10 @@ interface ConfigurationInspectorContext {
   >;
   readonly setDeleteTarget: (value: DeleteTarget | null) => void;
   readonly setImportInput: (value: string) => void;
+  readonly setImportPreview: (
+    value: OpenRouterModelImportPreview | null,
+  ) => void;
   readonly setInspector: (value: Inspector | null) => void;
-  readonly setPending: (value: boolean) => void;
   readonly setSelectedNodeId: (value: string | null) => void;
   readonly setSelectedImportProviders: (value: ReadonlySet<string>) => void;
 }
@@ -245,6 +289,14 @@ function useConfigurationViewState() {
       },
       [patch],
     ),
+    resetAssignmentInspector: useCallback(() => {
+      patch({
+        assignmentDirty: false,
+        chainRows: [],
+        inspector: null,
+        selectedNodeId: null,
+      });
+    }, [patch]),
   };
 }
 
@@ -478,6 +530,7 @@ function useConfigurationController({
   globalPhase = "ready",
   models,
   onAssignmentDirtyChange,
+  onAssignmentPendingChange = () => undefined,
   onNotice,
   onRefreshAssignments,
   onRefreshGlobal,
@@ -506,6 +559,7 @@ function useConfigurationController({
     setPending,
     setSelectedImportProviders,
     setSelectedNodeId,
+    resetAssignmentInspector,
   } = useConfigurationViewState();
   const [confirmedGlobal, setConfirmedGlobal] =
     useState<ConfirmedGlobalRecords>({
@@ -513,17 +567,41 @@ function useConfigurationController({
       models: [],
       mappings: [],
     });
-  const authoritativeNames = JSON.stringify({
-    providers: providers.map((item) => item.api_name),
-    models: models.map((item) => item.api_name),
-    mappings: providerModels.map((item) => item.api_name),
+  const [deletedGlobal, setDeletedGlobal] = useState<DeletedGlobalRecords>({
+    credentials: [],
+    providers: [],
+    models: [],
+    mappings: [],
   });
-  const [previousAuthoritativeNames, setPreviousAuthoritativeNames] =
-    useState(authoritativeNames);
+  const [confirmedAssignments, setConfirmedAssignments] =
+    useState<ConfirmedAssignmentRecords>({
+      serviceApiName: selectedService,
+      records: [],
+      deleted: [],
+    });
+  const authoritativeSnapshot = JSON.stringify({
+    credentials,
+    providers,
+    models,
+    mappings: providerModels,
+  });
+  const [previousAuthoritativeSnapshot, setPreviousAuthoritativeSnapshot] =
+    useState(authoritativeSnapshot);
   const returnFocusRef = useRef<HTMLElement | null>(null);
+  const pendingRef = useRef(false);
+  const pendingAssignmentRef = useRef(false);
+  const pendingInspectorTransitionRef = useRef<InspectorTransition | null>(
+    null,
+  );
+  const pendingCredentialReplacementRef = useRef<{
+    readonly form: HTMLFormElement;
+    readonly name: string;
+    readonly secret: string;
+  } | null>(null);
+  const previousSelectedServiceRef = useRef(selectedService);
 
-  if (authoritativeNames !== previousAuthoritativeNames) {
-    setPreviousAuthoritativeNames(authoritativeNames);
+  if (authoritativeSnapshot !== previousAuthoritativeSnapshot) {
+    setPreviousAuthoritativeSnapshot(authoritativeSnapshot);
     setConfirmedGlobal((current) => {
       const next = {
         providers: pruneAcknowledgedRecords(providers, current.providers),
@@ -536,20 +614,88 @@ function useConfigurationController({
         ? current
         : next;
     });
+    setDeletedGlobal((current) => {
+      const next = {
+        credentials: pruneAcknowledgedDeletions(
+          credentials,
+          current.credentials,
+        ),
+        providers: pruneAcknowledgedDeletions(providers, current.providers),
+        models: pruneAcknowledgedDeletions(models, current.models),
+        mappings: pruneAcknowledgedDeletions(providerModels, current.mappings),
+      };
+      return next.credentials === current.credentials &&
+        next.providers === current.providers &&
+        next.models === current.models &&
+        next.mappings === current.mappings
+        ? current
+        : next;
+    });
+  }
+
+  const assignmentSnapshot = JSON.stringify({
+    serviceApiName: selectedService,
+    assignments,
+  });
+  const [previousAssignmentSnapshot, setPreviousAssignmentSnapshot] =
+    useState(assignmentSnapshot);
+  if (assignmentSnapshot !== previousAssignmentSnapshot) {
+    setPreviousAssignmentSnapshot(assignmentSnapshot);
+    setConfirmedAssignments((current) => {
+      if (current.serviceApiName !== selectedService)
+        return { serviceApiName: selectedService, records: [], deleted: [] };
+      const nextRecords = pruneAcknowledgedRecords(
+        assignments,
+        current.records,
+      );
+      const nextDeleted = pruneAcknowledgedDeletions(
+        assignments,
+        current.deleted,
+      );
+      return nextRecords === current.records && nextDeleted === current.deleted
+        ? current
+        : { ...current, records: nextRecords, deleted: nextDeleted };
+    });
   }
 
   const visibleProviders = useMemo(
-    () => includeConfirmedRecords(providers, confirmedGlobal.providers),
-    [confirmedGlobal.providers, providers],
+    () =>
+      excludeDeletedRecords(
+        includeConfirmedRecords(providers, confirmedGlobal.providers),
+        deletedGlobal.providers,
+      ),
+    [confirmedGlobal.providers, deletedGlobal.providers, providers],
   );
   const visibleModels = useMemo(
-    () => includeConfirmedRecords(models, confirmedGlobal.models),
-    [confirmedGlobal.models, models],
+    () =>
+      excludeDeletedRecords(
+        includeConfirmedRecords(models, confirmedGlobal.models),
+        deletedGlobal.models,
+      ),
+    [confirmedGlobal.models, deletedGlobal.models, models],
   );
   const visibleMappings = useMemo(
-    () => includeConfirmedRecords(providerModels, confirmedGlobal.mappings),
-    [confirmedGlobal.mappings, providerModels],
+    () =>
+      excludeDeletedRecords(
+        includeConfirmedRecords(providerModels, confirmedGlobal.mappings),
+        deletedGlobal.mappings,
+      ),
+    [confirmedGlobal.mappings, deletedGlobal.mappings, providerModels],
   );
+  const visibleCredentials = useMemo(
+    () => excludeDeletedRecords(credentials, deletedGlobal.credentials),
+    [credentials, deletedGlobal.credentials],
+  );
+  const visibleAssignments = useMemo(() => {
+    const overlay =
+      confirmedAssignments.serviceApiName === selectedService
+        ? confirmedAssignments
+        : { records: [], deleted: [] };
+    return excludeDeletedRecords(
+      includeConfirmedRecords(assignments, overlay.records),
+      overlay.deleted,
+    );
+  }, [assignments, confirmedAssignments, selectedService]);
 
   const projection = useMemo(
     () =>
@@ -557,9 +703,9 @@ function useConfigurationController({
         visibleProviders,
         visibleModels,
         visibleMappings,
-        assignments,
+        visibleAssignments,
       ),
-    [assignments, visibleMappings, visibleModels, visibleProviders],
+    [visibleAssignments, visibleMappings, visibleModels, visibleProviders],
   );
   const providerByName = useMemo(
     () => new Map(visibleProviders.map((item) => [item.api_name, item])),
@@ -574,18 +720,74 @@ function useConfigurationController({
     [visibleMappings],
   );
   const assignmentByName = useMemo(
-    () => new Map(assignments.map((item) => [item.api_name, item])),
-    [assignments],
+    () => new Map(visibleAssignments.map((item) => [item.api_name, item])),
+    [visibleAssignments],
   );
+
+  useEffect(() => {
+    if (previousSelectedServiceRef.current === selectedService) return;
+    previousSelectedServiceRef.current = selectedService;
+    setConfirmedAssignments({
+      serviceApiName: selectedService,
+      records: [],
+      deleted: [],
+    });
+    pendingInspectorTransitionRef.current = null;
+    if (inspector?.kind !== "assignment") return;
+    resetAssignmentInspector();
+    onAssignmentDirtyChange(false);
+  }, [
+    inspector?.kind,
+    onAssignmentDirtyChange,
+    resetAssignmentInspector,
+    selectedService,
+  ]);
+
+  function beginPending(assignmentOperation = false): boolean {
+    if (pendingRef.current) return false;
+    pendingRef.current = true;
+    pendingAssignmentRef.current = assignmentOperation;
+    setPending(true);
+    if (assignmentOperation) onAssignmentPendingChange(true);
+    return true;
+  }
+
+  function finishPending() {
+    if (!pendingRef.current) return;
+    const assignmentOperation = pendingAssignmentRef.current;
+    pendingRef.current = false;
+    pendingAssignmentRef.current = false;
+    setPending(false);
+    if (assignmentOperation) onAssignmentPendingChange(false);
+  }
   function markAssignmentDirty() {
     if (assignmentDirty) return;
     setAssignmentDirty(true);
     onAssignmentDirtyChange(true);
   }
 
-  function closeInspector() {
-    if (pending) return;
-    if (inspector?.kind === "assignment" && assignmentDirty) {
+  function applyInspectorTransition(transition: InspectorTransition) {
+    pendingInspectorTransitionRef.current = null;
+    if (transition.trigger !== null)
+      returnFocusRef.current = transition.trigger;
+    setSelectedNodeId(transition.selectedNodeId);
+    if (transition.chainRows !== undefined) setChainRows(transition.chainRows);
+    setInspector(transition.inspector);
+    if (transition.inspector?.kind !== "assignment") {
+      setAssignmentDirty(false);
+      onAssignmentDirtyChange(false);
+    }
+  }
+
+  function requestInspectorTransition(transition: InspectorTransition) {
+    if (pendingRef.current) return;
+    if (
+      inspector?.kind === "assignment" &&
+      assignmentDirty &&
+      (transition.inspector?.kind !== "assignment" ||
+        transition.inspector.apiName !== inspector.apiName)
+    ) {
+      pendingInspectorTransitionRef.current = transition;
       setDeleteTarget({
         kind: "draft",
         apiName: inspector.apiName ?? "new assignment",
@@ -593,38 +795,80 @@ function useConfigurationController({
       });
       return;
     }
-    setInspector(null);
+    applyInspectorTransition(transition);
+  }
+
+  function closeInspector() {
+    if (pendingRef.current) return;
+    if (inspector?.kind === "assignment" && assignmentDirty) {
+      pendingInspectorTransitionRef.current = null;
+      setDeleteTarget({
+        kind: "draft",
+        apiName: inspector.apiName ?? "new assignment",
+        impact: `discard unsaved assignment changes for service ${selectedService}`,
+      });
+      return;
+    }
+    applyInspectorTransition({
+      inspector: null,
+      selectedNodeId,
+      trigger: null,
+    });
   }
 
   function activate(context: RelationshipGraphNodeContext) {
     const identity = parseConfigurationNodeId(context.node.id);
     if (identity === null) return;
-    returnFocusRef.current = context.trigger;
+    if (pendingRef.current) return;
+    if (
+      inspector?.kind === identity.kind &&
+      inspector.apiName === identity.apiName &&
+      (identity.kind !== "assignment" ||
+        inspector.serviceApiName === selectedService)
+    ) {
+      returnFocusRef.current = context.trigger;
+      return;
+    }
+    const nextInspector: Inspector = {
+      kind: identity.kind,
+      apiName: identity.apiName,
+      ...(identity.kind === "assignment"
+        ? { serviceApiName: selectedService }
+        : {}),
+    };
+    let nextChainRows: readonly EditableTableRow<ChainDraft>[] | undefined;
     if (identity.kind === "assignment") {
       const assignment = assignmentByName.get(identity.apiName);
       const chain =
         assignment?.direct_chain ?? assignment?.effective_chain ?? [];
-      setChainRows(
-        chain.map((candidate, index) => ({
-          id: `chain:${String(index)}:${candidate.provider_model_api_name}`,
-          label: `Fallback ${String(index + 1)}`,
-          draft: { providerModel: candidate.provider_model_api_name },
-        })),
-      );
+      nextChainRows = chain.map((candidate, index) => ({
+        id: `chain:${String(index)}:${candidate.provider_model_api_name}`,
+        label: `Fallback ${String(index + 1)}`,
+        draft: { providerModel: candidate.provider_model_api_name },
+      }));
     }
-    setInspector({ kind: identity.kind, apiName: identity.apiName });
+    requestInspectorTransition({
+      ...(nextChainRows === undefined ? {} : { chainRows: nextChainRows }),
+      inspector: nextInspector,
+      selectedNodeId: identity.id,
+      trigger: context.trigger,
+    });
   }
 
   function openCreate(
     kind: ConfigurationRecordKind,
     trigger: HTMLButtonElement,
   ) {
-    returnFocusRef.current = trigger;
-    setSelectedNodeId(null);
-    setAssignmentDirty(false);
-    onAssignmentDirtyChange(false);
-    if (kind === "assignment") setChainRows([]);
-    setInspector({ kind, apiName: null });
+    requestInspectorTransition({
+      ...(kind === "assignment" ? { chainRows: [] } : {}),
+      inspector: {
+        kind,
+        apiName: null,
+        ...(kind === "assignment" ? { serviceApiName: selectedService } : {}),
+      },
+      selectedNodeId: null,
+      trigger,
+    });
   }
 
   const columns: readonly [
@@ -638,6 +882,7 @@ function useConfigurationController({
       countLabel: `${String(visibleProviders.length)} global`,
       actions: (
         <Button
+          disabled={pending}
           onClick={(event) => {
             openCreate("provider", event.currentTarget);
           }}
@@ -671,6 +916,7 @@ function useConfigurationController({
       actions: (
         <span className="configuration-column-actions">
           <Button
+            disabled={pending}
             onClick={(event) => {
               openCreate("model", event.currentTarget);
             }}
@@ -679,6 +925,7 @@ function useConfigurationController({
             Add model
           </Button>
           <Button
+            disabled={pending}
             onClick={(event) => {
               openCreate("mapping", event.currentTarget);
             }}
@@ -731,10 +978,10 @@ function useConfigurationController({
       countLabel:
         selectedService === ""
           ? "Select a service"
-          : `${String(assignments.length)} effective`,
+          : `${String(visibleAssignments.length)} effective`,
       actions: (
         <Button
-          disabled={selectedService === ""}
+          disabled={pending || selectedService === ""}
           onClick={(event) => {
             openCreate("assignment", event.currentTarget);
           }}
@@ -801,17 +1048,20 @@ function useConfigurationController({
       ...(credential === "" ? {} : { credential_api_name: credential }),
       enabled: form.get("enabled") === "on",
     };
-    setPending(true);
+    if (!beginPending()) return;
     try {
-      const created = inspector?.apiName === null;
-      const saved = created
-        ? await client.createProvider(value, csrf)
-        : await client.putProvider(value.api_name, value, csrf);
-      if (created)
-        setConfirmedGlobal((current) => ({
-          ...current,
-          providers: retainConfirmedRecord(current.providers, saved),
-        }));
+      const saved =
+        inspector?.apiName === null
+          ? await client.createProvider(value, csrf)
+          : await client.putProvider(value.api_name, value, csrf);
+      setConfirmedGlobal((current) => ({
+        ...current,
+        providers: retainConfirmedRecord(current.providers, saved),
+      }));
+      setDeletedGlobal((current) => ({
+        ...current,
+        providers: discardDeletedRecord(current.providers, saved.api_name),
+      }));
       await onRefreshGlobal();
       onNotice("success", "The global provider connection was saved.");
       setSelectedNodeId(`provider:${value.api_name}`);
@@ -819,7 +1069,7 @@ function useConfigurationController({
     } catch (error) {
       onNotice("error", errorMessage(error));
     } finally {
-      setPending(false);
+      finishPending();
     }
   }
 
@@ -828,11 +1078,28 @@ function useConfigurationController({
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
     const { apiName: name, secret } = credentialFormValue(form);
-    setPending(true);
+    if (visibleCredentials.some((item) => item.api_name === name)) {
+      pendingCredentialReplacementRef.current = {
+        form: formElement,
+        name,
+        secret,
+      };
+      if (document.activeElement instanceof HTMLElement)
+        returnFocusRef.current = document.activeElement;
+      setDeleteTarget({
+        kind: "credential-replace",
+        apiName: name,
+        impact: `replace the stored secret for credential ${name}; the prior secret stops serving new attempts after commit`,
+      });
+      return;
+    }
+    if (!beginPending()) return;
     try {
-      if (credentials.some((item) => item.api_name === name))
-        await client.replaceCredential(name, secret, csrf);
-      else await client.createCredential(name, secret, csrf);
+      await client.createCredential(name, secret, csrf);
+      setDeletedGlobal((current) => ({
+        ...current,
+        credentials: discardDeletedRecord(current.credentials, name),
+      }));
       formElement.reset();
       await onRefreshGlobal();
       onNotice("success", "The write-only credential was saved.");
@@ -841,7 +1108,7 @@ function useConfigurationController({
       if (secretInput instanceof HTMLInputElement) secretInput.value = "";
       onNotice("error", errorMessage(error));
     } finally {
-      setPending(false);
+      finishPending();
     }
   }
 
@@ -857,17 +1124,20 @@ function useConfigurationController({
       );
       return;
     }
-    setPending(true);
+    if (!beginPending()) return;
     try {
-      const created = inspector?.apiName === null;
-      const saved = created
-        ? await client.createModel(value, csrf)
-        : await client.putModel(value.api_name, value, csrf);
-      if (created)
-        setConfirmedGlobal((current) => ({
-          ...current,
-          models: retainConfirmedRecord(current.models, saved),
-        }));
+      const saved =
+        inspector?.apiName === null
+          ? await client.createModel(value, csrf)
+          : await client.putModel(value.api_name, value, csrf);
+      setConfirmedGlobal((current) => ({
+        ...current,
+        models: retainConfirmedRecord(current.models, saved),
+      }));
+      setDeletedGlobal((current) => ({
+        ...current,
+        models: discardDeletedRecord(current.models, saved.api_name),
+      }));
       await onRefreshGlobal();
       onNotice("success", "The global canonical model was saved.");
       setSelectedNodeId(`model:${value.api_name}`);
@@ -875,7 +1145,7 @@ function useConfigurationController({
     } catch (error) {
       onNotice("error", errorMessage(error));
     } finally {
-      setPending(false);
+      finishPending();
     }
   }
 
@@ -891,17 +1161,20 @@ function useConfigurationController({
       );
       return;
     }
-    setPending(true);
+    if (!beginPending()) return;
     try {
-      const created = inspector?.apiName === null;
-      const saved = created
-        ? await client.createProviderModel(value, csrf)
-        : await client.putProviderModel(value.api_name, value, csrf);
-      if (created)
-        setConfirmedGlobal((current) => ({
-          ...current,
-          mappings: retainConfirmedRecord(current.mappings, saved),
-        }));
+      const saved =
+        inspector?.apiName === null
+          ? await client.createProviderModel(value, csrf)
+          : await client.putProviderModel(value.api_name, value, csrf);
+      setConfirmedGlobal((current) => ({
+        ...current,
+        mappings: retainConfirmedRecord(current.mappings, saved),
+      }));
+      setDeletedGlobal((current) => ({
+        ...current,
+        mappings: discardDeletedRecord(current.mappings, saved.api_name),
+      }));
       await onRefreshGlobal();
       onNotice("success", "The global provider-model mapping was saved.");
       setSelectedNodeId(`mapping:${value.api_name}`);
@@ -909,7 +1182,7 @@ function useConfigurationController({
     } catch (error) {
       onNotice("error", errorMessage(error));
     } finally {
-      setPending(false);
+      finishPending();
     }
   }
 
@@ -948,25 +1221,45 @@ function useConfigurationController({
               ? {}
               : { reasoning_level: reasoning as ReasoningLevel }),
           };
-    setPending(true);
+    if (!beginPending(true)) return;
     try {
-      await client.putAssignment(selectedService, name, value, csrf);
+      const saved = await client.putAssignment(
+        selectedService,
+        name,
+        value,
+        csrf,
+      );
+      setConfirmedAssignments((current) => ({
+        serviceApiName: selectedService,
+        records: retainConfirmedRecord(
+          current.serviceApiName === selectedService ? current.records : [],
+          saved,
+        ),
+        deleted: discardDeletedRecord(
+          current.serviceApiName === selectedService ? current.deleted : [],
+          saved.api_name,
+        ),
+      }));
       await onRefreshAssignments();
       setAssignmentDirty(false);
       onAssignmentDirtyChange(false);
       onNotice("success", "The selected service assignment was saved.");
       setSelectedNodeId(`assignment:${name}`);
-      setInspector({ kind: "assignment", apiName: name });
+      setInspector({
+        kind: "assignment",
+        apiName: name,
+        serviceApiName: selectedService,
+      });
     } catch (error) {
       onNotice("error", errorMessage(error));
     } finally {
-      setPending(false);
+      finishPending();
     }
   }
 
   async function previewOpenRouter(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
-    setPending(true);
+    if (!beginPending()) return;
     setImportPreview(null);
     setSelectedImportProviders(new Set());
     try {
@@ -982,7 +1275,7 @@ function useConfigurationController({
     } catch (error) {
       onNotice("error", errorMessage(error));
     } finally {
-      setPending(false);
+      finishPending();
     }
   }
 
@@ -993,7 +1286,7 @@ function useConfigurationController({
         ? [option.provider_model]
         : [],
     );
-    setPending(true);
+    if (!beginPending()) return;
     try {
       const reviewed = {
         source_model_id: importPreview.source_model_id,
@@ -1012,6 +1305,14 @@ function useConfigurationController({
           current.mappings,
         ),
       }));
+      setDeletedGlobal((current) => ({
+        ...current,
+        models: discardDeletedRecord(current.models, result.model.api_name),
+        mappings: result.provider_models.reduce(
+          (deleted, mapping) => discardDeletedRecord(deleted, mapping.api_name),
+          current.mappings,
+        ),
+      }));
       await onRefreshGlobal();
       setImportPreview(null);
       setImportInput("");
@@ -1024,20 +1325,50 @@ function useConfigurationController({
     } catch (error) {
       onNotice("error", errorMessage(error));
     } finally {
-      setPending(false);
+      finishPending();
     }
   }
 
   async function deleteRecord() {
     if (deleteTarget === null) return;
     if (deleteTarget.kind === "draft") {
+      const transition = pendingInspectorTransitionRef.current;
+      pendingInspectorTransitionRef.current = null;
       setAssignmentDirty(false);
       onAssignmentDirtyChange(false);
       setDeleteTarget(null);
-      setInspector(null);
+      if (transition === null) setInspector(null);
+      else applyInspectorTransition(transition);
       return;
     }
-    setPending(true);
+    if (deleteTarget.kind === "credential-replace") {
+      const replacement = pendingCredentialReplacementRef.current;
+      if (replacement === null || !beginPending()) return;
+      try {
+        await client.replaceCredential(
+          replacement.name,
+          replacement.secret,
+          csrf,
+        );
+        replacement.form.reset();
+        pendingCredentialReplacementRef.current = null;
+        await onRefreshGlobal();
+        setDeleteTarget(null);
+        onNotice("success", "The write-only credential was replaced.");
+      } catch (error) {
+        const secretInput = replacement.form.elements.namedItem("secret");
+        if (secretInput instanceof HTMLInputElement) secretInput.value = "";
+        pendingCredentialReplacementRef.current = null;
+        setDeleteTarget(null);
+        onNotice("error", errorMessage(error));
+      } finally {
+        finishPending();
+      }
+      return;
+    }
+    const assignmentOperation =
+      deleteTarget.kind === "assignment" || deleteTarget.kind === "requirement";
+    if (!beginPending(assignmentOperation)) return;
     try {
       if (deleteTarget.kind === "provider")
         await client.deleteProvider(deleteTarget.apiName, csrf);
@@ -1064,6 +1395,56 @@ function useConfigurationController({
           deleteTarget.apiName,
           csrf,
         );
+      const deletedGlobalKey: keyof DeletedGlobalRecords | null =
+        deleteTarget.kind === "provider"
+          ? "providers"
+          : deleteTarget.kind === "model"
+            ? "models"
+            : deleteTarget.kind === "mapping"
+              ? "mappings"
+              : deleteTarget.kind === "credential"
+                ? "credentials"
+                : null;
+      if (deletedGlobalKey !== null)
+        setDeletedGlobal((current) => ({
+          ...current,
+          [deletedGlobalKey]: retainDeletedRecord(
+            current[deletedGlobalKey],
+            deleteTarget.apiName,
+          ),
+        }));
+      if (
+        (deleteTarget.kind === "assignment" ||
+          deleteTarget.kind === "requirement") &&
+        selectedService !== ""
+      )
+        setConfirmedAssignments((current) => {
+          const records =
+            current.serviceApiName === selectedService ? current.records : [];
+          const deleted =
+            current.serviceApiName === selectedService ? current.deleted : [];
+          if (deleteTarget.kind === "assignment")
+            return {
+              serviceApiName: selectedService,
+              records: discardConfirmedRecord(records, deleteTarget.apiName),
+              deleted: retainDeletedRecord(deleted, deleteTarget.apiName),
+            };
+          const assignment = assignmentByName.get(deleteTarget.apiName);
+          return {
+            serviceApiName: selectedService,
+            records:
+              assignment === undefined || deleteTarget.requirement === undefined
+                ? records
+                : retainConfirmedRecord(records, {
+                    ...assignment,
+                    observed_requirements:
+                      assignment.observed_requirements.filter(
+                        (item) => item !== deleteTarget.requirement,
+                      ),
+                  }),
+            deleted,
+          };
+        });
       setConfirmedGlobal((current) => ({
         providers:
           deleteTarget.kind === "provider"
@@ -1095,7 +1476,7 @@ function useConfigurationController({
     } catch (error) {
       onNotice("error", errorMessage(error));
     } finally {
-      setPending(false);
+      finishPending();
     }
   }
 
@@ -1105,15 +1486,17 @@ function useConfigurationController({
       : ({
           assignmentByName,
           assignmentDirty,
+          beginPending,
           chainRows,
           client,
           closeInspector,
           confirmOpenRouter,
-          credentials,
+          credentials: visibleCredentials,
           csrf,
           importInput,
           importPreview,
           inspector,
+          finishPending,
           markAssignmentDirty,
           mappingByName,
           modelByName,
@@ -1139,13 +1522,15 @@ function useConfigurationController({
           setChainRows,
           setDeleteTarget,
           setImportInput,
+          setImportPreview,
           setInspector,
-          setPending,
           setSelectedNodeId,
           setSelectedImportProviders,
         } satisfies ConfigurationInspectorContext);
   const inspectorContent =
-    inspectorContext === null ? null : (
+    inspectorContext === null ||
+    (inspector?.kind === "assignment" &&
+      inspector.serviceApiName !== selectedService) ? null : (
       <ConfigurationInspector context={inspectorContext} />
     );
   const auxiliaryInspector =
@@ -1160,6 +1545,7 @@ function useConfigurationController({
       </p>
       <div className="configuration-column-actions">
         <Button
+          disabled={pending}
           onClick={(event) => {
             openCreate("provider", event.currentTarget);
           }}
@@ -1168,6 +1554,7 @@ function useConfigurationController({
           Add provider
         </Button>
         <Button
+          disabled={pending}
           onClick={(event) => {
             openCreate("model", event.currentTarget);
           }}
@@ -1194,7 +1581,31 @@ function useConfigurationController({
     setDeleteTarget,
     selectedNodeId,
     selectedNodeInspector,
-    setSelectedNodeId,
+    onSelectionChange: (nodeId: string | null) => {
+      if (nodeId !== null) {
+        if (pendingRef.current) return;
+        if (!(inspector?.kind === "assignment" && assignmentDirty))
+          setSelectedNodeId(nodeId);
+        return;
+      }
+      setSelectedNodeId(null);
+      if (inspector?.apiName === null) return;
+      setInspector(null);
+      if (inspector?.kind === "assignment") {
+        setAssignmentDirty(false);
+        onAssignmentDirtyChange(false);
+      }
+    },
+    cancelDeleteTarget: () => {
+      pendingInspectorTransitionRef.current = null;
+      const replacement = pendingCredentialReplacementRef.current;
+      if (replacement !== null) {
+        const secretInput = replacement.form.elements.namedItem("secret");
+        if (secretInput instanceof HTMLInputElement) secretInput.value = "";
+        pendingCredentialReplacementRef.current = null;
+      }
+      setDeleteTarget(null);
+    },
   };
 }
 
@@ -1202,19 +1613,19 @@ export function ConfigurationGraph(props: ConfigurationGraphProps) {
   const {
     activate,
     auxiliaryInspector,
+    cancelDeleteTarget,
     columns,
     deleteRecord,
     deleteTarget,
     globalPhase,
     emptyCatalogState,
     onRefreshGlobal,
+    onSelectionChange,
     pending,
     relationships,
     returnFocusRef,
-    setDeleteTarget,
     selectedNodeId,
     selectedNodeInspector,
-    setSelectedNodeId,
   } = useConfigurationController(props);
   const graphState = (
     <GraphState onRetry={() => void onRefreshGlobal()} phase={globalPhase} />
@@ -1238,7 +1649,7 @@ export function ConfigurationGraph(props: ConfigurationGraphProps) {
           inspector={selectedNodeInspector}
           noResultsDescription="Change the search or restore the complete global configuration graph."
           onNodeActivate={activate}
-          onSelectionChange={setSelectedNodeId}
+          onSelectionChange={onSelectionChange}
           relationships={relationships}
           searchLabel="Search providers, models, mappings, and assignments"
           selectedNodeId={selectedNodeId}
@@ -1248,16 +1659,18 @@ export function ConfigurationGraph(props: ConfigurationGraphProps) {
         confirmLabel={
           deleteTarget?.kind === "draft"
             ? "Discard changes"
-            : deleteTarget?.kind === "requirement"
-              ? "Remove requirement"
-              : "Delete record"
+            : deleteTarget?.kind === "credential-replace"
+              ? "Replace credential"
+              : deleteTarget?.kind === "requirement"
+                ? "Remove requirement"
+                : "Delete record"
         }
         description={deleteTarget?.impact ?? "Delete the selected record."}
         {...(deleteTarget === null
           ? {}
           : { impactStatement: deleteTarget.impact })}
         onCancel={() => {
-          setDeleteTarget(null);
+          cancelDeleteTarget();
         }}
         onConfirm={() => void deleteRecord()}
         open={deleteTarget !== null}
@@ -1266,9 +1679,11 @@ export function ConfigurationGraph(props: ConfigurationGraphProps) {
         title={
           deleteTarget?.kind === "draft"
             ? "Discard assignment changes?"
-            : deleteTarget?.kind === "requirement"
-              ? "Remove this observed requirement?"
-              : "Confirm configuration deletion"
+            : deleteTarget?.kind === "credential-replace"
+              ? "Replace this credential secret?"
+              : deleteTarget?.kind === "requirement"
+                ? "Remove this observed requirement?"
+                : "Confirm configuration deletion"
         }
       />
     </section>
@@ -1281,12 +1696,32 @@ function ConfigurationInspector({
   readonly context: ConfigurationInspectorContext;
 }) {
   if (context.inspector.kind === "provider")
-    return <ProviderInspector context={context} />;
+    return (
+      <ProviderInspector
+        context={context}
+        key={`provider:${context.inspector.apiName ?? "new"}`}
+      />
+    );
   if (context.inspector.kind === "model")
-    return <ModelInspector context={context} />;
+    return (
+      <ModelInspector
+        context={context}
+        key={`model:${context.inspector.apiName ?? "new"}`}
+      />
+    );
   if (context.inspector.kind === "mapping")
-    return <MappingInspector context={context} />;
-  return <AssignmentInspector context={context} />;
+    return (
+      <MappingInspector
+        context={context}
+        key={`mapping:${context.inspector.apiName ?? "new"}`}
+      />
+    );
+  return (
+    <AssignmentInspector
+      context={context}
+      key={`assignment:${context.inspector.serviceApiName ?? "none"}:${context.inspector.apiName ?? "new"}`}
+    />
+  );
 }
 
 function ProviderInspector({
@@ -1312,12 +1747,21 @@ function ProviderInspector({
       : providerByName.get(inspector.apiName);
   const adapter = provider?.adapter ?? "openai";
   const [selectedAdapter, setSelectedAdapter] = useState(adapter);
+  const [selectedCredential, setSelectedCredential] = useState(
+    provider?.credential_api_name ?? "",
+  );
+  const [selectedEndpoint, setSelectedEndpoint] = useState(
+    provider?.endpoint ?? "",
+  );
+  const [selectedEnabled, setSelectedEnabled] = useState(
+    provider?.enabled ?? true,
+  );
   const fieldPolicy = adapterFieldPolicy[selectedAdapter];
   return (
     <GraphInspector
       activationKey={`${inspector.kind}:${inspector.apiName ?? "new"}`}
       eyebrow="Global provider connection"
-      onClose={closeInspector}
+      {...(pending ? {} : { onClose: closeInspector })}
       returnFocusRef={returnFocusRef}
       title={provider?.display_name ?? "Add provider"}
     >
@@ -1356,7 +1800,10 @@ function ProviderInspector({
           <select
             name="adapter"
             onChange={(event) => {
-              setSelectedAdapter(event.currentTarget.value as ProviderAdapter);
+              const next = event.currentTarget.value as ProviderAdapter;
+              setSelectedAdapter(next);
+              setSelectedCredential("");
+              setSelectedEndpoint("");
             }}
             value={selectedAdapter}
           >
@@ -1371,9 +1818,12 @@ function ProviderInspector({
           <label>
             Applicable credential
             <select
-              defaultValue={provider?.credential_api_name ?? ""}
               name="credential_api_name"
+              onChange={(event) => {
+                setSelectedCredential(event.currentTarget.value);
+              }}
               required={fieldPolicy.credential === "required"}
+              value={selectedCredential}
             >
               <option value="">
                 {fieldPolicy.credential === "required"
@@ -1397,22 +1847,52 @@ function ProviderInspector({
             <label>
               Custom endpoint
               <input
-                defaultValue={provider?.endpoint ?? ""}
                 name="endpoint"
+                onChange={(event) => {
+                  setSelectedEndpoint(event.currentTarget.value);
+                }}
                 placeholder="https://provider.example/v1"
                 required
                 type="url"
+                value={selectedEndpoint}
               />
             </label>
           ) : null}
           <label className="checkbox-field">
             <input
-              defaultChecked={provider?.enabled ?? true}
+              checked={selectedEnabled}
               name="enabled"
+              onChange={(event) => {
+                setSelectedEnabled(event.currentTarget.checked);
+              }}
               type="checkbox"
             />
             Enabled after validation
           </label>
+          {recordFacts([
+            [
+              "Adapter",
+              provider === undefined || provider.adapter === selectedAdapter
+                ? selectedAdapter
+                : `${provider.adapter} → ${selectedAdapter}`,
+            ],
+            [
+              "Endpoint after save",
+              fieldPolicy.endpoint === "inferred"
+                ? "Registered standard endpoint and safe defaults"
+                : selectedEndpoint || "Required before save",
+            ],
+            [
+              "Credential after save",
+              fieldPolicy.credential === "none"
+                ? "None; this adapter does not accept one"
+                : selectedCredential ||
+                  (fieldPolicy.credential === "required"
+                    ? "Required before save"
+                    : "None"),
+            ],
+            ["State after save", selectedEnabled ? "Enabled" : "Disabled"],
+          ])}
         </details>
         <Button disabled={pending} type="submit">
           {pending ? "Saving…" : "Review and save provider"}
@@ -1453,6 +1933,7 @@ function ProviderInspector({
                 <small>Fingerprint {credential.fingerprint}</small>
               </span>
               <Button
+                disabled={pending}
                 onClick={() => {
                   setDeleteTarget({
                     kind: "credential",
@@ -1471,6 +1952,7 @@ function ProviderInspector({
       {provider === undefined ? null : (
         <div className="configuration-inspector-actions">
           <Button
+            disabled={pending}
             onClick={() => {
               setInspector({
                 kind: "mapping",
@@ -1483,6 +1965,7 @@ function ProviderInspector({
             Add mapping for this provider
           </Button>
           <Button
+            disabled={pending}
             onClick={() => {
               setDeleteTarget({
                 kind: "provider",
@@ -1516,6 +1999,7 @@ function ModelInspector({
     importInput,
     setImportInput,
     importPreview,
+    setImportPreview,
     confirmOpenRouter,
     selectedImportProviders,
     setSelectedImportProviders,
@@ -1526,7 +2010,8 @@ function ModelInspector({
     onRefreshGlobal,
     onNotice,
     setInspector,
-    setPending,
+    beginPending,
+    finishPending,
     setSelectedNodeId,
   } = context;
   const model =
@@ -1538,7 +2023,7 @@ function ModelInspector({
     <GraphInspector
       activationKey={`${inspector.kind}:${inspector.apiName ?? "new"}`}
       eyebrow="Global canonical model"
-      onClose={closeInspector}
+      {...(pending ? {} : { onClose: closeInspector })}
       returnFocusRef={returnFocusRef}
       title={model?.display_name ?? "Add model"}
     >
@@ -1603,6 +2088,7 @@ function ModelInspector({
       {model !== undefined ? (
         <div className="configuration-inspector-actions">
           <Button
+            disabled={pending}
             onClick={() => {
               setInspector({
                 kind: "mapping",
@@ -1617,7 +2103,7 @@ function ModelInspector({
           <Button
             disabled={pending || applicableMappings.length === 0}
             onClick={() => {
-              setPending(true);
+              if (!beginPending()) return;
               void client
                 .synchronizePrices(
                   applicableMappings.map((item) => item.api_name),
@@ -1639,7 +2125,7 @@ function ModelInspector({
                   onNotice("error", errorMessage(error));
                 })
                 .finally(() => {
-                  setPending(false);
+                  finishPending();
                 });
             }}
             variant="secondary"
@@ -1647,6 +2133,7 @@ function ModelInspector({
             Synchronize applicable prices
           </Button>
           <Button
+            disabled={pending}
             onClick={() => {
               setDeleteTarget({
                 kind: "model",
@@ -1672,6 +2159,8 @@ function ModelInspector({
                 maxLength={512}
                 onChange={(event) => {
                   setImportInput(event.currentTarget.value);
+                  setImportPreview(null);
+                  setSelectedImportProviders(new Set());
                 }}
                 required
                 value={importInput}
@@ -1816,7 +2305,8 @@ function MappingInspector({
     providers,
     models,
     pending,
-    setPending,
+    beginPending,
+    finishPending,
     client,
     csrf,
     onRefreshGlobal,
@@ -1832,7 +2322,7 @@ function MappingInspector({
     <GraphInspector
       activationKey={`${inspector.kind}:${inspector.apiName ?? "new"}`}
       eyebrow="Global provider-model mapping"
-      onClose={closeInspector}
+      {...(pending ? {} : { onClose: closeInspector })}
       returnFocusRef={returnFocusRef}
       title={mapping?.api_name ?? "Add mapping"}
     >
@@ -1939,7 +2429,7 @@ function MappingInspector({
           <Button
             disabled={pending}
             onClick={() => {
-              setPending(true);
+              if (!beginPending()) return;
               void client
                 .synchronizePrices([mapping.api_name], csrf)
                 .then(async (result) => {
@@ -1955,7 +2445,7 @@ function MappingInspector({
                   onNotice("error", errorMessage(error));
                 })
                 .finally(() => {
-                  setPending(false);
+                  finishPending();
                 });
             }}
             variant="secondary"
@@ -1963,6 +2453,7 @@ function MappingInspector({
             Synchronize price
           </Button>
           <Button
+            disabled={pending}
             onClick={() => {
               setDeleteTarget({
                 kind: "mapping",
@@ -2140,6 +2631,11 @@ function AssignmentInspector({
       ? undefined
       : assignmentByName.get(inspector.apiName);
   const isLocal = assignment?.defined_by_service_api_name === selectedService;
+  const [definitionMode, setDefinitionMode] = useState(
+    assignment?.definition_kind === "inherited_assignment"
+      ? "inherit"
+      : "direct",
+  );
   return (
     <GraphInspector
       activationKey={`${inspector.kind}:${inspector.apiName ?? "new"}`}
@@ -2148,7 +2644,7 @@ function AssignmentInspector({
           ? "Select a service"
           : `${selectedService} configuration context`
       }
-      onClose={closeInspector}
+      {...(pending ? {} : { onClose: closeInspector })}
       returnFocusRef={returnFocusRef}
       title={assignment?.display_name ?? "Add assignment"}
     >
@@ -2196,6 +2692,7 @@ function AssignmentInspector({
                       <li key={requirement}>
                         <span>{requirement}</span>
                         <Button
+                          disabled={pending}
                           onClick={() => {
                             setDeleteTarget({
                               kind: "requirement",
@@ -2239,26 +2736,29 @@ function AssignmentInspector({
             <label>
               Definition
               <select
-                defaultValue={
-                  assignment?.definition_kind === "inherited_assignment"
-                    ? "inherit"
-                    : "direct"
-                }
                 name="definition_kind"
+                onChange={(event) => {
+                  setDefinitionMode(event.currentTarget.value);
+                  markAssignmentDirty();
+                }}
+                value={definitionMode}
               >
                 <option value="direct">Ordered direct chain</option>
                 <option value="inherit">Inherit another assignment</option>
               </select>
             </label>
-            <label>
-              Inherited assignment
-              <input
-                defaultValue={
-                  assignment?.inherits_assignment_api_name ?? "default"
-                }
-                name="inherits_assignment_api_name"
-              />
-            </label>
+            {definitionMode === "inherit" ? (
+              <label>
+                Inherited assignment
+                <input
+                  defaultValue={
+                    assignment?.inherits_assignment_api_name ?? "default"
+                  }
+                  name="inherits_assignment_api_name"
+                  required
+                />
+              </label>
+            ) : null}
             <label>
               Reasoning level
               <select
@@ -2272,18 +2772,21 @@ function AssignmentInspector({
                 <option>high</option>
               </select>
             </label>
-            <AssignmentChainEditor
-              onDirty={markAssignmentDirty}
-              providerModels={providerModels}
-              rows={chainRows}
-              setRows={setChainRows}
-            />
+            {definitionMode === "direct" ? (
+              <AssignmentChainEditor
+                onDirty={markAssignmentDirty}
+                providerModels={providerModels}
+                rows={chainRows}
+                setRows={setChainRows}
+              />
+            ) : null}
             <div className="configuration-inspector-actions">
               <Button disabled={pending} type="submit">
                 Save selected service assignment
               </Button>
               {assignmentDirty ? (
                 <Button
+                  disabled={pending}
                   onClick={() => {
                     setDeleteTarget({
                       kind: "draft",
@@ -2301,6 +2804,7 @@ function AssignmentInspector({
           </form>
           {assignment !== undefined && isLocal ? (
             <Button
+              disabled={pending}
               onClick={() => {
                 setDeleteTarget({
                   kind: "assignment",
@@ -2370,7 +2874,9 @@ function AssignmentChainEditor({
         columns={columns}
         density="compact"
         onDelete={(rowId) => {
-          setRows((current) => current.filter((row) => row.id !== rowId));
+          setRows((current) =>
+            orderChainRows(current.filter((row) => row.id !== rowId)),
+          );
           onDirty();
         }}
         onDraftChange={(rowId, patch) => {
@@ -2384,7 +2890,7 @@ function AssignmentChainEditor({
         }}
         reorder={{
           onReorder: ({ orderedRows }) => {
-            setRows(orderedRows);
+            setRows(orderChainRows(orderedRows));
             onDirty();
           },
         }}
@@ -2508,6 +3014,7 @@ function OpenRouterPreview({
               <li key={`${item.kind}:${item.api_name}`}>
                 <span>{item.message}</span>{" "}
                 <Button
+                  disabled={pending}
                   onClick={() => {
                     onOpenConflict(item.kind, item.api_name);
                   }}
@@ -2530,7 +3037,7 @@ function OpenRouterPreview({
           >
             <input
               checked={selectedProviders.has(option.provider_api_name)}
-              disabled={!option.selectable}
+              disabled={pending || !option.selectable}
               onChange={(event) => {
                 const next = new Set(selectedProviders);
                 if (event.currentTarget.checked)

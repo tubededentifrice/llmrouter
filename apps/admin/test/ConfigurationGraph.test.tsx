@@ -5,11 +5,15 @@ import {
   adapterFieldPolicy,
   configurationNodeId,
   discardConfirmedRecord,
+  discardDeletedRecord,
+  excludeDeletedRecords,
   includeConfirmedRecords,
   parseConfigurationNodeId,
   projectConfigurationGraph,
+  pruneAcknowledgedDeletions,
   pruneAcknowledgedRecords,
   retainConfirmedRecord,
+  retainDeletedRecord,
   validateAssignmentChain,
 } from "../src/configurationState.js";
 import { createAdministrationClient } from "../src/api.js";
@@ -161,6 +165,20 @@ describe("configuration policy", () => {
     ]);
   });
 
+  it("shows a confirmed replacement until the full refreshed value matches it", () => {
+    const confirmed = {
+      ...provider,
+      display_name: "Confirmed replacement",
+    };
+    expect(includeConfirmedRecords([provider], [confirmed])).toEqual([
+      confirmed,
+    ]);
+    expect(pruneAcknowledgedRecords([provider], [confirmed])).toEqual([
+      confirmed,
+    ]);
+    expect(pruneAcknowledgedRecords([confirmed], [confirmed])).toEqual([]);
+  });
+
   it("does not restore a confirmed record after parent catch-up or local deletion", () => {
     const confirmed = { ...provider, api_name: "confirmed-create" };
     let overlay: readonly Provider[] = [confirmed];
@@ -171,6 +189,22 @@ describe("configuration policy", () => {
     expect(includeConfirmedRecords([], overlay)).toEqual([]);
 
     expect(discardConfirmedRecord([confirmed], confirmed.api_name)).toEqual([]);
+  });
+
+  it("hides confirmed deletions until the authoritative list removes them", () => {
+    let deleted: readonly string[] = [];
+    deleted = retainDeletedRecord(deleted, provider.api_name);
+    deleted = retainDeletedRecord(deleted, provider.api_name);
+
+    expect(deleted).toEqual([provider.api_name]);
+    expect(excludeDeletedRecords([provider], deleted)).toEqual([]);
+    expect(pruneAcknowledgedDeletions([provider], deleted)).toEqual(deleted);
+
+    expect(discardDeletedRecord(deleted, provider.api_name)).toEqual([]);
+
+    deleted = pruneAcknowledgedDeletions([], deleted);
+    expect(deleted).toEqual([]);
+    expect(excludeDeletedRecords([provider], deleted)).toEqual([provider]);
   });
 });
 
