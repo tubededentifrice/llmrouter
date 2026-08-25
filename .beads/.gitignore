@@ -64,6 +64,7 @@ backup/
 .env
 
 # Legacy files (from pre-Dolt versions)
+beads.jsonl
 *.db
 *.db?*
 *.db-journal
