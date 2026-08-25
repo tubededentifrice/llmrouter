@@ -444,6 +444,9 @@ class ProviderModel(ClosedModel):
     capabilities: list[ModelCapability]
     constraints: ModelConstraints | None = None
     reasoning_mappings: list[ReasoningMapping]
+    configured_price_source: str | None = None
+    configured_price_lookup_key: str | None = None
+    configured_manual_price: Price | None = None
     price_source: str | None = None
     price_lookup_key: str | None = None
     effective_price: Price | None = None

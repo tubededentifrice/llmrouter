@@ -46,6 +46,7 @@ import {
   includeConfirmedRecords,
   parseConfigurationNodeId,
   projectConfigurationGraph,
+  providerModelPriceFormDefaults,
   pruneAcknowledgedDeletions,
   pruneAcknowledgedRecords,
   retainConfirmedRecord,
@@ -54,7 +55,11 @@ import {
   type ConfigurationLoadPhase,
   type ConfigurationRecordKind,
 } from "./configurationState.js";
-import { credentialFormValue, parseManualPrice } from "./formContracts.js";
+import {
+  credentialFormValue,
+  configuredPriceValue,
+  parseManualPrice,
+} from "./formContracts.js";
 
 interface ConfigurationGraphProps {
   readonly assignments: readonly Assignment[];
@@ -440,7 +445,9 @@ function providerValue(form: FormData): ProviderModelWrite {
   )
     throw new Error("Enter each reasoning level only once.");
   const constraints = constraintValue(form);
-  const manualPrice = parseManualPrice(
+  const configuredPrice = configuredPriceValue(
+    formValue(form, "price_source"),
+    formValue(form, "price_lookup_key"),
     formValue(form, "currency"),
     formValue(form, "unit_prices"),
   );
@@ -473,13 +480,7 @@ function providerValue(form: FormData): ProviderModelWrite {
         }),
     ...(Object.keys(constraints).length === 0 ? {} : { constraints }),
     ...(reasoning_mappings.length === 0 ? {} : { reasoning_mappings }),
-    ...(formValue(form, "price_source") === ""
-      ? {}
-      : {
-          price_source: formValue(form, "price_source"),
-          price_lookup_key: formValue(form, "price_lookup_key"),
-        }),
-    ...(manualPrice === null ? {} : { manual_price: manualPrice }),
+    ...configuredPrice,
   };
 }
 
@@ -2479,6 +2480,7 @@ function MappingAdvancedFields({
 }: {
   readonly mapping: ProviderModel | undefined;
 }) {
+  const priceDefaults = providerModelPriceFormDefaults(mapping);
   return (
     <details className="configuration-advanced">
       <summary>Capabilities, reasoning, and price</summary>
@@ -2575,19 +2577,16 @@ function MappingAdvancedFields({
       </label>
       <label>
         Price source
-        <input defaultValue={mapping?.price_source ?? ""} name="price_source" />
+        <input defaultValue={priceDefaults.source} name="price_source" />
       </label>
       <label>
         Source model identifier
-        <input
-          defaultValue={mapping?.price_lookup_key ?? ""}
-          name="price_lookup_key"
-        />
+        <input defaultValue={priceDefaults.lookupKey} name="price_lookup_key" />
       </label>
       <label>
         Manual price currency
         <input
-          defaultValue=""
+          defaultValue={priceDefaults.currency}
           maxLength={3}
           name="currency"
           placeholder="USD"
@@ -2596,7 +2595,7 @@ function MappingAdvancedFields({
       <label>
         Manual typed unit prices
         <textarea
-          defaultValue=""
+          defaultValue={priceDefaults.unitPrices}
           name="unit_prices"
           placeholder="input_token=0.001, output_token=0.002"
           rows={3}

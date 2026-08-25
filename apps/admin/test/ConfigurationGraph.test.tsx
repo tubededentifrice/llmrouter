@@ -10,6 +10,7 @@ import {
   includeConfirmedRecords,
   parseConfigurationNodeId,
   projectConfigurationGraph,
+  providerModelPriceFormDefaults,
   pruneAcknowledgedDeletions,
   pruneAcknowledgedRecords,
   retainConfirmedRecord,
@@ -18,6 +19,7 @@ import {
 } from "../src/configurationState.js";
 import { createAdministrationClient } from "../src/api.js";
 import type { Assignment, Model, Provider, ProviderModel } from "../src/api.js";
+import { configuredPriceValue } from "../src/formContracts.js";
 
 const provider: Provider = {
   api_name: "openrouter-main",
@@ -147,6 +149,72 @@ describe("configuration policy", () => {
       validateAssignmentChain(Array.from({ length: 17 }, () => "x")),
     ).toContain("1 through 16");
     expect(validateAssignmentChain(["one", "one"])).toContain("only once");
+  });
+
+  it("prefills only the price configured directly on a mapping", () => {
+    const configuredManualPrice = {
+      currency: "EUR",
+      unit_prices: [
+        { unit: "input_token" as const, amount: "0.004" },
+        { unit: "output_token" as const, amount: "0.008" },
+      ],
+    };
+    const direct = {
+      ...mapping,
+      configured_manual_price: configuredManualPrice,
+      effective_price: configuredManualPrice,
+    };
+    expect(providerModelPriceFormDefaults(direct)).toEqual({
+      source: "",
+      lookupKey: "",
+      currency: "EUR",
+      unitPrices: "input_token=0.004, output_token=0.008",
+    });
+    expect(
+      providerModelPriceFormDefaults({
+        ...mapping,
+        price_source: "openrouter",
+        price_lookup_key: "inherited/model",
+        effective_price: {
+          currency: "USD",
+          unit_prices: [{ unit: "input_token", amount: "0.001" }],
+          source: "openrouter",
+        },
+      }),
+    ).toEqual({ source: "", lookupKey: "", currency: "", unitPrices: "" });
+    const defaults = providerModelPriceFormDefaults(direct);
+    expect(
+      configuredPriceValue(
+        defaults.source,
+        defaults.lookupKey,
+        defaults.currency,
+        defaults.unitPrices,
+      ),
+    ).toEqual({ manual_price: configuredManualPrice });
+    const configuredSource = providerModelPriceFormDefaults({
+      ...mapping,
+      configured_price_source: "wavespeed",
+      configured_price_lookup_key: "media/model",
+      price_source: "wavespeed",
+      price_lookup_key: "media/model",
+    });
+    expect(configuredSource).toEqual({
+      source: "wavespeed",
+      lookupKey: "media/model",
+      currency: "",
+      unitPrices: "",
+    });
+    expect(
+      configuredPriceValue(
+        configuredSource.source,
+        configuredSource.lookupKey,
+        configuredSource.currency,
+        configuredSource.unitPrices,
+      ),
+    ).toEqual({
+      price_source: "wavespeed",
+      price_lookup_key: "media/model",
+    });
   });
 
   it("keeps a confirmed create until the refreshed list contains it", () => {

@@ -71,6 +71,27 @@ export function parseManualPrice(
   return { currency, unit_prices };
 }
 
+export function configuredPriceValue(
+  sourceValue: string,
+  lookupKeyValue: string,
+  currencyValue: string,
+  unitPriceValue: string,
+): {
+  readonly price_source?: string;
+  readonly price_lookup_key?: string;
+  readonly manual_price?: Price;
+} {
+  const source = sourceValue.trim();
+  const lookupKey = lookupKeyValue.trim();
+  const manualPrice = parseManualPrice(currencyValue, unitPriceValue);
+  return {
+    ...(source === ""
+      ? {}
+      : { price_source: source, price_lookup_key: lookupKey }),
+    ...(manualPrice === null ? {} : { manual_price: manualPrice }),
+  };
+}
+
 const supportedImageTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
 const maximumInputImageBytes = 20_971_520;
 const maximumInputImageTotalBytes = 52_428_800;

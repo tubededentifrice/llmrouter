@@ -1426,6 +1426,9 @@ _PROVIDER_MODEL_SELECT = """SELECT mapping.api_name,
     mapping.provider_model_name, mapping.enabled, mapping.input_modalities,
     mapping.output_modalities, mapping.capabilities, mapping.constraints,
     mapping.reasoning_mappings,
+    mapping.price_source AS configured_price_source,
+    mapping.price_lookup_key AS configured_price_lookup_key,
+    mapping.manual_price AS configured_manual_price,
     CASE WHEN mapping.manual_price IS NOT NULL THEN NULL
          ELSE COALESCE(mapping.price_source, model.price_source) END AS price_source,
     CASE WHEN mapping.manual_price IS NOT NULL THEN NULL

@@ -138,6 +138,20 @@ export const adapterFieldPolicy: Readonly<
   ollama: { endpoint: "required", credential: "optional" },
 };
 
+export function providerModelPriceFormDefaults(
+  mapping: ProviderModel | undefined,
+) {
+  return {
+    source: mapping?.configured_price_source ?? "",
+    lookupKey: mapping?.configured_price_lookup_key ?? "",
+    currency: mapping?.configured_manual_price?.currency ?? "",
+    unitPrices:
+      mapping?.configured_manual_price?.unit_prices
+        .map((item) => `${item.unit}=${item.amount}`)
+        .join(", ") ?? "",
+  };
+}
+
 export function validateAssignmentChain(
   chain: readonly string[],
 ): string | null {

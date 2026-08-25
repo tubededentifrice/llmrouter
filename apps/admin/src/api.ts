@@ -176,6 +176,9 @@ export interface ProviderModel {
   readonly capabilities: readonly ModelCapability[];
   readonly constraints?: ModelConstraints | null;
   readonly reasoning_mappings: readonly ReasoningMapping[];
+  readonly configured_price_source?: string | null;
+  readonly configured_price_lookup_key?: string | null;
+  readonly configured_manual_price?: Price | null;
   readonly price_source?: string | null;
   readonly price_lookup_key?: string | null;
   readonly effective_price?: Price | null;

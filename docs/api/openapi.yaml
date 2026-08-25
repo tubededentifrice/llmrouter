@@ -3456,11 +3456,24 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ReasoningMapping"
+        configured_price_source:
+          type: string
+          description: The price source configured directly on this mapping. It is absent when the mapping inherits price authority.
+        configured_price_lookup_key:
+          type: string
+          description: The source lookup key configured directly on this mapping. It is absent when the mapping inherits price authority.
+        configured_manual_price:
+          description: The manual price configured directly on this mapping. It is absent when the mapping uses a source or inherits price authority.
+          allOf:
+            - $ref: "#/components/schemas/Price"
         price_source:
           type: string
+          description: The effective price source after mapping and canonical-model inheritance.
         price_lookup_key:
           type: string
+          description: The effective source lookup key after mapping and canonical-model inheritance.
         effective_price:
+          description: The effective manual or synchronized price after mapping and canonical-model inheritance.
           $ref: "#/components/schemas/Price"
         cooldown:
           $ref: "#/components/schemas/Cooldown"

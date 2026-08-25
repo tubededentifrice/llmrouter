@@ -44,6 +44,11 @@ the complete submitted value. They do not create revisions, drafts, rollouts,
 or rollback records. A price synchronization keeps the last valid price when a
 source has no value or fails.
 
+Administrator provider-model responses separate the price authority configured
+directly on the mapping from the effective price authority and price after
+canonical-model inheritance. Service-safe provider-model discovery exposes only
+the effective price and does not expose the administrator configuration fields.
+
 Record lists use bounded cursor pagination. The global administrator can set
 the one detailed-log retention duration from 1 through 30 whole days.
 `GET /v1/metrics` supplies Prometheus text for deployment monitoring. It has no

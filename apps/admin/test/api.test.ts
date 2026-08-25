@@ -411,6 +411,45 @@ describe("native administration client", () => {
     });
   });
 
+  it("sends the exact direct provider-model price replacement", async () => {
+    let path = "";
+    let body = "";
+    const client = createAdministrationClient(
+      vi.fn((input: string | URL | Request, init?: RequestInit) => {
+        path = url(input);
+        body = typeof init?.body === "string" ? init.body : "";
+        return Promise.resolve(
+          json({
+            api_name: "priced-mapping",
+            provider_api_name: "openrouter-main",
+            model_api_name: "priced-model",
+            provider_model_name: "vendor/model",
+            enabled: true,
+            input_modalities: ["text"],
+            output_modalities: ["text"],
+            capabilities: [],
+            reasoning_mappings: [],
+            configured_price_source: "openrouter",
+            configured_price_lookup_key: "vendor/model",
+            created_at: "2026-08-25T00:00:00Z",
+          }),
+        );
+      }),
+    );
+    const replacement = {
+      api_name: "priced-mapping",
+      provider_api_name: "openrouter-main",
+      model_api_name: "priced-model",
+      provider_model_name: "vendor/model",
+      enabled: true,
+      price_source: "openrouter",
+      price_lookup_key: "vendor/model",
+    } as const;
+    await client.putProviderModel("priced-mapping", replacement, "csrf");
+    expect(path).toBe("/v1/admin/provider-models/priced-mapping");
+    expect(JSON.parse(body)).toEqual(replacement);
+  });
+
   it("omits top-level null values from closed administrator writes", async () => {
     const calls: { readonly path: string; readonly body: unknown }[] = [];
     const client = createAdministrationClient(

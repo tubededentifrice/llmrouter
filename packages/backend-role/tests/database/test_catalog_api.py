@@ -145,6 +145,12 @@ def assert_service_provider_model_sdk_contract(
     assert [item["api_name"] for item in response.json()["items"]] == ["fake-text"]
     assert "provider_api_name" not in response.text
     assert "wire-text" not in response.text
+    for administrator_field in (
+        "configured_price_source",
+        "configured_price_lookup_key",
+        "configured_manual_price",
+    ):
+        assert administrator_field not in response.text
     sdk_page = RouterClient(
         base_url="https://llmrouter.test",
         service_key=service_key,
@@ -967,6 +973,9 @@ def test_provider_model_price_override_replaces_complete_canonical_authority(
     )
     assert created.status_code == HTTPStatus.CREATED
     assert "price_source" not in created.json()
+    assert "configured_price_source" not in created.json()
+    assert "configured_price_lookup_key" not in created.json()
+    assert created.json()["configured_manual_price"] == manual_mapping["manual_price"]
     assert created.json()["effective_price"]["currency"] == "USD"
 
     selected_source = {
@@ -982,18 +991,77 @@ def test_provider_model_price_override_replaces_complete_canonical_authority(
     )
     assert replaced.status_code == HTTPStatus.OK
     assert replaced.json()["price_source"] == "wavespeed"
+    assert replaced.json()["configured_price_source"] == "wavespeed"
+    assert replaced.json()["configured_price_lookup_key"] == "source-media-model"
+    assert "configured_manual_price" not in replaced.json()
     assert "effective_price" not in replaced.json()
+
+    inherited = context.client.put(
+        "/v1/admin/provider-models/priced",
+        json={
+            **selected_source,
+            "price_source": None,
+            "price_lookup_key": None,
+        },
+        headers=context.write_headers,
+    )
+    assert inherited.status_code == HTTPStatus.OK
+    assert "configured_price_source" not in inherited.json()
+    assert "configured_price_lookup_key" not in inherited.json()
+    assert "configured_manual_price" not in inherited.json()
+    assert inherited.json()["price_source"] == "openrouter"
+    assert inherited.json()["price_lookup_key"] == "source-model"
+    assert "effective_price" not in inherited.json()
+
+    assert (
+        context.client.post(
+            "/v1/admin/models",
+            json={
+                "api_name": "unpriced",
+                "display_name": "Unpriced",
+                "input_modalities": ["text"],
+                "output_modalities": ["text"],
+                "capabilities": [],
+            },
+            headers=context.write_headers,
+        ).status_code
+        == HTTPStatus.CREATED
+    )
+    no_price = context.client.put(
+        "/v1/admin/provider-models/priced",
+        json={
+            **selected_source,
+            "model_api_name": "unpriced",
+            "price_source": None,
+            "price_lookup_key": None,
+        },
+        headers=context.write_headers,
+    )
+    assert no_price.status_code == HTTPStatus.OK
+    for price_field in (
+        "configured_price_source",
+        "configured_price_lookup_key",
+        "configured_manual_price",
+        "price_source",
+        "price_lookup_key",
+        "effective_price",
+    ):
+        assert price_field not in no_price.json()
 
     mixed_authority = context.client.put(
         "/v1/admin/provider-models/priced",
-        json={**selected_source, "manual_price": manual_mapping["manual_price"]},
+        json={
+            **selected_source,
+            "model_api_name": "unpriced",
+            "manual_price": manual_mapping["manual_price"],
+        },
         headers=context.write_headers,
     )
     assert mixed_authority.status_code == HTTPStatus.BAD_REQUEST
     current = context.client.get(
         "/v1/admin/provider-models/priced", headers=context.read_headers
     ).json()
-    assert current["price_source"] == "wavespeed"
+    assert "price_source" not in current
     assert "effective_price" not in current
     with psycopg.connect(catalog_database, row_factory=dict_row) as connection:
         available, next_cursor = catalog.list_available_provider_models(
