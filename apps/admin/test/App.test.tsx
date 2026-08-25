@@ -131,6 +131,11 @@ describe("accepted administration composition", () => {
     expect(configuration).toContain("Play exact route");
     expect(configuration).toContain("Play assignment");
     expect(configuration).toContain("<PlaygroundModal");
+    expect(configuration).toContain(
+      "playgroundTarget.serviceContext === selectedService",
+    );
+    expect(configuration).toContain(".od-graph-empty-state button");
+    expect(configuration).not.toContain("setPlaygroundTarget(null);\n\n  if (");
     expect(configuration).not.toContain(
       "Playground available after configuration delivery",
     );

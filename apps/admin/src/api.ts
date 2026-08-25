@@ -638,50 +638,73 @@ async function parseError(response: Response): Promise<AdministrationApiError> {
   } catch {
     value = null;
   }
-  const candidate =
-    typeof value === "object" && value !== null && "error" in value
-      ? (value as { error?: unknown }).error
-      : null;
-  if (typeof candidate === "object" && candidate !== null) {
-    const body = candidate as {
-      code?: unknown;
-      message?: unknown;
-      details?: unknown;
-    };
+  try {
+    const envelope = requireClosedObject(
+      value,
+      ["error"],
+      ["logical_call_id", "selector", "elapsed_ms", "attempts"],
+      "administrator error envelope",
+    );
+    const error = parseStreamError(envelope.error);
+    const contextKeys = [
+      "logical_call_id",
+      "selector",
+      "elapsed_ms",
+      "attempts",
+    ] as const;
+    const presentContextKeys = contextKeys.filter((key) => key in envelope);
+    if (
+      presentContextKeys.length !== 0 &&
+      presentContextKeys.length !== contextKeys.length
+    )
+      throw invalidStream("The administrator error context is incomplete.");
+    let context: AdministratorPlaygroundErrorContext | undefined;
+    if (presentContextKeys.length !== 0) {
+      if (
+        !isBoundedString(envelope.logical_call_id, 200) ||
+        !isIntegerInRange(envelope.elapsed_ms, 0, 900_000)
+      )
+        throw invalidStream("The administrator error context is invalid.");
+      const selector = parseAdministratorSelector(envelope.selector);
+      const attempts = parseStreamAttempts(
+        envelope.attempts,
+        16,
+        false,
+        "provider_model_api_name" in selector,
+      );
+      if (
+        "provider_model_api_name" in selector &&
+        attempts.some(
+          (attempt) =>
+            attempt.provider_model_api_name !==
+            selector.provider_model_api_name,
+        )
+      )
+        throw invalidStream(
+          "The exact administrator error contains an attempt for a different route.",
+        );
+      context = {
+        logical_call_id: envelope.logical_call_id,
+        selector,
+        elapsed_ms: envelope.elapsed_ms,
+        attempts,
+      };
+    }
     return new AdministrationApiError(
       response.status,
-      typeof body.code === "string" ? body.code : "internal_error",
-      typeof body.message === "string"
-        ? body.message
-        : "The Router could not complete the operation.",
-      typeof body.details === "object" && body.details !== null
-        ? body.details
-        : undefined,
-      typeof value === "object" && value !== null
-        ? {
-            ...("logical_call_id" in value &&
-            typeof value.logical_call_id === "string"
-              ? { logical_call_id: value.logical_call_id }
-              : {}),
-            ...("selector" in value &&
-            typeof value.selector === "object" &&
-            value.selector !== null
-              ? {
-                  selector: value.selector as AdministratorPlaygroundSelector,
-                }
-              : {}),
-            ...("elapsed_ms" in value && typeof value.elapsed_ms === "number"
-              ? { elapsed_ms: value.elapsed_ms }
-              : {}),
-            ...("attempts" in value && Array.isArray(value.attempts)
-              ? {
-                  attempts:
-                    value.attempts as readonly AdministratorPlaygroundAttempt[],
-                }
-              : {}),
-          }
-        : undefined,
+      error.code,
+      error.message,
+      error.details ?? undefined,
+      context,
     );
+  } catch (error) {
+    if (error instanceof AdministrationApiError)
+      return new AdministrationApiError(
+        response.status,
+        "invalid_response",
+        "The Router returned an invalid error envelope.",
+        error.details,
+      );
   }
   return new AdministrationApiError(
     response.status,
@@ -853,6 +876,13 @@ function selectorKey(value: unknown): string {
   return `assignment:${selector.service_api_name}:${selector.assignment_api_name}`;
 }
 
+function parseAdministratorSelector(
+  value: unknown,
+): AdministratorPlaygroundSelector {
+  selectorKey(value);
+  return value as AdministratorPlaygroundSelector;
+}
+
 function parseStreamError(value: unknown): SafeError {
   const error = requireClosedObject(
     value,
@@ -932,6 +962,7 @@ function parseStreamAttempts(
   maximum: number,
   successful: boolean,
   exact: boolean,
+  elapsedMaximum = 600_000,
 ): readonly AdministratorPlaygroundAttempt[] {
   if (
     !Array.isArray(value) ||
@@ -951,7 +982,7 @@ function parseStreamAttempts(
       typeof attempt.provider_model_api_name !== "string" ||
       !apiNamePattern.test(attempt.provider_model_api_name) ||
       (attempt.outcome !== "succeeded" && attempt.outcome !== "failed") ||
-      !isIntegerInRange(attempt.elapsed_ms, 0, 600_000) ||
+      !isIntegerInRange(attempt.elapsed_ms, 0, elapsedMaximum) ||
       (attempt.outcome === "succeeded" && attempt.error !== undefined) ||
       (attempt.outcome === "failed" && attempt.error === undefined)
     )
@@ -976,6 +1007,395 @@ function parseStreamAttempts(
   )
     throw invalidStream("The model stream completed attempts are invalid.");
   return attempts;
+}
+
+function invalidPlaygroundResponse(reason: string): AdministrationApiError {
+  return new AdministrationApiError(
+    502,
+    "invalid_response",
+    "The Router returned an invalid administrator playground response.",
+    { reason },
+  );
+}
+
+function sameUsage(left: Usage, right: Usage): boolean {
+  const units = (usage: Usage) =>
+    usage.units.map((item) => `${item.unit}:${item.quantity}`).sort();
+  return (
+    left.cost === right.cost &&
+    left.currency === right.currency &&
+    JSON.stringify(units(left)) === JSON.stringify(units(right))
+  );
+}
+
+function parseSuccessfulResultFacts(
+  value: Record<string, unknown>,
+  expectedSelector: AdministratorPlaygroundSelector,
+): {
+  readonly logicalCallId: string;
+  readonly selector: AdministratorPlaygroundSelector;
+  readonly elapsedMs: number;
+  readonly attempts: readonly AdministratorPlaygroundAttempt[];
+} {
+  if (
+    !isBoundedString(value.logical_call_id, 200) ||
+    !isIntegerInRange(value.elapsed_ms, 0, 900_000)
+  )
+    throw invalidPlaygroundResponse(
+      "The response has invalid call identity or elapsed time.",
+    );
+  const selector = parseAdministratorSelector(value.selector);
+  if (selectorKey(selector) !== selectorKey(expectedSelector))
+    throw invalidPlaygroundResponse(
+      "The response selector does not match the request target.",
+    );
+  const attempts = parseStreamAttempts(
+    value.attempts,
+    16,
+    true,
+    "provider_model_api_name" in selector,
+  );
+  if (
+    "provider_model_api_name" in selector &&
+    attempts.some(
+      (attempt) =>
+        attempt.provider_model_api_name !== selector.provider_model_api_name,
+    )
+  )
+    throw invalidPlaygroundResponse(
+      "An exact response contains an attempt for a different route.",
+    );
+  return {
+    logicalCallId: value.logical_call_id,
+    selector,
+    elapsedMs: value.elapsed_ms,
+    attempts,
+  };
+}
+
+function parseAssistantContent(value: unknown) {
+  if (!Array.isArray(value) || value.length === 0)
+    throw invalidPlaygroundResponse("The model content is empty or invalid.");
+  return value.map((part) => {
+    const candidate = objectValue(part);
+    if (candidate.type === "text") {
+      requireClosedObject(candidate, ["type", "text"], [], "model text");
+      if (typeof candidate.text !== "string")
+        throw invalidPlaygroundResponse("The model text is invalid.");
+      return { type: "text" as const, text: candidate.text };
+    }
+    requireClosedObject(
+      candidate,
+      ["type", "id", "name", "arguments_json"],
+      [],
+      "model tool call",
+    );
+    if (
+      candidate.type !== "tool_call" ||
+      !isBoundedString(candidate.id, 200) ||
+      !isBoundedString(candidate.name, 200) ||
+      !isBoundedString(candidate.arguments_json, 1_000_000)
+    )
+      throw invalidPlaygroundResponse("The model tool call is invalid.");
+    return {
+      type: "tool_call" as const,
+      id: candidate.id,
+      name: candidate.name,
+      arguments_json: candidate.arguments_json,
+    };
+  });
+}
+
+function parseAdministratorModelResult(
+  value: unknown,
+  expectedSelector: AdministratorPlaygroundSelector,
+): AdministratorPlaygroundModelResult {
+  const response = requireClosedObject(
+    value,
+    ["logical_call_id", "selector", "elapsed_ms", "attempts", "result"],
+    [],
+    "administrator model result",
+  );
+  const facts = parseSuccessfulResultFacts(response, expectedSelector);
+  const resultObject = objectValue(response.result);
+  let result: ModelCallResult;
+  if (resultObject.output_type === "standard") {
+    requireClosedObject(
+      resultObject,
+      ["output_type", "provider_model_api_name", "content", "usage"],
+      [],
+      "administrator standard model result",
+    );
+    if (
+      typeof resultObject.provider_model_api_name !== "string" ||
+      !apiNamePattern.test(resultObject.provider_model_api_name)
+    )
+      throw invalidPlaygroundResponse("The final model route is invalid.");
+    result = {
+      output_type: "standard",
+      provider_model_api_name: resultObject.provider_model_api_name,
+      content: parseAssistantContent(resultObject.content),
+      usage: parseStreamUsage(resultObject.usage),
+    };
+  } else {
+    requireClosedObject(
+      resultObject,
+      [
+        "output_type",
+        "provider_model_api_name",
+        "structured_output_json",
+        "usage",
+      ],
+      [],
+      "administrator structured model result",
+    );
+    if (
+      resultObject.output_type !== "structured_json" ||
+      typeof resultObject.provider_model_api_name !== "string" ||
+      !apiNamePattern.test(resultObject.provider_model_api_name) ||
+      !isBoundedString(resultObject.structured_output_json, 1_000_000)
+    )
+      throw invalidPlaygroundResponse(
+        "The structured model result is invalid.",
+      );
+    result = {
+      output_type: "structured_json",
+      provider_model_api_name: resultObject.provider_model_api_name,
+      structured_output_json: resultObject.structured_output_json,
+      usage: parseStreamUsage(resultObject.usage),
+    };
+  }
+  const finalAttempt = facts.attempts.at(-1);
+  if (
+    finalAttempt?.provider_model_api_name !== result.provider_model_api_name ||
+    (finalAttempt.usage !== undefined &&
+      !sameUsage(finalAttempt.usage, result.usage))
+  )
+    throw invalidPlaygroundResponse(
+      "The model result does not match its final succeeded attempt.",
+    );
+  return {
+    logical_call_id: facts.logicalCallId,
+    selector: facts.selector,
+    elapsed_ms: facts.elapsedMs,
+    attempts: facts.attempts,
+    result,
+  };
+}
+
+function parseAdministratorEmbeddingResult(
+  value: unknown,
+  expectedSelector: AdministratorPlaygroundSelector,
+  expectedInputCount: number,
+): AdministratorPlaygroundEmbeddingResult {
+  const response = requireClosedObject(
+    value,
+    ["logical_call_id", "selector", "elapsed_ms", "attempts", "result"],
+    [],
+    "administrator embedding result",
+  );
+  const facts = parseSuccessfulResultFacts(response, expectedSelector);
+  const result = requireClosedObject(
+    response.result,
+    ["provider_model_api_name", "embeddings", "usage"],
+    [],
+    "administrator embedding value",
+  );
+  if (
+    typeof result.provider_model_api_name !== "string" ||
+    !apiNamePattern.test(result.provider_model_api_name) ||
+    !Array.isArray(result.embeddings) ||
+    result.embeddings.length !== expectedInputCount
+  )
+    throw invalidPlaygroundResponse("The embedding result is incomplete.");
+  let dimensions: number | undefined;
+  const embeddings = result.embeddings.map((value, index) => {
+    const embedding = requireClosedObject(
+      value,
+      ["index", "values"],
+      [],
+      "embedding vector",
+    );
+    if (
+      embedding.index !== index ||
+      !Array.isArray(embedding.values) ||
+      embedding.values.length < 1 ||
+      embedding.values.length > 65_536 ||
+      embedding.values.some(
+        (item) => typeof item !== "number" || !Number.isFinite(item),
+      ) ||
+      (dimensions !== undefined && embedding.values.length !== dimensions)
+    )
+      throw invalidPlaygroundResponse(
+        "The embedding vectors do not match the request batch.",
+      );
+    dimensions = embedding.values.length;
+    return { index, values: embedding.values as readonly number[] };
+  });
+  const usage = parseStreamUsage(result.usage);
+  const finalAttempt = facts.attempts.at(-1);
+  if (
+    finalAttempt?.provider_model_api_name !== result.provider_model_api_name ||
+    (finalAttempt.usage !== undefined && !sameUsage(finalAttempt.usage, usage))
+  )
+    throw invalidPlaygroundResponse(
+      "The embedding result does not match its final succeeded attempt.",
+    );
+  return {
+    logical_call_id: facts.logicalCallId,
+    selector: facts.selector,
+    elapsed_ms: facts.elapsedMs,
+    attempts: facts.attempts,
+    result: {
+      provider_model_api_name: result.provider_model_api_name,
+      embeddings,
+      usage,
+    },
+  };
+}
+
+function validTimestamp(value: unknown): value is string {
+  return isBoundedString(value, 200) && Number.isFinite(Date.parse(value));
+}
+
+function parseAdministratorMediaJob(
+  value: unknown,
+  expected?: {
+    readonly id?: string;
+    readonly selector?: AdministratorPlaygroundSelector;
+  },
+): AdministratorPlaygroundMediaJob {
+  const response = requireClosedObject(
+    value,
+    [
+      "id",
+      "logical_call_id",
+      "selector",
+      "provider_model_api_name",
+      "kind",
+      "state",
+      "attempts",
+      "created_at",
+    ],
+    ["elapsed_ms", "usage", "content", "error", "completed_at"],
+    "administrator media job",
+  );
+  const selector = parseAdministratorSelector(response.selector);
+  if (
+    !isBoundedString(response.id, 200) ||
+    !isBoundedString(response.logical_call_id, 200) ||
+    typeof response.provider_model_api_name !== "string" ||
+    !apiNamePattern.test(response.provider_model_api_name) ||
+    (response.kind !== "image" &&
+      response.kind !== "video" &&
+      response.kind !== "audio") ||
+    (response.state !== "pending" &&
+      response.state !== "running" &&
+      response.state !== "succeeded" &&
+      response.state !== "failed") ||
+    !validTimestamp(response.created_at) ||
+    (expected?.id !== undefined && response.id !== expected.id) ||
+    (expected?.selector !== undefined &&
+      selectorKey(selector) !== selectorKey(expected.selector))
+  )
+    throw invalidPlaygroundResponse("The media job identity is invalid.");
+  if (
+    "provider_model_api_name" in selector &&
+    response.provider_model_api_name !== selector.provider_model_api_name
+  )
+    throw invalidPlaygroundResponse(
+      "The exact media job uses a different provider-model route.",
+    );
+  const terminal =
+    response.state === "succeeded" || response.state === "failed";
+  if (
+    terminal !== (response.elapsed_ms !== undefined) ||
+    terminal !== (response.completed_at !== undefined) ||
+    (response.elapsed_ms !== undefined &&
+      !isIntegerInRange(response.elapsed_ms, 0, 86_400_000)) ||
+    (response.completed_at !== undefined &&
+      !validTimestamp(response.completed_at)) ||
+    (response.state === "succeeded" &&
+      (response.content === undefined || response.error !== undefined)) ||
+    (response.state === "failed" &&
+      (response.error === undefined || response.content !== undefined)) ||
+    (!terminal &&
+      (response.content !== undefined || response.error !== undefined))
+  )
+    throw invalidPlaygroundResponse("The media job state facts are invalid.");
+  const attempts = parseStreamAttempts(
+    response.attempts,
+    16,
+    response.state === "succeeded",
+    "provider_model_api_name" in selector,
+    86_400_000,
+  );
+  if (
+    "provider_model_api_name" in selector &&
+    attempts.some(
+      (attempt) =>
+        attempt.provider_model_api_name !== selector.provider_model_api_name,
+    )
+  )
+    throw invalidPlaygroundResponse(
+      "The exact media job contains an attempt for a different route.",
+    );
+  if (
+    terminal &&
+    attempts.length > 0 &&
+    attempts.at(-1)?.provider_model_api_name !==
+      response.provider_model_api_name
+  )
+    throw invalidPlaygroundResponse(
+      "The media job route does not match its final attempt.",
+    );
+  let content: AdministratorPlaygroundMediaJob["content"];
+  if (response.content !== undefined) {
+    const parsed = requireClosedObject(
+      response.content,
+      ["media_type", "size_bytes"],
+      [],
+      "media content facts",
+    );
+    if (
+      !isBoundedString(parsed.media_type, 200) ||
+      !isIntegerInRange(parsed.size_bytes, 0, Number.MAX_SAFE_INTEGER)
+    )
+      throw invalidPlaygroundResponse("The media content facts are invalid.");
+    content = { media_type: parsed.media_type, size_bytes: parsed.size_bytes };
+  }
+  const usage =
+    response.usage === undefined ? undefined : parseStreamUsage(response.usage);
+  const finalUsage = attempts.at(-1)?.usage;
+  if (
+    usage !== undefined &&
+    finalUsage !== undefined &&
+    !sameUsage(usage, finalUsage)
+  )
+    throw invalidPlaygroundResponse(
+      "The media job usage does not match its final attempt.",
+    );
+  return {
+    id: response.id,
+    logical_call_id: response.logical_call_id,
+    selector,
+    provider_model_api_name: response.provider_model_api_name,
+    kind: response.kind,
+    state: response.state,
+    attempts,
+    ...(response.elapsed_ms === undefined
+      ? {}
+      : { elapsed_ms: response.elapsed_ms }),
+    ...(usage === undefined ? {} : { usage }),
+    ...(content === undefined ? {} : { content }),
+    ...(response.error === undefined
+      ? {}
+      : { error: parseStreamError(response.error) }),
+    created_at: response.created_at,
+    ...(response.completed_at === undefined
+      ? {}
+      : { completed_at: response.completed_at }),
+  };
 }
 
 function boundedUtf8(
@@ -1146,6 +1566,10 @@ async function readAdministratorModelStream(
         "model stream error event",
       );
       const error = parseStreamError(data.error);
+      if (error.code === "conflict" || error.code === "assignment_cycle")
+        throw invalidStream(
+          "The model stream returned a configuration-only error code.",
+        );
       if (
         !isBoundedString(data.logical_call_id, 200) ||
         data.logical_call_id !== logicalCallId
@@ -1165,6 +1589,24 @@ async function readAdministratorModelStream(
         false,
         startSelectorKey.startsWith("provider-model:"),
       );
+      if (
+        startSelectorKey.startsWith("provider-model:") &&
+        attempts.some(
+          (attempt) =>
+            `provider-model:${attempt.provider_model_api_name}` !==
+            startSelectorKey,
+        )
+      )
+        throw invalidStream(
+          "The exact model stream contains an attempt for a different route.",
+        );
+      if (
+        attempts.length > 0 &&
+        attempts.at(-1)?.provider_model_api_name !== startProviderModel
+      )
+        throw invalidStream(
+          "The model stream error route does not match its final attempt.",
+        );
       const headerLogicalCallId = response.headers.get(
         "X-LLMRouter-Logical-Call-Id",
       );
@@ -1499,6 +1941,9 @@ export function createAdministrationClient(
     path: string,
     init: RequestInit = {},
     deadline: ClientDeadline = administrationDeadline,
+    responseParser?: (value: unknown) => T,
+    expectedErrorSelector?: AdministratorPlaygroundSelector,
+    requireNoStore = false,
   ): Promise<T> {
     const headers = new Headers(init.headers);
     headers.set("Accept", "application/json");
@@ -1513,9 +1958,63 @@ export function createAdministrationClient(
           headers,
           signal,
         });
-        if (!response.ok) throw await parseError(response);
+        if (!response.ok) {
+          const error = await parseError(response);
+          if (
+            expectedErrorSelector !== undefined &&
+            (error.code === "conflict" || error.code === "assignment_cycle")
+          )
+            throw invalidPlaygroundResponse(
+              "The playground returned a configuration-only error code.",
+            );
+          if (
+            expectedErrorSelector !== undefined &&
+            error.context?.selector !== undefined &&
+            selectorKey(error.context.selector) !==
+              selectorKey(expectedErrorSelector)
+          )
+            throw invalidPlaygroundResponse(
+              "The error selector does not match the request target.",
+            );
+          throw error;
+        }
         if (response.status === 204) return undefined as T;
-        return (await response.json()) as T;
+        if (
+          requireNoStore &&
+          response.headers.get("Cache-Control")?.trim().toLowerCase() !==
+            "no-store"
+        )
+          throw invalidPlaygroundResponse(
+            "The response is missing its no-store cache control.",
+          );
+        if (
+          requireNoStore &&
+          response.headers
+            .get("Content-Type")
+            ?.split(";", 1)[0]
+            ?.trim()
+            .toLowerCase() !== "application/json"
+        )
+          throw invalidPlaygroundResponse(
+            "The response has an invalid content type.",
+          );
+        let value: unknown;
+        try {
+          value = await response.json();
+        } catch {
+          if (responseParser !== undefined)
+            throw invalidPlaygroundResponse(
+              "The response body is not valid JSON.",
+            );
+          throw new AdministrationApiError(
+            502,
+            "invalid_response",
+            "The Router returned invalid JSON.",
+          );
+        }
+        return responseParser === undefined
+          ? (value as T)
+          : responseParser(value);
       },
       deadline,
       init.signal,
@@ -1742,6 +2241,9 @@ export function createAdministrationClient(
           ...(signal === undefined ? {} : { signal }),
         },
         runtimeCallDeadline,
+        (response) => parseAdministratorModelResult(response, value.selector),
+        value.selector,
+        true,
       ),
     playgroundModelStream: (value, csrf, callerSignal) =>
       withClientDeadline(
@@ -1758,7 +2260,22 @@ export function createAdministrationClient(
             body: JSON.stringify(value),
             signal,
           });
-          if (!response.ok) throw await parseError(response);
+          if (!response.ok) {
+            const error = await parseError(response);
+            if (error.code === "conflict" || error.code === "assignment_cycle")
+              throw invalidPlaygroundResponse(
+                "The stream returned a configuration-only error code.",
+              );
+            if (
+              error.context?.selector !== undefined &&
+              selectorKey(error.context.selector) !==
+                selectorKey(value.selector)
+            )
+              throw invalidPlaygroundResponse(
+                "The stream error selector does not match the request target.",
+              );
+            throw error;
+          }
           if (
             response.headers
               .get("Content-Type")
@@ -1769,6 +2286,15 @@ export function createAdministrationClient(
             await response.body?.cancel();
             throw invalidStream(
               "The model stream response has an invalid content type.",
+            );
+          }
+          if (
+            response.headers.get("Cache-Control")?.trim().toLowerCase() !==
+            "no-store"
+          ) {
+            await response.body?.cancel();
+            throw invalidStream(
+              "The model stream response is missing its no-store cache control.",
             );
           }
           return readAdministratorModelStream(
@@ -1790,6 +2316,14 @@ export function createAdministrationClient(
           ...(signal === undefined ? {} : { signal }),
         },
         runtimeCallDeadline,
+        (response) =>
+          parseAdministratorEmbeddingResult(
+            response,
+            value.selector,
+            value.inputs.length,
+          ),
+        value.selector,
+        true,
       ),
     playgroundCreateMedia: (value, csrf, signal) =>
       request(
@@ -1801,12 +2335,19 @@ export function createAdministrationClient(
           ...(signal === undefined ? {} : { signal }),
         },
         mediaAdmissionDeadline,
+        (response) =>
+          parseAdministratorMediaJob(response, { selector: value.selector }),
+        value.selector,
+        true,
       ),
     playgroundMediaJob: (id, signal) =>
       request(
         `/v1/admin/playground/media-jobs/${encode(id)}`,
         signal === undefined ? {} : { signal },
         mediaStatusDeadline,
+        (response) => parseAdministratorMediaJob(response, { id }),
+        undefined,
+        true,
       ),
     playgroundMediaContent: (id, callerSignal) =>
       withClientDeadline(
@@ -1820,6 +2361,13 @@ export function createAdministrationClient(
             },
           );
           if (!response.ok) throw await parseError(response);
+          if (
+            response.headers.get("Cache-Control")?.trim().toLowerCase() !==
+            "no-store"
+          )
+            throw invalidPlaygroundResponse(
+              "The media response is missing its no-store cache control.",
+            );
           return response.blob();
         },
         mediaContentDeadline,

@@ -81,7 +81,38 @@ export async function pollMediaJob(
   try {
     while (job.state === "pending" || job.state === "running") {
       await delay(1000, pollSignal);
-      job = await client.playgroundMediaJob(job.id, pollSignal);
+      const next = await client.playgroundMediaJob(job.id, pollSignal);
+      const stateMovedBackward =
+        job.state === "running" && next.state === "pending";
+      const attemptsChanged = job.attempts.some(
+        (attempt, index) =>
+          JSON.stringify(attempt) !== JSON.stringify(next.attempts[index]),
+      );
+      if (
+        next.id !== job.id ||
+        next.logical_call_id !== job.logical_call_id ||
+        JSON.stringify(next.selector) !== JSON.stringify(job.selector) ||
+        next.provider_model_api_name !== job.provider_model_api_name ||
+        next.kind !== job.kind ||
+        next.created_at !== job.created_at ||
+        next.attempts.length < job.attempts.length ||
+        attemptsChanged ||
+        stateMovedBackward
+      )
+        throw new AdministrationApiError(
+          502,
+          "invalid_response",
+          "The media-job status changed immutable facts or moved backward.",
+          {
+            reason: `Keep administrator media job ${job.id} for recovery and inspect Router health.`,
+          },
+          {
+            logical_call_id: job.logical_call_id,
+            selector: job.selector,
+            attempts: job.attempts,
+          },
+        );
+      job = next;
       onUpdate(job);
     }
     return job;
@@ -171,20 +202,28 @@ function usableMappings(
 }
 
 function capabilities(mappings: readonly ProviderModel[]) {
-  const supportsStructuredOutput = mappings.some((mapping) =>
+  const modelMappings = mappings.filter((mapping) => {
+    const inputModalities = new Set(mapping.input_modalities);
+    const outputModalities = new Set(mapping.output_modalities);
+    return (
+      inputModalities.has("text") &&
+      (outputModalities.has("text") || outputModalities.has("structured_json"))
+    );
+  });
+  const supportsStructuredOutput = modelMappings.some((mapping) =>
     new Set(mapping.output_modalities).has("structured_json"),
   );
   return {
-    supportsStreaming: mappings.some((mapping) =>
+    supportsStreaming: modelMappings.some((mapping) =>
       new Set(mapping.capabilities).has("streaming"),
     ),
     supportsStructuredOutput,
     requiresStructuredOutput:
       supportsStructuredOutput &&
-      !mappings.some((mapping) =>
+      !modelMappings.some((mapping) =>
         new Set(mapping.output_modalities).has("text"),
       ),
-    supportsTools: mappings.some((mapping) =>
+    supportsTools: modelMappings.some((mapping) =>
       new Set(mapping.capabilities).has("tool_calling"),
     ),
   };
@@ -358,6 +397,7 @@ export function targetUnavailableMessage(
 }
 
 export function parseTags(value: string): readonly string[] {
+  const encoder = new TextEncoder();
   const tags = Array.from(
     new Set(
       value.split(",").flatMap((item) => {
@@ -366,9 +406,21 @@ export function parseTags(value: string): readonly string[] {
       }),
     ),
   );
-  tags.sort();
+  tags.sort((left, right) => {
+    const leftBytes = encoder.encode(left);
+    const rightBytes = encoder.encode(right);
+    for (
+      let index = 0;
+      index < Math.min(leftBytes.length, rightBytes.length);
+      index += 1
+    ) {
+      const difference = (leftBytes[index] ?? 0) - (rightBytes[index] ?? 0);
+      if (difference !== 0) return difference;
+    }
+    return leftBytes.length - rightBytes.length;
+  });
   if (tags.length > 32) throw new Error("Enter no more than 32 tags.");
-  const encoded = tags.map((tag) => new TextEncoder().encode(tag).byteLength);
+  const encoded = tags.map((tag) => encoder.encode(tag).byteLength);
   if (encoded.some((length) => length < 1 || length > 128))
     throw new Error("Each tag must contain 1 through 128 UTF-8 bytes.");
   if (encoded.reduce((total, length) => total + length, 0) > 2048)
@@ -377,9 +429,22 @@ export function parseTags(value: string): readonly string[] {
 }
 
 export function nonBlankInputLines(value: string): readonly string[] {
-  return value
+  const inputs = value
     .split("\n")
     .flatMap((line) => (line.trim() === "" ? [] : [line]));
+  if (inputs.length < 1 || inputs.length > 32)
+    throw new Error("Enter 1 through 32 nonblank embedding inputs.");
+  const encoder = new TextEncoder();
+  const lengths = inputs.map((input) => encoder.encode(input).byteLength);
+  if (lengths.some((length) => length < 1 || length > 32_768))
+    throw new Error(
+      "Each embedding input must contain 1 through 32,768 UTF-8 bytes.",
+    );
+  if (lengths.reduce((total, length) => total + length, 0) > 262_144)
+    throw new Error(
+      "The complete embedding batch must not exceed 262,144 UTF-8 bytes.",
+    );
+  return inputs;
 }
 
 export function parseToolDefinitions(value: string) {
@@ -400,12 +465,24 @@ export function parseToolDefinitions(value: string) {
       typeof item !== "object" ||
       item === null ||
       Array.isArray(item) ||
+      Object.keys(candidate).some(
+        (key) =>
+          key !== "name" &&
+          key !== "description" &&
+          key !== "input_schema_json",
+      ) ||
       typeof candidate.name !== "string" ||
+      candidate.name.length < 1 ||
+      candidate.name.length > 200 ||
       typeof candidate.description !== "string" ||
-      typeof candidate.input_schema_json !== "string"
+      candidate.description.length < 1 ||
+      candidate.description.length > 2_000 ||
+      typeof candidate.input_schema_json !== "string" ||
+      candidate.input_schema_json.length < 2 ||
+      candidate.input_schema_json.length > 100_000
     )
       throw new Error(
-        "Each tool needs name, description, and input_schema_json string fields.",
+        "Each tool needs only bounded name, description, and input_schema_json string fields.",
       );
     JSON.parse(candidate.input_schema_json);
     return {

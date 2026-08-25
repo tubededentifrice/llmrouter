@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { PlaygroundModal } from "../src/PlaygroundModal.js";
 import {
   clientDeadlineMilliseconds,
@@ -23,6 +23,10 @@ import {
   targetUnavailableMessage,
   updateMediaRecovery,
 } from "../src/playgroundState.js";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 const provider: Provider = {
   api_name: "fake-provider",
@@ -103,6 +107,36 @@ describe("administrator playground target projection", () => {
       supportsStreaming: true,
       supportsStructuredOutput: true,
       supportsTools: true,
+    });
+  });
+
+  it("does not apply media-only capabilities to model controls", () => {
+    const target = assignmentPlaygroundTarget(
+      assignment.api_name,
+      "crewday",
+      [
+        {
+          ...assignment,
+          effective_chain: [
+            { provider_model_api_name: "fake-model" },
+            { provider_model_api_name: "fake-media" },
+          ],
+        },
+      ],
+      [
+        { ...mapping, capabilities: [], output_modalities: ["text"] },
+        {
+          ...mapping,
+          api_name: "fake-media",
+          capabilities: ["streaming", "tool_calling"],
+          output_modalities: ["image"],
+        },
+      ],
+      [provider],
+    );
+    expect(target).toMatchObject({
+      supportsStreaming: false,
+      supportsTools: false,
     });
   });
 
@@ -225,6 +259,64 @@ describe("administrator playground target projection", () => {
     });
     expect(client.playgroundMediaJob).toHaveBeenCalledTimes(2);
     expect(onUpdate).toHaveBeenCalledWith(running);
+    vi.useRealTimers();
+  });
+
+  it("rejects media status that changes identity or moves backward", async () => {
+    vi.useFakeTimers();
+    const running = {
+      id: "job-one",
+      logical_call_id: "call-one",
+      selector: { provider_model_api_name: mapping.api_name } as const,
+      provider_model_api_name: mapping.api_name,
+      kind: "image" as const,
+      state: "running" as const,
+      attempts: [],
+      created_at: "2026-08-25T00:00:00Z",
+    };
+    const client = {
+      playgroundMediaJob: vi.fn().mockResolvedValue({
+        ...running,
+        logical_call_id: "different-call",
+        state: "pending",
+      }),
+    };
+    const result = pollMediaJob(
+      client,
+      running,
+      new AbortController().signal,
+      vi.fn(),
+    ).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(1000);
+    await expect(result).resolves.toMatchObject({ code: "invalid_response" });
+  });
+
+  it("rejects media status that changes its selected route", async () => {
+    vi.useFakeTimers();
+    const running: AdministratorPlaygroundMediaJob = {
+      id: "job-one",
+      logical_call_id: "call-one",
+      selector: { provider_model_api_name: mapping.api_name },
+      provider_model_api_name: mapping.api_name,
+      kind: "image",
+      state: "running",
+      attempts: [],
+      created_at: "2026-08-25T00:00:00Z",
+    };
+    const client = {
+      playgroundMediaJob: vi.fn().mockResolvedValue({
+        ...running,
+        provider_model_api_name: "different-route",
+      }),
+    };
+    const result = pollMediaJob(
+      client,
+      running,
+      new AbortController().signal,
+      vi.fn(),
+    ).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(1000);
+    await expect(result).resolves.toMatchObject({ code: "invalid_response" });
     vi.useRealTimers();
   });
 
@@ -377,8 +469,23 @@ describe("administrator playground input", () => {
     ]);
   });
 
+  it("enforces the exact embedding batch bounds", () => {
+    expect(() => nonBlankInputLines("\n \n")).toThrow("1 through 32");
+    expect(() => nonBlankInputLines(Array(33).fill("one").join("\n"))).toThrow(
+      "1 through 32",
+    );
+    expect(() => nonBlankInputLines("x".repeat(32_769))).toThrow("32,768");
+    expect(
+      nonBlankInputLines(Array(8).fill("x".repeat(32_768)).join("\n")),
+    ).toHaveLength(8);
+    expect(() =>
+      nonBlankInputLines(`${Array(8).fill("x".repeat(32_768)).join("\n")}\ny`),
+    ).toThrow("262,144");
+  });
+
   it("normalizes bounded tags and validates tool definition JSON", () => {
     expect(parseTags("zeta, alpha, zeta")).toEqual(["alpha", "zeta"]);
+    expect(parseTags("𐀀, ")).toEqual(["", "𐀀"]);
     expect(() => parseTags("a".repeat(129))).toThrow("128 UTF-8");
     expect(
       parseToolDefinitions(
@@ -396,6 +503,11 @@ describe("administrator playground input", () => {
         '[{"name":"lookup","description":"One","input_schema_json":"{}"},{"name":"lookup","description":"Two","input_schema_json":"{}"}]',
       ),
     ).toThrow("unique");
+    expect(() =>
+      parseToolDefinitions(
+        '[{"name":"lookup","description":"Find","input_schema_json":"{}","extra":true}]',
+      ),
+    ).toThrow("only bounded");
   });
 
   it("renders one fixed-target modal without key, workspace, or scope controls", () => {
@@ -414,7 +526,9 @@ describe("administrator playground input", () => {
         currentTarget={target}
         onClose={vi.fn()}
         onMediaJobChange={vi.fn()}
+        onUncertainMediaAdmissionChange={vi.fn()}
         retainedMediaJob={null}
+        retainedUncertainMediaAdmission={false}
         returnFocusRef={{ current: null }}
         target={target}
       />,
@@ -446,6 +560,7 @@ describe("administrator playground input", () => {
         currentTarget={target}
         onClose={vi.fn()}
         onMediaJobChange={vi.fn()}
+        onUncertainMediaAdmissionChange={vi.fn()}
         retainedMediaJob={{
           id: "job-retained",
           logical_call_id: "call-retained",
@@ -456,6 +571,7 @@ describe("administrator playground input", () => {
           attempts: [],
           created_at: "2026-08-25T00:00:00Z",
         }}
+        retainedUncertainMediaAdmission={false}
         returnFocusRef={{ current: null }}
         target={target}
       />,
@@ -463,6 +579,34 @@ describe("administrator playground input", () => {
     expect(markup).toContain("Resume media job");
     expect(markup).toContain("job-retained");
     expect(markup).toContain("will not submit a replacement job");
+    expect(markup).toContain("disabled");
+  });
+
+  it("blocks another submission after an uncertain media admission", () => {
+    const target = mappingPlaygroundTarget(
+      mapping.api_name,
+      [mapping],
+      [provider],
+      [model],
+    );
+    if (target === null) throw new Error("Missing test target.");
+    const markup = renderToStaticMarkup(
+      <PlaygroundModal
+        client={createAdministrationClient(vi.fn())}
+        csrf="csrf"
+        currentTarget={target}
+        onClose={vi.fn()}
+        onMediaJobChange={vi.fn()}
+        onUncertainMediaAdmissionChange={vi.fn()}
+        retainedMediaJob={null}
+        retainedUncertainMediaAdmission
+        returnFocusRef={{ current: null }}
+        target={target}
+      />,
+    );
+    expect(markup).toContain("Uncertain media admission");
+    expect(markup).toContain("can still have created a job");
+    expect(markup).toContain("I checked; allow a new submission");
     expect(markup).toContain("disabled");
   });
 
@@ -481,6 +625,7 @@ describe("administrator playground input", () => {
         currentTarget={target}
         onClose={vi.fn()}
         onMediaJobChange={vi.fn()}
+        onUncertainMediaAdmissionChange={vi.fn()}
         retainedMediaJob={{
           id: "job-content-retry",
           logical_call_id: "call-content-retry",
@@ -500,6 +645,7 @@ describe("administrator playground input", () => {
           created_at: "2026-08-25T00:00:00Z",
           completed_at: "2026-08-25T00:00:20Z",
         }}
+        retainedUncertainMediaAdmission={false}
         returnFocusRef={{ current: null }}
         target={target}
       />,
@@ -525,6 +671,7 @@ describe("administrator playground input", () => {
         currentTarget={target}
         onClose={vi.fn()}
         onMediaJobChange={vi.fn()}
+        onUncertainMediaAdmissionChange={vi.fn()}
         retainedMediaJob={{
           id: "job-failed",
           logical_call_id: "call-failed",
@@ -561,6 +708,7 @@ describe("administrator playground input", () => {
           created_at: "2026-08-25T00:00:00Z",
           completed_at: "2026-08-25T00:00:20Z",
         }}
+        retainedUncertainMediaAdmission={false}
         returnFocusRef={{ current: null }}
         target={target}
       />,

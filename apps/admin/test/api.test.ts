@@ -15,7 +15,10 @@ afterEach(() => {
 function json(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json",
+    },
   });
 }
 
@@ -678,6 +681,7 @@ describe("administrator playground client", () => {
       vi.fn().mockResolvedValue(
         new Response(body, {
           headers: {
+            "Cache-Control": "no-store",
             "Content-Type": "text/event-stream",
             "X-LLMRouter-Logical-Call-Id": "logical-call",
           },
@@ -713,7 +717,10 @@ describe("administrator playground client", () => {
         if (path.endsWith("/content"))
           return Promise.resolve(
             new Response(new Uint8Array([1, 2, 3]), {
-              headers: { "Content-Type": "image/png" },
+              headers: {
+                "Cache-Control": "no-store",
+                "Content-Type": "image/png",
+              },
             }),
           );
         if (path.includes("media-jobs/job"))
@@ -882,6 +889,313 @@ describe("administrator playground client", () => {
     });
   });
 
+  it("keeps connection attempt bounds for media error context", async () => {
+    const envelope = (elapsedMs: number) => ({
+      logical_call_id: "logical-call",
+      selector: exactSelector,
+      elapsed_ms: 900_000,
+      attempts: [
+        {
+          provider_model_api_name: "fake-model",
+          outcome: "failed",
+          elapsed_ms: elapsedMs,
+          error: {
+            code: "upstream_failed",
+            message: "The provider attempt failed.",
+          },
+        },
+      ],
+      error: {
+        code: "upstream_failed",
+        message: "The selected provider-model failed.",
+      },
+    });
+    const call = (elapsedMs: number) =>
+      createAdministrationClient(
+        vi.fn().mockResolvedValue(json(envelope(elapsedMs), 502)),
+      )
+        .playgroundCreateMedia?.(
+          { selector: exactSelector, kind: "image", prompt: "Draw" },
+          "csrf",
+        )
+        .catch((value: unknown) => value);
+
+    await expect(call(600_000)).resolves.toMatchObject({
+      code: "upstream_failed",
+      context: { attempts: [{ elapsed_ms: 600_000 }] },
+    });
+    await expect(call(600_001)).resolves.toMatchObject({
+      code: "invalid_response",
+    });
+  });
+
+  it("rejects malformed and uncorrelated playground JSON results", async () => {
+    const modelResult = {
+      logical_call_id: "call",
+      selector: exactSelector,
+      elapsed_ms: 5,
+      attempts: [attempt],
+      result: {
+        output_type: "standard",
+        provider_model_api_name: "fake-model",
+        content: [{ type: "text", text: "ok" }],
+        usage,
+      },
+    };
+    const invalidModelResults = [
+      { ...modelResult, unexpected: true },
+      {
+        ...modelResult,
+        result: {
+          ...modelResult.result,
+          provider_model_api_name: "other-model",
+        },
+      },
+      {
+        ...modelResult,
+        result: {
+          ...modelResult.result,
+          usage: { ...usage, cost: "0.02" },
+        },
+      },
+    ];
+    const modelErrors = await Promise.all(
+      invalidModelResults.map((body) => {
+        const client = createAdministrationClient(
+          vi.fn().mockResolvedValue(json(body)),
+        );
+        return Promise.resolve(
+          client.playgroundModel?.(
+            {
+              selector: exactSelector,
+              messages: [
+                { role: "user", content: [{ type: "text", text: "Hello" }] },
+              ],
+            },
+            "csrf",
+          ),
+        ).catch((error: unknown) => error);
+      }),
+    );
+    for (const error of modelErrors)
+      expect(error).toMatchObject({ code: "invalid_response" });
+
+    const embeddingClient = createAdministrationClient(
+      vi.fn().mockResolvedValue(
+        json({
+          logical_call_id: "call",
+          selector: exactSelector,
+          elapsed_ms: 5,
+          attempts: [attempt],
+          result: {
+            provider_model_api_name: "fake-model",
+            embeddings: [{ index: 1, values: [0.1, Number.POSITIVE_INFINITY] }],
+            usage,
+          },
+        }),
+      ),
+    );
+    await expect(
+      embeddingClient
+        .playgroundEmbedding?.(
+          { selector: exactSelector, inputs: ["one"] },
+          "csrf",
+        )
+        .catch((error: unknown) => error),
+    ).resolves.toMatchObject({ code: "invalid_response" });
+
+    const mediaClient = createAdministrationClient(
+      vi.fn().mockResolvedValue(
+        json(
+          {
+            id: "job",
+            logical_call_id: "call",
+            selector: exactSelector,
+            provider_model_api_name: "fake-model",
+            kind: "image",
+            state: "succeeded",
+            attempts: [attempt],
+            elapsed_ms: 5,
+            created_at: "2026-08-25T00:00:00Z",
+            completed_at: "2026-08-25T00:00:01Z",
+          },
+          202,
+        ),
+      ),
+    );
+    await expect(
+      mediaClient
+        .playgroundCreateMedia?.(
+          { selector: exactSelector, kind: "image", prompt: "Draw" },
+          "csrf",
+        )
+        .catch((error: unknown) => error),
+    ).resolves.toMatchObject({ code: "invalid_response" });
+  });
+
+  it("rejects malformed and mismatched playground error envelopes", async () => {
+    const bodies = [
+      {
+        logical_call_id: "call",
+        selector: { provider_model_api_name: "other-model" },
+        elapsed_ms: 5,
+        attempts: [],
+        error: { code: "upstream_failed", message: "Failed." },
+      },
+      {
+        logical_call_id: "call",
+        error: { code: "upstream_failed", message: "Failed." },
+      },
+      {
+        error: {
+          code: "upstream_failed",
+          message: "Failed.",
+          unexpected: true,
+        },
+      },
+      {
+        error: {
+          code: "conflict",
+          message: "A configuration conflict is not a playground error.",
+        },
+      },
+      {
+        logical_call_id: "call",
+        selector: exactSelector,
+        elapsed_ms: 900_001,
+        attempts: [],
+        error: { code: "upstream_failed", message: "Failed." },
+      },
+    ];
+    const errors = await Promise.all(
+      bodies.map((body) => {
+        const client = createAdministrationClient(
+          vi.fn().mockResolvedValue(json(body, 502)),
+        );
+        return Promise.resolve(
+          client.playgroundModel?.(
+            {
+              selector: exactSelector,
+              messages: [
+                { role: "user", content: [{ type: "text", text: "Hello" }] },
+              ],
+            },
+            "csrf",
+          ),
+        ).catch((error: unknown) => error);
+      }),
+    );
+    for (const error of errors)
+      expect(error).toMatchObject({ code: "invalid_response" });
+  });
+
+  it("rejects an exact non-2xx stream attempt for another route", async () => {
+    const client = createAdministrationClient(
+      vi.fn().mockResolvedValue(
+        json(
+          {
+            logical_call_id: "logical-call",
+            selector: exactSelector,
+            elapsed_ms: 17,
+            attempts: [
+              {
+                provider_model_api_name: "other-model",
+                outcome: "failed",
+                elapsed_ms: 12,
+                error: {
+                  code: "upstream_failed",
+                  message: "The provider attempt failed.",
+                },
+              },
+            ],
+            error: {
+              code: "upstream_failed",
+              message: "The selected provider-model failed.",
+            },
+          },
+          502,
+        ),
+      ),
+    );
+
+    await expect(
+      client
+        .playgroundModelStream?.(
+          {
+            selector: exactSelector,
+            messages: [
+              { role: "user", content: [{ type: "text", text: "Hello" }] },
+            ],
+          },
+          "csrf",
+        )
+        .catch((value: unknown) => value),
+    ).resolves.toMatchObject({ code: "invalid_response" });
+  });
+
+  it("requires no-store JSON and exact media-job identity", async () => {
+    const pending = {
+      id: "other-job",
+      logical_call_id: "call",
+      selector: exactSelector,
+      provider_model_api_name: "fake-model",
+      kind: "image",
+      state: "pending",
+      attempts: [],
+      created_at: "2026-08-25T00:00:00Z",
+    };
+    const mismatched = createAdministrationClient(
+      vi.fn().mockResolvedValue(json(pending)),
+    );
+    await expect(
+      mismatched.playgroundMediaJob?.("job").catch((error: unknown) => error),
+    ).resolves.toMatchObject({ code: "invalid_response" });
+
+    const missingNoStore = createAdministrationClient(
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ ...pending, id: "job" }), {
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    await expect(
+      missingNoStore
+        .playgroundMediaJob?.("job")
+        .catch((error: unknown) => error),
+    ).resolves.toMatchObject({ code: "invalid_response" });
+  });
+
+  it("preserves succeeded attempt facts on a failed media job", async () => {
+    const client = createAdministrationClient(
+      vi.fn().mockResolvedValue(
+        json({
+          id: "job",
+          logical_call_id: "call",
+          selector: exactSelector,
+          provider_model_api_name: "fake-model",
+          kind: "image",
+          state: "failed",
+          attempts: [attempt],
+          elapsed_ms: 5,
+          usage,
+          error: {
+            code: "content_unavailable",
+            message: "The generated media could not be retained.",
+          },
+          created_at: "2026-08-25T00:00:00Z",
+          completed_at: "2026-08-25T00:00:01Z",
+        }),
+      ),
+    );
+
+    await expect(client.playgroundMediaJob?.("job")).resolves.toMatchObject({
+      state: "failed",
+      attempts: [{ outcome: "succeeded", usage }],
+      usage,
+      error: { code: "content_unavailable" },
+    });
+  });
+
   it("bounds and cancels administrator playground calls", async () => {
     vi.useFakeTimers();
     const signals: AbortSignal[] = [];
@@ -952,6 +1266,7 @@ describe("administrator playground client", () => {
       vi.fn().mockResolvedValue(
         new Response(body, {
           headers: {
+            "Cache-Control": "no-store",
             "Content-Type": "text/event-stream",
             "X-LLMRouter-Logical-Call-Id": "logical-call",
           },
@@ -1008,6 +1323,7 @@ describe("administrator playground client", () => {
           vi.fn().mockResolvedValue(
             new Response(fixture.body, {
               headers: {
+                "Cache-Control": "no-store",
                 "Content-Type": "text/event-stream",
                 "X-LLMRouter-Logical-Call-Id": fixture.header,
               },
@@ -1115,6 +1431,7 @@ describe("administrator playground client", () => {
       vi.fn().mockResolvedValue(
         new Response(body, {
           headers: {
+            "Cache-Control": "no-store",
             "Content-Type": "text/event-stream",
             "X-LLMRouter-Logical-Call-Id": "logical-call",
           },
@@ -1246,6 +1563,7 @@ describe("administrator playground client", () => {
       vi.fn().mockResolvedValue(
         new Response(body, {
           headers: {
+            "Cache-Control": "no-store",
             "Content-Type": "text/event-stream",
             "X-LLMRouter-Logical-Call-Id": "other-call",
           },
@@ -1299,6 +1617,7 @@ describe("administrator playground client", () => {
       vi.fn().mockResolvedValue(
         new Response(streamStart, {
           headers: {
+            "Cache-Control": "no-store",
             "Content-Type": "application/json",
             "X-LLMRouter-Logical-Call-Id": "logical-call",
           },

@@ -36,7 +36,9 @@ interface PlaygroundModalProps {
   readonly onMediaJobChange: (
     job: AdministratorPlaygroundMediaJob | null,
   ) => void;
+  readonly onUncertainMediaAdmissionChange: (uncertain: boolean) => void;
   readonly retainedMediaJob: AdministratorPlaygroundMediaJob | null;
+  readonly retainedUncertainMediaAdmission: boolean;
   readonly returnFocusRef: RefObject<HTMLElement | null>;
   readonly target: PlaygroundTargetSnapshot;
 }
@@ -341,7 +343,9 @@ export function PlaygroundModal({
   currentTarget,
   onClose,
   onMediaJobChange,
+  onUncertainMediaAdmissionChange,
   retainedMediaJob,
+  retainedUncertainMediaAdmission,
   returnFocusRef,
   target,
 }: PlaygroundModalProps) {
@@ -353,12 +357,18 @@ export function PlaygroundModal({
     {
       value: initialValue(target),
       runState:
-        retainedMediaJob === null
-          ? initialRunState
-          : {
+        retainedMediaJob !== null
+          ? {
               status: "empty",
               message: `Resume admitted media job ${retainedMediaJob.id}. Do not submit a replacement.`,
-            },
+            }
+          : retainedUncertainMediaAdmission
+            ? {
+                status: "empty",
+                message:
+                  "The last media admission result is uncertain. Check detailed logs before you allow another submission.",
+              }
+            : initialRunState,
       diagnostics:
         retainedMediaJob === null ? null : mediaDiagnostics(retainedMediaJob),
       inputImages: [],
@@ -421,9 +431,11 @@ export function PlaygroundModal({
   const targetUnavailable = targetUnavailableMessage(target, currentTarget);
   const unavailable =
     targetUnavailable ??
-    (retainedMediaJob === null
-      ? null
-      : `Media job ${retainedMediaJob.id} is already admitted. Resume or dismiss that job before you submit new work.`);
+    (retainedMediaJob !== null
+      ? `Media job ${retainedMediaJob.id} is already admitted. Resume or dismiss that job before you submit new work.`
+      : retainedUncertainMediaAdmission
+        ? "The prior media admission can still have created a job. Check detailed logs, then acknowledge the warning before you submit more work."
+        : null);
   const running = runState.status === "loading";
   const modelOperation = value.operation === "model";
 
@@ -445,7 +457,9 @@ export function PlaygroundModal({
     if (
       requestRef.current !== null ||
       (!resumingMedia &&
-        (targetUnavailable !== null || retainedMediaJob !== null))
+        (targetUnavailable !== null ||
+          retainedMediaJob !== null ||
+          retainedUncertainMediaAdmission))
     )
       return null;
     const controller = new AbortController();
@@ -655,6 +669,7 @@ export function PlaygroundModal({
                     }),
                 ...(parsedTags.length === 0 ? {} : { tags: parsedTags }),
               };
+        onUncertainMediaAdmissionChange(true);
         // react-doctor-disable-next-line react-doctor/async-defer-await -- The next guard rejects a late response from this awaited call.
         const created = await playgroundClient.playgroundCreateMedia(
           mediaRequest,
@@ -662,6 +677,7 @@ export function PlaygroundModal({
           active.signal,
         );
         if (!isCurrent(active.id)) return;
+        onUncertainMediaAdmissionChange(false);
         setDiagnostics(mediaDiagnostics(created));
         admittedMediaJob = mediaDiagnostics(created).job;
         onMediaJobChange(created);
@@ -762,6 +778,15 @@ export function PlaygroundModal({
     } catch (error) {
       if (!isCurrent(active.id)) return;
       if (error instanceof DOMException && error.name === "AbortError") return;
+      if (
+        value.operation !== "model" &&
+        value.operation !== "embedding" &&
+        error instanceof AdministrationApiError &&
+        error.code !== "client_timeout" &&
+        error.code !== "invalid_response" &&
+        error.context?.logical_call_id === undefined
+      )
+        onUncertainMediaAdmissionChange(false);
       if (error instanceof SyntaxError)
         setRunState(
           correctiveError(
@@ -989,6 +1014,25 @@ export function PlaygroundModal({
               Resume media job
             </Button>
           )}
+        </section>
+      )}
+      {!retainedUncertainMediaAdmission || retainedMediaJob !== null ? null : (
+        <section aria-label="Uncertain media admission">
+          <p>
+            The browser did not receive a trustworthy media admission result.
+            The Router can still have created a job. Check detailed logs before
+            you allow another media submission for this target.
+          </p>
+          <Button
+            disabled={running}
+            onClick={() => {
+              onUncertainMediaAdmissionChange(false);
+              setRunState(initialRunState);
+            }}
+            variant="secondary"
+          >
+            I checked; allow a new submission
+          </Button>
         </section>
       )}
       <PlaygroundDiagnosticsView diagnostics={diagnostics} />

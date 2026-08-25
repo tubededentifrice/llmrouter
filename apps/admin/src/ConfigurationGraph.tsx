@@ -599,6 +599,10 @@ function useConfigurationController({
   const [playgroundMediaRecovery, setPlaygroundMediaRecovery] = useState<
     ReadonlyMap<string, AdministratorPlaygroundMediaJob>
   >(new Map());
+  const [
+    playgroundUncertainMediaAdmissions,
+    setPlaygroundUncertainMediaAdmissions,
+  ] = useState<ReadonlySet<string>>(new Set());
   const authoritativeSnapshot = JSON.stringify({
     credentials,
     providers,
@@ -620,12 +624,6 @@ function useConfigurationController({
     readonly secret: string;
   } | null>(null);
   const previousSelectedServiceRef = useRef(selectedService);
-
-  if (
-    playgroundTarget?.kind === "assignment" &&
-    playgroundTarget.serviceContext !== selectedService
-  )
-    setPlaygroundTarget(null);
 
   if (authoritativeSnapshot !== previousAuthoritativeSnapshot) {
     setPreviousAuthoritativeSnapshot(authoritativeSnapshot);
@@ -1614,7 +1612,9 @@ function useConfigurationController({
           client={client}
           csrf={csrf}
           currentTarget={
-            globalPhase === "ready"
+            globalPhase === "ready" &&
+            (playgroundTarget.kind !== "assignment" ||
+              playgroundTarget.serviceContext === selectedService)
               ? currentPlaygroundTarget(
                   playgroundTarget,
                   visibleAssignments,
@@ -1628,8 +1628,18 @@ function useConfigurationController({
             const returnTarget = playgroundReturnFocusRef.current;
             setPlaygroundTarget(null);
             const restorePlaygroundFocus = () => {
-              if (returnTarget?.isConnected)
+              if (returnTarget?.isConnected) {
                 returnTarget.focus({ preventScroll: true });
+                return;
+              }
+              const fallback =
+                document.querySelector<HTMLElement>(
+                  '.od-graph-node[data-selected="true"]:not(:disabled)',
+                ) ??
+                document.querySelector<HTMLElement>(
+                  '.od-graph-node[tabindex="0"]:not(:disabled), .od-graph-empty-state button:not(:disabled), .configuration-graph-page button:not(:disabled)',
+                );
+              fallback?.focus({ preventScroll: true });
             };
             if (typeof requestAnimationFrame === "function")
               requestAnimationFrame(restorePlaygroundFocus);
@@ -1640,11 +1650,23 @@ function useConfigurationController({
               updateMediaRecovery(current, playgroundTarget, job),
             );
           }}
+          onUncertainMediaAdmissionChange={(uncertain) => {
+            setPlaygroundUncertainMediaAdmissions((current) => {
+              const key = playgroundTargetKey(playgroundTarget);
+              const next = new Set(current);
+              if (uncertain) next.add(key);
+              else next.delete(key);
+              return next;
+            });
+          }}
           retainedMediaJob={
             playgroundMediaRecovery.get(
               playgroundTargetKey(playgroundTarget),
             ) ?? null
           }
+          retainedUncertainMediaAdmission={playgroundUncertainMediaAdmissions.has(
+            playgroundTargetKey(playgroundTarget),
+          )}
           returnFocusRef={playgroundReturnFocusRef}
           target={playgroundTarget}
         />
