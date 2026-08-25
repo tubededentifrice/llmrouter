@@ -1,5 +1,20 @@
 import type { Price } from "./api.js";
 
+function opaqueFormValue(form: FormData, name: string): string {
+  const value = form.get(name);
+  return typeof value === "string" ? value : "";
+}
+
+export function credentialFormValue(form: FormData): {
+  readonly apiName: string;
+  readonly secret: string;
+} {
+  return {
+    apiName: opaqueFormValue(form, "credential_api_name").trim(),
+    secret: opaqueFormValue(form, "secret"),
+  };
+}
+
 export const usageUnits = [
   "input_token",
   "output_token",

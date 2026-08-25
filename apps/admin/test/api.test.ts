@@ -94,6 +94,7 @@ describe("native administration client", () => {
     expect(result).toEqual({
       items: [{ api_name: "first" }, { api_name: "second" }],
       page: { has_more: false, next_cursor: null },
+      retrieval: { complete: true, loaded_items: 2, loaded_pages: 2 },
     });
     expect(paths).toEqual([
       "/v1/admin/services?limit=200",
@@ -302,6 +303,62 @@ describe("native administration client", () => {
     expect(JSON.parse(body)).toEqual({
       direct_chain: [{ provider_model_api_name: "primary" }],
     });
+  });
+
+  it("sends the OpenRouter preview input unchanged and confirms exact reviewed objects", async () => {
+    const calls: { readonly path: string; readonly body: unknown }[] = [];
+    const reviewed = {
+      source_model_id: "vendor/model",
+      model: {
+        api_name: "vendor-model",
+        display_name: "Vendor model",
+        input_modalities: ["text" as const],
+        output_modalities: ["text" as const],
+        capabilities: ["reasoning" as const],
+        constraints: {
+          max_context_tokens: 128_000,
+          max_output_tokens: 16_384,
+        },
+        price_source: "openrouter",
+        price_lookup_key: "vendor/model",
+      },
+      reviewed_price: {
+        currency: "USD",
+        unit_prices: [{ unit: "input_token" as const, amount: "0.000001" }],
+        source: "openrouter",
+      },
+      provider_models: [
+        {
+          api_name: "openrouter-vendor-model",
+          provider_api_name: "openrouter-main",
+          model_api_name: "vendor-model",
+          provider_model_name: "vendor/model",
+          enabled: true,
+        },
+      ],
+    };
+    const client = createAdministrationClient(
+      vi.fn((input: string | URL | Request, init?: RequestInit) => {
+        calls.push({
+          path: url(input),
+          body: JSON.parse(typeof init?.body === "string" ? init.body : "null"),
+        });
+        return Promise.resolve(json({}));
+      }),
+    );
+    const exactInput = "https://openrouter.ai/vendor/model?tab=parameters";
+    await client.previewOpenRouterModel(exactInput, "csrf");
+    await client.importOpenRouterModel(reviewed, "csrf");
+    expect(calls).toEqual([
+      {
+        path: "/v1/admin/openrouter-model-imports/preview",
+        body: { model_id_or_url: exactInput },
+      },
+      {
+        path: "/v1/admin/openrouter-model-imports",
+        body: reviewed,
+      },
+    ]);
   });
 
   it("keeps every typed manual-price unit in the exact model body", async () => {

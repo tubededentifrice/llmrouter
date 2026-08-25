@@ -109,8 +109,6 @@ textarea,
 
 .administration-content {
   width: 100%;
-  max-width: 1680px;
-  margin: 0 auto;
   padding: 32px clamp(18px, 4vw, 52px) 76px;
 }
 
@@ -121,7 +119,8 @@ textarea,
 }
 
 .od-page-description,
-.service-management .od-graph-inspector-eyebrow {
+.service-management .od-graph-inspector-eyebrow,
+.configuration-graph-page .od-graph-inspector-eyebrow {
   color: var(--od-color-muted-strong);
 }
 
@@ -465,8 +464,164 @@ tbody th small {
 .service-management,
 .service-management .od-graph-workspace,
 .od-service-assignment-graph,
-.od-operation-playground {
+.od-operation-playground,
+.configuration-graph-page,
+.configuration-graph-page .od-relationship-graph {
   min-width: 0;
+}
+
+.configuration-graph-page {
+  display: grid;
+  gap: 16px;
+}
+
+.configuration-column-actions,
+.configuration-inspector-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.configuration-graph-page .od-relationship-graph-viewport {
+  min-height: 34rem;
+}
+
+.configuration-graph-page .od-graph-inspector {
+  width: min(42rem, calc(100% - 1.75rem));
+}
+
+.configuration-form {
+  display: grid;
+  gap: 13px;
+}
+
+.configuration-form > label,
+.configuration-advanced label {
+  display: grid;
+  gap: 6px;
+  color: var(--od-color-muted-strong);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.configuration-advanced {
+  padding: 12px;
+  border: 1px solid var(--od-color-border);
+  border-radius: var(--od-radius-md);
+}
+
+.configuration-advanced summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.configuration-advanced[open] {
+  display: grid;
+  gap: 12px;
+}
+
+.configuration-advanced p,
+.configuration-inspector-section p,
+.openrouter-preview p {
+  margin: 0;
+  color: var(--od-color-muted-strong);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.configuration-facts {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 18px;
+}
+
+.configuration-facts div {
+  display: grid;
+  grid-template-columns: minmax(7rem, 0.35fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.configuration-facts dt {
+  color: var(--od-color-muted-strong);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.configuration-facts dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.configuration-inspector-section,
+.configuration-chain-editor,
+.openrouter-preview {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--od-color-border);
+}
+
+.configuration-inspector-section h3,
+.configuration-chain-editor h3,
+.openrouter-preview h4,
+.openrouter-preview h5 {
+  margin: 0;
+}
+
+.configuration-safe-list,
+.openrouter-preview ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.configuration-safe-list li {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.configuration-safe-list span,
+.configuration-safe-list small,
+.openrouter-provider-option span,
+.openrouter-provider-option small {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.configuration-safe-list small,
+.openrouter-provider-option small {
+  color: var(--od-color-muted);
+}
+
+.openrouter-preview fieldset {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--od-color-border);
+  border-radius: var(--od-radius-md);
+}
+
+.openrouter-provider-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+}
+
+.openrouter-provider-option input {
+  width: 18px;
+  min-height: 18px;
 }
 
 .service-management .od-graph-inspector {
@@ -603,6 +758,15 @@ tbody th small {
 
   .service-management .od-graph-inspector {
     width: calc(100% - 1.5rem);
+  }
+
+  .configuration-graph-page .od-graph-inspector {
+    width: calc(100% - 1.5rem);
+  }
+
+  .configuration-facts div {
+    grid-template-columns: 1fr;
+    gap: 2px;
   }
 
   .service-access-heading {

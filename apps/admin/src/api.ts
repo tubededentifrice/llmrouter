@@ -20,6 +20,12 @@ export interface Page<T> {
     readonly has_more: boolean;
     readonly next_cursor?: string | null;
   };
+  /** Client-side collection facts. Omitted only by test or embedded clients. */
+  readonly retrieval?: {
+    readonly complete: boolean;
+    readonly loaded_items: number;
+    readonly loaded_pages: number;
+  };
 }
 export interface AdministratorSession {
   readonly subject: string;
@@ -104,6 +110,8 @@ export interface Provider extends ProviderWrite {
   readonly created_at: string;
 }
 export interface ModelConstraints {
+  readonly max_context_tokens?: number | null;
+  readonly max_output_tokens?: number | null;
   readonly embedding_dimensions?: readonly number[] | null;
   readonly max_input_images?: number | null;
   readonly max_input_image_bytes?: number | null;
@@ -200,6 +208,81 @@ export interface ModelImportSelection {
 }
 export interface ModelImportResult {
   readonly models: readonly Model[];
+  readonly provider_models: readonly ProviderModel[];
+}
+export type OpenRouterSupportedConstraint =
+  | "maximum_output_tokens"
+  | "temperature"
+  | "top_p"
+  | "top_k"
+  | "min_p"
+  | "seed"
+  | "stop"
+  | "frequency_penalty"
+  | "presence_penalty"
+  | "repetition_penalty"
+  | "logit_bias"
+  | "logprobs"
+  | "top_logprobs";
+export interface OpenRouterReasoningPreview {
+  readonly supported: boolean;
+  readonly mandatory?: boolean | null;
+  readonly source_configuration_available: boolean;
+  readonly default_enabled?: boolean | null;
+  readonly default_effort?: string | null;
+  readonly supported_efforts?: readonly string[] | null;
+  readonly supports_max_tokens?: boolean | null;
+}
+export interface OpenRouterImportIssue {
+  readonly code:
+    | "display_name_shortened"
+    | "input_modality_unsupported"
+    | "output_modality_unsupported"
+    | "embedding_dimensions_unknown"
+    | "media_duration_unknown"
+    | "reasoning_mapping_incomplete"
+    | "price_unit_unsupported"
+    | "source_price_zero_omitted"
+    | "conditional_price_unsupported"
+    | "router_input_limits_applied";
+  readonly field: string;
+  readonly source_value?: string | null;
+  readonly message: string;
+}
+export interface OpenRouterImportConflict {
+  readonly kind: "model" | "provider_model";
+  readonly api_name: string;
+  readonly provider_api_name?: string | null;
+  readonly message: string;
+}
+export interface OpenRouterProviderModelOption {
+  readonly provider_api_name: string;
+  readonly provider_display_name: string;
+  readonly provider_enabled: boolean;
+  readonly selectable: boolean;
+  readonly unavailable_reason?: string | null;
+  readonly provider_model: ProviderModelWrite;
+}
+export interface OpenRouterModelImportPreview {
+  readonly source_model_id: string;
+  readonly model: ModelWrite;
+  readonly reviewed_price?: Price | null;
+  readonly reasoning: OpenRouterReasoningPreview;
+  readonly supported_constraints: readonly OpenRouterSupportedConstraint[];
+  readonly provider_options: readonly OpenRouterProviderModelOption[];
+  readonly conflicts: readonly OpenRouterImportConflict[];
+  readonly issues: readonly OpenRouterImportIssue[];
+  readonly can_confirm: boolean;
+}
+export interface OpenRouterModelImportRequest {
+  readonly source_model_id: string;
+  readonly model: ModelWrite;
+  readonly reviewed_price?: Price | null;
+  readonly provider_models: readonly ProviderModelWrite[];
+}
+export interface OpenRouterModelImportResult {
+  readonly source_model_id: string;
+  readonly model: Model;
   readonly provider_models: readonly ProviderModel[];
 }
 export interface PriceSyncItem {
@@ -578,6 +661,14 @@ export interface AdministrationClient {
     selections: readonly ModelImportSelection[],
     csrf: string,
   ): Promise<ModelImportResult>;
+  previewOpenRouterModel(
+    modelIdOrUrl: string,
+    csrf: string,
+  ): Promise<OpenRouterModelImportPreview>;
+  importOpenRouterModel(
+    reviewed: OpenRouterModelImportRequest,
+    csrf: string,
+  ): Promise<OpenRouterModelImportResult>;
   synchronizePrices(
     names: readonly string[] | null,
     csrf: string,
@@ -650,6 +741,7 @@ export function createAdministrationClient(
       const items: T[] = [];
       const seenCursors = new Set<string>();
       let cursor: string | undefined;
+      let loadedPages = 0;
       for (let pageIndex = 0; pageIndex < maximumListPages; pageIndex += 1) {
         const response: unknown = await request(
           `${path}${query({ ...filters, limit: String(listLimit), cursor })}`,
@@ -673,6 +765,7 @@ export function createAdministrationClient(
             "The list page does not match the native cursor contract.",
           );
         const current = response as Page<T>;
+        loadedPages += 1;
         if (current.items.length > listLimit)
           throw invalidListResponse(
             `The list page exceeds the requested ${String(listLimit)} item limit.`,
@@ -690,6 +783,11 @@ export function createAdministrationClient(
           return {
             items,
             page: { has_more: false, next_cursor: null },
+            retrieval: {
+              complete: true,
+              loaded_items: items.length,
+              loaded_pages: loadedPages,
+            },
           };
         const nextCursor = current.page.next_cursor;
         if (
@@ -816,6 +914,12 @@ export function createAdministrationClient(
         provider_api_name: provider,
         selections,
       }),
+    previewOpenRouterModel: (modelIdOrUrl, csrf) =>
+      write("/v1/admin/openrouter-model-imports/preview", "POST", csrf, {
+        model_id_or_url: modelIdOrUrl,
+      }),
+    importOpenRouterModel: (reviewed, csrf) =>
+      write("/v1/admin/openrouter-model-imports", "POST", csrf, reviewed),
     synchronizePrices: (names, csrf) =>
       write("/v1/admin/prices/synchronize", "POST", csrf, {
         provider_model_api_names: names,

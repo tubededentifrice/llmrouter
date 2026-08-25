@@ -16,14 +16,13 @@ import {
   ApplicationSidebar,
   ApplicationTopbar,
   Button,
+  ConfirmationDialog,
   Icon,
   MobileNavigation,
   NavigationItem,
-  OperationPlayground,
   PageHeading,
   Panel,
   PanelHeader,
-  ServiceAssignmentGraph,
   SessionCard,
   SessionPage,
   ShellErrorBoundary,
@@ -33,14 +32,10 @@ import {
   Toast,
   WorkspaceSelector,
   type IconName,
-  type PlaygroundRunState,
-  type PlaygroundValue,
-  type ServiceAssignmentItem,
 } from "@opendle/ui";
 import {
   AdministrationApiError,
   createAdministrationClient,
-  createRuntimeClient,
   errorMessage,
   isoRange,
   type ActivityEvent,
@@ -50,48 +45,28 @@ import {
   type Assignment,
   type Credential,
   type Model,
-  type ModelCapability,
-  type ModelImportPreview,
-  type ModelWrite,
   type LogMedia,
-  type ObservedRequirement,
-  type OutputModality,
-  type Price,
-  type PriceSyncResult,
   type Provider,
-  type ProviderAdapter,
   type ProviderModel,
-  type ProviderModelWrite,
   type RequestLog,
   type RequestLogSummary,
-  type RuntimeInputImage,
   type Service,
   type StatisticsResult,
-  type Workspace,
 } from "./api.js";
 import { ServiceManagement } from "./ServiceManagement.js";
+import { ConfigurationGraph } from "./ConfigurationGraph.js";
 import { createScopeLoadGuard } from "./accessState.js";
 import {
   expireAdministratorSessionLoads,
   invalidateRetainedMediaLoad,
   updateRetentionDuration,
 } from "./administrationSafety.js";
-import {
-  createInputImageSelectionQueue,
-  parseManualPrice,
-  usageUnits,
-  validateInputImageSelection,
-} from "./formContracts.js";
 import { scheduleSessionExpiry } from "./sessionExpiry.js";
-import { waitForMediaJob } from "./mediaPolling.js";
 
 type Section =
   | "overview"
   | "services"
-  | "providers"
-  | "models"
-  | "assignments"
-  | "playground"
+  | "configuration"
   | "logs"
   | "statistics"
   | "operations";
@@ -107,6 +82,7 @@ interface AppData {
   readonly credentials: readonly Credential[];
   readonly health: AdministratorHealth;
   readonly retentionDays: number;
+  readonly configurationPhase: "ready" | "partial";
 }
 const routes: readonly {
   readonly id: Section;
@@ -116,10 +92,12 @@ const routes: readonly {
 }[] = [
   { id: "overview", label: "Overview", icon: "grid", group: "Manage" },
   { id: "services", label: "Services", icon: "layers", group: "Manage" },
-  { id: "providers", label: "Providers", icon: "server", group: "Manage" },
-  { id: "models", label: "Models & prices", icon: "spark", group: "Manage" },
-  { id: "assignments", label: "Assignments", icon: "layers", group: "Manage" },
-  { id: "playground", label: "Playground", icon: "spark", group: "Manage" },
+  {
+    id: "configuration",
+    label: "LLM configuration",
+    icon: "spark",
+    group: "Manage",
+  },
   { id: "logs", label: "Detailed logs", icon: "list", group: "Observe" },
   {
     id: "statistics",
@@ -134,11 +112,18 @@ const routes: readonly {
     group: "Observe",
   },
 ];
+const legacyConfigurationPaths = new Set([
+  "providers",
+  "models",
+  "assignments",
+  "playground",
+]);
 
 function currentSection(): Section {
   const value =
     typeof location === "undefined" ? "" : location.pathname.slice(1);
   if (value === "access") return "services";
+  if (legacyConfigurationPaths.has(value)) return "configuration";
   return routes.some((route) => route.id === value)
     ? (value as Section)
     : "overview";
@@ -188,22 +173,6 @@ function displayTime(value: string | null | undefined): string {
     ? "Unavailable"
     : parsed.toLocaleString();
 }
-function words(value: string): readonly string[] {
-  return [
-    ...new Set(
-      value.split(",").flatMap((item) => {
-        const trimmed = item.trim();
-        return trimmed === "" ? [] : [trimmed];
-      }),
-    ),
-  ];
-}
-function commaItems(value: string): readonly string[] {
-  return value.split(",").flatMap((item) => {
-    const trimmed = item.trim();
-    return trimmed === "" ? [] : [trimmed];
-  });
-}
 function formText(form: FormData, name: string): string {
   const value = form.get(name);
   return typeof value === "string" ? value.trim() : "";
@@ -218,31 +187,6 @@ function tone(value: string): "green" | "amber" | "red" | "blue" {
   if (["failed", "unavailable", "disabled"].includes(value)) return "red";
   return "blue";
 }
-function correction(error: unknown): {
-  readonly title: string;
-  readonly message: string;
-  readonly correction: string;
-  readonly code?: string;
-} {
-  if (error instanceof AdministrationApiError)
-    return {
-      title: "The operation did not complete",
-      message: error.message,
-      correction:
-        error.details?.reason ??
-        (error.status === 401
-          ? "Enter an active service key and try again."
-          : "Check the selected service, workspace, route, and input."),
-      code: error.code,
-    };
-  return {
-    title: "The operation did not complete",
-    message: errorMessage(error),
-    correction:
-      "Try again. If the problem continues, inspect the Router health summary.",
-  };
-}
-
 function EmptyTable({
   columns,
   text,
@@ -376,1758 +320,6 @@ function Overview({ data }: { readonly data: AppData }) {
         </ul>
       </Panel>
     </div>
-  );
-}
-
-function ProvidersPage({
-  client,
-  csrf,
-  credentials,
-  onNotice,
-  onRefresh,
-  providers,
-}: {
-  readonly client: AdministrationClient;
-  readonly csrf: string;
-  readonly credentials: readonly Credential[];
-  readonly onNotice: (tone: "success" | "error", message: string) => void;
-  readonly onRefresh: () => Promise<void>;
-  readonly providers: readonly Provider[];
-}) {
-  const adapters: readonly ProviderAdapter[] = [
-    "openai",
-    "openai_compatible",
-    "openrouter",
-    "custom",
-    "wavespeed",
-    "ollama",
-    "local_embeddings",
-    "fake",
-  ];
-  async function saveProvider(event: SubmitEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const formElement = event.currentTarget;
-    const form = new FormData(formElement);
-    const name = formText(form, "api_name");
-    const endpoint = formText(form, "endpoint");
-    const credential = formText(form, "credential");
-    const value = {
-      api_name: name,
-      display_name: formText(form, "display_name"),
-      adapter: formText(form, "adapter") as ProviderAdapter,
-      enabled: form.get("enabled") === "on",
-      ...(endpoint === "" ? {} : { endpoint }),
-      ...(credential === "" ? {} : { credential_api_name: credential }),
-    };
-    try {
-      if (
-        providers.some((item) => item.api_name === name) &&
-        !confirmDestructiveAction(
-          `Replace the complete provider connection ${name}?`,
-        )
-      )
-        return;
-      if (providers.some((item) => item.api_name === name))
-        await client.putProvider(name, value, csrf);
-      else await client.createProvider(value, csrf);
-      formElement.reset();
-      await onRefresh();
-      onNotice("success", "The provider connection was saved.");
-    } catch (error) {
-      onNotice("error", errorMessage(error));
-    }
-  }
-  async function saveCredential(event: SubmitEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const formElement = event.currentTarget;
-    const form = new FormData(formElement);
-    const name = formText(form, "api_name");
-    const secretValue = form.get("secret");
-    const secret = typeof secretValue === "string" ? secretValue : "";
-    try {
-      if (
-        credentials.some((item) => item.api_name === name) &&
-        !confirmDestructiveAction(
-          `Replace the stored value for credential ${name}? The prior value will stop serving new attempts.`,
-        )
-      )
-        return;
-      if (credentials.some((item) => item.api_name === name))
-        await client.replaceCredential(name, secret, csrf);
-      else await client.createCredential(name, secret, csrf);
-      formElement.reset();
-      await onRefresh();
-      onNotice(
-        "success",
-        "The encrypted credential was stored. The value is no longer available.",
-      );
-    } catch (error) {
-      onNotice("error", errorMessage(error));
-    }
-  }
-  return (
-    <div className="administration-page">
-      <PageHeading
-        description="Connections and encrypted credentials are global. Credential values are write-only."
-        eyebrow="Global catalog"
-        title="Providers and credentials"
-      />
-      <div className="administration-sections">
-        <Panel>
-          <PanelHeader
-            description="Use an existing API name to replace the complete current connection."
-            title="Provider connection"
-          />
-          <form
-            className="administration-form"
-            onSubmit={(event) => void saveProvider(event)}
-          >
-            <label>
-              API name
-              <input name="api_name" required />
-            </label>
-            <label>
-              Display name
-              <input name="display_name" required />
-            </label>
-            <label>
-              Adapter
-              <select name="adapter">
-                {adapters.map((item) => (
-                  <option key={item}>{item}</option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Endpoint
-              <input
-                name="endpoint"
-                placeholder="Optional exact endpoint"
-                type="url"
-              />
-            </label>
-            <label>
-              Credential
-              <select name="credential">
-                <option value="">No credential</option>
-                {credentials.map((item) => (
-                  <option key={item.api_name} value={item.api_name}>
-                    {item.api_name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="checkbox-field">
-              <input defaultChecked name="enabled" type="checkbox" /> Enabled
-            </label>
-            <Button type="submit">Save provider</Button>
-          </form>
-        </Panel>
-        <Panel>
-          <PanelHeader
-            description="Replacement changes the fingerprint and update time."
-            title="Encrypted credentials"
-          />
-          <form
-            className="administration-form"
-            onSubmit={(event) => void saveCredential(event)}
-          >
-            <label>
-              API name
-              <input name="api_name" required />
-            </label>
-            <label>
-              Secret
-              <input
-                autoComplete="new-password"
-                name="secret"
-                required
-                type="password"
-              />
-            </label>
-            <Button type="submit">Store or replace</Button>
-          </form>
-          <ul className="record-list">
-            {credentials.length === 0 ? (
-              <li>No credential metadata</li>
-            ) : (
-              credentials.map((item) => (
-                <li key={item.api_name}>
-                  <span>
-                    <strong>{item.api_name}</strong>
-                    <small>
-                      Fingerprint {item.fingerprint} · Updated{" "}
-                      {displayTime(item.updated_at)}
-                    </small>
-                  </span>
-                  <Button
-                    onClick={() => {
-                      if (
-                        !confirmDestructiveAction(
-                          `Delete credential ${item.api_name}? New provider attempts cannot use it.`,
-                        )
-                      )
-                        return;
-                      void client
-                        .deleteCredential(item.api_name, csrf)
-                        .then(onRefresh)
-                        .catch((error: unknown) => {
-                          onNotice("error", errorMessage(error));
-                        });
-                    }}
-                    variant="quiet"
-                  >
-                    Delete
-                  </Button>
-                </li>
-              ))
-            )}
-          </ul>
-        </Panel>
-      </div>
-      <Panel>
-        <PanelHeader title="Current provider connections" />
-        <div className="administration-table-region">
-          <table>
-            <thead>
-              <tr>
-                <th>Connection</th>
-                <th>Adapter</th>
-                <th>Endpoint</th>
-                <th>Credential</th>
-                <th>State</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {providers.length === 0 ? (
-                <EmptyTable columns={6} text="No providers" />
-              ) : (
-                providers.map((item) => (
-                  <tr key={item.api_name}>
-                    <th scope="row">
-                      <strong>{item.display_name}</strong>
-                      <small>{item.api_name}</small>
-                    </th>
-                    <td>{item.adapter}</td>
-                    <td>{item.endpoint ?? "Adapter default"}</td>
-                    <td>{item.credential_api_name ?? "None"}</td>
-                    <td>
-                      <StatusPill tone={item.enabled ? "green" : "red"}>
-                        {item.enabled ? "enabled" : "disabled"}
-                      </StatusPill>
-                    </td>
-                    <td>
-                      <Button
-                        onClick={() => {
-                          if (
-                            !confirmDestructiveAction(
-                              `Delete provider connection ${item.api_name}?`,
-                            )
-                          )
-                            return;
-                          void client
-                            .deleteProvider(item.api_name, csrf)
-                            .then(onRefresh)
-                            .catch((error: unknown) => {
-                              onNotice("error", errorMessage(error));
-                            });
-                        }}
-                        variant="quiet"
-                      >
-                        Delete
-                      </Button>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </Panel>
-    </div>
-  );
-}
-
-function manualPrice(form: FormData): Price | null {
-  return parseManualPrice(
-    formText(form, "currency"),
-    formText(form, "unit_prices"),
-  );
-}
-
-function modelConstraints(form: FormData) {
-  const dimensionValues = commaItems(formText(form, "dimensions"));
-  const dimensions = dimensionValues.map(Number);
-  const maximumImages = formText(form, "max_input_images");
-  const maximumImageBytes = formText(form, "max_input_image_bytes");
-  const maximumDuration = formText(form, "max_output_duration_seconds");
-  if (
-    dimensions.length === 0 &&
-    maximumImages === "" &&
-    maximumImageBytes === "" &&
-    maximumDuration === ""
-  )
-    return undefined;
-  if (
-    dimensions.length > 64 ||
-    new Set(dimensions).size !== dimensions.length ||
-    dimensions.some(
-      (value, index) =>
-        !/^\d+$/.test(dimensionValues[index] ?? "") ||
-        !Number.isInteger(value) ||
-        value < 1 ||
-        value > 65_536,
-    )
-  )
-    throw new Error(
-      "Use 1 through 64 unique embedding dimensions from 1 through 65,536.",
-    );
-  return {
-    ...(dimensions.length === 0 ? {} : { embedding_dimensions: dimensions }),
-    ...(maximumImages === ""
-      ? {}
-      : { max_input_images: Number(maximumImages) }),
-    ...(maximumImageBytes === ""
-      ? {}
-      : { max_input_image_bytes: Number(maximumImageBytes) }),
-    ...(maximumDuration === ""
-      ? {}
-      : { max_output_duration_seconds: Number(maximumDuration) }),
-  };
-}
-
-function catalogApiName(value: string, prefix: string): string {
-  const fragment = value
-    .toLowerCase()
-    .replaceAll(/[^a-z0-9-]/g, "-")
-    .replaceAll(/^-+|-+$/g, "");
-  const combined = `${prefix}-${fragment === "" ? "catalog-entry" : fragment}`;
-  return combined.slice(0, 63).replaceAll(/-+$/g, "");
-}
-
-function ConstraintFields() {
-  return (
-    <>
-      <label>
-        Embedding dimensions
-        <input name="dimensions" placeholder="1536, 3072" />
-      </label>
-      <label>
-        Maximum input images
-        <input max={8} min={1} name="max_input_images" type="number" />
-      </label>
-      <label>
-        Maximum input image bytes
-        <input
-          max={20_971_520}
-          min={1}
-          name="max_input_image_bytes"
-          type="number"
-        />
-      </label>
-      <label>
-        Maximum output duration in seconds
-        <input
-          max={86_400}
-          min={1}
-          name="max_output_duration_seconds"
-          type="number"
-        />
-      </label>
-    </>
-  );
-}
-
-function CanonicalModelEditor({
-  onSubmit,
-}: {
-  readonly onSubmit: (event: SubmitEvent<HTMLFormElement>) => void;
-}) {
-  return (
-    <Panel>
-      <PanelHeader
-        description="Comma-separate modality, capability, and embedding-dimension values."
-        title="Canonical model"
-      />
-      <form className="administration-form" onSubmit={onSubmit}>
-        <label>
-          API name
-          <input name="api_name" required />
-        </label>
-        <label>
-          Display name
-          <input name="display_name" required />
-        </label>
-        <label>
-          Input modalities
-          <input defaultValue="text" name="inputs" required />
-        </label>
-        <label>
-          Output modalities
-          <input defaultValue="text" name="outputs" required />
-        </label>
-        <label>
-          Capabilities
-          <input name="capabilities" placeholder="streaming, reasoning" />
-        </label>
-        <ConstraintFields />
-        <label>
-          Price source
-          <input name="price_source" placeholder="Optional" />
-        </label>
-        <label>
-          Source lookup key
-          <input name="price_lookup_key" placeholder="Required with source" />
-        </label>
-        <PriceFields />
-        <Button type="submit">Save canonical model</Button>
-      </form>
-    </Panel>
-  );
-}
-
-function ProviderModelEditor({
-  models,
-  onSubmit,
-  providers,
-}: {
-  readonly models: readonly Model[];
-  readonly onSubmit: (event: SubmitEvent<HTMLFormElement>) => void;
-  readonly providers: readonly Provider[];
-}) {
-  return (
-    <Panel>
-      <PanelHeader
-        description="Optional capability fields narrow the canonical model."
-        title="Provider-model mapping"
-      />
-      <form className="administration-form" onSubmit={onSubmit}>
-        <label>
-          API name
-          <input name="api_name" required />
-        </label>
-        <label>
-          Provider
-          <select name="provider" required>
-            <option value="">Select provider</option>
-            {providers.map((item) => (
-              <option key={item.api_name} value={item.api_name}>
-                {item.display_name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Canonical model
-          <select name="model" required>
-            <option value="">Select model</option>
-            {models.map((item) => (
-              <option key={item.api_name} value={item.api_name}>
-                {item.display_name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Provider wire model
-          <input name="wire_model" required />
-        </label>
-        <label>
-          Input override
-          <input name="inputs" />
-        </label>
-        <label>
-          Output override
-          <input name="outputs" />
-        </label>
-        <label>
-          Capability override
-          <input name="capabilities" />
-        </label>
-        <label>
-          Reasoning mappings
-          <input name="reasoning" placeholder="none=disabled, high=high" />
-        </label>
-        <ConstraintFields />
-        <label>
-          Price source
-          <input name="price_source" placeholder="Optional" />
-        </label>
-        <label>
-          Source lookup key
-          <input name="price_lookup_key" placeholder="Required with source" />
-        </label>
-        <label className="checkbox-field">
-          <input defaultChecked name="enabled" type="checkbox" /> Enabled
-        </label>
-        <PriceFields />
-        <Button type="submit">Save mapping</Button>
-      </form>
-    </Panel>
-  );
-}
-
-function ProviderModelTable({
-  client,
-  csrf,
-  onNotice,
-  onRefresh,
-  providerModels,
-  setSync,
-  sync,
-}: {
-  readonly client: AdministrationClient;
-  readonly csrf: string;
-  readonly onNotice: (tone: "success" | "error", message: string) => void;
-  readonly onRefresh: () => Promise<void>;
-  readonly providerModels: readonly ProviderModel[];
-  readonly setSync: (value: PriceSyncResult | null) => void;
-  readonly sync: PriceSyncResult | null;
-}) {
-  return (
-    <Panel>
-      <PanelHeader
-        actions={
-          <Button
-            onClick={() => {
-              void client
-                .synchronizePrices(null, csrf)
-                .then((result) => {
-                  setSync(result);
-                  return onRefresh();
-                })
-                .catch((error: unknown) => {
-                  onNotice("error", errorMessage(error));
-                });
-            }}
-          >
-            <Icon name="refresh" size={16} /> Synchronize now
-          </Button>
-        }
-        description="The daily synchronization runs at 02:00 UTC. Missing or failed values keep the last accepted price."
-        title="Provider-model availability and prices"
-      />
-      {sync === null ? null : (
-        <p className="price-synchronization-status" role="status">
-          Last synchronization:{" "}
-          {sync.items
-            .map((item) => `${item.provider_model_api_name} ${item.outcome}`)
-            .join(" · ") || "No selected price rows"}
-        </p>
-      )}
-      <div className="administration-table-region">
-        <table>
-          <thead>
-            <tr>
-              <th>Provider-model</th>
-              <th>Route</th>
-              <th>Capabilities</th>
-              <th>Constraints</th>
-              <th>Reasoning</th>
-              <th>Price</th>
-              <th>Cooldown</th>
-              <th>Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {providerModels.length === 0 ? (
-              <EmptyTable columns={8} text="No provider-model mappings" />
-            ) : (
-              providerModels.map((item) => (
-                <tr key={item.api_name}>
-                  <th scope="row">{item.api_name}</th>
-                  <td>
-                    {item.provider_api_name} / {item.provider_model_name}
-                  </td>
-                  <td>
-                    {[
-                      ...item.input_modalities,
-                      ...item.output_modalities,
-                      ...item.capabilities,
-                    ].join(", ")}
-                  </td>
-                  <td>
-                    {item.constraints == null
-                      ? "None"
-                      : JSON.stringify(item.constraints)}
-                  </td>
-                  <td>
-                    {item.reasoning_mappings
-                      .map(
-                        (mapping) =>
-                          `${mapping.level}=${mapping.provider_value}`,
-                      )
-                      .join(", ") || "None"}
-                  </td>
-                  <td>
-                    {item.effective_price == null
-                      ? "Unavailable"
-                      : `${item.effective_price.currency} · ${item.effective_price.unit_prices.map((price) => `${price.unit} ${price.amount}`).join(", ")}`}
-                  </td>
-                  <td>
-                    {item.cooldown == null
-                      ? "Ready"
-                      : `${item.cooldown.reason} until ${displayTime(item.cooldown.until)}`}
-                  </td>
-                  <td>
-                    <Button
-                      onClick={() => {
-                        if (
-                          !confirmDestructiveAction(
-                            `Delete provider-model mapping ${item.api_name}?`,
-                          )
-                        )
-                          return;
-                        void client
-                          .deleteProviderModel(item.api_name, csrf)
-                          .then(onRefresh)
-                          .catch((error: unknown) => {
-                            onNotice("error", errorMessage(error));
-                          });
-                      }}
-                      variant="quiet"
-                    >
-                      Delete
-                    </Button>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-    </Panel>
-  );
-}
-
-function CatalogImportPanel({
-  client,
-  csrf,
-  onNotice,
-  onRefresh,
-  preview,
-  providers,
-  setPreview,
-}: {
-  readonly client: AdministrationClient;
-  readonly csrf: string;
-  readonly onNotice: (tone: "success" | "error", message: string) => void;
-  readonly onRefresh: () => Promise<void>;
-  readonly preview: ModelImportPreview | null;
-  readonly providers: readonly Provider[];
-  readonly setPreview: (value: ModelImportPreview | null) => void;
-}) {
-  const previewLoadGuard = useRef(createScopeLoadGuard());
-  useEffect(
-    () => () => {
-      previewLoadGuard.current.invalidate();
-    },
-    [],
-  );
-  function previewCatalog(event: SubmitEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const generation = previewLoadGuard.current.begin();
-    void client
-      .previewImport(
-        formText(new FormData(event.currentTarget), "provider"),
-        csrf,
-      )
-      .then((value) => {
-        if (previewLoadGuard.current.isCurrent(generation)) setPreview(value);
-      })
-      .catch((error: unknown) => {
-        if (previewLoadGuard.current.isCurrent(generation))
-          onNotice("error", errorMessage(error));
-      });
-  }
-  return (
-    <Panel>
-      <PanelHeader
-        description="Preview makes no change. Select entries before import."
-        title="Catalog import"
-      />
-      <form
-        className="administration-form catalog-preview-request-form"
-        onSubmit={(event) => {
-          previewCatalog(event);
-        }}
-      >
-        <label>
-          Provider
-          <select name="provider" required>
-            <option value="">Select provider</option>
-            {providers.map((item) => (
-              <option key={item.api_name} value={item.api_name}>
-                {item.display_name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <Button type="submit">Preview catalog</Button>
-      </form>
-      {preview === null ? null : (
-        <form
-          className="catalog-preview"
-          onSubmit={(event) => {
-            event.preventDefault();
-            const selectedKeys = new Set(
-              new FormData(event.currentTarget).getAll("candidate"),
-            );
-            if (selectedKeys.size === 0) {
-              onNotice("error", "Select at least one catalog entry to import.");
-              return;
-            }
-            const selected = preview.candidates.flatMap((item) =>
-              selectedKeys.has(item.catalog_key)
-                ? [
-                    {
-                      catalog_key: item.catalog_key,
-                      model_api_name: catalogApiName(item.catalog_key, "model"),
-                      provider_model_api_name: catalogApiName(
-                        item.catalog_key,
-                        preview.provider_api_name,
-                      ),
-                    },
-                  ]
-                : [],
-            );
-            if (
-              new Set(selected.map((item) => item.model_api_name)).size !==
-                selected.length ||
-              new Set(selected.map((item) => item.provider_model_api_name))
-                .size !== selected.length
-            ) {
-              onNotice(
-                "error",
-                "The selected catalog entries produce duplicate API names. Import a smaller selection.",
-              );
-              return;
-            }
-            void client
-              .importModels(preview.provider_api_name, selected, csrf)
-              .then(() => {
-                setPreview(null);
-                return onRefresh();
-              })
-              .catch((error: unknown) => {
-                onNotice("error", errorMessage(error));
-              });
-          }}
-        >
-          <ul>
-            {preview.candidates.length === 0 ? (
-              <li>No catalog entries</li>
-            ) : (
-              preview.candidates.map((item) => (
-                <li key={item.catalog_key}>
-                  <label>
-                    <input
-                      aria-label={`Import ${item.display_name}`}
-                      name="candidate"
-                      type="checkbox"
-                      value={item.catalog_key}
-                    />
-                    <span>
-                      <strong>{item.display_name}</strong>
-                      <small>
-                        {item.provider_model_name} ·{" "}
-                        {[...item.output_modalities, ...item.capabilities].join(
-                          ", ",
-                        )}
-                      </small>
-                    </span>
-                  </label>
-                </li>
-              ))
-            )}
-          </ul>
-          <Button disabled={preview.candidates.length === 0} type="submit">
-            Import selected entries
-          </Button>
-        </form>
-      )}
-    </Panel>
-  );
-}
-
-function CanonicalModelTable({
-  client,
-  csrf,
-  models,
-  onNotice,
-  onRefresh,
-}: {
-  readonly client: AdministrationClient;
-  readonly csrf: string;
-  readonly models: readonly Model[];
-  readonly onNotice: (tone: "success" | "error", message: string) => void;
-  readonly onRefresh: () => Promise<void>;
-}) {
-  return (
-    <Panel>
-      <PanelHeader title="Canonical models" />
-      <div className="administration-table-region">
-        <table>
-          <thead>
-            <tr>
-              <th>Model</th>
-              <th>Inputs</th>
-              <th>Outputs</th>
-              <th>Capabilities</th>
-              <th>Constraints</th>
-              <th>Price</th>
-              <th>Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {models.length === 0 ? (
-              <EmptyTable columns={7} text="No canonical models" />
-            ) : (
-              models.map((item) => (
-                <tr key={item.api_name}>
-                  <th scope="row">
-                    <strong>{item.display_name}</strong>
-                    <small>{item.api_name}</small>
-                  </th>
-                  <td>{item.input_modalities.join(", ")}</td>
-                  <td>{item.output_modalities.join(", ")}</td>
-                  <td>{item.capabilities.join(", ") || "None"}</td>
-                  <td>
-                    {item.constraints == null
-                      ? "None"
-                      : JSON.stringify(item.constraints)}
-                  </td>
-                  <td>
-                    {item.current_price == null
-                      ? "Unavailable"
-                      : `${item.current_price.currency} · ${String(item.current_price.unit_prices.length)} units`}
-                  </td>
-                  <td>
-                    <Button
-                      onClick={() => {
-                        if (
-                          !confirmDestructiveAction(
-                            `Delete canonical model ${item.api_name}?`,
-                          )
-                        )
-                          return;
-                        void client
-                          .deleteModel(item.api_name, csrf)
-                          .then(onRefresh)
-                          .catch((error: unknown) => {
-                            onNotice("error", errorMessage(error));
-                          });
-                      }}
-                      variant="quiet"
-                    >
-                      Delete
-                    </Button>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-    </Panel>
-  );
-}
-
-function ModelsPage({
-  client,
-  csrf,
-  models,
-  onNotice,
-  onRefresh,
-  providerModels,
-  providers,
-}: {
-  readonly client: AdministrationClient;
-  readonly csrf: string;
-  readonly models: readonly Model[];
-  readonly onNotice: (tone: "success" | "error", message: string) => void;
-  readonly onRefresh: () => Promise<void>;
-  readonly providerModels: readonly ProviderModel[];
-  readonly providers: readonly Provider[];
-}) {
-  const [preview, setPreview] = useState<ModelImportPreview | null>(null);
-  const [sync, setSync] = useState<PriceSyncResult | null>(null);
-  async function saveModel(event: SubmitEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const formElement = event.currentTarget;
-    const form = new FormData(formElement);
-    const name = formText(form, "api_name");
-    let constraints: ReturnType<typeof modelConstraints>;
-    let price: Price | null;
-    try {
-      constraints = modelConstraints(form);
-      price = manualPrice(form);
-    } catch (error) {
-      onNotice(
-        "error",
-        error instanceof Error ? error.message : "The manual price is invalid.",
-      );
-      return;
-    }
-    const value: ModelWrite = {
-      api_name: name,
-      display_name: formText(form, "display_name"),
-      input_modalities: words(formText(form, "inputs")) as readonly (
-        "text" | "image"
-      )[],
-      output_modalities: words(
-        formText(form, "outputs"),
-      ) as readonly OutputModality[],
-      capabilities: words(
-        formText(form, "capabilities"),
-      ) as readonly ModelCapability[],
-      ...(constraints === undefined ? {} : { constraints }),
-      ...(formText(form, "price_source") === ""
-        ? {}
-        : {
-            price_source: formText(form, "price_source"),
-            price_lookup_key: formText(form, "price_lookup_key"),
-          }),
-      manual_price: price,
-    };
-    try {
-      if (
-        models.some((item) => item.api_name === name) &&
-        !confirmDestructiveAction(`Replace the complete model ${name}?`)
-      )
-        return;
-      if (models.some((item) => item.api_name === name))
-        await client.putModel(name, value, csrf);
-      else await client.createModel(value, csrf);
-      formElement.reset();
-      await onRefresh();
-      onNotice("success", "The canonical model was saved.");
-    } catch (error) {
-      onNotice("error", errorMessage(error));
-    }
-  }
-  async function saveMapping(event: SubmitEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const formElement = event.currentTarget;
-    const form = new FormData(formElement);
-    const name = formText(form, "api_name");
-    let constraints: ReturnType<typeof modelConstraints>;
-    let price: Price | null;
-    try {
-      constraints = modelConstraints(form);
-      price = manualPrice(form);
-    } catch (error) {
-      onNotice(
-        "error",
-        error instanceof Error ? error.message : "The manual price is invalid.",
-      );
-      return;
-    }
-    const reasoningLevels = new Set(["none", "low", "medium", "high"]);
-    const reasoning = words(formText(form, "reasoning")).map((item) => {
-      const separator = item.indexOf("=");
-      const level = separator < 0 ? item : item.slice(0, separator).trim();
-      const providerValue =
-        separator < 0 ? item : item.slice(separator + 1).trim();
-      return {
-        level: level as "none",
-        provider_value: providerValue,
-      };
-    });
-    if (
-      reasoning.some(
-        (item) =>
-          !reasoningLevels.has(item.level) || item.provider_value === "",
-      )
-    ) {
-      onNotice(
-        "error",
-        "Use reasoning mappings such as none=disabled or high=high.",
-      );
-      return;
-    }
-    const value: ProviderModelWrite = {
-      api_name: name,
-      provider_api_name: formText(form, "provider"),
-      model_api_name: formText(form, "model"),
-      provider_model_name: formText(form, "wire_model"),
-      enabled: form.get("enabled") === "on",
-      ...(formText(form, "inputs") === ""
-        ? {}
-        : {
-            input_modalities: words(formText(form, "inputs")) as readonly (
-              "text" | "image"
-            )[],
-          }),
-      ...(formText(form, "outputs") === ""
-        ? {}
-        : {
-            output_modalities: words(
-              formText(form, "outputs"),
-            ) as readonly OutputModality[],
-          }),
-      ...(formText(form, "capabilities") === ""
-        ? {}
-        : {
-            capabilities: words(
-              formText(form, "capabilities"),
-            ) as readonly ModelCapability[],
-          }),
-      ...(reasoning.length === 0 ? {} : { reasoning_mappings: reasoning }),
-      ...(constraints === undefined ? {} : { constraints }),
-      ...(formText(form, "price_source") === ""
-        ? {}
-        : {
-            price_source: formText(form, "price_source"),
-            price_lookup_key: formText(form, "price_lookup_key"),
-          }),
-      manual_price: price,
-    };
-    try {
-      if (
-        providerModels.some((item) => item.api_name === name) &&
-        !confirmDestructiveAction(
-          `Replace the complete provider-model mapping ${name}?`,
-        )
-      )
-        return;
-      if (providerModels.some((item) => item.api_name === name))
-        await client.putProviderModel(name, value, csrf);
-      else await client.createProviderModel(value, csrf);
-      formElement.reset();
-      await onRefresh();
-      onNotice("success", "The provider-model mapping was saved.");
-    } catch (error) {
-      onNotice("error", errorMessage(error));
-    }
-  }
-  return (
-    <div className="administration-page">
-      <PageHeading
-        description="Manage canonical capabilities, provider mappings, fixed-decimal prices, and catalog imports."
-        eyebrow="Global catalog"
-        title="Models and prices"
-      />
-      <div className="administration-sections">
-        <CanonicalModelEditor
-          onSubmit={(event) => {
-            void saveModel(event);
-          }}
-        />
-        <ProviderModelEditor
-          models={models}
-          onSubmit={(event) => {
-            void saveMapping(event);
-          }}
-          providers={providers}
-        />
-      </div>
-      <ProviderModelTable
-        client={client}
-        csrf={csrf}
-        onNotice={onNotice}
-        onRefresh={onRefresh}
-        providerModels={providerModels}
-        setSync={setSync}
-        sync={sync}
-      />
-      <CatalogImportPanel
-        client={client}
-        csrf={csrf}
-        onNotice={onNotice}
-        onRefresh={onRefresh}
-        preview={preview}
-        providers={providers}
-        setPreview={setPreview}
-      />
-      <CanonicalModelTable
-        client={client}
-        csrf={csrf}
-        models={models}
-        onNotice={onNotice}
-        onRefresh={onRefresh}
-      />
-    </div>
-  );
-}
-function PriceFields() {
-  return (
-    <>
-      <label>
-        Manual price currency
-        <input maxLength={3} name="currency" placeholder="USD" />
-      </label>
-      <label>
-        Typed unit amounts
-        <textarea
-          name="unit_prices"
-          placeholder="input_token=0.001, output_token=0.002"
-          rows={3}
-        />
-        <small>
-          Use unit=amount pairs. Supported units: {usageUnits.join(", ")}.
-        </small>
-      </label>
-    </>
-  );
-}
-
-export function AssignmentsPage({
-  assignments,
-  client,
-  csrf,
-  onNotice,
-  onRefresh,
-  providerModels,
-  selectedService,
-}: {
-  readonly assignments: readonly Assignment[];
-  readonly client: AdministrationClient;
-  readonly csrf: string;
-  readonly onNotice: (tone: "success" | "error", message: string) => void;
-  readonly onRefresh: () => Promise<void>;
-  readonly providerModels: readonly ProviderModel[];
-  readonly selectedService: string;
-}) {
-  const [selected, setSelected] = useState<string | null>(null);
-  const directLocalAssignments = new Set(
-    assignments.flatMap((item) =>
-      item.definition_kind !== "implicit" &&
-      item.defined_by_service_api_name === selectedService
-        ? [item.api_name]
-        : [],
-    ),
-  );
-  if (selectedService === "")
-    return (
-      <StatePanel kind="empty" title="Select a service">
-        Select one service to inspect and configure its effective assignments.
-      </StatePanel>
-    );
-  const graphItems: readonly ServiceAssignmentItem[] = assignments.map(
-    (item) => ({
-      id: item.api_name,
-      name: item.api_name,
-      source:
-        item.definition_kind === "implicit"
-          ? {
-              kind: "implicit",
-              label: item.defined_by_service_api_name ?? selectedService,
-            }
-          : item.defined_by_service_api_name === selectedService
-            ? { kind: "direct", label: selectedService }
-            : {
-                kind: "inherited",
-                label: item.defined_by_service_api_name ?? "parent service",
-              },
-      candidates: item.effective_chain.map((candidate) => ({
-        id: candidate.provider_model_api_name,
-        label: candidate.provider_model_api_name,
-      })),
-      ...(item.inherits_assignment_api_name == null
-        ? {}
-        : { inheritsFrom: item.inherits_assignment_api_name }),
-      isDefault: item.api_name === "default",
-      lastUsed:
-        item.last_used_at == null
-          ? null
-          : {
-              label: displayTime(item.last_used_at),
-              dateTime: item.last_used_at,
-            },
-      observedRequirements: item.observed_requirements,
-    }),
-  );
-  async function save(event: SubmitEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const formElement = event.currentTarget;
-    const form = new FormData(formElement);
-    const mode = formText(form, "mode");
-    const reasoning = formText(form, "reasoning");
-    const displayName = formText(form, "display_name");
-    const chain = commaItems(formText(form, "chain"));
-    const inheritedAssignment = formText(form, "inherits");
-    if (mode === "direct" && chain.length === 0) {
-      onNotice(
-        "error",
-        "Enter at least one provider-model in the direct chain.",
-      );
-      return;
-    }
-    if (mode === "direct" && new Set(chain).size !== chain.length) {
-      onNotice(
-        "error",
-        "Enter each provider-model only once in the direct chain.",
-      );
-      return;
-    }
-    if (mode === "inherit" && inheritedAssignment === "") {
-      onNotice("error", "Enter the assignment to inherit.");
-      return;
-    }
-    const value =
-      mode === "inherit"
-        ? {
-            ...(displayName === "" ? {} : { display_name: displayName }),
-            inherits_assignment_api_name: inheritedAssignment,
-            ...(reasoning === ""
-              ? {}
-              : { reasoning_level: reasoning as "none" }),
-          }
-        : {
-            ...(displayName === "" ? {} : { display_name: displayName }),
-            direct_chain: chain.map((name) => ({
-              provider_model_api_name: name,
-            })),
-            ...(reasoning === ""
-              ? {}
-              : { reasoning_level: reasoning as "none" }),
-          };
-    try {
-      const assignmentName = formText(form, "api_name");
-      if (
-        directLocalAssignments.has(assignmentName) &&
-        !confirmDestructiveAction(
-          `Replace the complete local assignment ${assignmentName}?`,
-        )
-      )
-        return;
-      await client.putAssignment(selectedService, assignmentName, value, csrf);
-      formElement.reset();
-      await onRefresh();
-      onNotice("success", "The assignment was saved.");
-    } catch (error) {
-      onNotice("error", errorMessage(error));
-    }
-  }
-  return (
-    <div className="administration-page">
-      <PageHeading
-        description="The nearest service definition replaces the complete inherited fallback chain."
-        eyebrow={selectedService}
-        title="Assignment graph"
-      />
-      <Panel>
-        <PanelHeader
-          description="Use one inherited assignment name or one ordered comma-separated provider-model chain."
-          title="Create or replace a local assignment"
-        />
-        <form
-          className="administration-form"
-          onSubmit={(event) => void save(event)}
-        >
-          <label>
-            Assignment API name
-            <input name="api_name" required />
-          </label>
-          <label>
-            Display name
-            <input name="display_name" />
-          </label>
-          <label>
-            Definition
-            <select name="mode">
-              <option value="direct">Direct chain</option>
-              <option value="inherit">Inherit assignment</option>
-            </select>
-          </label>
-          <label>
-            Ordered direct chain
-            <input
-              list="provider-model-options"
-              name="chain"
-              placeholder="primary, fallback"
-            />
-            <datalist id="provider-model-options">
-              {providerModels.map((item) => (
-                <option key={item.api_name}>{item.api_name}</option>
-              ))}
-            </datalist>
-          </label>
-          <label>
-            Inherited assignment
-            <input name="inherits" placeholder="default" />
-          </label>
-          <label>
-            Reasoning
-            <select name="reasoning">
-              <option value="">Model default</option>
-              <option>none</option>
-              <option>low</option>
-              <option>medium</option>
-              <option>high</option>
-            </select>
-          </label>
-          <Button type="submit">Save assignment</Button>
-        </form>
-      </Panel>
-      <ServiceAssignmentGraph
-        actionsForAssignment={(item) => {
-          const canDelete = directLocalAssignments.has(item.id);
-          if (!canDelete && item.observedRequirements.length === 0) return null;
-          return (
-            <div className="assignment-actions">
-              {canDelete ? (
-                <Button
-                  onClick={() => {
-                    if (
-                      !confirmDestructiveAction(
-                        `Delete the local assignment ${item.id}? The next inherited definition will become effective.`,
-                      )
-                    )
-                      return;
-                    void client
-                      .deleteAssignment(selectedService, item.id, csrf)
-                      .then(onRefresh)
-                      .catch((error: unknown) => {
-                        onNotice("error", errorMessage(error));
-                      });
-                  }}
-                  variant="quiet"
-                >
-                  Delete local definition
-                </Button>
-              ) : null}
-              {item.observedRequirements.map((requirement) => (
-                <Button
-                  key={requirement}
-                  onClick={() => {
-                    if (
-                      !confirmDestructiveAction(
-                        `Remove the observed requirement ${requirement} from ${item.id}?`,
-                      )
-                    )
-                      return;
-                    void client
-                      .removeRequirement(
-                        selectedService,
-                        item.id,
-                        requirement as ObservedRequirement,
-                        csrf,
-                      )
-                      .then(onRefresh)
-                      .catch((error: unknown) => {
-                        onNotice("error", errorMessage(error));
-                      });
-                  }}
-                  variant="quiet"
-                >
-                  Remove {requirement}
-                </Button>
-              ))}
-            </div>
-          );
-        }}
-        aria-label={`${selectedService} assignment configuration`}
-        assignments={graphItems}
-        id="router-assignments"
-        onSelectionChange={setSelected}
-        selectedAssignmentId={selected}
-      />
-    </div>
-  );
-}
-
-interface PlaygroundPageState {
-  readonly inputImages: readonly PlaygroundImage[];
-  readonly serviceKey: string;
-  readonly workspace: string;
-  readonly tags: string;
-  readonly runState: PlaygroundRunState;
-  readonly value: PlaygroundValue;
-}
-
-interface PlaygroundImage extends RuntimeInputImage {
-  readonly id: string;
-  readonly name: string;
-  readonly detail: string;
-  readonly sizeBytes: number;
-}
-
-async function readInputImage(file: File): Promise<PlaygroundImage> {
-  validateInputImageSelection([], [file]);
-  const dataUrl = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.addEventListener("load", () => {
-      if (typeof reader.result === "string") resolve(reader.result);
-      else reject(new Error("The image could not be read."));
-    });
-    reader.addEventListener("error", () => {
-      reject(new Error("The image could not be read."));
-    });
-    reader.readAsDataURL(file);
-  });
-  const marker = dataUrl.indexOf(",");
-  return {
-    id: globalThis.crypto.randomUUID(),
-    name: file.name,
-    detail: `${String(Math.ceil(file.size / 1024))} KB`,
-    sizeBytes: file.size,
-    media_type: file.type as RuntimeInputImage["media_type"],
-    data_base64: dataUrl.slice(marker + 1),
-  };
-}
-
-function PlaygroundView({
-  assignments,
-  onNotice,
-  onRun,
-  playground,
-  providerModels,
-  selectedService,
-  updatePlayground,
-  workspaces,
-}: {
-  readonly assignments: readonly Assignment[];
-  readonly onNotice: (tone: "success" | "error", message: string) => void;
-  readonly onRun: (value: PlaygroundValue) => Promise<void>;
-  readonly playground: PlaygroundPageState;
-  readonly providerModels: readonly ProviderModel[];
-  readonly selectedService: string;
-  readonly updatePlayground: (patch: Partial<PlaygroundPageState>) => void;
-  readonly workspaces: readonly Workspace[];
-}) {
-  const inputImageQueue = useRef(
-    createInputImageSelectionQueue(playground.inputImages, (inputImages) => {
-      updatePlayground({ inputImages });
-    }),
-  );
-  return (
-    <div className="administration-page">
-      <PageHeading
-        description="Calls use the native service API. The key stays only in this page memory."
-        eyebrow={
-          selectedService === "" ? "No service selected" : selectedService
-        }
-        title="Model and media playground"
-      />
-      <Panel>
-        <PanelHeader
-          description="Use a key that belongs to the selected service. The browser does not save it."
-          title="Service call context"
-        />
-        <div className="administration-form">
-          <label>
-            Service API key
-            <input
-              autoComplete="off"
-              onChange={(event) => {
-                updatePlayground({ serviceKey: event.currentTarget.value });
-              }}
-              type="password"
-              value={playground.serviceKey}
-            />
-          </label>
-          <label>
-            Workspace
-            <select
-              onChange={(event) => {
-                updatePlayground({ workspace: event.currentTarget.value });
-              }}
-              value={playground.workspace}
-            >
-              <option value="">Select workspace</option>
-              {workspaces.map((item) => (
-                <option key={item.api_name} value={item.api_name}>
-                  {item.display_name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Tags
-            <input
-              onChange={(event) => {
-                updatePlayground({ tags: event.currentTarget.value });
-              }}
-              placeholder="evaluation, manual"
-              value={playground.tags}
-            />
-          </label>
-        </div>
-      </Panel>
-      <OperationPlayground
-        assignmentOptions={assignments.map((item) => ({
-          id: item.api_name,
-          label: item.display_name,
-          detail:
-            item.effective_chain.length === 0
-              ? "Empty effective chain"
-              : `${String(item.effective_chain.length)} candidates`,
-          disabled: item.effective_chain.length === 0,
-        }))}
-        description="Run model, embedding, image, video, and audio operations through an assignment or one exact provider-model."
-        id="router-playground"
-        inputImages={playground.inputImages}
-        onAddInputImages={(files) => {
-          void inputImageQueue.current
-            .add(files, readInputImage)
-            .catch((error: unknown) => {
-              onNotice(
-                "error",
-                error instanceof Error
-                  ? error.message
-                  : "The image could not be read.",
-              );
-            });
-        }}
-        onRemoveInputImage={(imageId) => {
-          inputImageQueue.current.remove((image) => image.id === imageId);
-        }}
-        onReset={() => {
-          updatePlayground({ runState: { status: "empty" } });
-        }}
-        onRun={(next) => {
-          void onRun(next);
-        }}
-        onValueChange={(value) => {
-          updatePlayground({ value });
-        }}
-        providerModelOptions={providerModels.flatMap((item) =>
-          item.enabled
-            ? [
-                {
-                  id: item.api_name,
-                  label: item.api_name,
-                  detail: item.provider_model_name,
-                },
-              ]
-            : [],
-        )}
-        runState={playground.runState}
-        title="Operation playground"
-        value={playground.value}
-      />
-    </div>
-  );
-}
-
-function PlaygroundPage({
-  assignments,
-  initialKey,
-  onNotice,
-  providerModels,
-  selectedService,
-  workspaces,
-}: {
-  readonly assignments: readonly Assignment[];
-  readonly initialKey: string;
-  readonly onNotice: (tone: "success" | "error", message: string) => void;
-  readonly providerModels: readonly ProviderModel[];
-  readonly selectedService: string;
-  readonly workspaces: readonly Workspace[];
-}) {
-  const [playground, updatePlayground] = useReducer(
-    (state: PlaygroundPageState, patch: Partial<PlaygroundPageState>) => ({
-      ...state,
-      ...patch,
-    }),
-    {
-      inputImages: [],
-      serviceKey: initialKey,
-      workspace: workspaces[0]?.api_name ?? "",
-      tags: "",
-      runState: {
-        status: "empty",
-        message:
-          "Run one operation to see its selected route, latency, usage, cost, and output.",
-      },
-      value: {
-        operation: "model",
-        selection: { kind: "assignment", id: assignments[0]?.api_name ?? "" },
-        input: "",
-        systemPrompt: "",
-        temperature: null,
-        outputLimit: null,
-      },
-    },
-  );
-  const objectUrl = useRef<string | null>(null);
-  useEffect(
-    () => () => {
-      if (objectUrl.current !== null) URL.revokeObjectURL(objectUrl.current);
-    },
-    [],
-  );
-  async function run(next: PlaygroundValue) {
-    if (playground.serviceKey === "" || playground.workspace === "") {
-      updatePlayground({
-        runState: {
-          status: "error",
-          error: {
-            title: "Service access is required",
-            message:
-              "The playground needs one active service key and owned workspace.",
-            correction: "Enter the one-time key and select its workspace.",
-          },
-        },
-      });
-      return;
-    }
-    if (objectUrl.current !== null) {
-      URL.revokeObjectURL(objectUrl.current);
-      objectUrl.current = null;
-    }
-    updatePlayground({
-      runState: {
-        status: "loading",
-        message: "The Router is calling the selected route.",
-      },
-    });
-    const started = performance.now();
-    const selector =
-      next.selection.kind === "assignment"
-        ? { assignment_api_name: next.selection.id }
-        : { provider_model_api_name: next.selection.id };
-    const client = createRuntimeClient(playground.serviceKey);
-    try {
-      if (next.operation === "model") {
-        const result = await client.model(
-          playground.workspace,
-          selector,
-          next.input,
-          next.systemPrompt,
-          playground.inputImages,
-          next.temperature,
-          next.outputLimit,
-          words(playground.tags),
-        );
-        const output =
-          result.output_type === "structured_json"
-            ? {
-                kind: "json" as const,
-                content: result.structured_output_json ?? "",
-              }
-            : {
-                kind: "text" as const,
-                content:
-                  result.content
-                    ?.map((item) =>
-                      item.type === "text"
-                        ? item.text
-                        : `${item.name}(${item.arguments_json})`,
-                    )
-                    .join("\n") ?? "",
-              };
-        updatePlayground({
-          runState: {
-            status: "success",
-            result: {
-              output,
-              selectedRoute: {
-                label: result.provider_model_api_name,
-                detail:
-                  next.selection.kind === "assignment"
-                    ? `Selected by ${next.selection.id}`
-                    : "Exact provider-model",
-              },
-              latencyMs: Math.round(performance.now() - started),
-              usage: result.usage.units.map((item) => ({
-                id: item.unit,
-                label: item.unit,
-                value: item.quantity,
-              })),
-              cost: {
-                amount: result.usage.cost,
-                currency: result.usage.currency,
-              },
-            },
-          },
-        });
-        return;
-      }
-      if (next.operation === "embedding") {
-        const result = await client.embedding(
-          playground.workspace,
-          selector,
-          next.input.split("\n").filter(Boolean),
-          words(playground.tags),
-        );
-        updatePlayground({
-          runState: {
-            status: "success",
-            result: {
-              output: {
-                kind: "embedding",
-                vectorCount: result.embeddings.length,
-                dimensions: result.embeddings[0]?.values.length ?? 0,
-                ...(result.embeddings[0] === undefined
-                  ? {}
-                  : { preview: result.embeddings[0].values.slice(0, 8) }),
-              },
-              selectedRoute: { label: result.provider_model_api_name },
-              latencyMs: Math.round(performance.now() - started),
-              usage: result.usage.units.map((item) => ({
-                id: item.unit,
-                label: item.unit,
-                value: item.quantity,
-              })),
-              cost: {
-                amount: result.usage.cost,
-                currency: result.usage.currency,
-              },
-            },
-          },
-        });
-        return;
-      }
-      const job = await client.createMedia(
-        playground.workspace,
-        selector,
-        next.operation,
-        next.input,
-        next.operation === "audio" ? [] : playground.inputImages,
-        words(playground.tags),
-      );
-      const current = await waitForMediaJob(client, job);
-      if (current.state !== "succeeded")
-        throw new AdministrationApiError(
-          502,
-          current.error?.code ?? "upstream_failed",
-          current.error?.message ?? "The media job did not succeed.",
-          current.error?.details ?? undefined,
-        );
-      const blob = await client.mediaContent(job.id);
-      objectUrl.current = URL.createObjectURL(blob);
-      updatePlayground({
-        runState: {
-          status: "success",
-          result: {
-            output: {
-              kind: next.operation,
-              objectUrl: objectUrl.current,
-              label: `${next.operation} result`,
-              mediaType: blob.type,
-            },
-            selectedRoute: {
-              label: current.provider_model_api_name,
-              detail: `Media job ${current.id}`,
-            },
-            latencyMs: Math.round(performance.now() - started),
-            usage: [],
-            cost: null,
-          },
-        },
-      });
-    } catch (error) {
-      updatePlayground({
-        runState: { status: "error", error: correction(error) },
-      });
-      onNotice("error", errorMessage(error));
-    }
-  }
-  return (
-    <PlaygroundView
-      assignments={assignments}
-      onNotice={onNotice}
-      onRun={run}
-      playground={playground}
-      providerModels={providerModels}
-      selectedService={selectedService}
-      updatePlayground={updatePlayground}
-      workspaces={workspaces}
-    />
   );
 }
 
@@ -2878,7 +1070,8 @@ interface MainState {
   readonly data: AppData | null;
   readonly failure: string | null;
   readonly notice: Notice | null;
-  readonly playgroundKey: string;
+  readonly assignmentDirty: boolean;
+  readonly pendingService: string | null;
   readonly section: Section;
   readonly selectedService: string;
   readonly sessionState: {
@@ -2887,7 +1080,6 @@ interface MainState {
     readonly session?: AdministratorSession;
     readonly message?: string;
   };
-  readonly workspaces: readonly Workspace[];
 }
 
 function initialMainState(): MainState {
@@ -2896,11 +1088,11 @@ function initialMainState(): MainState {
     data: null,
     failure: null,
     notice: null,
-    playgroundKey: "",
+    assignmentDirty: false,
+    pendingService: null,
     section: currentSection(),
     selectedService: selectedServiceFromLocation(),
     sessionState: { status: "loading" },
-    workspaces: [],
   };
 }
 
@@ -2915,12 +1107,11 @@ function AuthenticatedAdministration({
   notice,
   notify,
   onDismissNotice,
-  playgroundKey,
+  onAssignmentDirtyChange,
   section,
   selectService,
   selectedService,
   session,
-  workspaces,
 }: {
   readonly assignments: readonly Assignment[];
   readonly client: AdministrationClient;
@@ -2932,12 +1123,11 @@ function AuthenticatedAdministration({
   readonly notice: Notice | null;
   readonly notify: (tone: "success" | "error", message: string) => void;
   readonly onDismissNotice: () => void;
-  readonly playgroundKey: string;
+  readonly onAssignmentDirtyChange: (dirty: boolean) => void;
   readonly section: Section;
   readonly selectService: (value: string) => void;
   readonly selectedService: string;
   readonly session: AdministratorSession;
-  readonly workspaces: readonly Workspace[];
 }) {
   const sidebar = (
     <ApplicationSidebar
@@ -3076,52 +1266,31 @@ function AuthenticatedAdministration({
         />
       </div>
     );
-  if (data !== null && section === "providers")
+  if (data !== null && section === "configuration")
     content = (
-      <ProvidersPage
-        client={client}
-        credentials={data.credentials}
-        csrf={session.csrf_token}
-        onNotice={notify}
-        onRefresh={loadGlobal}
-        providers={data.providers}
-      />
-    );
-  if (data !== null && section === "models")
-    content = (
-      <ModelsPage
-        client={client}
-        csrf={session.csrf_token}
-        models={data.models}
-        onNotice={notify}
-        onRefresh={loadGlobal}
-        providerModels={data.providerModels}
-        providers={data.providers}
-      />
-    );
-  if (data !== null && section === "assignments")
-    content = (
-      <AssignmentsPage
-        assignments={assignments}
-        client={client}
-        csrf={session.csrf_token}
-        onNotice={notify}
-        onRefresh={loadScope}
-        providerModels={data.providerModels}
-        selectedService={selectedService}
-      />
-    );
-  if (data !== null && section === "playground")
-    content = (
-      <PlaygroundPage
-        assignments={assignments}
-        initialKey={playgroundKey}
-        key={`${selectedService}:${assignments.map((item) => item.api_name).join(",")}:${workspaces.map((item) => item.api_name).join(",")}`}
-        onNotice={notify}
-        providerModels={data.providerModels}
-        selectedService={selectedService}
-        workspaces={workspaces}
-      />
+      <div className="administration-page">
+        <PageHeading
+          description="Manage global providers, canonical models, provider-model mappings, prices, credentials, and the selected service assignments in one graph."
+          eyebrow="Global catalog and selected service context"
+          title="LLM configuration"
+        />
+        <ConfigurationGraph
+          assignments={assignments}
+          client={client}
+          credentials={data.credentials}
+          csrf={session.csrf_token}
+          globalPhase={data.configurationPhase}
+          key={selectedService}
+          models={data.models}
+          onAssignmentDirtyChange={onAssignmentDirtyChange}
+          onNotice={notify}
+          onRefreshAssignments={loadScope}
+          onRefreshGlobal={loadGlobal}
+          providerModels={data.providerModels}
+          providers={data.providers}
+          selectedService={selectedService}
+        />
+      </div>
     );
   if (data !== null && section === "logs")
     content = <LogsPage client={client} onNotice={notify} />;
@@ -3183,6 +1352,7 @@ function AuthenticatedAdministration({
   );
 }
 
+// react-doctor-disable-next-line react-doctor/no-giant-component -- This session coordinator owns authentication, fenced global and selected-service loads, history, and the dirty-service transition as one boundary.
 export function App({ client = defaultAdministrationClient }: AppProps) {
   const [main, update] = useReducer(
     (state: MainState, patch: Partial<MainState>) => ({ ...state, ...patch }),
@@ -3191,14 +1361,14 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
   );
   const {
     assignments,
+    assignmentDirty,
     data,
     failure,
     notice,
-    playgroundKey,
+    pendingService,
     section,
     selectedService,
     sessionState,
-    workspaces,
   } = main;
   const notify = useCallback(
     (nextTone: "success" | "error", message: string) => {
@@ -3209,14 +1379,21 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
   const [scopeLoadGuard] = useState(createScopeLoadGuard);
   const [globalLoadGuard] = useState(createScopeLoadGuard);
   const selectedServiceRef = useRef(selectedService);
+  const replaceLegacyConfigurationPath = useCallback(() => {
+    if (!legacyConfigurationPaths.has(globalThis.location.pathname.slice(1)))
+      return;
+    globalThis.history.replaceState(
+      {},
+      "",
+      `/configuration${globalThis.location.search}`,
+    );
+  }, []);
   const expireAdministratorSession = useCallback(() => {
     expireAdministratorSessionLoads(globalLoadGuard, scopeLoadGuard, () => {
       update({
         assignments: [],
         data: null,
-        playgroundKey: "",
         sessionState: { status: "expired" },
-        workspaces: [],
       });
     });
   }, [globalLoadGuard, scopeLoadGuard]);
@@ -3274,6 +1451,17 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
             credentials: credentials.items,
             health,
             retentionDays: retention.duration_days,
+            configurationPhase: [
+              providers,
+              models,
+              providerModels,
+              credentials,
+            ].some(
+              (page) =>
+                page.page.has_more || page.retrieval?.complete === false,
+            )
+              ? "partial"
+              : "ready",
           },
         });
         const currentService = selectedServiceRef.current;
@@ -3282,7 +1470,7 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
           !services.items.some((item) => item.api_name === currentService)
         ) {
           selectedServiceRef.current = "";
-          update({ playgroundKey: "", selectedService: "" });
+          update({ selectedService: "" });
           const url = new URL(globalThis.location.href);
           url.searchParams.delete("service");
           globalThis.history.replaceState(
@@ -3301,24 +1489,19 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
   const loadScope = useCallback((): Promise<void> => {
     const generation = scopeLoadGuard.begin();
     if (selectedService === "") {
-      update({ assignments: [], workspaces: [] });
+      update({ assignments: [] });
       return Promise.resolve();
     }
-    update({ assignments: [], workspaces: [] });
-    return Promise.all([
-      authenticatedClient.assignments(selectedService),
-      authenticatedClient.workspaces(selectedService),
-    ])
-      .then(([assignmentPage, workspacePage]) => {
+    update({ assignments: [] });
+    return authenticatedClient
+      .assignments(selectedService)
+      .then((assignmentPage) => {
         if (!scopeLoadGuard.isCurrent(generation)) return;
-        update({
-          assignments: assignmentPage.items,
-          workspaces: workspacePage.items,
-        });
+        update({ assignments: assignmentPage.items });
       })
       .catch((error: unknown) => {
         if (!scopeLoadGuard.isCurrent(generation)) return;
-        update({ assignments: [], workspaces: [] });
+        update({ assignments: [] });
         notify("error", errorMessage(error));
       });
   }, [authenticatedClient, notify, scopeLoadGuard, selectedService]);
@@ -3353,35 +1536,43 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
     return scheduleSessionExpiry(sessionExpiresAt, expireAdministratorSession);
   }, [expireAdministratorSession, sessionExpiresAt, sessionState.status]);
   useEffect(() => {
+    replaceLegacyConfigurationPath();
     const restoreLocation = () => {
+      replaceLegacyConfigurationPath();
       scopeLoadGuard.invalidate();
       selectedServiceRef.current = selectedServiceFromLocation();
       update({
         assignments: [],
-        playgroundKey: "",
         section: currentSection(),
         selectedService: selectedServiceFromLocation(),
-        workspaces: [],
       });
     };
     globalThis.addEventListener("popstate", restoreLocation);
     return () => {
       globalThis.removeEventListener("popstate", restoreLocation);
     };
-  }, [scopeLoadGuard]);
-  function selectService(value: string) {
+  }, [replaceLegacyConfigurationPath, scopeLoadGuard]);
+  function applyServiceSelection(value: string) {
     scopeLoadGuard.invalidate();
     selectedServiceRef.current = value;
     update({
       assignments: [],
-      playgroundKey: "",
+      assignmentDirty: false,
+      pendingService: null,
       selectedService: value,
-      workspaces: [],
     });
     const url = new URL(globalThis.location.href);
     if (value === "") url.searchParams.delete("service");
     else url.searchParams.set("service", value);
     globalThis.history.replaceState({}, "", `${url.pathname}${url.search}`);
+  }
+  function selectService(value: string) {
+    if (value === selectedService) return;
+    if (assignmentDirty) {
+      update({ pendingService: value });
+      return;
+    }
+    applyServiceSelection(value);
   }
   function navigate(id: string) {
     const next = routes.find((item) => item.id === id)?.id;
@@ -3453,26 +1644,43 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
     );
   const session = sessionState.session;
   if (session === undefined) return null;
+  const discardImpact = `discard assignment changes for ${selectedService || "the selected service"}`;
   return (
-    <AuthenticatedAdministration
-      assignments={assignments}
-      client={authenticatedClient}
-      data={data}
-      failure={failure}
-      loadGlobal={loadGlobal}
-      loadScope={loadScope}
-      navigate={navigate}
-      notice={notice}
-      notify={notify}
-      onDismissNotice={() => {
-        update({ notice: null });
-      }}
-      playgroundKey={playgroundKey}
-      section={section}
-      selectService={selectService}
-      selectedService={selectedService}
-      session={session}
-      workspaces={workspaces}
-    />
+    <>
+      <AuthenticatedAdministration
+        assignments={assignments}
+        client={authenticatedClient}
+        data={data}
+        failure={failure}
+        loadGlobal={loadGlobal}
+        loadScope={loadScope}
+        navigate={navigate}
+        notice={notice}
+        notify={notify}
+        onAssignmentDirtyChange={(dirty) => {
+          update({ assignmentDirty: dirty });
+        }}
+        onDismissNotice={() => {
+          update({ notice: null });
+        }}
+        section={section}
+        selectService={selectService}
+        selectedService={selectedService}
+        session={session}
+      />
+      <ConfirmationDialog
+        confirmLabel="Discard and change service"
+        description="The open assignment form has unsaved values. The service change closes that form and replaces only the assignment column."
+        impactStatement={discardImpact}
+        onCancel={() => {
+          update({ pendingService: null });
+        }}
+        onConfirm={() => {
+          if (pendingService !== null) applyServiceSelection(pendingService);
+        }}
+        open={pendingService !== null}
+        title="Discard assignment changes?"
+      />
+    </>
   );
 }

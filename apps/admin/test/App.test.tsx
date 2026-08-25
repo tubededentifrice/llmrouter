@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { App, AssignmentsPage } from "../src/App.js";
+import { App } from "../src/App.js";
 import {
   expireAdministratorSessionLoads,
   invalidateRetainedMediaLoad,
@@ -12,12 +12,7 @@ import {
   ServiceManagement,
 } from "../src/ServiceManagement.js";
 import { AdministrationApiError } from "../src/api.js";
-import type {
-  AdministrationClient,
-  Assignment,
-  MediaJob,
-  Service,
-} from "../src/api.js";
+import type { AdministrationClient, MediaJob, Service } from "../src/api.js";
 import {
   createScopeLoadGuard,
   protectedServiceApiName,
@@ -28,6 +23,7 @@ import {
 } from "../src/accessState.js";
 import {
   createInputImageSelectionQueue,
+  credentialFormValue,
   parseManualPrice,
   validateInputImageSelection,
 } from "../src/formContracts.js";
@@ -78,6 +74,8 @@ function client(): AdministrationClient {
     deleteCredential: vi.fn(),
     previewImport: vi.fn(),
     importModels: vi.fn(),
+    previewOpenRouterModel: vi.fn(),
+    importOpenRouterModel: vi.fn(),
     synchronizePrices: vi.fn(),
     activity: vi.fn().mockResolvedValue(emptyPage),
     statistics: vi.fn(),
@@ -110,14 +108,29 @@ const services: readonly Service[] = [
 ];
 
 describe("accepted administration composition", () => {
-  it("uses the shared assignment and playground components", () => {
-    const source = readFileSync(
+  it("uses one configuration graph as the only LLM configuration entry", () => {
+    const application = readFileSync(
       new URL("../src/App.tsx", import.meta.url),
       "utf8",
     );
-    expect(source).toContain("ServiceAssignmentGraph");
-    expect(source).toContain("OperationPlayground");
-    expect(source).toContain("Model and media playground");
+    const configuration = readFileSync(
+      new URL("../src/ConfigurationGraph.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(application).toContain('id: "configuration"');
+    expect(application).not.toContain('label: "Providers"');
+    expect(application).not.toContain('label: "Models & prices"');
+    expect(application).not.toContain('label: "Assignments"');
+    expect(application).not.toContain('label: "Playground"');
+    expect(application).not.toContain("function ProvidersPage");
+    expect(application).not.toContain("function ModelsPage");
+    expect(application).not.toContain("function AssignmentsPage");
+    expect(application).not.toContain("function PlaygroundPage");
+    expect(configuration).toContain("RelationshipGraph");
+    expect(configuration).toContain("Global models and mappings");
+    expect(configuration).toContain(
+      "Playground available after configuration delivery",
+    );
   });
 
   it("does not restore removed product surfaces", () => {
@@ -339,55 +352,6 @@ describe("accepted administration composition", () => {
     ])
       expect(styles).not.toContain(layoutHelper);
   });
-
-  it("keeps assignment actions equal to the selected service ownership", () => {
-    const assignments: readonly Assignment[] = [
-      {
-        api_name: "local",
-        display_name: "Shared display name",
-        definition_kind: "direct_chain",
-        defined_by_service_api_name: "child",
-        direct_chain: [],
-        effective_chain: [],
-        observed_requirements: ["text_input"],
-      },
-      {
-        api_name: "inherited",
-        display_name: "Shared display name",
-        definition_kind: "inherited_assignment",
-        defined_by_service_api_name: "child",
-        inherits_assignment_api_name: "local",
-        effective_chain: [],
-        observed_requirements: ["streaming"],
-      },
-      {
-        api_name: "default",
-        display_name: "Shared display name",
-        definition_kind: "implicit",
-        defined_by_service_api_name: "child",
-        effective_chain: [],
-        observed_requirements: ["reasoning"],
-      },
-    ];
-    const markup = renderToStaticMarkup(
-      <AssignmentsPage
-        assignments={assignments}
-        client={client()}
-        csrf="csrf"
-        onNotice={vi.fn()}
-        onRefresh={vi.fn()}
-        providerModels={[]}
-        selectedService="child"
-      />,
-    );
-    expect(markup.match(/Delete local definition/g)).toHaveLength(2);
-    expect(markup).toContain("Remove text_input");
-    expect(markup).toContain("Remove streaming");
-    expect(markup).toContain("Remove reasoning");
-    expect(markup).toContain(
-      "The list contains the same records and actions as the graph.",
-    );
-  });
 });
 
 describe("load isolation", () => {
@@ -580,6 +544,18 @@ describe("manual typed prices", () => {
     expect(() => parseManualPrice("USD", "request=")).toThrow(
       "fixed-decimal amount",
     );
+  });
+});
+
+describe("write-only credential form", () => {
+  it("preserves every opaque secret byte while names stay separate", () => {
+    const form = new FormData();
+    form.set("credential_api_name", "  credential-name  ");
+    form.set("secret", "  exact secret with space and newline\n ");
+    expect(credentialFormValue(form)).toEqual({
+      apiName: "credential-name",
+      secret: "  exact secret with space and newline\n ",
+    });
   });
 });
 
