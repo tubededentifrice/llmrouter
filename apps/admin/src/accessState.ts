@@ -1,60 +1,3 @@
-import type { ServiceKey, Workspace } from "./api.js";
-
-export interface AccessScopeState {
-  readonly keys: readonly ServiceKey[];
-  readonly phase: "loading" | "ready" | "error";
-  readonly secret: string | null;
-  readonly service: string;
-  readonly workspaces: readonly Workspace[];
-}
-
-export type AccessScopeAction =
-  | { readonly type: "begin"; readonly service: string }
-  | { readonly type: "refresh"; readonly service: string }
-  | {
-      readonly type: "success";
-      readonly service: string;
-      readonly keys: readonly ServiceKey[];
-      readonly workspaces: readonly Workspace[];
-    }
-  | { readonly type: "failure"; readonly service: string }
-  | {
-      readonly type: "show-secret";
-      readonly service: string;
-      readonly secret: string;
-    }
-  | { readonly type: "clear-secret"; readonly service: string };
-
-export function initialAccessScopeState(service: string): AccessScopeState {
-  return {
-    keys: [],
-    phase: service === "" ? "ready" : "loading",
-    secret: null,
-    service,
-    workspaces: [],
-  };
-}
-
-export function reduceAccessScopeState(
-  state: AccessScopeState,
-  action: AccessScopeAction,
-): AccessScopeState {
-  if (action.type === "begin") return initialAccessScopeState(action.service);
-  if (action.service !== state.service) return state;
-  if (action.type === "refresh") return { ...state, phase: "loading" };
-  if (action.type === "success")
-    return {
-      ...state,
-      keys: action.keys,
-      phase: "ready",
-      workspaces: action.workspaces,
-    };
-  if (action.type === "failure")
-    return { ...state, keys: [], phase: "error", workspaces: [] };
-  if (action.type === "show-secret") return { ...state, secret: action.secret };
-  return { ...state, secret: null };
-}
-
 export interface ScopeLoadGuard {
   readonly begin: () => number;
   readonly invalidate: () => void;
@@ -74,5 +17,58 @@ export function createScopeLoadGuard(): ScopeLoadGuard {
     isCurrent(generation) {
       return generation === current;
     },
+  };
+}
+
+export type KeyCreationLifecycle =
+  | {
+      readonly phase: "pending";
+      readonly serviceApiName: string;
+    }
+  | {
+      readonly phase: "shown";
+      readonly secret: string;
+      readonly serviceApiName: string;
+    };
+
+export type KeyCreationLifecycleAction =
+  | { readonly type: "begin"; readonly serviceApiName: string }
+  | {
+      readonly type: "created";
+      readonly secret: string;
+      readonly serviceApiName: string;
+    }
+  | { readonly type: "failed"; readonly serviceApiName: string }
+  | { readonly type: "clear" };
+
+export function protectedServiceApiName(
+  selectedService: string,
+  lifecycle: KeyCreationLifecycle | null,
+): string {
+  return lifecycle?.serviceApiName ?? selectedService;
+}
+
+export function reduceKeyCreationLifecycle(
+  state: KeyCreationLifecycle | null,
+  action: KeyCreationLifecycleAction,
+): KeyCreationLifecycle | null {
+  if (action.type === "begin")
+    return (
+      state ?? {
+        phase: "pending",
+        serviceApiName: action.serviceApiName,
+      }
+    );
+  if (action.type === "clear") return state?.phase === "shown" ? null : state;
+  if (
+    state?.phase !== "pending" ||
+    state.serviceApiName !== action.serviceApiName
+  )
+    return state;
+  if (action.type === "failed") return null;
+  return {
+    phase: "shown",
+    secret: action.secret,
+    serviceApiName: action.serviceApiName,
   };
 }

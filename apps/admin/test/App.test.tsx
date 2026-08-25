@@ -7,7 +7,10 @@ import {
   invalidateRetainedMediaLoad,
   updateRetentionDuration,
 } from "../src/administrationSafety.js";
-import { ServiceManagement } from "../src/ServiceManagement.js";
+import {
+  MissingProtectedKeyInspector,
+  ServiceManagement,
+} from "../src/ServiceManagement.js";
 import { AdministrationApiError } from "../src/api.js";
 import type {
   AdministrationClient,
@@ -17,8 +20,9 @@ import type {
 } from "../src/api.js";
 import {
   createScopeLoadGuard,
-  initialAccessScopeState,
-  reduceAccessScopeState,
+  protectedServiceApiName,
+  reduceKeyCreationLifecycle,
+  type KeyCreationLifecycle,
 } from "../src/accessState.js";
 import {
   createInputImageSelectionQueue,
@@ -130,7 +134,7 @@ describe("accepted administration composition", () => {
       expect(source).not.toContain(removed);
   });
 
-  it("shows the service graph and the equivalent accessible list", () => {
+  it("uses the service graph as the only service record surface", () => {
     const markup = renderToStaticMarkup(
       <ServiceManagement
         client={client()}
@@ -143,10 +147,145 @@ describe("accepted administration composition", () => {
       />,
     );
     expect(markup).toContain("Service tree canvas");
-    expect(markup).toContain("Accessible service list");
+    expect(markup).not.toContain("Accessible service list");
+    expect(markup).not.toContain("<strong>Service tree</strong>");
+    expect(markup).toContain('data-canvas-alignment="center"');
+    expect(markup.match(/tabindex="0"/g)).toHaveLength(1);
     expect(markup).toContain("Root");
     expect(markup).toContain("Child");
+    expect(markup).toContain("Workspaces");
+    expect(markup).toContain("Service API keys");
+    expect(markup).toContain("Loading workspaces");
+    expect(markup).toContain("Loading service API keys");
     expect(markup).toContain("Move or delete each child");
+  });
+
+  it("keeps workspaces and keys in the service inspector", () => {
+    const applicationSource = readFileSync(
+      new URL("../src/App.tsx", import.meta.url),
+      "utf8",
+    );
+    const serviceSource = readFileSync(
+      new URL("../src/ServiceManagement.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(applicationSource).not.toContain('label: "Workspaces & keys"');
+    expect(applicationSource).not.toContain("function AccessPage");
+    expect(serviceSource).toContain("EditableTable");
+    expect(serviceSource).toContain("ConfirmationDialog");
+    expect(serviceSource).not.toContain("globalThis.confirm");
+    expect(serviceSource).toContain("Copy this key now");
+    expect(serviceSource).toContain(
+      "keyLifecycleActive || busy ? {} : { onClose }",
+    );
+    expect(serviceSource).toContain(
+      "selectionLocked={keyLifecycle !== null || busy}",
+    );
+    expect(serviceSource).toContain("MissingProtectedKeyInspector");
+    expect(serviceSource).toContain("busyRef.current");
+    expect(serviceSource).toContain(
+      'phase === "loading" || keyLifecycleActive',
+    );
+    expect(serviceSource).not.toContain('target.closest("dialog:modal")');
+    expect(serviceSource).not.toContain("localStorage");
+    expect(serviceSource).not.toContain("sessionStorage");
+    expect(serviceSource).not.toContain("Use in playground");
+  });
+
+  it("uses a create-row identity that no workspace API name can use", () => {
+    const serviceSource = readFileSync(
+      new URL("../src/ServiceManagement.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(serviceSource).toContain(
+      'const WORKSPACE_CREATE_ROW_ID = "__new_workspace__"',
+    );
+    expect(serviceSource).not.toContain('id: "new-workspace"');
+  });
+
+  it("keeps a key request and one-time secret bound to its service", () => {
+    let lifecycle: KeyCreationLifecycle | null = null;
+    lifecycle = reduceKeyCreationLifecycle(lifecycle, {
+      type: "begin",
+      serviceApiName: "root",
+    });
+    expect(lifecycle).toEqual({ phase: "pending", serviceApiName: "root" });
+    expect(reduceKeyCreationLifecycle(lifecycle, { type: "clear" })).toBe(
+      lifecycle,
+    );
+    expect(
+      reduceKeyCreationLifecycle(lifecycle, {
+        type: "failed",
+        serviceApiName: "child",
+      }),
+    ).toBe(lifecycle);
+
+    lifecycle = reduceKeyCreationLifecycle(lifecycle, {
+      type: "created",
+      secret: "one-time-secret",
+      serviceApiName: "root",
+    });
+    expect(lifecycle).toEqual({
+      phase: "shown",
+      secret: "one-time-secret",
+      serviceApiName: "root",
+    });
+    expect(
+      reduceKeyCreationLifecycle(lifecycle, {
+        type: "begin",
+        serviceApiName: "child",
+      }),
+    ).toBe(lifecycle);
+    expect(reduceKeyCreationLifecycle(lifecycle, { type: "clear" })).toBeNull();
+    expect(
+      reduceKeyCreationLifecycle(null, {
+        type: "created",
+        secret: "late-secret",
+        serviceApiName: "root",
+      }),
+    ).toBeNull();
+    const failed = reduceKeyCreationLifecycle(
+      { phase: "pending", serviceApiName: "root" },
+      { type: "failed", serviceApiName: "root" },
+    );
+    expect(failed).toBeNull();
+  });
+
+  it("keeps a missing service key lifecycle reachable", () => {
+    const pending: KeyCreationLifecycle = {
+      phase: "pending",
+      serviceApiName: "removed-service",
+    };
+    expect(protectedServiceApiName("child", pending)).toBe("removed-service");
+    expect(
+      services.find(
+        (service) =>
+          service.api_name === protectedServiceApiName("child", pending),
+      ),
+    ).toBeUndefined();
+    const pendingMarkup = renderToStaticMarkup(
+      <MissingProtectedKeyInspector
+        keyLifecycle={pending}
+        onClearKey={vi.fn()}
+        onNotice={vi.fn()}
+      />,
+    );
+    expect(pendingMarkup).toContain("Creating the service API key");
+    expect(pendingMarkup).toContain("The service record is unavailable");
+
+    const shownMarkup = renderToStaticMarkup(
+      <MissingProtectedKeyInspector
+        keyLifecycle={{
+          phase: "shown",
+          secret: "one-time-secret",
+          serviceApiName: "removed-service",
+        }}
+        onClearKey={vi.fn()}
+        onNotice={vi.fn()}
+      />,
+    );
+    expect(shownMarkup).toContain("one-time-secret");
+    expect(shownMarkup).toContain("Clear key");
   });
 
   it("starts in a session loading state", () => {
@@ -225,56 +364,7 @@ describe("accepted administration composition", () => {
   });
 });
 
-describe("service access isolation", () => {
-  it("clears prior scope data and its one-time secret before a failed load", () => {
-    const first = reduceAccessScopeState(initialAccessScopeState("first"), {
-      type: "success",
-      service: "first",
-      keys: [
-        {
-          id: "key-one",
-          name: "First key",
-          created_at: "2026-08-24T00:00:00Z",
-        },
-      ],
-      workspaces: [
-        {
-          api_name: "first-workspace",
-          display_name: "First workspace",
-          created_at: "2026-08-24T00:00:00Z",
-        },
-      ],
-    });
-    const withSecret = reduceAccessScopeState(first, {
-      type: "show-secret",
-      service: "first",
-      secret: "first-service-secret",
-    });
-    const second = reduceAccessScopeState(withSecret, {
-      type: "begin",
-      service: "second",
-    });
-    const failed = reduceAccessScopeState(second, {
-      type: "failure",
-      service: "second",
-    });
-    expect(failed).toEqual({
-      keys: [],
-      phase: "error",
-      secret: null,
-      service: "second",
-      workspaces: [],
-    });
-    expect(
-      reduceAccessScopeState(failed, {
-        type: "success",
-        service: "first",
-        keys: first.keys,
-        workspaces: first.workspaces,
-      }),
-    ).toBe(failed);
-  });
-
+describe("load isolation", () => {
   it("rejects a late completion after the selected scope changes", () => {
     const guard = createScopeLoadGuard();
     const first = guard.begin();

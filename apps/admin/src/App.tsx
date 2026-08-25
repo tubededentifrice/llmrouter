@@ -70,11 +70,7 @@ import {
   type Workspace,
 } from "./api.js";
 import { ServiceManagement } from "./ServiceManagement.js";
-import {
-  createScopeLoadGuard,
-  initialAccessScopeState,
-  reduceAccessScopeState,
-} from "./accessState.js";
+import { createScopeLoadGuard } from "./accessState.js";
 import {
   expireAdministratorSessionLoads,
   invalidateRetainedMediaLoad,
@@ -92,7 +88,6 @@ import { waitForMediaJob } from "./mediaPolling.js";
 type Section =
   | "overview"
   | "services"
-  | "access"
   | "providers"
   | "models"
   | "assignments"
@@ -121,7 +116,6 @@ const routes: readonly {
 }[] = [
   { id: "overview", label: "Overview", icon: "grid", group: "Manage" },
   { id: "services", label: "Services", icon: "layers", group: "Manage" },
-  { id: "access", label: "Workspaces & keys", icon: "key", group: "Manage" },
   { id: "providers", label: "Providers", icon: "server", group: "Manage" },
   { id: "models", label: "Models & prices", icon: "spark", group: "Manage" },
   { id: "assignments", label: "Assignments", icon: "layers", group: "Manage" },
@@ -144,6 +138,7 @@ const routes: readonly {
 function currentSection(): Section {
   const value =
     typeof location === "undefined" ? "" : location.pathname.slice(1);
+  if (value === "access") return "services";
   return routes.some((route) => route.id === value)
     ? (value as Section)
     : "overview";
@@ -380,295 +375,6 @@ function Overview({ data }: { readonly data: AppData }) {
           ))}
         </ul>
       </Panel>
-    </div>
-  );
-}
-
-function AccessPage({
-  client,
-  csrf,
-  onNotice,
-  selectedService,
-  setPlaygroundKey,
-}: {
-  readonly client: AdministrationClient;
-  readonly csrf: string;
-  readonly onNotice: (tone: "success" | "error", message: string) => void;
-  readonly selectedService: string;
-  readonly setPlaygroundKey: (key: string) => void;
-}) {
-  const [access, updateAccess] = useReducer(
-    reduceAccessScopeState,
-    selectedService,
-    initialAccessScopeState,
-  );
-  const visibleAccess =
-    access.service === selectedService
-      ? access
-      : initialAccessScopeState(selectedService);
-  const { keys, phase, secret, workspaces } = visibleAccess;
-  const accessLoadGuard = useRef(createScopeLoadGuard());
-  const load = useCallback((): Promise<void> => {
-    const generation = accessLoadGuard.current.begin();
-    if (selectedService === "") {
-      updateAccess({ type: "begin", service: selectedService });
-      return Promise.resolve();
-    }
-    updateAccess({ type: "refresh", service: selectedService });
-    return Promise.all([
-      client.workspaces(selectedService),
-      client.keys(selectedService),
-    ])
-      .then(([workspacePage, keyPage]) => {
-        if (!accessLoadGuard.current.isCurrent(generation)) return;
-        updateAccess({
-          type: "success",
-          service: selectedService,
-          keys: keyPage.items,
-          workspaces: workspacePage.items,
-        });
-      })
-      .catch((error: unknown) => {
-        if (!accessLoadGuard.current.isCurrent(generation)) return;
-        updateAccess({ type: "failure", service: selectedService });
-        onNotice("error", errorMessage(error));
-      });
-  }, [client, onNotice, selectedService]);
-  useEffect(() => {
-    const loadGuard = accessLoadGuard.current;
-    updateAccess({ type: "begin", service: selectedService });
-    const timer = globalThis.setTimeout(() => {
-      void load();
-    }, 0);
-    return () => {
-      globalThis.clearTimeout(timer);
-      loadGuard.invalidate();
-    };
-  }, [load, selectedService]);
-  if (selectedService === "")
-    return (
-      <StatePanel kind="empty" title="Select a service">
-        Select one service to manage its workspaces and API keys.
-      </StatePanel>
-    );
-  if (phase === "loading")
-    return <LoadingPage title="Loading service access" />;
-  return (
-    <div className="administration-page">
-      <PageHeading
-        description="Workspaces are accounting labels. Service keys are backend-only bearer credentials."
-        eyebrow={selectedService}
-        title="Workspaces and service keys"
-      />
-      {secret === null ? null : (
-        <section aria-labelledby="one-time-key" className="secret-panel">
-          <h2 id="one-time-key">Copy this key now</h2>
-          <p>
-            The Router will not show it again. Deploy it to the calling-service
-            backend, then clear this panel.
-          </p>
-          <output>{secret}</output>
-          <div>
-            <Button
-              onClick={() => {
-                setPlaygroundKey(secret);
-              }}
-              variant="secondary"
-            >
-              Use in playground
-            </Button>
-            <Button
-              onClick={() => {
-                updateAccess({
-                  type: "clear-secret",
-                  service: selectedService,
-                });
-              }}
-              variant="quiet"
-            >
-              Clear key
-            </Button>
-          </div>
-        </section>
-      )}
-      {phase === "error" ? (
-        <StatePanel kind="error" title="Service access is unavailable">
-          <p>
-            The Router could not load workspaces and keys for this service. No
-            prior service data is shown.
-          </p>
-          <Button onClick={() => void load()}>Try again</Button>
-        </StatePanel>
-      ) : null}
-      {phase === "error" ? null : (
-        <div className="administration-sections">
-          <Panel>
-            <PanelHeader title="Workspaces" />
-            <form
-              className="administration-form"
-              onSubmit={(event) => {
-                event.preventDefault();
-                const formElement = event.currentTarget;
-                const form = new FormData(formElement);
-                void client
-                  .createWorkspace(
-                    selectedService,
-                    {
-                      api_name: formText(form, "api_name"),
-                      display_name: formText(form, "display_name"),
-                    },
-                    csrf,
-                  )
-                  .then(() => {
-                    formElement.reset();
-                    onNotice("success", "The workspace was created.");
-                    return load();
-                  })
-                  .catch((error: unknown) => {
-                    onNotice("error", errorMessage(error));
-                  });
-              }}
-            >
-              <label>
-                API name
-                <input name="api_name" required />
-              </label>
-              <label>
-                Display name
-                <input name="display_name" required />
-              </label>
-              <Button type="submit">Create workspace</Button>
-            </form>
-            <div className="administration-table-region">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Workspace</th>
-                    <th>Created</th>
-                    <th>Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {workspaces.length === 0 ? (
-                    <EmptyTable columns={3} text="No workspaces" />
-                  ) : (
-                    workspaces.map((item) => (
-                      <tr key={item.api_name}>
-                        <th scope="row">
-                          <strong>{item.display_name}</strong>
-                          <small>{item.api_name}</small>
-                        </th>
-                        <td>{displayTime(item.created_at)}</td>
-                        <td>
-                          <Button
-                            onClick={() => {
-                              if (
-                                !confirmDestructiveAction(
-                                  `Delete workspace ${item.api_name} and its logs, accounting, jobs, and retained media?`,
-                                )
-                              )
-                                return;
-                              void client
-                                .deleteWorkspace(
-                                  selectedService,
-                                  item.api_name,
-                                  csrf,
-                                )
-                                .then(() => load())
-                                .catch((error: unknown) => {
-                                  onNotice("error", errorMessage(error));
-                                });
-                            }}
-                            variant="quiet"
-                          >
-                            Delete
-                          </Button>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </Panel>
-          <Panel>
-            <PanelHeader title="Service API keys" />
-            <form
-              className="administration-form service-key-form"
-              onSubmit={(event) => {
-                event.preventDefault();
-                const formElement = event.currentTarget;
-                const form = new FormData(formElement);
-                void client
-                  .createKey(selectedService, formText(form, "name"), csrf)
-                  .then((created) => {
-                    formElement.reset();
-                    updateAccess({
-                      type: "show-secret",
-                      service: selectedService,
-                      secret: created.secret,
-                    });
-                    onNotice("success", "The service API key was created.");
-                    return load();
-                  })
-                  .catch((error: unknown) => {
-                    onNotice("error", errorMessage(error));
-                  });
-              }}
-            >
-              <label>
-                Key name
-                <input name="name" required />
-              </label>
-              <Button type="submit">Create key</Button>
-            </form>
-            <div className="administration-table-region">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Name</th>
-                    <th>Last use</th>
-                    <th>Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {keys.length === 0 ? (
-                    <EmptyTable columns={3} text="No active keys" />
-                  ) : (
-                    keys.map((item) => (
-                      <tr key={item.id}>
-                        <th scope="row">{item.name}</th>
-                        <td>{displayTime(item.last_used_at)}</td>
-                        <td>
-                          <Button
-                            onClick={() => {
-                              if (
-                                !confirmDestructiveAction(
-                                  `Revoke service key ${item.name}? Later requests with this key will fail.`,
-                                )
-                              )
-                                return;
-                              void client
-                                .revokeKey(selectedService, item.id, csrf)
-                                .then(() => load())
-                                .catch((error: unknown) => {
-                                  onNotice("error", errorMessage(error));
-                                });
-                            }}
-                            variant="quiet"
-                          >
-                            Revoke
-                          </Button>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </Panel>
-        </div>
-      )}
     </div>
   );
 }
@@ -3209,7 +2915,6 @@ function AuthenticatedAdministration({
   notice,
   notify,
   onDismissNotice,
-  onPlaygroundKey,
   playgroundKey,
   section,
   selectService,
@@ -3227,7 +2932,6 @@ function AuthenticatedAdministration({
   readonly notice: Notice | null;
   readonly notify: (tone: "success" | "error", message: string) => void;
   readonly onDismissNotice: () => void;
-  readonly onPlaygroundKey: (key: string) => void;
   readonly playgroundKey: string;
   readonly section: Section;
   readonly selectService: (value: string) => void;
@@ -3371,17 +3075,6 @@ function AuthenticatedAdministration({
           services={data.services}
         />
       </div>
-    );
-  if (data !== null && section === "access")
-    content = (
-      <AccessPage
-        client={client}
-        csrf={session.csrf_token}
-        key={selectedService}
-        onNotice={notify}
-        selectedService={selectedService}
-        setPlaygroundKey={onPlaygroundKey}
-      />
     );
   if (data !== null && section === "providers")
     content = (
@@ -3773,9 +3466,6 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
       notify={notify}
       onDismissNotice={() => {
         update({ notice: null });
-      }}
-      onPlaygroundKey={(key) => {
-        update({ playgroundKey: key });
       }}
       playgroundKey={playgroundKey}
       section={section}

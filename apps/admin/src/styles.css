@@ -342,8 +342,6 @@ tbody th small {
   font-size: 12px;
 }
 
-.record-section,
-.service-create-panel,
 .secret-panel {
   overflow: hidden;
   border: 1px solid var(--od-color-border);
@@ -352,30 +350,8 @@ tbody th small {
   box-shadow: 0 8px 24px var(--od-shadow);
 }
 
-.record-section > h2,
-.record-section > p,
-.service-create-panel > div,
 .secret-panel {
   padding-inline: 22px;
-}
-
-.record-section > h2 {
-  margin-block: 20px 4px;
-  font-family: var(--od-font-display), sans-serif;
-  font-size: 18px;
-}
-
-.record-section > p {
-  margin: 0 0 18px;
-  color: var(--od-color-muted);
-  font-size: 12px;
-}
-
-.service-create-panel > div {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
 }
 
 .secret-panel {
@@ -384,7 +360,7 @@ tbody th small {
   background: var(--od-color-amber-soft);
 }
 
-.secret-panel h2,
+.secret-panel h3,
 .secret-panel p {
   margin: 0;
 }
@@ -488,6 +464,77 @@ tbody th small {
   min-width: 0;
 }
 
+.service-management .od-graph-inspector {
+  width: min(38rem, calc(100% - 1.75rem));
+}
+
+.service-create-form,
+.service-access-sections {
+  display: grid;
+  gap: 16px;
+}
+
+.service-create-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--od-color-muted-strong);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.service-create-form .od-button,
+.service-inspector-form .od-button {
+  justify-self: start;
+}
+
+.service-access-section,
+.service-delete-section {
+  min-width: 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--od-color-border);
+}
+
+.service-access-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.service-access-heading h3,
+.service-access-heading p,
+.service-delete-section h3 {
+  margin: 0;
+}
+
+.service-access-heading p {
+  margin-top: 3px;
+  color: var(--od-color-muted);
+  font-size: 11px;
+}
+
+.service-access-section .od-editable-table,
+.service-access-section .od-data-table {
+  min-width: 0;
+}
+
+.service-access-section .od-data-table-table code,
+.service-access-section .od-data-table-card dd,
+.service-access-section .od-data-table-card-title {
+  overflow-wrap: anywhere;
+}
+
+.service-delete-section h3 {
+  margin-bottom: 10px;
+  font-size: 14px;
+}
+
+.service-delete-section .field-note {
+  margin-top: 10px;
+  padding-inline: 0;
+}
+
 @media (max-width: 1080px) {
   .resource-totals,
   .administration-sections {
@@ -547,6 +594,15 @@ tbody th small {
   .record-facts div {
     grid-template-columns: 1fr;
     gap: 3px;
+  }
+
+  .service-management .od-graph-inspector {
+    width: calc(100% - 1.5rem);
+  }
+
+  .service-access-heading {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
 
