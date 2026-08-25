@@ -495,6 +495,101 @@ tbody th small {
   gap: 13px;
 }
 
+.configuration-playground-dialog-body {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.configuration-playground-dialog-body .od-operation-playground,
+.configuration-playground-dialog-body .od-playground {
+  min-width: 0;
+  width: 100%;
+}
+
+.configuration-playground-options {
+  padding: 12px;
+  border: 1px solid var(--od-color-border);
+  border-radius: var(--od-radius-md);
+}
+
+.configuration-playground-options > summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.configuration-playground-options > div {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.configuration-playground-options label,
+.configuration-playground-tags {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: var(--od-color-muted-strong);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.configuration-playground-options .checkbox-field {
+  display: flex;
+}
+
+.playground-diagnostics {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--od-color-border);
+  border-radius: var(--od-radius-md);
+  background: var(--od-color-surface);
+}
+
+.playground-diagnostics h3,
+.playground-diagnostics p,
+.playground-diagnostics dl {
+  margin: 0;
+}
+
+.playground-diagnostics dl,
+.playground-diagnostics ol {
+  display: grid;
+  gap: 8px;
+}
+
+.playground-diagnostics dl div,
+.playground-diagnostics li {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.playground-diagnostics dt {
+  color: var(--od-color-muted-strong);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.playground-diagnostics dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.playground-diagnostics ol {
+  margin: 0;
+  padding-left: 24px;
+}
+
+.playground-diagnostics li span {
+  overflow-wrap: anywhere;
+  color: var(--od-color-muted-strong);
+  font-size: 12px;
+}
+
 .configuration-form > label,
 .configuration-advanced label {
   display: grid;

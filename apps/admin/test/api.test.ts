@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   AdministrationApiError,
+  administratorStreamLimits,
   clientDeadlineMilliseconds,
   createAdministrationClient,
-  createRuntimeClient,
   errorMessage,
   isoRange,
 } from "../src/api.js";
@@ -646,218 +646,692 @@ describe("native administration client", () => {
     });
   });
 
-  it("uses operation-specific runtime and media client deadlines", async () => {
-    vi.useFakeTimers();
-    const signals: AbortSignal[] = [];
-    const runtime = createRuntimeClient(
-      "service-secret",
-      vi.fn((_input: string | URL | Request, init?: RequestInit) => {
-        if (init?.signal !== null && init?.signal !== undefined)
-          signals.push(init.signal);
-        return new Promise<Response>(() => undefined);
-      }),
-    );
-    const model = runtime
-      .model(
-        "workspace",
-        { assignment_api_name: "chat" },
-        "Hello",
-        "",
-        [],
-        null,
-        null,
-        [],
-      )
-      .catch((error: unknown) => error);
-    const admission = runtime
-      .createMedia(
-        "workspace",
-        { assignment_api_name: "image" },
-        "image",
-        "Draw",
-        [],
-        [],
-      )
-      .catch((error: unknown) => error);
-    const status = runtime.mediaJob("job-id").catch((error: unknown) => error);
-    const content = runtime
-      .mediaContent("job-id")
-      .catch((error: unknown) => error);
-
-    await vi.advanceTimersByTimeAsync(clientDeadlineMilliseconds.mediaStatus);
-    expect(await status).toMatchObject({
-      code: "client_timeout",
-      message: "The media-job status did not load before the browser deadline.",
-    });
-    await vi.advanceTimersByTimeAsync(
-      clientDeadlineMilliseconds.mediaAdmission -
-        clientDeadlineMilliseconds.mediaStatus,
-    );
-    expect(await admission).toMatchObject({
-      code: "client_timeout",
-      message:
-        "The media-job request did not finish before the browser deadline.",
-    });
-    await vi.advanceTimersByTimeAsync(
-      clientDeadlineMilliseconds.mediaContent -
-        clientDeadlineMilliseconds.mediaAdmission,
-    );
-    expect(await content).toMatchObject({
-      code: "client_timeout",
-      message: "The media content did not load before the browser deadline.",
-    });
-    await vi.advanceTimersByTimeAsync(
-      clientDeadlineMilliseconds.runtimeCall -
-        clientDeadlineMilliseconds.mediaContent,
-    );
-    const modelError = await model;
-    expect(modelError).toMatchObject({
-      code: "client_timeout",
-      message: "The runtime call did not finish before the browser deadline.",
-    });
-    expect(modelError).toBeInstanceOf(AdministrationApiError);
-    if (!(modelError instanceof AdministrationApiError)) throw modelError;
-    expect(modelError.details?.reason).toContain(
-      "Check the detailed logs before you submit the same work again.",
-    );
-    expect(signals).toHaveLength(4);
-    expect(signals.every((signal) => signal.aborted)).toBe(true);
-  });
-
-  it("uses a service bearer key only for native runtime operations", async () => {
-    let received: RequestInit | undefined;
-    const runtime = createRuntimeClient(
-      "service-secret",
-      vi.fn((_input: string | URL | Request, init?: RequestInit) => {
-        received = init;
-        return Promise.resolve(
-          json({
-            provider_model_api_name: "fake-model",
-            embeddings: [{ index: 0, values: [0.1, 0.2] }],
-            usage: { units: [], cost: "0", currency: "USD" },
-          }),
-        );
-      }),
-    );
-    await runtime.embedding(
-      "production",
-      { assignment_api_name: "embedding" },
-      ["one"],
-      ["manual"],
-    );
-    expect(new Headers(received?.headers).get("Authorization")).toBe(
-      "Bearer service-secret",
-    );
-    expect(received?.credentials).toBe("omit");
-    expect(typeof received?.body).toBe("string");
-    expect(
-      JSON.parse(typeof received?.body === "string" ? received.body : "null"),
-    ).toEqual({
-      workspace_api_name: "production",
-      selector: { assignment_api_name: "embedding" },
-      inputs: ["one"],
-      tags: ["manual"],
-    });
-  });
-
-  it("sends system prompts and input images through native runtime contracts", async () => {
-    const calls: { readonly path: string; readonly body: unknown }[] = [];
-    const runtime = createRuntimeClient(
-      "service-secret",
-      vi.fn((input: string | URL | Request, init?: RequestInit) => {
-        calls.push({
-          path:
-            typeof input === "string"
-              ? input
-              : input instanceof URL
-                ? input.href
-                : input.url,
-          body: JSON.parse(typeof init?.body === "string" ? init.body : "null"),
-        });
-        return Promise.resolve(
-          json({
-            id: "job-1",
-            workspace_api_name: "production",
-            provider_model_api_name: "fake-image",
-            kind: "image",
-            state: "pending",
-            created_at: "2026-08-24T12:00:00Z",
-          }),
-        );
-      }),
-    );
-    const image = {
-      media_type: "image/png" as const,
-      data_base64: "aGVsbG8=",
-      id: "ui-only",
-    };
-    await runtime.model(
-      "production",
-      { assignment_api_name: "chat" },
-      "Hello",
-      "Be concise.",
-      [image],
-      0.2,
-      120,
-      ["manual"],
-    );
-    await runtime.createMedia(
-      "production",
-      { provider_model_api_name: "fake-image" },
-      "image",
-      "A blue square",
-      [image],
-      ["manual"],
-    );
-    expect(calls).toEqual([
-      {
-        path: "/v1/model-calls",
-        body: {
-          workspace_api_name: "production",
-          selector: { assignment_api_name: "chat" },
-          messages: [
-            { role: "system", content: "Be concise." },
-            {
-              role: "user",
-              content: [
-                { type: "text", text: "Hello" },
-                {
-                  type: "image",
-                  media_type: image.media_type,
-                  data_base64: image.data_base64,
-                },
-              ],
-            },
-          ],
-          temperature: 0.2,
-          output_limit: 120,
-          tags: ["manual"],
-        },
-      },
-      {
-        path: "/v1/media-jobs",
-        body: {
-          workspace_api_name: "production",
-          selector: { provider_model_api_name: "fake-image" },
-          kind: "image",
-          prompt: "A blue square",
-          input_images: [
-            {
-              type: "image",
-              media_type: image.media_type,
-              data_base64: image.data_base64,
-            },
-          ],
-          tags: ["manual"],
-        },
-      },
-    ]);
-  });
-
   it("creates a stable bounded UTC range", () => {
     expect(isoRange(7, new Date("2026-08-24T12:00:00Z"))).toEqual({
       from: "2026-08-17T12:00:00.000Z",
       to: "2026-08-24T12:00:00.000Z",
+    });
+  });
+});
+
+describe("administrator playground client", () => {
+  const exactSelector = { provider_model_api_name: "fake-model" } as const;
+  const usage = {
+    units: [{ unit: "output_token" as const, quantity: "2" }],
+    cost: "0.01",
+    currency: "USD",
+  };
+  const attempt = {
+    provider_model_api_name: "fake-model",
+    outcome: "succeeded" as const,
+    elapsed_ms: 4,
+    usage,
+  };
+  const streamStart =
+    'event: start\ndata: {"logical_call_id":"logical-call","selector":{"provider_model_api_name":"fake-model"},"provider_model_api_name":"fake-model"}\n\n';
+
+  function streamClient(
+    body: ReadableStream<Uint8Array> | string,
+    limits: Partial<typeof administratorStreamLimits> = {},
+  ) {
+    return createAdministrationClient(
+      vi.fn().mockResolvedValue(
+        new Response(body, {
+          headers: {
+            "Content-Type": "text/event-stream",
+            "X-LLMRouter-Logical-Call-Id": "logical-call",
+          },
+        }),
+      ),
+      { ...administratorStreamLimits, ...limits },
+    );
+  }
+
+  async function streamError(
+    body: ReadableStream<Uint8Array> | string,
+    limits: Partial<typeof administratorStreamLimits> = {},
+  ) {
+    return streamClient(body, limits)
+      .playgroundModelStream?.(
+        {
+          selector: exactSelector,
+          messages: [
+            { role: "user", content: [{ type: "text", text: "Hello" }] },
+          ],
+        },
+        "csrf",
+      )
+      .catch((value: unknown) => value);
+  }
+
+  it("uses only native administrator routes and browser controls", async () => {
+    const calls: { path: string; init: RequestInit }[] = [];
+    const fetcher = vi.fn(
+      (input: string | URL | Request, init: RequestInit = {}) => {
+        const path = url(input);
+        calls.push({ path, init });
+        if (path.endsWith("/content"))
+          return Promise.resolve(
+            new Response(new Uint8Array([1, 2, 3]), {
+              headers: { "Content-Type": "image/png" },
+            }),
+          );
+        if (path.includes("media-jobs/job"))
+          return Promise.resolve(
+            json({
+              id: "job",
+              logical_call_id: "call",
+              selector: exactSelector,
+              provider_model_api_name: "fake-model",
+              kind: "image",
+              state: "succeeded",
+              attempts: [attempt],
+              elapsed_ms: 5,
+              usage,
+              content: { media_type: "image/png", size_bytes: 3 },
+              created_at: "2026-08-25T00:00:00Z",
+              completed_at: "2026-08-25T00:00:01Z",
+            }),
+          );
+        if (path.endsWith("media-jobs"))
+          return Promise.resolve(
+            json(
+              {
+                id: "job",
+                logical_call_id: "call",
+                selector: exactSelector,
+                provider_model_api_name: "fake-model",
+                kind: "image",
+                state: "pending",
+                attempts: [],
+                created_at: "2026-08-25T00:00:00Z",
+              },
+              202,
+            ),
+          );
+        if (path.endsWith("embeddings"))
+          return Promise.resolve(
+            json({
+              logical_call_id: "call",
+              selector: exactSelector,
+              elapsed_ms: 5,
+              attempts: [attempt],
+              result: {
+                provider_model_api_name: "fake-model",
+                embeddings: [{ index: 0, values: [0.1] }],
+                usage,
+              },
+            }),
+          );
+        return Promise.resolve(
+          json({
+            logical_call_id: "call",
+            selector: exactSelector,
+            elapsed_ms: 5,
+            attempts: [attempt],
+            result: {
+              output_type: "standard",
+              provider_model_api_name: "fake-model",
+              content: [{ type: "text", text: "ok" }],
+              usage,
+            },
+          }),
+        );
+      },
+    );
+    const client = createAdministrationClient(fetcher);
+    await client.playgroundModel?.(
+      {
+        selector: exactSelector,
+        messages: [
+          { role: "user", content: [{ type: "text", text: "Hello" }] },
+        ],
+      },
+      "csrf",
+    );
+    await client.playgroundEmbedding?.(
+      { selector: exactSelector, inputs: ["Hello"] },
+      "csrf",
+    );
+    await client.playgroundCreateMedia?.(
+      {
+        selector: exactSelector,
+        kind: "image",
+        prompt: "Draw",
+      },
+      "csrf",
+    );
+    await client.playgroundMediaJob?.("job");
+    await client.playgroundMediaContent?.("job");
+
+    expect(calls.map((item) => item.path)).toEqual([
+      "/v1/admin/playground/model-calls",
+      "/v1/admin/playground/embeddings",
+      "/v1/admin/playground/media-jobs",
+      "/v1/admin/playground/media-jobs/job",
+      "/v1/admin/playground/media-jobs/job/content",
+    ]);
+    for (const [index, call] of calls.entries()) {
+      const { body, cache, credentials, headers: suppliedHeaders } = call.init;
+      const headers = new Headers(suppliedHeaders);
+      expect(credentials).toBe("same-origin");
+      expect(cache).toBe("no-store");
+      expect(headers.has("Authorization")).toBe(false);
+      expect(headers.has("Origin")).toBe(false);
+      expect(headers.get("X-CSRF-Token")).toBe(index < 3 ? "csrf" : null);
+      if (typeof body === "string") {
+        expect(body).not.toContain("workspace");
+        expect(body).not.toContain("service_key");
+      }
+    }
+  });
+
+  it("preserves safe post-admission error context", async () => {
+    const client = createAdministrationClient(
+      vi.fn().mockResolvedValue(
+        json(
+          {
+            logical_call_id: "logical-call",
+            selector: exactSelector,
+            elapsed_ms: 17,
+            attempts: [
+              {
+                provider_model_api_name: "fake-model",
+                outcome: "failed",
+                elapsed_ms: 12,
+                error: {
+                  code: "upstream_failed",
+                  message: "The provider attempt failed.",
+                },
+              },
+            ],
+            error: {
+              code: "upstream_failed",
+              message: "The selected provider-model failed.",
+            },
+          },
+          502,
+        ),
+      ),
+    );
+    const error = await client
+      .playgroundModel?.(
+        {
+          selector: exactSelector,
+          messages: [
+            { role: "user", content: [{ type: "text", text: "Hello" }] },
+          ],
+        },
+        "csrf",
+      )
+      .catch((value: unknown) => value);
+    expect(error).toBeInstanceOf(AdministrationApiError);
+    expect(error).toMatchObject({
+      code: "upstream_failed",
+      context: {
+        logical_call_id: "logical-call",
+        selector: exactSelector,
+        elapsed_ms: 17,
+        attempts: [
+          {
+            provider_model_api_name: "fake-model",
+            outcome: "failed",
+          },
+        ],
+      },
+    });
+  });
+
+  it("bounds and cancels administrator playground calls", async () => {
+    vi.useFakeTimers();
+    const signals: AbortSignal[] = [];
+    const client = createAdministrationClient(
+      vi.fn((_input: string | URL | Request, init?: RequestInit) => {
+        if (init?.signal !== null && init?.signal !== undefined)
+          signals.push(init.signal);
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            reject(new DOMException("Aborted", "AbortError"));
+          });
+        });
+      }),
+    );
+    const timedOut = client
+      .playgroundModel?.(
+        {
+          selector: exactSelector,
+          messages: [
+            { role: "user", content: [{ type: "text", text: "Hello" }] },
+          ],
+        },
+        "csrf",
+      )
+      .catch((value: unknown) => value);
+    await vi.advanceTimersByTimeAsync(clientDeadlineMilliseconds.runtimeCall);
+    await expect(timedOut).resolves.toMatchObject({
+      code: "client_timeout",
+      status: 408,
+    });
+
+    const controller = new AbortController();
+    const cancelled = client.playgroundEmbedding?.(
+      { selector: exactSelector, inputs: ["Hello"] },
+      "csrf",
+      controller.signal,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    controller.abort();
+    await expect(cancelled).rejects.toMatchObject({ name: "AbortError" });
+    expect(signals).toHaveLength(2);
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+  });
+
+  it("parses split UTF-8 model streams with text and tool output", async () => {
+    const streamText = [
+      'event: start\r\ndata: {"logical_call_id":"logical-call","selector":{"provider_model_api_name":"fake-model"},"provider_model_api_name":"fake-model"}\r\n\r\n',
+      'event: text_delta\r\ndata: {"delta":"Hello 🌍"}\r\n\r\n',
+      'event: tool_call\r\ndata: {"tool_call":{"type":"tool_call","id":"tool-1","name":"lookup","arguments_json":"{}"}}\r\n\r\n',
+      `event: completed\r\ndata: ${JSON.stringify({
+        logical_call_id: "logical-call",
+        selector: exactSelector,
+        provider_model_api_name: "fake-model",
+        elapsed_ms: 9,
+        attempts: [attempt],
+        usage,
+      })}\r\n\r\n`,
+    ].join("");
+    const bytes = new TextEncoder().encode(streamText);
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let offset = 0; offset < bytes.length; offset += 7)
+          controller.enqueue(bytes.slice(offset, offset + 7));
+        controller.close();
+      },
+    });
+    const client = createAdministrationClient(
+      vi.fn().mockResolvedValue(
+        new Response(body, {
+          headers: {
+            "Content-Type": "text/event-stream",
+            "X-LLMRouter-Logical-Call-Id": "logical-call",
+          },
+        }),
+      ),
+    );
+    const result = await client.playgroundModelStream?.(
+      {
+        selector: exactSelector,
+        messages: [
+          { role: "user", content: [{ type: "text", text: "Hello" }] },
+        ],
+      },
+      "csrf",
+    );
+    expect(result).toMatchObject({
+      logical_call_id: "logical-call",
+      provider_model_api_name: "fake-model",
+      elapsed_ms: 9,
+      content: [
+        { type: "text", text: "Hello 🌍" },
+        {
+          type: "tool_call",
+          id: "tool-1",
+          name: "lookup",
+          arguments_json: "{}",
+        },
+      ],
+    });
+  });
+
+  it("rejects incomplete and mismatched model streams", async () => {
+    const errors = await Promise.all(
+      [
+        {
+          header: "different-call",
+          body:
+            'event: start\ndata: {"logical_call_id":"logical-call","selector":{"provider_model_api_name":"fake-model"},"provider_model_api_name":"fake-model"}\n\n' +
+            `event: completed\ndata: ${JSON.stringify({
+              logical_call_id: "logical-call",
+              selector: exactSelector,
+              provider_model_api_name: "fake-model",
+              elapsed_ms: 1,
+              attempts: [attempt],
+              usage,
+            })}\n\n`,
+        },
+        {
+          header: "logical-call",
+          body: 'event: start\ndata: {"logical_call_id":"logical-call","selector":{"provider_model_api_name":"fake-model"},"provider_model_api_name":"fake-model"}\n\n',
+        },
+      ].map(async (fixture) => {
+        const client = createAdministrationClient(
+          vi.fn().mockResolvedValue(
+            new Response(fixture.body, {
+              headers: {
+                "Content-Type": "text/event-stream",
+                "X-LLMRouter-Logical-Call-Id": fixture.header,
+              },
+            }),
+          ),
+        );
+        return client
+          .playgroundModelStream?.(
+            {
+              selector: exactSelector,
+              messages: [
+                { role: "user", content: [{ type: "text", text: "Hello" }] },
+              ],
+            },
+            "csrf",
+          )
+          .catch((value: unknown) => value);
+      }),
+    );
+    for (const error of errors)
+      expect(error).toMatchObject({ code: "invalid_response" });
+  });
+
+  it("requires the exact two-line SSE frame and final terminator", async () => {
+    const startData =
+      '{"logical_call_id":"logical-call","selector":{"provider_model_api_name":"fake-model"},"provider_model_api_name":"fake-model"}';
+    const completedData = JSON.stringify({
+      logical_call_id: "logical-call",
+      selector: exactSelector,
+      provider_model_api_name: "fake-model",
+      elapsed_ms: 1,
+      attempts: [attempt],
+      usage,
+    });
+    const results = await Promise.all([
+      streamError(`data: ${startData}\nevent: start\n\n`),
+      streamError(`event: start\nevent: start\ndata: ${startData}\n\n`),
+      streamError(`event: start\ndata: ${startData}\ndata: {}\n\n`),
+      streamError(`event: start\nid: one\ndata: ${startData}\n\n`),
+      streamError(`${streamStart}event: completed\ndata: ${completedData}`),
+    ]);
+    for (const result of results)
+      expect(result).toMatchObject({ code: "invalid_response" });
+  });
+
+  it("rejects mismatched start, completed, and error correlation facts", async () => {
+    const completed = (
+      selector: string,
+      provider: string,
+      attempts = [attempt],
+    ) =>
+      `event: completed\ndata: ${JSON.stringify({
+        logical_call_id: "logical-call",
+        selector: { provider_model_api_name: selector },
+        provider_model_api_name: provider,
+        elapsed_ms: 1,
+        attempts,
+        usage,
+      })}\n\n`;
+    const errors = await Promise.all([
+      streamError(
+        'event: start\ndata: {"logical_call_id":"logical-call","selector":{"provider_model_api_name":"other-model"},"provider_model_api_name":"other-model"}\n\n',
+      ),
+      streamError(streamStart + completed("other-model", "fake-model")),
+      streamError(streamStart + completed("fake-model", "other-model")),
+      streamError(
+        streamStart +
+          completed("fake-model", "fake-model", [
+            { ...attempt, provider_model_api_name: "other-model" },
+          ]),
+      ),
+      streamError(
+        streamStart +
+          'event: error\ndata: {"logical_call_id":"other-call","selector":{"provider_model_api_name":"fake-model"},"elapsed_ms":1,"attempts":[],"error":{"code":"upstream_failed","message":"Failed."}}\n\n',
+      ),
+      streamError(
+        streamStart +
+          'event: error\ndata: {"logical_call_id":"logical-call","selector":{"provider_model_api_name":"other-model"},"elapsed_ms":1,"attempts":[],"error":{"code":"upstream_failed","message":"Failed."}}\n\n',
+      ),
+    ]);
+    for (const error of errors)
+      expect(error).toMatchObject({ code: "invalid_response" });
+  });
+
+  it("correlates an assignment final route with its succeeded attempt", async () => {
+    const assignmentSelector = {
+      assignment_api_name: "default",
+      service_api_name: "crewday",
+    } as const;
+    const body =
+      `event: start\ndata: ${JSON.stringify({
+        logical_call_id: "logical-call",
+        selector: assignmentSelector,
+        provider_model_api_name: "fake-model",
+      })}\n\n` +
+      `event: completed\ndata: ${JSON.stringify({
+        logical_call_id: "logical-call",
+        selector: assignmentSelector,
+        provider_model_api_name: "fake-model",
+        elapsed_ms: 1,
+        attempts: [{ ...attempt, provider_model_api_name: "other-model" }],
+        usage,
+      })}\n\n`;
+    const client = createAdministrationClient(
+      vi.fn().mockResolvedValue(
+        new Response(body, {
+          headers: {
+            "Content-Type": "text/event-stream",
+            "X-LLMRouter-Logical-Call-Id": "logical-call",
+          },
+        }),
+      ),
+    );
+    const result = await client
+      .playgroundModelStream?.(
+        {
+          selector: assignmentSelector,
+          messages: [
+            { role: "user", content: [{ type: "text", text: "Hello" }] },
+          ],
+        },
+        "csrf",
+      )
+      .catch((error: unknown) => error);
+    expect(result).toMatchObject({ code: "invalid_response" });
+  });
+
+  it("bounds unterminated events and cancels their reader", async () => {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("x".repeat(65)));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    await expect(
+      streamError(body, { pendingEventBytes: 64 }),
+    ).resolves.toMatchObject({ code: "invalid_response" });
+    expect(cancelled).toBe(true);
+  });
+
+  it("bounds event count, text output, and tool calls", async () => {
+    const delta = 'event: text_delta\ndata: {"delta":"a"}\n\n';
+    const tool =
+      'event: tool_call\ndata: {"tool_call":{"type":"tool_call","id":"tool","name":"lookup","arguments_json":"{}"}}\n\n';
+    const cases = [
+      streamError(streamStart + delta + delta, { eventCount: 2 }),
+      streamError(
+        streamStart + 'event: text_delta\ndata: {"delta":"four"}\n\n',
+        { textOutputBytes: 3 },
+      ),
+      streamError(streamStart + tool + tool, { toolCallCount: 1 }),
+    ];
+    for (const result of await Promise.all(cases))
+      expect(result).toMatchObject({ code: "invalid_response" });
+  });
+
+  it("bounds one event, tool JSON, and terminal attempts", async () => {
+    const oversizedEvent =
+      streamStart +
+      `event: text_delta\ndata: {"delta":"${"x".repeat(300)}"}\n\n`;
+    const oversizedTool =
+      streamStart +
+      'event: tool_call\ndata: {"tool_call":{"type":"tool_call","id":"tool","name":"lookup","arguments_json":"12345"}}\n\n';
+    const completed =
+      streamStart +
+      `event: completed\ndata: ${JSON.stringify({
+        logical_call_id: "logical-call",
+        selector: exactSelector,
+        provider_model_api_name: "fake-model",
+        elapsed_ms: 1,
+        attempts: [attempt, attempt],
+        usage,
+      })}\n\n`;
+    const results = await Promise.all([
+      streamError(oversizedEvent, { pendingEventBytes: 256 }),
+      streamError(oversizedTool, { toolArgumentsBytes: 4 }),
+      streamError(completed, { terminalAttempts: 1 }),
+    ]);
+    for (const result of results)
+      expect(result).toMatchObject({ code: "invalid_response" });
+  });
+
+  it("bounds aggregate content across individually valid events", async () => {
+    const body =
+      streamStart +
+      'event: text_delta\ndata: {"delta":"1234"}\n\n' +
+      'event: tool_call\ndata: {"tool_call":{"type":"tool_call","id":"tool","name":"lookup","arguments_json":"{}"}}\n\n';
+    await expect(
+      streamError(body, {
+        contentBytes: 10,
+        textOutputBytes: 10,
+        toolIdBytes: 10,
+        toolNameBytes: 10,
+        toolArgumentsBytes: 10,
+      }),
+    ).resolves.toMatchObject({ code: "invalid_response" });
+  });
+
+  it("rejects incomplete post-start errors", async () => {
+    const complete = {
+      logical_call_id: "logical-call",
+      selector: exactSelector,
+      elapsed_ms: 1,
+      attempts: [],
+      error: { code: "upstream_failed", message: "Failed." },
+    };
+    const bodies = Object.keys(complete).map((missing) => {
+      const event = Object.fromEntries(
+        Object.entries(complete).filter(([key]) => key !== missing),
+      );
+      return `${streamStart}event: error\ndata: ${JSON.stringify(event)}\n\n`;
+    });
+    for (const result of await Promise.all(
+      bodies.map((body) => streamError(body)),
+    ))
+      expect(result).toMatchObject({ code: "invalid_response" });
+  });
+
+  it("requires the post-start error correlation header", async () => {
+    const body =
+      streamStart +
+      'event: error\ndata: {"logical_call_id":"logical-call","selector":{"provider_model_api_name":"fake-model"},"elapsed_ms":3,"attempts":[],"error":{"code":"upstream_failed","message":"Failed."}}\n\n';
+    await expect(streamError(body)).resolves.toMatchObject({
+      code: "upstream_failed",
+      context: {
+        logical_call_id: "logical-call",
+        selector: exactSelector,
+        elapsed_ms: 3,
+        attempts: [],
+      },
+    });
+    const client = createAdministrationClient(
+      vi.fn().mockResolvedValue(
+        new Response(body, {
+          headers: {
+            "Content-Type": "text/event-stream",
+            "X-LLMRouter-Logical-Call-Id": "other-call",
+          },
+        }),
+      ),
+    );
+    await expect(
+      client
+        .playgroundModelStream?.(
+          {
+            selector: exactSelector,
+            messages: [
+              { role: "user", content: [{ type: "text", text: "Hello" }] },
+            ],
+          },
+          "csrf",
+        )
+        .catch((value: unknown) => value),
+    ).resolves.toMatchObject({ code: "invalid_response" });
+  });
+
+  it("rejects unknown fields and invalid numeric result shapes", async () => {
+    const completed = (changes: Record<string, unknown>) =>
+      `${streamStart}event: completed\ndata: ${JSON.stringify({
+        logical_call_id: "logical-call",
+        selector: exactSelector,
+        provider_model_api_name: "fake-model",
+        elapsed_ms: 1,
+        attempts: [attempt],
+        usage,
+        ...changes,
+      })}\n\n`;
+    const results = await Promise.all([
+      streamError(
+        streamStart +
+          'event: text_delta\ndata: {"delta":"ok","unexpected":true}\n\n',
+      ),
+      streamError(completed({ elapsed_ms: -1 })),
+      streamError(
+        completed({
+          attempts: [{ ...attempt, elapsed_ms: Number.POSITIVE_INFINITY }],
+        }),
+      ),
+    ]);
+    for (const result of results)
+      expect(result).toMatchObject({ code: "invalid_response" });
+  });
+
+  it("rejects an invalid stream content type and invalid UTF-8", async () => {
+    const wrongContentType = createAdministrationClient(
+      vi.fn().mockResolvedValue(
+        new Response(streamStart, {
+          headers: {
+            "Content-Type": "application/json",
+            "X-LLMRouter-Logical-Call-Id": "logical-call",
+          },
+        }),
+      ),
+    );
+    const request = {
+      selector: exactSelector,
+      messages: [
+        {
+          role: "user" as const,
+          content: [{ type: "text" as const, text: "Hello" }],
+        },
+      ],
+    };
+    await expect(
+      wrongContentType
+        .playgroundModelStream?.(request, "csrf")
+        .catch((value: unknown) => value),
+    ).resolves.toMatchObject({ code: "invalid_response" });
+
+    const validPrefix = new TextEncoder().encode(streamStart);
+    const invalidUtf8 = new Uint8Array(validPrefix.length + 1);
+    invalidUtf8.set(validPrefix);
+    invalidUtf8[validPrefix.length] = 0xff;
+    const invalidBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(invalidUtf8);
+        controller.close();
+      },
+    });
+    await expect(streamError(invalidBody)).resolves.toMatchObject({
+      code: "invalid_response",
     });
   });
 });

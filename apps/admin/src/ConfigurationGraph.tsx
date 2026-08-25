@@ -25,6 +25,7 @@ import {
 import {
   errorMessage,
   type AdministrationClient,
+  type AdministratorPlaygroundMediaJob,
   type Assignment,
   type AssignmentWrite,
   type Credential,
@@ -60,6 +61,15 @@ import {
   configuredPriceValue,
   parseManualPrice,
 } from "./formContracts.js";
+import { PlaygroundModal } from "./PlaygroundModal.js";
+import {
+  assignmentPlaygroundTarget,
+  currentPlaygroundTarget,
+  mappingPlaygroundTarget,
+  playgroundTargetKey,
+  updateMediaRecovery,
+  type PlaygroundTargetSnapshot,
+} from "./playgroundState.js";
 
 interface ConfigurationGraphProps {
   readonly assignments: readonly Assignment[];
@@ -171,6 +181,10 @@ interface ConfigurationInspectorContext {
   readonly onNotice: (tone: "success" | "error", message: string) => void;
   readonly onRefreshAssignments: () => Promise<void>;
   readonly onRefreshGlobal: () => Promise<void>;
+  readonly openPlayground: (
+    target: PlaygroundTargetSnapshot,
+    trigger: HTMLElement,
+  ) => void;
   readonly pending: boolean;
   readonly previewOpenRouter: (
     event: SubmitEvent<HTMLFormElement>,
@@ -580,6 +594,11 @@ function useConfigurationController({
       records: [],
       deleted: [],
     });
+  const [playgroundTarget, setPlaygroundTarget] =
+    useState<PlaygroundTargetSnapshot | null>(null);
+  const [playgroundMediaRecovery, setPlaygroundMediaRecovery] = useState<
+    ReadonlyMap<string, AdministratorPlaygroundMediaJob>
+  >(new Map());
   const authoritativeSnapshot = JSON.stringify({
     credentials,
     providers,
@@ -589,6 +608,7 @@ function useConfigurationController({
   const [previousAuthoritativeSnapshot, setPreviousAuthoritativeSnapshot] =
     useState(authoritativeSnapshot);
   const returnFocusRef = useRef<HTMLElement | null>(null);
+  const playgroundReturnFocusRef = useRef<HTMLElement | null>(null);
   const pendingRef = useRef(false);
   const pendingAssignmentRef = useRef(false);
   const pendingInspectorTransitionRef = useRef<InspectorTransition | null>(
@@ -600,6 +620,12 @@ function useConfigurationController({
     readonly secret: string;
   } | null>(null);
   const previousSelectedServiceRef = useRef(selectedService);
+
+  if (
+    playgroundTarget?.kind === "assignment" &&
+    playgroundTarget.serviceContext !== selectedService
+  )
+    setPlaygroundTarget(null);
 
   if (authoritativeSnapshot !== previousAuthoritativeSnapshot) {
     setPreviousAuthoritativeSnapshot(authoritativeSnapshot);
@@ -1504,6 +1530,11 @@ function useConfigurationController({
           models: visibleModels,
           onAssignmentDirtyChange,
           onNotice,
+          openPlayground: (target, trigger) => {
+            if (pendingRef.current) return;
+            playgroundReturnFocusRef.current = trigger;
+            setPlaygroundTarget(target);
+          },
           onRefreshAssignments,
           onRefreshGlobal,
           pending,
@@ -1577,6 +1608,47 @@ function useConfigurationController({
     emptyCatalogState,
     onRefreshGlobal,
     pending,
+    playground:
+      playgroundTarget === null ? null : (
+        <PlaygroundModal
+          client={client}
+          csrf={csrf}
+          currentTarget={
+            globalPhase === "ready"
+              ? currentPlaygroundTarget(
+                  playgroundTarget,
+                  visibleAssignments,
+                  visibleMappings,
+                  visibleProviders,
+                  visibleModels,
+                )
+              : null
+          }
+          onClose={() => {
+            const returnTarget = playgroundReturnFocusRef.current;
+            setPlaygroundTarget(null);
+            const restorePlaygroundFocus = () => {
+              if (returnTarget?.isConnected)
+                returnTarget.focus({ preventScroll: true });
+            };
+            if (typeof requestAnimationFrame === "function")
+              requestAnimationFrame(restorePlaygroundFocus);
+            else restorePlaygroundFocus();
+          }}
+          onMediaJobChange={(job) => {
+            setPlaygroundMediaRecovery((current) =>
+              updateMediaRecovery(current, playgroundTarget, job),
+            );
+          }}
+          retainedMediaJob={
+            playgroundMediaRecovery.get(
+              playgroundTargetKey(playgroundTarget),
+            ) ?? null
+          }
+          returnFocusRef={playgroundReturnFocusRef}
+          target={playgroundTarget}
+        />
+      ),
     relationships: projection.relationships,
     returnFocusRef,
     setDeleteTarget,
@@ -1623,6 +1695,7 @@ export function ConfigurationGraph(props: ConfigurationGraphProps) {
     onRefreshGlobal,
     onSelectionChange,
     pending,
+    playground,
     relationships,
     returnFocusRef,
     selectedNodeId,
@@ -1687,6 +1760,7 @@ export function ConfigurationGraph(props: ConfigurationGraphProps) {
                 : "Confirm configuration deletion"
         }
       />
+      {playground}
     </section>
   );
 }
@@ -2314,11 +2388,22 @@ function MappingInspector({
     onNotice,
     setDeleteTarget,
     mappingByName,
+    openPlayground,
+    providerModels,
   } = context;
   const mapping =
     inspector.apiName === null
       ? undefined
       : mappingByName.get(inspector.apiName);
+  const playgroundTarget =
+    mapping === undefined
+      ? null
+      : mappingPlaygroundTarget(
+          mapping.api_name,
+          providerModels,
+          providers,
+          models,
+        );
   return (
     <GraphInspector
       activationKey={`${inspector.kind}:${inspector.apiName ?? "new"}`}
@@ -2466,9 +2551,17 @@ function MappingInspector({
           >
             Delete mapping
           </Button>
-          <Button disabled variant="quiet">
-            Playground available after configuration delivery
-          </Button>
+          {playgroundTarget === null ? null : (
+            <Button
+              disabled={pending}
+              onClick={(event) => {
+                openPlayground(playgroundTarget, event.currentTarget);
+              }}
+              variant="quiet"
+            >
+              Play exact route
+            </Button>
+          )}
         </div>
       )}
     </GraphInspector>
@@ -2624,12 +2717,24 @@ function AssignmentInspector({
     assignmentDirty,
     pending,
     setDeleteTarget,
+    openPlayground,
+    providers,
   } = context;
   const assignment =
     inspector.apiName === null
       ? undefined
       : assignmentByName.get(inspector.apiName);
   const isLocal = assignment?.defined_by_service_api_name === selectedService;
+  const playgroundTarget =
+    assignment === undefined
+      ? null
+      : assignmentPlaygroundTarget(
+          assignment.api_name,
+          selectedService,
+          [...assignmentByName.values()],
+          providerModels,
+          providers,
+        );
   const [definitionMode, setDefinitionMode] = useState(
     assignment?.definition_kind === "inherited_assignment"
       ? "inherit"
@@ -2816,9 +2921,15 @@ function AssignmentInspector({
               Delete local definition
             </Button>
           ) : null}
-          {assignment === undefined ? null : (
-            <Button disabled variant="quiet">
-              Open playground (available in the next configuration delivery)
+          {playgroundTarget === null ? null : (
+            <Button
+              disabled={pending}
+              onClick={(event) => {
+                openPlayground(playgroundTarget, event.currentTarget);
+              }}
+              variant="quiet"
+            >
+              Play assignment
             </Button>
           )}
         </>

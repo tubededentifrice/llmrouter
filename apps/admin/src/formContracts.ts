@@ -139,7 +139,9 @@ export interface InputImageSelectionQueue<T> {
     files: readonly F[],
     read: (file: F) => Promise<T>,
   ) => Promise<readonly T[]>;
-  readonly remove: (matches: (image: T) => boolean) => readonly T[];
+  readonly remove: (matches: (image: T) => boolean) => Promise<readonly T[]>;
+  readonly clear: () => readonly T[];
+  readonly dispose: () => void;
 }
 
 export function createInputImageSelectionQueue<
@@ -150,11 +152,19 @@ export function createInputImageSelectionQueue<
 ): InputImageSelectionQueue<T> {
   let current = [...initial];
   let pending: Promise<void> = Promise.resolve();
+  let generation = 0;
+  let active = true;
   return {
     add(files, read) {
+      const requestedGeneration = generation;
       const operation = pending.then(async () => {
+        if (!active)
+          throw new DOMException("The image queue is closed.", "AbortError");
+        if (requestedGeneration !== generation) return current;
         validateInputImageSelection(current, files);
+        // react-doctor-disable-next-line react-doctor/async-defer-await -- The generation guard must run after all files in this serialized batch finish reading.
         const added = await Promise.all(files.map(read));
+        if (requestedGeneration !== generation) return current;
         current = [...current, ...added];
         onChange(current);
         return current;
@@ -166,9 +176,28 @@ export function createInputImageSelectionQueue<
       return operation;
     },
     remove(matches) {
-      current = current.filter((image) => !matches(image));
-      onChange(current);
+      const operation = pending.then(() => {
+        if (!active) return current;
+        current = current.filter((image) => !matches(image));
+        onChange(current);
+        return current;
+      });
+      pending = operation.then(
+        () => undefined,
+        () => undefined,
+      );
+      return operation;
+    },
+    clear() {
+      generation += 1;
+      current = [];
+      if (active) onChange(current);
       return current;
+    },
+    dispose() {
+      active = false;
+      generation += 1;
+      current = [];
     },
   };
 }

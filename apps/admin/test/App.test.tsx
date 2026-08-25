@@ -11,8 +11,7 @@ import {
   MissingProtectedKeyInspector,
   ServiceManagement,
 } from "../src/ServiceManagement.js";
-import { AdministrationApiError } from "../src/api.js";
-import type { AdministrationClient, MediaJob, Service } from "../src/api.js";
+import type { AdministrationClient, Service } from "../src/api.js";
 import {
   createScopeLoadGuard,
   protectedServiceApiName,
@@ -28,7 +27,6 @@ import {
   validateInputImageSelection,
 } from "../src/formContracts.js";
 import { scheduleSessionExpiry } from "../src/sessionExpiry.js";
-import { waitForMediaJob } from "../src/mediaPolling.js";
 
 const emptyPage = { items: [], page: { has_more: false, next_cursor: null } };
 
@@ -130,7 +128,10 @@ describe("accepted administration composition", () => {
     expect(configuration).toContain("Global models and mappings");
     expect(application).not.toContain("key={selectedService}");
     expect(application).toContain("assignmentPending");
-    expect(configuration).toContain(
+    expect(configuration).toContain("Play exact route");
+    expect(configuration).toContain("Play assignment");
+    expect(configuration).toContain("<PlaygroundModal");
+    expect(configuration).not.toContain(
       "Playground available after configuration delivery",
     );
   });
@@ -368,40 +369,6 @@ describe("load isolation", () => {
   });
 });
 
-describe("media job polling", () => {
-  it("stops at the poll bound without claiming a provider failure", async () => {
-    const pending: MediaJob = {
-      id: "safe-job-id",
-      workspace_api_name: "workspace",
-      provider_model_api_name: "image-route",
-      kind: "image",
-      state: "pending",
-      created_at: "2026-08-24T00:00:00Z",
-    };
-    const mediaJob = vi.fn().mockResolvedValue(pending);
-    const wait = vi.fn().mockResolvedValue(undefined);
-    const error: unknown = await waitForMediaJob(
-      { mediaJob },
-      pending,
-      2,
-      wait,
-    ).catch((caught: unknown) => caught);
-    expect(error).toMatchObject({
-      code: "media_job_poll_timeout",
-      message: "Media job safe-job-id is still pending.",
-      status: 408,
-    });
-    expect(error).not.toMatchObject({ code: "upstream_failed" });
-    expect(mediaJob).toHaveBeenCalledTimes(2);
-    expect(wait).toHaveBeenCalledTimes(2);
-    expect(error).toBeInstanceOf(AdministrationApiError);
-    if (!(error instanceof AdministrationApiError)) throw error;
-    expect(error.details?.reason).toBe(
-      "The playground stopped polling job safe-job-id. The job can still complete. Do not submit the same work again. Query /v1/media-jobs/safe-job-id with the same service key.",
-    );
-  });
-});
-
 describe("playground image boundaries", () => {
   const image = (size: number, type = "image/png") => ({ size, type });
 
@@ -510,6 +477,92 @@ describe("playground image boundaries", () => {
     );
     await expect(accepted).resolves.toHaveLength(2);
     await expect(rejected).rejects.toThrow("52,428,800 bytes or less");
+  });
+
+  it("orders removal after an active selection batch", async () => {
+    interface Item {
+      readonly id: string;
+      readonly sizeBytes: number;
+    }
+    const changes: (readonly Item[])[] = [];
+    let release: (() => void) | undefined;
+    const reading = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const queue = createInputImageSelectionQueue<Item>(
+      [
+        { id: "keep", sizeBytes: 1 },
+        { id: "remove", sizeBytes: 1 },
+      ],
+      (items) => {
+        changes.push(items);
+      },
+    );
+    const adding = queue.add([image(1)], async () => {
+      await reading;
+      return { id: "added", sizeBytes: 1 };
+    });
+    const removing = queue.remove((item) => item.id === "remove");
+    release?.();
+    await expect(adding).resolves.toHaveLength(3);
+    await expect(removing).resolves.toEqual([
+      { id: "keep", sizeBytes: 1 },
+      { id: "added", sizeBytes: 1 },
+    ]);
+    expect(changes.at(-1)?.map((item) => item.id)).toEqual(["keep", "added"]);
+  });
+
+  it("drops a late file read after queue disposal", async () => {
+    interface Item {
+      readonly id: string;
+      readonly sizeBytes: number;
+    }
+    const changes = vi.fn();
+    let release: (() => void) | undefined;
+    const reading = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const queue = createInputImageSelectionQueue<Item>([], changes);
+    const adding = queue.add([image(1)], async () => {
+      await reading;
+      return { id: "late", sizeBytes: 1 };
+    });
+    await Promise.resolve();
+    queue.dispose();
+    release?.();
+    await expect(adding).resolves.toEqual([]);
+    expect(changes).not.toHaveBeenCalled();
+    await expect(queue.remove(() => true)).resolves.toEqual([]);
+  });
+
+  it("drops active and queued selections after reset", async () => {
+    interface Item {
+      readonly id: string;
+      readonly sizeBytes: number;
+    }
+    let release: (() => void) | undefined;
+    const reading = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const changes: (readonly Item[])[] = [];
+    const secondRead = vi.fn(() =>
+      Promise.resolve({ id: "queued", sizeBytes: 1 }),
+    );
+    const queue = createInputImageSelectionQueue<Item>([], (items) => {
+      changes.push(items);
+    });
+    const active = queue.add([image(1)], async () => {
+      await reading;
+      return { id: "active", sizeBytes: 1 };
+    });
+    const queued = queue.add([image(1)], secondRead);
+    await Promise.resolve();
+    expect(queue.clear()).toEqual([]);
+    release?.();
+    await expect(active).resolves.toEqual([]);
+    await expect(queued).resolves.toEqual([]);
+    expect(secondRead).not.toHaveBeenCalled();
+    expect(changes).toEqual([[]]);
   });
 });
 
