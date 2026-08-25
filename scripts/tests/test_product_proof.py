@@ -139,6 +139,10 @@ def test_browser_proof_keeps_authentication_and_provider_work_safe() -> None:
     assert '"httpOnly": True' in source
     assert '"sameSite": "Lax"' in source
     assert '"secure": False' in source
+    assert '"--remote-debugging-address=127.0.0.1"' in source
+    assert 'f"--remote-allow-origins=http://127.0.0.1:{port}"' in source
+    assert 'f"Origin: http://{url.host}:{url.port}\\r\\n"' in source
+    assert '"--remote-allow-origins=*"' not in source
     assert '"provider_model_api_name": "text"' in source
     assert '"provider_model_api_name": "embedding"' in source
     assert '"provider_model_api_name": "media"' in source

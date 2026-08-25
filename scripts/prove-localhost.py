@@ -769,8 +769,12 @@ def _prove_native_http(  # noqa: PLR0913, PLR0917
             == administrator_events[-1][1]["logical_call_id"]
             == administrator_stream.headers["x-llmrouter-logical-call-id"]
         )
+        administrator_attempts = administrator_events[-1][1]["attempts"]
+        assert isinstance(administrator_attempts, list)
+        assert all(isinstance(item, dict) for item in administrator_attempts)
         assert [
-            item["outcome"] for item in administrator_events[-1][1]["attempts"]
+            item["outcome"]
+            for item in cast("list[dict[str, object]]", administrator_attempts)
         ] == ["succeeded"]
 
         administrator_embedding = client.post(
@@ -813,7 +817,12 @@ def _prove_native_http(  # noqa: PLR0913, PLR0917
             administrator_media_ids.append(str(administrator_job["id"]))
             assert administrator_job["state"] == "succeeded"
             assert administrator_job["provider_model_api_name"] == "media"
-            assert administrator_job["attempts"][-1]["outcome"] == "succeeded"
+            administrator_attempts = administrator_job["attempts"]
+            assert isinstance(administrator_attempts, list)
+            assert administrator_attempts
+            final_administrator_attempt = administrator_attempts[-1]
+            assert isinstance(final_administrator_attempt, dict)
+            assert final_administrator_attempt["outcome"] == "succeeded"
             administrator_content = client.get(
                 f"/v1/admin/playground/media-jobs/{administrator_job['id']}/content",
                 headers=admin_read_headers,
@@ -1235,7 +1244,8 @@ def _prove_hydrated_administration(admin_session: str) -> None:
                 "--no-sandbox",
                 "--disable-gpu",
                 "--disable-dev-shm-usage",
-                "--remote-allow-origins=*",
+                f"--remote-allow-origins=http://127.0.0.1:{port}",
+                "--remote-debugging-address=127.0.0.1",
                 f"--remote-debugging-port={port}",
                 f"--user-data-dir={profile}",
                 "about:blank",
@@ -1296,7 +1306,7 @@ def _prove_administrator_logout(admin_session: str, csrf: str) -> None:
             "/v1/admin/session",
             headers={"Cookie": f"llmrouter_admin_session={admin_session}"},
         )
-        assert rejected.status_code == 401
+        assert rejected.status_code == 401, rejected.status_code
         assert rejected.json()["error"]["code"] == "authentication_required"
 
 
@@ -1658,6 +1668,21 @@ def _prove_configuration_graph(browser: _Cdp, *, mobile: bool) -> None:
     """Prove global catalog, selected assignments, and contextual playground."""
     _navigate(browser, "/configuration", "LLM configuration")
     _assert_layout(browser, mobile=mobile)
+    _wait_browser(
+        browser,
+        """(() => {
+          const columns = [...document.querySelectorAll(".od-relationship-graph-column h2")]
+            .map((item) => item.textContent?.trim());
+          return JSON.stringify(columns) === JSON.stringify([
+            "Global providers",
+            "Global models and mappings",
+            "Service assignments"
+          ]) && document.querySelector(
+            "[aria-label='Global LLM configuration and selected service assignments']"
+          ) !== null;
+        })()""",
+        "The global configuration graph columns did not become ready",
+    )
     initial = browser.evaluate(
         """(() => ({
           columns: [...document.querySelectorAll(".od-relationship-graph-column h2")]
@@ -2097,11 +2122,18 @@ def _prove_route_and_state_matrix(browser: _Cdp, *, mobile: bool) -> None:
     )
     _assert_layout(browser, mobile=mobile)
     _navigate(browser, "/configuration", "LLM configuration")
-    browser.evaluate("globalThis.__llmrouterProofMode = 'error'")
-    _click_text(browser, "Refresh")
     _wait_browser(
         browser,
-        "document.body.innerText.includes('Injected proof failure.') && "
+        "document.querySelector(\"[aria-label='Global LLM configuration and selected service assignments']\") !== null && "
+        "[...document.querySelectorAll('.administration-topbar-actions button')].some("
+        "(item) => item.textContent?.trim() === 'Refresh' && !item.disabled)",
+        "The current configuration graph was not ready for its failed refresh proof",
+    )
+    browser.evaluate("globalThis.__llmrouterProofMode = 'error'")
+    _click_text(browser, "Refresh", scope=".administration-topbar-actions")
+    _wait_browser(
+        browser,
+        "document.querySelector(\"[role='alert']\")?.textContent?.includes('Injected proof failure.') === true && "
         "document.querySelector(\"[aria-label='Global LLM configuration and selected service assignments']\") !== null",
         "A failed refresh did not retain and label the current configuration graph",
     )
@@ -2201,6 +2233,7 @@ class _Cdp:
         request = (
             f"GET {url.raw_path.decode()} HTTP/1.1\r\n"
             f"Host: {url.host}:{url.port}\r\n"
+            f"Origin: http://{url.host}:{url.port}\r\n"
             "Upgrade: websocket\r\nConnection: Upgrade\r\n"
             f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n"
         )

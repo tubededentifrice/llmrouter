@@ -6,7 +6,10 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import socket
 import threading
+import time
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
 from typing import TYPE_CHECKING, Any
@@ -15,6 +18,7 @@ from urllib.parse import parse_qs, urlsplit
 import httpx
 import psycopg
 import pytest
+import uvicorn
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from fastapi.testclient import TestClient
@@ -26,6 +30,7 @@ from llmrouter_backend.store import create_administrator_session
 from psycopg.rows import dict_row
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
     from pathlib import Path
 
 ADMIN_ORIGIN = "http://127.0.0.1:5174"
@@ -906,6 +911,86 @@ def test_oidc_pkce_callback_session_csrf_logout_and_expiry(
         client.get("/v1/admin/session", headers=context.admin_read_headers).status_code
         == HTTPStatus.UNAUTHORIZED
     )
+
+
+def test_live_logout_commits_before_no_content_response(
+    migrated_database: str,
+    identity_settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Commit session revocation before the live server sends success."""
+    context = IdentityTestContext(migrated_database, identity_settings)
+    context.seed_administrator()
+    application = create_app(
+        database_url=migrated_database,
+        settings=identity_settings,
+        price_sources={},
+    )
+    connections = application.state.database_connections
+    original_connect = connections.connect
+    delay_next_exit = threading.Event()
+    exit_waiting = threading.Event()
+    release_exit = threading.Event()
+
+    @contextmanager
+    def delayed_connect(conninfo: str, **kwargs: Any) -> Iterator[Any]:
+        delay_exit = delay_next_exit.is_set()
+        if delay_exit:
+            delay_next_exit.clear()
+        with original_connect(conninfo, **kwargs) as database:
+            yield database
+            if delay_exit:
+                exit_waiting.set()
+                assert release_exit.wait(timeout=5)
+
+    monkeypatch.setattr(connections, "connect", delayed_connect)
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    listener.settimeout(0.0)
+    port = int(listener.getsockname()[1])
+    server = uvicorn.Server(
+        uvicorn.Config(
+            application,
+            host="127.0.0.1",
+            port=port,
+            lifespan="off",
+            log_level="warning",
+            access_log=False,
+        )
+    )
+    thread = threading.Thread(
+        target=server.run,
+        kwargs={"sockets": [listener]},
+        daemon=True,
+    )
+    thread.start()
+    try:
+        deadline = time.monotonic() + 5
+        while not server.started and thread.is_alive() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert server.started
+        delay_next_exit.set()
+        with httpx.Client(
+            base_url=f"http://127.0.0.1:{port}", timeout=5, trust_env=False
+        ) as client:
+            logged_out = client.delete(
+                "/v1/admin/session", headers=context.admin_headers
+            )
+            assert logged_out.status_code == HTTPStatus.NO_CONTENT
+            assert exit_waiting.wait(timeout=2)
+            rejected = client.get(
+                "/v1/admin/session", headers=context.admin_read_headers
+            )
+            assert rejected.status_code == HTTPStatus.UNAUTHORIZED
+            assert rejected.json()["error"]["code"] == "authentication_required"
+    finally:
+        release_exit.set()
+        server.should_exit = True
+        thread.join(timeout=5)
+        listener.close()
+    assert not thread.is_alive()
 
 
 def test_corrupt_session_control_data_fails_as_authentication(

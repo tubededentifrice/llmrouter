@@ -1213,6 +1213,7 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
     ) -> Response:
         _require_browser_write(request, actor, controls)
         delete_administrator_session(database, actor.session_verifier)
+        database.commit()
         response = Response(status_code=HTTPStatus.NO_CONTENT)
         response.delete_cookie(
             _ADMINISTRATOR_COOKIE,
