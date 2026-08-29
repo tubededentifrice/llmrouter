@@ -1,0 +1,4 @@
+interface:
+  display_name: "LLM Router Bug Bash"
+  short_description: "Verify defects and create review-ready Beads"
+  default_prompt: "Use $bbash to run an interactive LLM Router bug-bash session and create verified Beads tasks."

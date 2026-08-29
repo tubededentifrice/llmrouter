@@ -47,6 +47,8 @@ required_files=(
   ".beads/README.md"
   ".beads/config.yaml"
   ".beads/metadata.json"
+  ".claude/skills/bbash/SKILL.md"
+  ".claude/skills/bbash/agents/openai.yaml"
   ".claude/skills/beads/SKILL.md"
   ".claude/skills/director/SKILL.md"
   ".claude/skills/director/agents/openai.yaml"
