@@ -63,9 +63,11 @@ exact allowed origin. Logout MUST invalidate the local session.
 The Router MUST host only one global administration application. It MUST let
 an administrator:
 
-- create, move, inspect, and delete services;
-- create, inspect, and delete workspaces in the selected-service inspector;
-- create and revoke service API keys in the selected-service inspector;
+- manage services, workspaces, and service API keys in the Services destination
+  as specified for the
+  [compact selected-service inspector](01-services-workspaces-and-assignments.md#compact-selected-service-inspector)
+  and the
+  [service-details route](01-services-workspaces-and-assignments.md#service-details-route);
 - manage provider connections, credentials, models, capabilities, prices, and
   service assignments in one configuration board;
 - preview and import model catalog entries from the model-create workflow;
@@ -76,12 +78,13 @@ an administrator:
   the small health summary.
 
 The sidebar MUST NOT contain separate workspace-and-key, provider, model,
-assignment, or playground destinations. The service tree MUST own service,
-workspace, and key administration. The three-column configuration board MUST
-own provider, model, provider-model, assignment, and contextual playground
-administration. Direct application paths for removed destinations MAY redirect
-to the applicable retained board, but MUST NOT keep a second configuration
-page.
+assignment, or playground destinations. The Services destination MUST own
+service, workspace, and key administration as specified in
+[Services, workspaces, and assignments](01-services-workspaces-and-assignments.md#service-details-route).
+The three-column configuration board MUST own provider, model, provider-model,
+assignment, and contextual playground administration. Direct application paths
+for removed destinations MAY redirect to the applicable retained board, but
+MUST NOT keep a second configuration page.
 
 ### Administration content
 
@@ -115,14 +118,14 @@ purpose. This removal does not change the basic-activity requirements in
 
 The content inventory MUST cover these retained routes:
 
-| Path             | View                         | Content that the inventory MUST check                                    |
-| ---------------- | ---------------------------- | ------------------------------------------------------------------------ |
-| `/overview`      | overview                     | totals, health, and cooldown summaries                                   |
-| `/services`      | service administration       | the service tree, inspectors, workspaces, and keys                       |
-| `/configuration` | configuration administration | all three board columns, inspectors, forms, and playground entry points  |
-| `/logs`          | retained-log inspection      | filters, retained records, selected details, media, and retention states |
-| `/statistics`    | accounting statistics        | filters, query states, and accounting results                            |
-| `/operations`    | operations                   | health, retention, cooldowns, and activity                               |
+| Path             | View                         | Content that the inventory MUST check                                                |
+| ---------------- | ---------------------------- | ------------------------------------------------------------------------------------ |
+| `/overview`      | overview                     | totals, health, and cooldown summaries                                               |
+| `/services`      | service administration       | the service tree, compact and create inspectors, and the service-details child route |
+| `/configuration` | configuration administration | all three board columns, inspectors, forms, and playground entry points              |
+| `/logs`          | retained-log inspection      | filters, retained records, selected details, media, and retention states             |
+| `/statistics`    | accounting statistics        | filters, query states, and accounting results                                        |
+| `/operations`    | operations                   | health, retention, cooldowns, and activity                                           |
 
 For each route, the test inventory MUST list each static helper text item, its
 expected presence or absence, and one allowed keep reason for each retained
@@ -150,9 +153,11 @@ horizontal overflow. A graph or dense data region MAY scroll in its own
 labelled viewport when its content cannot reflow. Its heading, filters, and
 primary actions MUST remain outside that scrolling region.
 
-The service tree MUST use nodes and inspectors as its complete interaction
-surface. The three-column configuration board MUST use compound cards, nested
-rows, and inspectors as its complete interaction surface. A graph or board
+The service tree MUST use nodes and inspectors as its graph interaction
+surface. Service management outside the graph MUST follow
+[Services, workspaces, and assignments](01-services-workspaces-and-assignments.md#service-details-route).
+The three-column configuration board MUST use compound cards, nested rows, and
+inspectors as its complete interaction surface. A graph or board
 toolbar MUST NOT show a visible surface title such as `Service tree` or repeat
 the page title. The page heading and the graph or board accessible name MUST
 provide the necessary context. A tree that is smaller than its viewport MUST
@@ -191,12 +196,14 @@ MUST connect to its exact provider route on the left. Home and End MUST move to
 the first and last visible actionable control in the current column.
 
 A key that has no valid target MUST keep focus on the current control. A focus
-change MUST scroll the focused control into the labelled local viewport. Enter
-or Space MUST open the same inspector or modal as a pointer action. An
-assignment rung action MUST open its assignment inspector and identify that
-rung. Escape MUST close the inspector or modal and return focus to the opening
-control. If that control no longer exists, focus MUST follow the
-unavailable-record rule below.
+change MUST scroll the focused control into the labelled local viewport. The
+service-node keyboard behavior MUST follow
+[Services, workspaces, and assignments](01-services-workspaces-and-assignments.md#compact-selected-service-inspector).
+For each other graph or board control, Enter or Space MUST open the same
+inspector or modal as a pointer action. An assignment rung action MUST open its
+assignment inspector and identify that rung. Escape MUST close the inspector or
+modal and return focus to the opening control. If that control no longer exists,
+focus MUST follow the unavailable-record rule below.
 
 The graph or board MUST expose selected, expanded, inherited, disabled, empty,
 loading, error, partial, and unavailable state without color alone. A refresh
