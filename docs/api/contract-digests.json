@@ -10,7 +10,7 @@
     },
     {
       "path": "docs/api/openapi.yaml",
-      "sha256": "5b2fbe1bed19491bfcbd69f186f11f689aa78cca4e8b9ed0e44567184d23a956"
+      "sha256": "10c65e477876deca9aaf6cd38317d52f708e48a0da29b74e4407db3ee5d22474"
     },
     {
       "path": "docs/api/stream-protocol.md",
@@ -18,7 +18,7 @@
     }
   ],
   "component_schemas": {
-    "ActivityEvent": "d17ed9617f7b80bd534b6edcf059bf48495a4434ae5c886fe181d32d50832c9d",
+    "ActivityEvent": "f97e9e2b61909c9f9f7ae523ddc1ca76c642570c1d00c7143c29d455ad05300e",
     "ActivityPage": "360434a60db7b696d56c2af8cc4f4e0cf30e3723e89f64f62804be0387c17418",
     "AdministratorAssignmentSelector": "23caf168e18f206a7985bd36e778031c367841d0e9392026280cdd5ac43f0884",
     "AdministratorAttemptResult": "af9700513886f8588e529f33c24a90516e9b195e96867d6162d01b836ad19f90",
@@ -53,16 +53,16 @@
     "ConfigurationDeletionConfirmation": "cf8fc02531252b6febb145b2bd83f3d909b9caf390d69e2ed8ced04849afc44a",
     "ConfigurationDeletionConfirmationToken": "8a410836ef8bc7b935c95b941dc0bef7f7dd082865518de83e7af93a54cd81a1",
     "ConfigurationDeletionConflictErrorEnvelope": "7d31e6ba02dc7ee93c96f9043fc2308c12b63c40a7c301c6e21239eee42d1e80",
-    "ConfigurationDeletionEffect": "1d23c84dbb99c515d35cb4e1f16949c341e3fb664b09c414ac14fb75982bd664",
+    "ConfigurationDeletionEffect": "18256465a8b227016a76a42cb402d804d75019fecb75953223bed74cfa84de0f",
     "ConfigurationDeletionEffectKind": "24f3097db6204ee01b5a2fbccffc358d43eafd674f9c0afae02b4ad1a5aad30f",
     "ConfigurationDeletionOperation": "44e9a49b5bcaf3b035df1e40d9a0aa36a240d15352a1da28db2308e0f4e4dd9f",
     "ConfigurationDeletionPreview": "3d38f219b989baeb0c4905238577c1279e1dcd6fba3a149384a756e326447dc6",
     "ConfigurationDeletionPreviewRequest": "97e71ae93654c96a6ccbc56c55546eaca1dce9f87c8e007103083477fdae761e",
-    "ConfigurationDeletionResourceKind": "c6d89e8a9e73abafe2210e4068ec0892b6d8f7010e0d10325fb8ba8ac1224322",
+    "ConfigurationDeletionResourceKind": "c3fb626d47bd88165882ab6dcffc74d77811be0fa826a6da071962f7cfca022c",
     "ConfigurationDeletionResult": "9d0585389df66ab497dd43f95b37dcb20b23a01bacb155cd4748eec264b51811",
     "ConfigurationDeletionStorageErrorEnvelope": "9792d7c6b1cb91d0d933b513482c418d6e0d8b11820a00b29e4ea4e4a8ae355b",
-    "ConfigurationDeletionTarget": "3193be1f5ac05353f9788b550600316646ee257889e6374890b6db63986417be",
-    "ConfigurationDeletionTargetKind": "442570f29815496b9de5f937498c5f125909fa24b24c53d413bc3f3c0cced842",
+    "ConfigurationDeletionTarget": "bdf9046b586c94d85c2c7fb00180d31633f86e2af06eec5ee7a9c0a52fd8e3b7",
+    "ConfigurationDeletionTargetKind": "0e884eae98d3bcffb649afdf75dbc81a615ac71aa98467b20971f2490e758147",
     "ConfigurationDeletionTargetNotFoundErrorEnvelope": "844502cb43ea7076f416343a3a5687834fb55fdf0b8ea427bdac0a31364995d5",
     "ConfigurationDeletionValidationErrorEnvelope": "d60c278c550f279ce9343d5ee2676709fbb4e6101b9e23c603bdc4b7d4e57d46",
     "ConnectionAdministratorAttemptResult": "d31bb4b75538a3e864c3fb4de38a644f741709687ffa9ae86f0d5f9aebcbb6ce",
@@ -184,6 +184,6 @@
   },
   "contract_set": "llmrouter-v1",
   "generator_version": 3,
-  "source_sha256": "5b2fbe1bed19491bfcbd69f186f11f689aa78cca4e8b9ed0e44567184d23a956",
+  "source_sha256": "10c65e477876deca9aaf6cd38317d52f708e48a0da29b74e4407db3ee5d22474",
   "version": "1.0.0"
 }

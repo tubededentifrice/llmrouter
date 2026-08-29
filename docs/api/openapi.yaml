@@ -2245,19 +2245,19 @@ components:
       type: string
       enum:
         - provider
-        - canonical_model
-        - provider_route
-        - provider_credential
+        - model
+        - provider_model
+        - credential
         - assignment
     ConfigurationDeletionResourceKind:
       type: string
       enum:
         - provider
-        - canonical_model
-        - provider_route
-        - provider_credential
-        - canonical_model_price
-        - provider_route_price
+        - model
+        - provider_model
+        - credential
+        - model_price
+        - provider_model_price
         - assignment
         - assignment_candidate_link
         - assignment_parent_reference
@@ -2309,7 +2309,7 @@ components:
               $ref: "#/components/schemas/AssignmentName"
         - properties:
             kind:
-              enum: [provider, canonical_model, provider_route, provider_credential]
+              enum: [provider, model, provider_model, credential]
             api_name:
               $ref: "#/components/schemas/ApiName"
           not:
@@ -2335,7 +2335,7 @@ components:
           description: The resource API identity. For a relation, this is the owning or child assignment API identity.
         service_api_name:
           $ref: "#/components/schemas/ApiName"
-        provider_route_api_name:
+        provider_model_api_name:
           description: The other endpoint of an assignment candidate link.
           $ref: "#/components/schemas/ApiName"
         parent_assignment_api_name:
@@ -2369,9 +2369,9 @@ components:
               enum: [assignment, assignment_resolution]
           not:
             anyOf:
-              - required: [provider_route_api_name]
+              - required: [provider_model_api_name]
               - required: [parent_assignment_api_name]
-        - required: [service_api_name, provider_route_api_name]
+        - required: [service_api_name, provider_model_api_name]
           properties:
             resource_kind:
               const: assignment_candidate_link
@@ -2386,22 +2386,22 @@ components:
               const: assignment_parent_reference
           not:
             anyOf:
-              - required: [provider_route_api_name]
+              - required: [provider_model_api_name]
               - required: [previous_effective_chain]
               - required: [resulting_effective_chain]
         - properties:
             resource_kind:
               enum:
                 - provider
-                - canonical_model
-                - provider_route
-                - provider_credential
-                - canonical_model_price
-                - provider_route_price
+                - model
+                - provider_model
+                - credential
+                - model_price
+                - provider_model_price
           not:
             anyOf:
               - required: [service_api_name]
-              - required: [provider_route_api_name]
+              - required: [provider_model_api_name]
               - required: [parent_assignment_api_name]
               - required: [previous_effective_chain]
               - required: [resulting_effective_chain]
@@ -4437,7 +4437,10 @@ components:
         service_api_name:
           $ref: "#/components/schemas/ApiName"
         resource_api_name:
-          $ref: "#/components/schemas/ApiName"
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: The API identity of the target resource or relation.
         resource_id:
           $ref: "#/components/schemas/OpaqueId"
         result:

@@ -147,14 +147,15 @@ A provider connection MUST show one of these board states:
 - `Unavailable` when it is enabled but a required credential or required
   adapter setting is not available. The card MUST show the corrective reason.
 
-A provider route MUST show `Enabled` when its stored route enablement is on and
-its provider is ready. It MUST show `Disabled` when its stored route enablement
-is off. It MUST show `Unavailable` when its stored route enablement is on but
-its provider is disabled or unavailable, when it has an active cooldown, or
-when the board cannot load a required referenced record. The row MUST show the
-cause. For a cooldown, it MUST show `Cooldown until {time}`. The board MUST keep
-a disabled or unavailable route in its model card and assignment rungs. It
-MUST NOT remove the route or silently connect the rung to another route.
+A provider route MUST show `Enabled` when its stored route enablement is on,
+its canonical model is enabled, and its provider is ready. It MUST show
+`Disabled` when its stored route enablement is off. It MUST show `Unavailable`
+when its stored route enablement is on but its canonical model is disabled,
+when its provider is disabled or unavailable, when it has an active cooldown,
+or when the board cannot load a required referenced record. The row MUST show
+the cause. For a cooldown, it MUST show `Cooldown until {time}`. The board MUST
+keep a disabled or unavailable route in its model card and assignment rungs.
+It MUST NOT remove the route or silently connect the rung to another route.
 
 `Ready` and `Enabled` on the board mean configuration readiness. They MUST NOT
 promise that a later provider call will succeed. Live provider health and
@@ -658,11 +659,12 @@ NOT contain a credential value, old field value, request content, model
 content, or confirmation token. A retained shared credential is not changed
 and MUST NOT create a per-resource effect event.
 
-An active call or provider attempt MAY finish with the immutable
-configuration and credential snapshot that it loaded before the confirmation
-committed. A new call admitted after commit MUST use the post-commit
-configuration. It MUST skip each disabled provider, canonical model, and
-provider-model mapping.
+An active call MAY finish with the immutable configuration snapshot that it
+loaded before the confirmation committed. An active provider attempt MAY
+finish with a credential value that it received in process memory before the
+confirmation committed. A new call admitted after commit MUST use the
+post-commit configuration. It MUST skip each disabled provider, canonical
+model, and provider-model mapping.
 
 Detailed logs, raw accounting, daily aggregates, media jobs, retained media,
 and activity events MUST keep their admitted immutable provider, model,
