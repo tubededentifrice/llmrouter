@@ -92,13 +92,14 @@ horizontal overflow. A graph or dense data region MAY scroll in its own
 labelled viewport when its content cannot reflow. Its heading, filters, and
 primary actions MUST remain outside that scrolling region.
 
-The service tree and the three-column configuration board MUST use nodes,
-compound cards, and inspectors as their complete interaction surface. A graph toolbar MUST NOT
-show a visible graph title such as `Service tree`. The page heading and the
-graph's accessible name MUST provide the necessary context. A tree that is
-smaller than its viewport MUST be centered in the available graph stage. A
-larger tree MUST keep its layout origin and MUST be reachable with bounded
-graph-viewport scrolling.
+The service tree MUST use nodes and inspectors as its complete interaction
+surface. The three-column configuration board MUST use compound cards, nested
+rows, and inspectors as its complete interaction surface. A graph or board
+toolbar MUST NOT show a visible surface title such as `Service tree` or repeat
+the page title. The page heading and the graph or board accessible name MUST
+provide the necessary context. A tree that is smaller than its viewport MUST
+be centered in the available graph stage. A larger tree MUST keep its layout
+origin and MUST be reachable with bounded graph-viewport scrolling.
 
 Each actionable node, compound-card header, nested row, and assignment rung
 MUST be a semantic control in the browser accessibility tree. Its accessible
@@ -123,7 +124,7 @@ an expanded node.
 In the configuration board, Up and Down MUST move through every visible
 actionable control in the current column. The rendered order of a compound
 card MUST put its header before its nested rows. The rendered order of an
-assignment card MUST put its header before its fallback rungs. Left and Right
+assignment card MUST put its header before its ordered rungs. Left and Right
 MUST move only through an actual relationship to the nearest connected control
 in rendered order in the adjacent column. A provider connection MUST connect
 to its provider-route rows. A provider-route row MUST connect to its provider
@@ -133,11 +134,11 @@ the first and last visible actionable control in the current column.
 
 A key that has no valid target MUST keep focus on the current control. A focus
 change MUST scroll the focused control into the labelled local viewport. Enter
-or Space MUST open the same inspector or modal as a pointer action. A fallback
-rung action MUST open its assignment inspector and identify that rung. Escape
-MUST close the inspector or modal and return focus to the opening control. If
-that control no longer exists, focus MUST follow the unavailable-record rule
-below.
+or Space MUST open the same inspector or modal as a pointer action. An
+assignment rung action MUST open its assignment inspector and identify that
+rung. Escape MUST close the inspector or modal and return focus to the opening
+control. If that control no longer exists, focus MUST follow the
+unavailable-record rule below.
 
 The graph or board MUST expose selected, expanded, inherited, disabled, empty,
 loading, error, partial, and unavailable state without color alone. A refresh
@@ -174,16 +175,22 @@ known references.
 
 OpenDLE UI component tests MUST cover compound-group semantics, nested-row
 connector endpoints, shared routes, the one-tab-stop model, all specified
-keyboard keys, search-result context, focus return, partial and unavailable
-state, fixed wide-screen columns, phone stacking, local scrolling, and
-responsive inspectors. Router tests MUST supply the domain assertions defined
-in the linked configuration-board specification. A consumer test MUST prove
-that the shared engine renders host data without importing Router domain
-types.
+keyboard keys, search-result context, focus return, partial, unavailable,
+empty, loading, and error states, fixed wide-screen columns, phone stacking,
+local scrolling, and responsive inspectors. Router tests MUST supply the
+domain assertions defined in the linked configuration-board specification. A
+consumer test MUST prove that the shared engine renders host data without
+importing Router domain types.
 
 Each graph or board inspector MUST use a right-side panel on a wide screen and
 a bottom sheet on a phone. Its content MUST use a local scroll region when
 necessary.
+Opening an inspector MUST move focus to its heading. The heading MUST be a
+programmatic focus target, and Tab MUST move to its first applicable control.
+On a wide screen, the side panel MUST let focus leave it. Tab and Shift+Tab MUST
+let the user move between the panel and the rest of the page. On a phone, the
+bottom sheet MUST make the background inactive and MUST keep focus in the sheet
+until it closes.
 Opening or closing an inspector MUST NOT change the page width or hide the
 focused control outside the reachable local viewport. A failed create,
 change, or delete MUST keep the applicable inspector open, keep the entered

@@ -49,8 +49,9 @@ MUST stack in the same `Providers`, `Canonical models`, and `Assignments`
 order. A compound model card MUST keep its provider routes nested when the
 columns stack. If a connector line cannot stay clear in the stacked layout,
 the route row and assignment rung MUST show the full relationship as text. The
-phone layout MUST keep every record and action available and MUST NOT cause
-page-level horizontal overflow.
+text MUST be the same as the applicable connector's accessible name. The phone
+layout MUST keep every record and action available and MUST NOT cause page-level
+horizontal overflow.
 
 Provider connections, credentials, canonical models, provider-model mappings,
 capabilities, and prices in the first two columns MUST always be global. When
@@ -62,13 +63,13 @@ inherited sources. Selecting a service MUST NOT create a service-owned copy or
 allowlist of a provider, model, mapping, credential, capability, or price.
 
 Changing the selected service MUST replace only the assignment column. It MUST
-close an open assignment inspector or playground. It MUST NOT silently discard
-an unsubmitted service-assignment form. It MUST let the administrator cancel
-the service change or confirm that the form will close. A response for the
-previously selected service MUST NOT replace data for the current selection.
-Each assignment write from the board MUST name the selected service. When no
-service is selected, assignment create, change, and delete actions MUST be
-unavailable.
+close an open assignment inspector or assignment playground. It MUST NOT
+silently discard an unsubmitted service-assignment form. It MUST let the
+administrator cancel the service change or confirm that the form will close.
+A response for the previously selected service MUST NOT replace data for the
+current selection. Each assignment write from the board MUST name the selected
+service. When no service is selected, assignment create, change, and delete
+actions MUST be unavailable.
 
 ### Records and technical identities
 
@@ -117,13 +118,22 @@ display name, provider-route identity, and current route state. It MUST connect
 to the exact nested provider-route row, not to the canonical-model card as a
 whole. One route MAY connect to more than one assignment or position.
 
+The last-use text MUST be `Last used: {time}` when `last_used_at` is available.
+It MUST be `Last used: Never` when `last_used_at` is not available. Observed
+requirements MUST use the same user-facing labels as the corresponding model
+modalities and capabilities. An empty list MUST show
+`No observed requirements.`
+
 The visible provider-to-route relationship label MUST be `Provides`. The
 visible route-to-assignment labels MUST be `Primary` and `Fallback {position}`.
 The provider connector's accessible name MUST be
-`Provides {route identity} for {model name}`. The assignment connector's
-accessible name MUST be `{relationship label} for {assignment name}`.
-Decorative connector lines MAY be hidden from assistive technology only when
-these names and the connected controls provide the same complete relationship.
+`{provider display_name} (Provider ID: {provider.api_name}) provides Route ID:
+{provider_model.api_name} for {model display_name} (Model ID:
+{model.api_name})`. The assignment connector's accessible name MUST be
+`{relationship label}: Route ID: {provider_model.api_name} for {assignment
+display_name} (Assignment ID: {assignment.api_name})`. Decorative connector
+lines MAY be hidden from assistive technology only when these names and the
+connected controls provide the same complete relationship.
 
 ### Readiness, state, and inheritance
 
@@ -174,20 +184,22 @@ records for that summary.
 
 An assignment card MUST use these exact source labels:
 
-- `Local definition` for a direct definition on the selected service;
+- `Local definition` for a definition stored on the selected service;
 - `Inherited from {service display_name} ({service api_name})` when the
   effective definition comes from an ancestor service;
 - `Inherits {assignment display_name} ({assignment api_name})` when the
   selected definition names another assignment;
 - `Implicit root default` for the empty implicit root `default`.
 
-The card MUST show `Local definition` or `Inherited from ...` as its definition
-source. It MUST also show `Inherits ...` when that definition names another
-assignment. The card MUST show the resolved effective rungs after these
-labels. It MUST NOT merge parent and child chains. An inherited card and its
-rungs MUST show `Inherited` without color alone. An administrator MUST be able
-to inspect the source service or inherited assignment from this context. The
-board MUST NOT invent a local definition when it presents inherited state.
+The card MUST show `Local definition`, `Inherited from ...`, or
+`Implicit root default` as its definition source. It MUST also show
+`Inherits ...` when that definition names another assignment. The card MUST
+show the resolved effective rungs after these labels. It MUST NOT merge parent
+and child chains. An inherited card and its rungs MUST identify inherited state
+with the word `Inherited`. They MUST NOT use only color. An administrator MUST
+be able to inspect the source service or inherited assignment from this
+context. The board MUST NOT invent a local definition when it presents
+inherited state.
 
 These board states only present current configuration and readiness. They MUST
 NOT add delete effects, cascading changes, a canonical-model enablement field,
@@ -204,33 +216,67 @@ states, assignment source labels, and observed requirements.
 A result MUST keep each direct match and the connected records that are
 necessary to understand the complete path. A provider match MUST keep its
 routes, their canonical-model cards, and connected assignment rungs. A model
-or route match MUST keep its provider and connected assignment rungs. An
-assignment match MUST keep its effective route rows, canonical-model cards,
-and providers. A connected record that is not a direct match MUST show the
-label `Context`. Search MUST NOT remove a route row from its canonical-model
-card or change fallback order.
+match MUST keep all its nested route rows, their providers, and their connected
+assignment rungs. A route match MUST keep its canonical-model card, its
+provider, and its connected assignment rungs. An assignment match MUST keep
+its effective route rows, canonical-model cards, and providers. A connected
+record that is not a direct match MUST show the label `Context`. Search MUST
+NOT remove a route row from its canonical-model card or change fallback order.
 
 Applying search or a filter MUST keep focus and selection when the selected
 control remains in the result. If the selected control is not in the result,
 the board MUST move focus and selection to the first direct match in rendered
-order and announce the result count. If there is no result, it MUST move focus
-to `Clear search` and announce the no-result message. Clearing search MUST
-restore the prior selection when that record still exists. Otherwise, it MUST
-select the first available control.
+order and announce the result count. If the complete result has no match, it
+MUST move focus to `Clear search` and announce the no-result message. If the
+loaded partial result has no match, it MUST move focus to the first available
+`Load more` action in column order and announce the partial-result message.
+Clearing search MUST restore focus and selection to the prior selected control
+when that record still exists. Otherwise, it MUST move focus and selection to
+the first available control.
 
-The no-result message MUST be `No configuration matches this search.` Its
-action MUST be `Clear search`. Clearing search MUST restore the complete
-loaded board and the prior selected service. Search, filtering, or bounded
-incremental loading MUST NOT change global ownership, assignment inheritance,
-or the selected service.
+After all applicable records are loaded, the no-result message MUST be
+`No configuration matches this search.` Its action MUST be `Clear search`.
+When more applicable records are available and no loaded record matches, the
+message MUST be `No matches in loaded records.` The board MUST also show
+`Partial`, `Load more`, and `Clear search`. Clearing search MUST restore the
+complete loaded board and the prior selected service. Search, filtering, or
+bounded incremental loading MUST NOT change global ownership, assignment
+inheritance, or the selected service.
 
 The board MUST identify when more records are available and MUST NOT present a
-partial result as the complete configuration. A partial result MUST show
-`Partial` and an action to load the next bounded page. Loading more records MUST
+partial result as the complete configuration. Each partial column MUST show
+`Partial` and a `Load more` action for its next bounded page. The action's
+accessible name MUST be `Load more {column heading}`. Loading more records MUST
 keep the search value, focus, selection, expanded compound cards, and selected
 service. A failed referenced-record load MUST keep records that are safe to
-show, label the affected relationship `Unavailable`, and provide a retry
+show, label the affected relationship `Unavailable`, and provide a `Retry`
 action. The board MUST NOT draw a connector to an assumed record.
+
+If a loaded route's provider cannot load, the route row MUST stay in its model
+card and show `Unavailable provider: {provider_api_name}` instead of a provider
+display name. If a loaded route's canonical model cannot load, the
+`Canonical models` column MUST put the route in a non-actionable group named
+`Unavailable referenced records`. The row MUST show
+`Unavailable model: {model_api_name} · Route ID: {api_name}`. It MUST also show
+the provider display name or the unavailable-provider text. If an assignment
+rung's route cannot load, the rung MUST show
+`Unavailable route: {provider_model_api_name}`. An assignment with a source
+service that cannot load MUST show
+`Inherited from unavailable service ({defined_by_service_api_name})`. An
+assignment that names another assignment that cannot load MUST show
+`Inherits unavailable assignment ({inherits_assignment_api_name})`. Each
+affected record MUST show `Unavailable` and `Retry`. These placeholders MUST
+use only known API identities. They MUST NOT invent a display name or act as a
+connector endpoint.
+
+If an initial page for one column fails, that column MUST show
+`Unable to load {column heading}.` and `Retry`. Safe records in the other
+columns MUST stay visible. If a later page fails, the applicable column MUST
+keep its loaded records and show `Unable to load more {column heading}.` and
+`Retry`. The failure MUST keep the search value, selected service, expanded
+cards, focus, and selection. If the failed action had focus, the replacement
+`Retry` action MUST receive focus. The board MUST announce the error without
+moving focus for a background failure.
 
 The board MUST use these empty states:
 
@@ -266,6 +312,11 @@ state label, capability label, inheritance label, fallback position, and exact
 connector endpoint. Search tests MUST cover a display name, each technical
 identity, a provider wire model, a capability, an inherited source, a direct
 match with context, no results, clearing, and an incomplete loaded page.
+Empty-state tests MUST cover each exact empty-state message and action. They
+MUST include the state in which no service is selected.
+Loading and error tests MUST cover an initial page failure, a later page
+failure, retained safe data, retry, focus, selection, expanded cards, and
+selected-service preservation.
 
 Browser tests MUST use `http://127.0.0.1:5174`. They MUST check a wide viewport
 at 1440 by 900 pixels and a phone viewport at 390 by 844 pixels. They MUST
