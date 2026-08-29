@@ -62,24 +62,22 @@ the title. Its eyebrow MUST be `Root service` when the service has no parent and
    `apiName` for a child service.
 3. `Created`: the service creation date and time.
 
-The inspector MUST have exactly two inspector-level actions: the shared close
-action and one primary action labelled `Open service details`. The primary
-action MUST open `/services/{serviceApiName}`. The inspector MUST NOT contain a
-display-name form, parent change, delete action, workspace data, workspace
-action, API-key metadata, API-key action, or one-time secret. It MUST NOT load
-workspaces or API keys.
+The inspector header MUST contain the shared close action. Its fixed footer
+MUST contain exactly one action: a primary action labelled `Open service
+details`. The primary action MUST open `/services/{serviceApiName}`. The
+inspector MUST NOT contain a display-name form, parent change, delete action,
+workspace data, workspace action, API-key metadata, API-key action, or one-time
+secret. It MUST NOT load workspaces or API keys.
 
 The selected-service and create-service inspectors MUST use the complete shared
 compact graph-inspector system in
 [Authentication, administration, and shared UI](04-authentication-administration-and-shared-ui.md#shared-compact-graph-inspector).
-They MUST use the shared `21rem` split and overlay width, split mode at `69rem`
-or more, overlay mode above `48rem` and below `69rem`, and modal bottom-sheet
-mode at `48rem` or less. The Router MUST NOT add a local width, padding,
-overflow, inset, breakpoint, or mode rule. On a phone, the modal sheet MUST
-render above the application bottom navigation and the navigation MUST be
-inactive. The navigation MUST NOT cover any part of the sheet. This clearance
-MUST NOT change the shared sheet insets, width, maximum height, or mode
-boundary.
+They MUST use all shared widths, insets, mode boundaries, and scrolling rules.
+The Router MUST NOT add a local width, padding, overflow, inset, breakpoint, or
+mode rule. On a phone, the modal sheet and its modal backdrop MUST be in a
+stacking layer above the application bottom navigation. The navigation MUST be
+inactive and MUST NOT cover any part of the sheet. This stacking rule MUST NOT
+change the shared sheet insets, width, maximum height, or mode boundary.
 
 Closing the compact selected-service inspector with Escape or its close action
 MUST keep the service selected and return focus to its graph node. Reopening the
@@ -103,7 +101,8 @@ destination and MUST NOT add a sidebar item. A workspace or API key MUST NOT
 have a separate administration route. Workspace and key management MUST use
 the service-details child route and MUST NOT use the compact selected-service
 inspector. The service-details child route MUST be part of the `/services`
-content inventory and accessibility review.
+destination and MUST have its own content-inventory and accessibility-review
+entry.
 
 The service-details page MUST contain these regions in this order:
 
@@ -117,8 +116,8 @@ The service-details page MUST contain these regions in this order:
    actions.
 5. A `Service API keys` section with active key metadata and create and revoke
    actions.
-6. A `Delete service` section with the child-service blocker and the complete
-   destructive effect.
+6. A `Delete service` section with a delete action, the child-service blocker,
+   and the complete destructive effect.
 
 The details page MUST use the route service as context. A form or action MUST
 NOT ask the administrator to select that service again. The service tree MUST
@@ -131,30 +130,58 @@ and `apiName`. The key table MUST show the key name, creation date and time, and
 last-used date and time. Key creation MUST ask for only the key name. The
 service `apiName` and workspace `apiName` MUST stay read-only after creation.
 
+The service form MUST have one primary `Save changes` action for its display
+name and parent values. It MUST show pending state and MUST prevent a duplicate
+submit. A failed save MUST keep the entered non-secret values and the last
+confirmed service facts, show a corrective error, and MUST NOT change the tree.
+The tree MUST change only after the server confirms the save.
+
+The page MUST NOT enable `Save changes` until it has confirmed the parent
+options for the route service. If those options fail to load or refresh, the
+service form MUST show a corrective error and a retry action. It MUST keep the
+confirmed service facts and MUST NOT remove or disable confirmed workspace or
+key data.
+
+The `Delete service` action MUST be unavailable while the service has a direct
+child and the section MUST identify the blocker. Otherwise, the action MUST
+open a confirmation that identifies the service and all effects of deletion.
+Cancellation MUST keep the page and return focus to the delete action. A failed
+delete MUST keep the page and confirmed service data and show a corrective
+error. Only a confirmed successful delete MAY change the route and tree.
+
 Opening the details page from a node double-click, Enter, or the inspector
 action MUST push one browser-history entry. It MUST NOT replace the service-tree
 entry. The tree entry MUST identify the selected service. Browser Back from a
 details page that was opened from the tree MUST return to the same tree
-location, keep the compact inspector open, restore the local graph scroll, and
-focus the same service node. Browser Forward MUST return to the details route
-and focus the page heading without making a second history entry.
+location and keep the compact inspector open. It MUST restore the prior local
+graph scroll when that position keeps the selected node reachable. Otherwise,
+the shared reachability behavior MUST scroll the node into view. In split or
+overlay mode, focus MUST return to the same service node. In bottom-sheet mode,
+focus MUST move to the inspector heading, and closing the sheet MUST return it
+to that node. Browser Forward MUST return to the details route and focus the
+page heading without making a second history entry.
 
 The `Back to services` action MUST use browser Back when the current history
 entry records a same-origin service-tree source. For a direct link or another
 source, it MUST replace the current entry with
 `/services?service={serviceApiName}`. That fallback MUST open the compact
-inspector and focus its service node. A normal browser Back from a direct link
-MUST continue to use the browser's prior history. History state MUST NOT contain
-a service API key secret, form value, workspace record, or other sensitive
-data.
+inspector, move focus to its heading, and use its service node as the
+return-focus target. A normal browser Back from a direct link MUST continue to
+use the browser's prior history. History state MUST NOT contain a service API
+key secret, form value, workspace record, or other sensitive data.
 
-Opening the details route MUST move focus to its page heading. A return to the
-tree MUST focus the applicable service node. If that node no longer exists,
-focus MUST move to the first available service node or the create-service
-action. An in-progress write MUST block application navigation and browser
-history restoration until it finishes. Unsaved non-secret form values MUST
-require discard confirmation before application navigation or browser Back can
-leave the page.
+Opening the details route MUST move focus to its page heading. A return that
+opens or restores the compact inspector MUST use the applicable focus rule
+above. A return without an inspector MUST focus the applicable service node. If
+that node no longer exists, focus MUST move to the first available service node
+or the create-service action. An in-progress write MUST block application
+navigation and browser history restoration until it finishes. Unsaved
+non-secret form values MUST require discard confirmation before application
+navigation or browser Back or Forward can leave the page. A browser reload or
+close attempt MUST use the standard leave-page confirmation while a write is
+pending or unsaved values exist. A blocked navigation attempt MUST NOT resume
+automatically after a write finishes. The administrator MUST request that
+navigation again.
 
 The route MUST load the exact service before it enables management actions. An
 initial load MUST show a labelled loading state. An initial load failure MUST
@@ -183,9 +210,12 @@ deleted details entry.
 
 If a service becomes unavailable while one of its API keys is being created or
 its one-time secret is visible, the page MUST keep the protected key state. It
-MUST show the unavailable-service state and let the request finish or the
-administrator copy and clear the secret. It MUST NOT discard, reload, or expose
-the secret in another record.
+MUST show the unavailable-service state and let the request finish. If the
+request returns a secret, or if a secret is already visible, that state MUST
+keep the one-time-secret presentation and its copy and clear actions. The `Back
+to services` action MUST remain unavailable until the request finishes and the
+administrator clears any secret. The application MUST NOT discard, reload, or
+expose the secret in another record.
 
 ## Workspaces
 
@@ -204,16 +234,26 @@ the operation do not already supply. A new service key MUST keep the one-time
 display and write-only rules in
 [Authentication, administration, and shared UI](04-authentication-administration-and-shared-ui.md#service-api-keys).
 
-The one-time secret MUST appear only on the service-details page after the
-applicable create response. The application MUST NOT put it in the URL, browser
-history state, browser storage, a stale-data snapshot, a log, or a later API
-response. While key creation is pending, application navigation and browser
-history restoration MUST remain on the details page. While the secret is
-visible, application navigation and browser history restoration MUST remain on
-the page until the administrator clears the secret. A browser reload or close
-attempt MUST use the standard leave-page confirmation while the request is
-pending or the secret is visible. If the administrator confirms a reload or
-close, the Router MUST NOT try to recover or show that secret again.
+In the global administration application, the one-time secret MUST appear only
+in the service-details page's `Service API keys` section after the applicable
+administrator create response. It MUST provide `Copy secret` and `Clear secret`
+actions and state that the secret cannot be shown again. `Clear secret` MUST
+remove the value from the rendered page and application state. The application
+MUST NOT put it in the URL, browser history state, browser storage, a stale-data
+snapshot, a log, or a later API response. While key creation is pending,
+application navigation and browser history restoration MUST remain on the
+details page. While the secret is visible, application navigation and browser
+history restoration MUST remain on the page until the administrator clears the
+secret. A browser reload or close attempt MUST use the standard leave-page
+confirmation while the secret is visible. If the administrator confirms a
+reload or close, the Router MUST NOT try to recover or show that secret again.
+
+A failed key create MUST keep the entered key name, show a corrective error,
+and MUST NOT show a secret or add key metadata. Revoking a key MUST require a
+confirmation that identifies the key and states that each later request will
+fail. Cancellation MUST return focus to the revoke action. A failed revoke MUST
+keep the key metadata and show a corrective error. The page MUST remove the key
+metadata only after the server confirms the revocation.
 
 The workspace and key sections MUST use the shared table behavior in
 [Authentication, administration, and shared UI](04-authentication-administration-and-shared-ui.md#global-administration-application).
@@ -232,29 +272,41 @@ service or global administration.
 Authenticated browser tests MUST use `http://127.0.0.1:5174` and the local
 test-session workflow. They MUST NOT print the session file values or a created
 key secret. Tests MUST cover a split desktop workspace, a narrow overlay
-workspace, and a phone bottom sheet. They MUST verify the shared `21rem`,
-`69rem`, and `48rem` rules, local graph scrolling, phone-navigation clearance,
-and the absence of Router-only inspector geometry.
+workspace, and a phone bottom sheet. They MUST verify the exact shared width
+and mode boundaries, local graph scrolling, phone-navigation stacking and
+inactive state, and the absence of Router-only inspector geometry.
 
 Browser tests MUST cover pointer click and double-click, Space, Enter, touch
 tap, the explicit `Open service details` action, close, Escape, initial focus,
 exact focus return, and one service-tree tab stop. They MUST cover the direct
 route, route encoding, page regions, history push, Back, Forward, the direct-
-link fallback, graph-scroll restoration, and deleted-node focus fallback.
+link fallback, graph-scroll restoration and reachability, mode-specific history
+focus, and deleted-node focus fallback.
 
 Browser tests MUST also cover initial loading, initial failure and retry,
 refresh failure with stale service data, independent workspace and key refresh
 failures, an out-of-order result after a route change, an initially absent
 service, concurrent service removal, successful deletion, a child-service
-delete blocker, and unsaved or pending navigation guards. Workspace and key
-tests MUST cover service isolation, create and delete, create and revoke,
-one-time secret display and clear, reload and navigation protection, and the
-absence of a secret in later reads, history, URLs, and logs.
+delete blocker, service-save success and failure, delete confirmation,
+delete failure, parent-option failure and retry, and unsaved or pending
+navigation guards for application navigation, Back, Forward, reload, and
+close. Workspace and key tests MUST cover service isolation, create and delete,
+key-create success and failure, revoke success, confirmation, and failure,
+one-time secret display, copy, and clear, reload and navigation protection, and
+the absence of a secret in later reads, history, URLs, browser storage,
+stale-data snapshots, and logs. Long-content tests MUST prove that graph and
+table viewports keep their local scrolling and do not cause page-level
+overflow.
 
-The compact inspector, details page, workspace table, key table, errors,
-unavailable states, and confirmations MUST pass Axe in desktop, narrow, and
-phone tests. Each of those widths MUST have a reviewed screenshot. Each React
-change MUST keep React Doctor at score 100 with zero diagnostics.
+The compact inspector, details page, workspace table, key table, loading,
+empty, stale, error, unavailable, one-time-secret, and confirmation states MUST
+pass Axe in desktop, narrow, and phone tests. Each width MUST have a reviewed
+screenshot of the normal service flow. Focused screenshots MUST also cover the
+phone sheet above the bottom navigation and each conditional state that is not
+visible in a normal screenshot. A one-time-secret screenshot MUST use a fixed
+synthetic value that cannot authenticate. A screenshot, snapshot, or test
+report MUST NOT contain a secret from a create response. Each React change MUST
+keep React Doctor at score 100 with zero diagnostics.
 
 Deleting a workspace MUST delete its detailed logs, raw accounting, daily
 aggregates, media jobs, uploaded images, and retained generated media. It MUST

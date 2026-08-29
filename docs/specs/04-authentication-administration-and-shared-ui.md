@@ -13,8 +13,10 @@ product MUST NOT exchange it for another token.
 
 One service MAY have several named active keys. A new key MUST contain at
 least 256 random bits and MUST be shown only once. The Router MUST store only
-a verifier that is sufficient to authenticate it. It MUST NOT put the key in
-a URL, browser code, log, activity detail, or response after its creation.
+a verifier that is sufficient to authenticate it. Except for the one-time
+creation response to an authenticated creator and its transient display to a
+global administrator, the Router MUST NOT put the key in a URL, browser source
+file or bundle, browser storage, log, activity detail, or later response.
 
 An authenticated service key MUST have all authority for its service's
 assignments, workspaces, model calls, embedding calls, media jobs, key
@@ -118,14 +120,15 @@ purpose. This removal does not change the basic-activity requirements in
 
 The content inventory MUST cover these retained routes:
 
-| Path             | View                         | Content that the inventory MUST check                                                |
-| ---------------- | ---------------------------- | ------------------------------------------------------------------------------------ |
-| `/overview`      | overview                     | totals, health, and cooldown summaries                                               |
-| `/services`      | service administration       | the service tree, compact and create inspectors, and the service-details child route |
-| `/configuration` | configuration administration | all three board columns, inspectors, forms, and playground entry points              |
-| `/logs`          | retained-log inspection      | filters, retained records, selected details, media, and retention states             |
-| `/statistics`    | accounting statistics        | filters, query states, and accounting results                                        |
-| `/operations`    | operations                   | health, retention, cooldowns, and activity                                           |
+| Path                         | View                           | Content that the inventory MUST check                                    |
+| ---------------------------- | ------------------------------ | ------------------------------------------------------------------------ |
+| `/overview`                  | overview                       | totals, health, and cooldown summaries                                   |
+| `/services`                  | service administration         | the service tree and compact and create inspectors                       |
+| `/services/{serviceApiName}` | service-details administration | the heading, facts, form, workspace, key, delete, and conditional states |
+| `/configuration`             | configuration administration   | all three board columns, inspectors, forms, and playground entry points  |
+| `/logs`                      | retained-log inspection        | filters, retained records, selected details, media, and retention states |
+| `/statistics`                | accounting statistics          | filters, query states, and accounting results                            |
+| `/operations`                | operations                     | health, retention, cooldowns, and activity                               |
 
 For each route, the test inventory MUST list each static helper text item, its
 expected presence or absence, and one allowed keep reason for each retained
@@ -517,6 +520,12 @@ and reachable in the local graph viewport. `GraphInspector` MUST use a connected
 `returnFocusRef` as the return target. When that reference is absent, it MUST
 capture the connected focused control that opened the inspector. The return
 target and the selected-control reachability target MAY be different controls.
+
+Restoring an inspector that application history kept open MUST NOT count as a
+new inspector open action. In split or overlay mode, the host MAY restore focus
+to the graph control that opened it. In bottom-sheet mode, focus MUST move to
+the inspector heading so that it stays in the modal sheet. The graph control
+MUST remain the inspector return-focus target in all three modes.
 
 If the inspector host crosses a mode boundary while the inspector is open, the
 system MUST keep the same inspector DOM element, selected record, entered
