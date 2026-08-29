@@ -1,7 +1,8 @@
 # Accounting, logs, retention, and operations
 
 Status: Accepted on 2026-08-23. The graph-first UI and administrator
-playground amendments were accepted on 2026-08-24.
+playground amendments were accepted on 2026-08-24. The administration
+statistics-filter amendment was accepted on 2026-08-29.
 
 ## Attempt and request accounting
 
@@ -86,6 +87,144 @@ behavior. Its filter controls and results MUST use the same page gutter and
 complete available width. Long dimensions, tags, usage values, and costs MUST
 wrap or scroll inside their bounded cells without causing page-level
 horizontal overflow.
+
+### Administration statistics filters
+
+The administration Usage and cost view MUST use date-only controls labelled
+`From` and `Through`. It MUST identify the dates as UTC and MUST NOT show a
+time or use the browser's local time zone. `From` MUST include the selected
+date. `Through` MUST include the selected date.
+
+On first open, `Through` MUST be the current UTC date and `From` MUST be 29
+UTC calendar dates before it. This default selects 30 dates. The current date
+MUST come from the same instant in every browser time zone.
+
+For a valid `From` date, the view MUST send `from` as that date at
+`00:00:00Z`, inclusive. For a valid `Through` date, it MUST send `to` as the
+next calendar date at `00:00:00Z`, exclusive. It MUST calculate the next date
+with UTC calendar-date arithmetic. It MUST NOT add a local-time day or use a
+local UTC offset. These examples are normative:
+
+| Case | `From` | `Through` | API `from` | API `to` |
+| --- | --- | --- | --- | --- |
+| One date | `2026-08-29` | `2026-08-29` | `2026-08-29T00:00:00Z` | `2026-08-30T00:00:00Z` |
+| One month | `2026-04-01` | `2026-04-30` | `2026-04-01T00:00:00Z` | `2026-05-01T00:00:00Z` |
+| Leap date | `2028-02-29` | `2028-02-29` | `2028-02-29T00:00:00Z` | `2028-03-01T00:00:00Z` |
+| Year end | `2026-12-31` | `2026-12-31` | `2026-12-31T00:00:00Z` | `2027-01-01T00:00:00Z` |
+
+The selected range MUST contain from 1 through 366 UTC calendar dates. A
+selection from `2028-01-01` through `2028-12-31` MUST be valid and MUST send
+`to=2029-01-01T00:00:00Z`. A selection of 367 dates MUST be invalid. A
+`Through` date before `From` MUST be invalid. If the next calendar date after
+`Through` cannot be represented as a valid API timestamp, the selection MUST
+be invalid. An invalid selection MUST NOT send an API request.
+
+The form MUST show these corrective errors next to the applicable control and
+in one live error summary:
+
+- `Enter a valid From date.` when `From` is missing or invalid;
+- `Enter a valid Through date.` when `Through` is missing or invalid;
+- `Through must be the same as or after From.` for an invalid order;
+- `Select 366 dates or fewer.` for an over-limit range;
+- `Through is outside the supported date range.` when the exclusive next date
+  cannot be represented.
+
+The first invalid control MUST have focus after submission. Each invalid
+control MUST use `aria-invalid` and MUST reference its error. Correcting a
+value MUST remove its obsolete error. The view MUST show the non-obvious UTC
+effect with the visible text `UTC dates. From and Through include the selected
+dates.`
+
+The basic filter surface MUST show `From`, `Through`, `Service`, and
+`Workspace`, with `Run statistics` outside any disclosure. One disclosure
+labelled `Advanced filters` MUST contain `Call actor`, `Administrator`,
+`Assignment configuration service`, `Assignment`, `Provider route`, `Outcome`,
+`Tag`, and `Group results`. The disclosure MUST be closed by default. When an
+advanced filter or group is active, its summary MUST show the active count.
+The count MUST add one for each non-empty advanced filter and one for each
+selected group. Closing it MUST keep all values. An error in it MUST open it
+before focus moves to the invalid control.
+
+The view MUST use these exact human labels for API filters and group values:
+
+| API name | Filter label | Group label |
+| --- | --- | --- |
+| `date` | `From` and `Through` | `Date` |
+| `call_actor` | `Call actor` | `Call actor` |
+| `service` | `Service` | `Service` |
+| `workspace` | `Workspace` | `Workspace` |
+| `administrator` | `Administrator` | `Administrator` |
+| `configuration_service` | `Assignment configuration service` | `Assignment configuration service` |
+| `assignment` | `Assignment` | `Assignment` |
+| `provider_model` | `Provider route` | `Provider route` |
+| `outcome` | `Outcome` | `Outcome` |
+| `tag` | `Tag` | `Tag` |
+
+The visible call-actor values MUST be `Service calls` and `Administrator
+playground calls`. The visible exact-assignment value for the API value
+`(exact)` MUST be `Exact provider route calls`. The visible outcome values
+MUST be `Succeeded` and `Failed`. An unset filter MUST have no API query
+parameter. An all-values select option MUST use `All call actors`, `All
+services`, `All workspaces`, `All administrators`, `All assignment
+configuration services`, `All assignments`, `All provider routes`, `All
+outcomes`, or `All tags`, as applicable. A technical API name such as
+`provider_model`, `configuration_service`, or `call_actor` MUST NOT be a
+visible label.
+
+OpenDLE UI MUST own a reusable compact checkbox-group pattern for `Group
+results`. The shared pattern MUST accept host-supplied values and human labels
+and MUST NOT contain Router dimension names. It MUST use a semantic fieldset,
+show `Group results ({count} selected)` in its compact summary, and keep its
+checkbox options hidden until the administrator opens it. It MUST submit
+selected values in the displayed order, not the selection order. The Router
+MUST display group options in the table order above and MUST enforce the API
+maximum of eight unique groups. At the limit, it MUST keep selected groups
+enabled, prevent another selection, and announce `Select up to 8 groups.`
+
+Enter or Space on the compact summary MUST open or close it. Tab and Shift+Tab
+MUST move through its checkboxes in displayed order. Space MUST change the
+focused checkbox. Escape MUST close the open group and return focus to its
+summary. Pointer selection of a checkbox label MUST have the same result. A
+phone presentation MUST keep the summary, options, labels, focus indicator,
+and selected count usable without page-level horizontal overflow. A long open
+option list MUST use a bounded local scroll region.
+
+Submitting a valid form MUST keep all submitted values visible. It MUST show
+the results table as loading and announce `Loading usage and cost.` It MUST
+prevent a duplicate submission for the same pending query. A later valid query
+MUST own the result, and an earlier response MUST NOT replace it. A successful
+query with no result buckets MUST show `No usage or cost matches these
+filters.` A failed query MUST keep the form values and show the corrective
+error `Unable to load usage and cost. Review the filters and try again.` A
+successful query MUST render calls, attempts, typed units, cost, currency, and
+dimensions with the shared data-table behavior. Loading, empty, error, and
+ready changes MUST use a live region. A valid submission MUST keep the current
+focus.
+
+This view mapping MUST NOT change the native statistics API. The API MUST keep
+the required timestamp query parameters `from` and `to`, with an inclusive
+lower bound and exclusive upper bound. It MUST NOT add a date-only API
+parameter. This rule applies only to the Usage and cost view. It does not
+define the Detailed logs view, its filters, or its record-loading behavior.
+
+Unit tests MUST cover one date, the month boundary, the year boundary, the
+leap date, exactly 366 dates, 367 dates, invalid order, missing and invalid
+dates, and exclusive-next-date overflow. Browser time-zone tests MUST run the
+same date selections in `UTC`, `Pacific/Kiritimati`, `Pacific/Pago_Pago`, and
+`America/New_York` during a daylight-saving transition. They MUST also test the
+default range at one fixed instant near a UTC date boundary. Each case MUST
+produce the same exact UTC timestamps or the same client error.
+
+API-request tests MUST confirm the exact `from` and `to` timestamps, every
+filter value, that each active filter is sent, that each inactive filter is
+omitted, no more than eight unique `group_by` values, and group order. Browser
+tests at desktop and phone widths MUST cover the basic and advanced hierarchy,
+every human label, group-summary counts, the eight-group limit, keyboard
+operation, focus after validation, focus during valid state changes, loading,
+empty, API-error, and populated-table states. They MUST check no page-level
+horizontal overflow. They MUST run Axe for the basic, advanced, error, and
+populated states at both widths. The React application MUST keep React Doctor
+at score 100 with zero diagnostics.
 
 ## Detailed request logs
 
