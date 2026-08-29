@@ -2,8 +2,8 @@
 
 Status: Accepted on 2026-08-23. The graph-first UI and administrator
 playground amendments were accepted on 2026-08-24. The fixed compound-board,
-administration-content, and optional relationship-graph toolbar amendments
-were accepted on 2026-08-29.
+administration-content, optional relationship-graph toolbar, and compact shared
+graph-inspector amendments were accepted on 2026-08-29.
 
 ## Service API keys
 
@@ -364,20 +364,163 @@ domain assertions defined in the linked configuration-board specification. A
 consumer test MUST prove that the shared engine renders host data without
 importing Router domain types.
 
-Each graph or board inspector MUST use a right-side panel on a wide screen and
-a bottom sheet on a phone. Its content MUST use a local scroll region when
-necessary.
+### Shared compact graph inspector
+
+OpenDLE UI MUST own one compact inspector system for `GraphWorkspace`,
+`RelationshipGraph`, and other host-neutral graph surfaces. The inspector width
+MUST be `21rem`, including its border. The system MUST select one of three modes
+from the graph workspace content-box width:
+
+- At `69rem` or more, it MUST use split mode. The inspector MUST occupy the
+  inline-end `21rem`, and the graph stage and toolbar MUST occupy the remaining
+  width. At the exact `69rem` boundary, the graph area MUST be `48rem`.
+- Above `48rem` and below `69rem`, it MUST use a non-modal right overlay. The
+  overlay MUST be `21rem` wide, stay below the toolbar, and leave the graph
+  stage at its full width.
+- At `48rem` or less, it MUST use a modal bottom sheet. The sheet MUST have a
+  `0.75rem` inset on each side and at the bottom, and its maximum height MUST be
+  `calc(100dvh - 1.5rem)`.
+
+The measured workspace content box is the complete width inside the workspace
+border before space is assigned to the inspector. The measurement MUST include
+the `21rem` that split mode then assigns to the inspector. It MUST NOT include
+the page gutter or sidebar. OpenDLE UI MUST own the mode and boundary
+calculation. It MUST use `ResizeObserver`, a CSS container query, or an
+equivalent container-size mechanism. It MUST NOT use the browser viewport width
+as a substitute. Exactly `69rem` belongs to split mode. Exactly `48rem` belongs
+to bottom-sheet mode.
+
+In split mode, the workspace outer width MUST stay unchanged. The graph stage
+and toolbar inline-end boundary MUST move before the inspector. The shared
+relationship graph MUST keep its three `13rem` minimum columns and MAY reduce
+only its shared column gaps and inline padding until the graph content reaches
+a `48rem` floor. Content that needs more than that floor MUST use the labelled
+local graph viewport. Split mode MUST NOT add page-level horizontal overflow or
+change the page width.
+
+In overlay mode, the inspector MUST use an inline-end inset of `0.875rem`, a
+block-start inset of `4.75rem`, and a block-end inset of `0.875rem`. It MUST NOT
+cover the toolbar. The graph stage MUST keep its width and local scroll. When
+the selected control is behind the overlay, the shared graph MUST scroll that
+control into the visible part of its local viewport. The complete graph MUST
+remain reachable without page-level scrolling.
+
+In bottom-sheet mode, OpenDLE UI MUST open the inspector with native modal
+dialog behavior or an equivalent accessible modal implementation. The
+background MUST be inactive, and focus MUST stay in the sheet until it closes.
+Split and overlay modes MUST stay non-modal. Their background MUST remain
+active, and Tab and Shift+Tab MUST let focus move between the inspector and the
+rest of the page.
+
+The shared inspector header, content, and footer MUST each use `0.75rem`
+padding. The header and footer MUST use a `0.5rem` gap. The content stack MUST
+use a `1rem` gap. A section heading MUST have a `0.5rem` gap before its content.
+The facts layout MUST use `5rem minmax(0, 1fr)` columns, a `0.5rem` column gap,
+and `0.5rem 0.625rem` row padding. It MUST collapse to one column when the text
+does not fit. A row list MUST use a `0.375rem` gap. Each row MUST use
+`0.5rem 0.625rem` padding and a minimum block size of `2.75rem`. A notice or
+corrective error MUST use `0.625rem` padding and a `0.5rem` internal gap. Footer
+actions MUST wrap with a `0.5rem` gap. These compact rules MUST NOT reduce an
+interactive control below `2.75rem` in either dimension.
+
+OpenDLE UI MUST export `GraphInspector`, `GraphInspectorFacts`,
+`GraphInspectorFact`, `GraphInspectorSection`, `GraphInspectorRows`,
+`GraphInspectorRow`, and `GraphInspectorNotice`, with their prop types, from the
+package root. These components MUST be host-neutral and MUST NOT contain a
+Router, Ontology, or Xbot data type.
+
+`GraphInspector` MUST own the labelled header, optional eyebrow and icon,
+heading, close action, local content region, and optional fixed action footer.
+Its heading MUST be an `h2`. It MUST wrap and MUST NOT use visible ellipsis as
+the only way to show a long title. `GraphInspectorFacts` MUST render a semantic
+description list. Each `GraphInspectorFact` MUST render one associated term and
+description. `GraphInspectorSection` MUST render a labelled section with an
+`h3` and an optional count. `GraphInspectorRows` MUST render a semantic list.
+Each `GraphInspectorRow` MUST support a label, a value, and optional sibling
+actions without nesting one interactive control in another. A row that is one
+action MAY use one semantic whole-row control instead. `GraphInspectorNotice`
+MUST support neutral, warning, and error states without color alone. A
+dynamically added corrective error MUST use an alert role. A static notice MUST
+NOT get a live role only because it uses the shared primitive.
+
+The shared primitives MUST own their semantic structure, spacing, wrapping,
+focus style, borders, and state presentation. A host MUST own domain values,
+labels, permissions, controls, forms, mutations, and error text. A host MAY put
+domain-specific content in the primitive slots. It MUST NOT copy the shared
+inspector structure or define a local inspector width, mode, padding, section,
+facts, row, notice, overflow, or footer layout.
+
+Only the inspector content region MAY scroll vertically. The header and action
+footer MUST remain visible. The inspector MUST NOT scroll horizontally. Long
+titles, labels, identifiers, URLs, values, notices, errors, and action text MUST
+wrap or break safely without hiding information or controls. At 200% text size,
+all content and controls MUST remain reachable, the reading order MUST stay the
+same, and the inspector MUST NOT cause page-level overflow.
+
 Opening an inspector MUST move focus to its heading. The heading MUST be a
 programmatic focus target, and Tab MUST move to its first applicable control.
-On a wide screen, the side panel MUST let focus leave it. Tab and Shift+Tab MUST
-let the user move between the panel and the rest of the page. On a phone, the
-bottom sheet MUST make the background inactive and MUST keep focus in the sheet
-until it closes.
-Opening or closing an inspector MUST NOT change the page width or hide the
-focused control outside the reachable local viewport. A failed create,
-change, or delete MUST keep the applicable inspector open, keep the entered
-non-secret values, and show a corrective error. It MUST NOT show success or
-change the graph or board until the server confirms the write.
+Escape and the close action MUST close the inspector in all three modes and
+return focus to the control that opened it. If that control no longer exists,
+focus MUST follow the unavailable-record rule. Opening or closing an inspector
+MUST NOT change the page width. The selected graph control MUST stay selected
+and reachable in the local graph viewport.
+
+If the workspace crosses a mode boundary while the inspector is open, the
+system MUST keep the same inspector instance, selected record, entered
+non-secret values, content scroll position, and focused element when that
+element still exists. It MUST NOT close and reopen the inspector or return
+focus to the graph. A change to bottom-sheet mode MUST make the background
+inactive and start modal focus containment. A change from bottom-sheet mode
+MUST remove that containment and make the background active. The mode change
+MUST NOT cause a duplicate announcement.
+
+A failed create, change, or delete MUST keep the applicable inspector open,
+keep the entered non-secret values, and show a corrective error. It MUST NOT
+show success or change the graph or board until the server confirms the write.
+
+The Router MUST remove the local `42rem` configuration-inspector width and the
+local `38rem` service-inspector width. It MUST use the shared `21rem` width and
+shared primitives for both surfaces. It MUST NOT replace either override with
+an equivalent local width or inspector-layout rule. OpenDLE UI MUST use Xbot's
+compact ontology inspector as the visual hierarchy baseline for facts,
+sections, property rows, relationship rows, and notices. It MUST implement that
+hierarchy in the shared primitives and MUST NOT copy Xbot selectors, CSS, copy,
+or domain types. Xbot MUST consume the shared primitives instead of keeping a
+second inspector layout. Ontology MUST use the same shared geometry and mode
+rules.
+
+Focused OpenDLE UI tests MUST import the inspector and all shared inspector
+primitives from the built package root. Container-boundary tests MUST cover
+`69rem`, one CSS pixel below `69rem`, one CSS pixel above `48rem`, and `48rem`.
+They MUST prove that the same browser viewport can produce different modes for
+different workspace container widths and that a container resize changes the
+mode.
+
+The split tests MUST prove the `21rem` inspector width, the `48rem` remaining
+graph floor, three `13rem` minimum relationship columns, reduced shared gaps
+and padding, contracted graph stage and toolbar, unchanged workspace width,
+local graph scrolling, and no page-level overflow. Overlay tests MUST prove
+the exact insets, an active background, an uncovered toolbar, local scroll, and
+selected-control reachability. Bottom-sheet tests MUST prove the exact insets,
+maximum height, inactive background, focus containment, and local content
+scrolling.
+
+Component tests MUST cover the exact header, content, footer, section, facts,
+row, notice, and action spacing. They MUST cover empty and absent optional
+regions, long data, long actions, forms, errors, notices, local overflow, 200%
+text, initial heading focus, Tab and Shift+Tab, Escape, close, exact focus
+return, unavailable return targets, and each open-inspector mode change. Wide,
+narrow, and phone surfaces MUST pass Axe and have reviewed screenshots. Each
+OpenDLE UI change MUST keep React Doctor at score 100 with zero diagnostics.
+
+Source-consumer checks MUST use the built OpenDLE UI package root. Router tests
+MUST cover configuration and service inspectors without the `42rem` and
+`38rem` overrides. Xbot tests MUST cover the shared compact visual hierarchy
+without copied consumer layout CSS. Ontology tests MUST cover the shared
+geometry and mode behavior. Router, Xbot, and Ontology MUST compile and render
+at wide, narrow, and phone workspace widths. Each changed inspector surface
+MUST pass Axe and have a reviewed screenshot at those widths. Each changed
+React consumer MUST keep React Doctor at score 100 with zero diagnostics.
 
 The playground MUST open as a modal from an applicable provider-route row or
 assignment card. It MUST infer the exact provider-model or assignment target,
