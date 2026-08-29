@@ -669,50 +669,63 @@ horizontal overflow.
 
 ### Shared DataTable alignment and status-pill sizing
 
-OpenDLE UI MUST own `DataTableColumn.align` as the host-neutral start, center,
-and end alignment API. It MUST apply one column alignment to the applicable
-header, each desktop cell content region, and each phone card value region. A
-center-aligned phone value MUST be centered inside its value region only. The
-label column and the shared gap between label and value MUST stay outside the
-centering calculation.
+OpenDLE UI MUST own the existing `DataTableColumn.align` API as the host-neutral
+start, center, and end alignment control. One column value MUST apply to its
+column-header content, each desktop data-cell content region, and each phone
+card description-value region. For a sortable column, it MUST apply to the
+visible header label and sort indicator as one content group.
 
-The default `DataTable` header, desktop cell, and phone card row MUST keep
-`0.75rem` inline padding. Compact density MUST keep `0.5rem` inline padding.
-The alignment measurement MUST exclude this padding. For a phone value, it
-MUST also exclude the label column and shared column gap. A centered child's
-border box MUST have equal free inline space on each side of the remaining
-alignment region. The two measured spaces MAY differ by no more than one CSS
-pixel. When the child fits, the applicable shared padding MUST keep at least
-that much
-clearance between the child and each outer inline edge of the header, cell, or
-card row. A host MUST NOT create this alignment with an asymmetric margin, a
-translated position, or a local alignment class.
+The desktop alignment region MUST be the header-cell or data-cell content box
+after removal of its inline padding. The phone alignment region MUST be the
+description-value region's value grid area after removal of the card-row inline
+padding, label grid track, and shared column gap. A center-aligned phone value
+MUST be centered only in that value grid area. It MUST NOT be centered across
+the complete label-and-value row.
+
+The default `DataTable` column-header cell, desktop data cell, and phone card
+value row MUST keep `0.75rem` inline padding. Compact density MUST keep
+`0.5rem` inline padding. Centering MUST NOT consume this protected outer
+padding. When rendered content fits after its allowed wrapping or breaking, its
+inline bounds MUST have at least `0.75rem` clearance from each applicable outer
+inline edge at default density and at least `0.5rem` at compact density. In the
+alignment region, the free inline space before and after centered rendered
+content MUST differ by no more than one CSS pixel. A host MUST NOT create this
+alignment with an asymmetric margin, a translated position, or a local
+alignment class.
 
 OpenDLE UI MUST own `StatusPill` internal spacing and safe long-label behavior.
 The pill MUST use border-box sizing, a maximum inline size of `100%`, and
 exactly `0.5rem` internal padding at each inline side. It MUST NOT own an outer
-margin or host alignment. A long localized or unexpected label MUST wrap or
-break inside the pill without reducing the inline padding, hiding the status
-dot, clipping text, or increasing the page width. This behavior MUST remain
-safe at 200% text size.
+margin or host alignment. Its status dot MUST NOT shrink, clip, or move outside
+the pill. A long localized label with spaces and a long unbroken label MUST wrap
+or break inside the pill without reducing the inline padding, hiding the dot,
+clipping text, or increasing the page width. The text MUST stay accessible and
+the dot MUST stay decorative. This behavior MUST remain safe at 200% text size.
 
 A host MUST choose the column alignment and supply the pill text and tone. It
 MUST use `DataTableColumn.align` when that API supplies the required alignment.
-`DataTable` MUST NOT add a status-specific alignment API, and a host MUST NOT
-add a status-specific shared API without a proved host-neutral gap.
+It MUST use the shared `StatusPill` for this status-pill pattern. A host MUST NOT
+override the shared pill sizing, padding, wrapping, dot layout, margin, or
+alignment. `DataTable` MUST NOT add a status-specific alignment API, and a host
+MUST NOT add a status-specific shared API without a proved host-neutral gap.
 
-Focused OpenDLE UI tests MUST cover start, center, and end alignment for a
-header, desktop cell, and phone value region. Center tests MUST measure the
-applicable shared padding and MUST prove that the two free inline spaces differ
-by no more than one CSS pixel. Phone tests MUST prove that the value is centered
-in its value region and not across the label-and-value row. Tests MUST cover
-default and compact spacing, a short `StatusPill`, and a long synthetic pill
-label at normal and 200% text size. They MUST prove equal pill inline padding,
-safe wrapping, a visible status dot, no clipping, no page-level overflow,
-semantic header and cell associations, and semantic phone term and description
-associations. Desktop and phone fixtures MUST pass Axe and have reviewed
-screenshots. Each OpenDLE UI change MUST keep React Doctor at score 100 with
-zero diagnostics.
+Focused OpenDLE UI tests MUST import `DataTable`, `DataTableColumn`,
+`StatusPill`, and `StatusPillProps` from the built package root. They MUST cover
+start, center, and end alignment for a plain header, a sortable header, a
+desktop cell, and a phone value region. Center tests MUST prove the exact
+default and compact inline padding, their matching minimum outer clearance,
+and the one-CSS-pixel maximum difference between the two free spaces. Phone
+tests MUST prove that the value is centered in its value grid area and not
+across the label-and-value row.
+
+Tests MUST cover a short `StatusPill`, a long synthetic label with spaces, and
+a long synthetic unbroken label at normal and 200% text size. They MUST prove
+equal pill inline padding, safe wrapping or breaking, a visible non-shrinking
+decorative status dot, accessible text, no clipping, and no page-level
+overflow. They MUST preserve semantic header and cell associations and semantic
+phone term and description associations. Desktop and phone fixtures MUST pass
+Axe and have reviewed screenshots. Each OpenDLE UI change MUST keep React
+Doctor at score 100 with zero diagnostics.
 
 ## Calling-service administration
 

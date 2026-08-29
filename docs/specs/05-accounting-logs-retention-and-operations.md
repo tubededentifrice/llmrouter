@@ -537,27 +537,35 @@ centered in the `Result` value region. It MUST NOT be centered across the
 complete label-and-value row.
 
 The Router MUST set the existing `DataTableColumn.align` value to `center` for
-this column. It MUST supply the activity result text and tone. It MUST NOT add
-a wrapper, asymmetric host margin, translated position, Router-only alignment
-class, or status-specific shared API. This requirement MUST NOT change the
-placement of a health-row status pill, a cooldown status pill, or another
+this column and MUST render the result with the shared `StatusPill`. It MUST
+supply the activity result text and tone. It MUST NOT add a wrapper, asymmetric
+host margin, translated position, Router-only alignment class, local pill
+override, or status-specific shared API. Only the activity `Result` column MAY
+receive the new column alignment. The shared internal pill rules still apply to
+all `StatusPill` instances, but this change MUST NOT alter the outer placement
+of a health-row pill, a cooldown pill, the Logs `Outcome` pill, or another
 outcome or status column.
 
-Focused Router component tests MUST cover the activity result values
-`succeeded` and `failed` and one long synthetic result label. At desktop and
-phone widths, they MUST prove at least the shared `0.75rem` default clearance
-from each applicable outer inline edge. They MUST also prove that the two free
-inline spaces in the desktop cell or phone value region differ by no more than
-one CSS pixel. They MUST confirm the centered `Result` header, desktop cell
-placement, phone value-region placement, equal pill inline padding, and
-unchanged health-row pill placement. At 200% text size, the long label MUST
-wrap or break safely. It MUST NOT clip text, hide the status dot, or cause
-page-level horizontal overflow. Tests MUST preserve semantic desktop header and
-cell associations and the phone `Result` term-to-value association. The
-activity table at desktop and phone widths MUST
-pass Axe and have reviewed screenshots. Each React change MUST keep React
-Doctor at score 100 with zero diagnostics. Browser tests, when applicable, MUST
-use `http://127.0.0.1:5174` and the local test-session workflow.
+Focused Router browser tests MUST cover the activity result values `succeeded`
+and `failed`, a long synthetic label with spaces, and a long synthetic unbroken
+label. A browser test fixture MUST supply the synthetic labels only to test
+rendering. It MUST NOT expand the public activity-result values. At desktop and
+phone widths, the tests MUST prove the exact shared default minimum outer
+clearance and centering tolerance. They MUST confirm the centered `Result`
+header, desktop cell placement, phone value-region placement, equal pill inline
+padding, accessible result text, and a visible decorative status dot. At 200%
+text size, each long label MUST wrap or break safely. It MUST NOT clip text,
+hide or shrink the status dot, or cause page-level horizontal overflow.
+
+The tests MUST preserve semantic desktop header and cell associations and the
+phone `Result` term-to-value association. Regression checks MUST prove unchanged
+outer placement for the health-row, cooldown, and Logs `Outcome` pills and
+unchanged alignment for each other activity column. The activity table at
+desktop and phone widths MUST pass Axe and have reviewed screenshots. Each
+authenticated Router browser, Axe, and screenshot test for this surface MUST
+use `http://127.0.0.1:5174` and the local test-session workflow. It MUST NOT use
+the external development site. Each React change MUST keep React Doctor at
+score 100 with zero diagnostics.
 
 ## Deployment
 
