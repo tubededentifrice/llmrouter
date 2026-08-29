@@ -93,7 +93,10 @@ horizontal overflow.
 The administration Usage and cost view MUST use date-only controls labelled
 `From` and `Through`. It MUST identify the dates as UTC and MUST NOT show a
 time or use the browser's local time zone. `From` MUST include the selected
-date. `Through` MUST include the selected date.
+date. `Through` MUST include the selected date. Each submitted value MUST use
+`YYYY-MM-DD` and MUST identify a real Gregorian calendar date. The view MUST
+NOT normalize an invalid value, such as `2026-02-29` or `2026-04-31`, to a
+different date.
 
 On first open, `Through` MUST be the current UTC date and `From` MUST be 29
 UTC calendar dates before it. This default selects 30 dates. The current date
@@ -105,19 +108,21 @@ next calendar date at `00:00:00Z`, exclusive. It MUST calculate the next date
 with UTC calendar-date arithmetic. It MUST NOT add a local-time day or use a
 local UTC offset. These examples are normative:
 
-| Case | `From` | `Through` | API `from` | API `to` |
-| --- | --- | --- | --- | --- |
-| One date | `2026-08-29` | `2026-08-29` | `2026-08-29T00:00:00Z` | `2026-08-30T00:00:00Z` |
+| Case      | `From`       | `Through`    | API `from`             | API `to`               |
+| --------- | ------------ | ------------ | ---------------------- | ---------------------- |
+| One date  | `2026-08-29` | `2026-08-29` | `2026-08-29T00:00:00Z` | `2026-08-30T00:00:00Z` |
 | One month | `2026-04-01` | `2026-04-30` | `2026-04-01T00:00:00Z` | `2026-05-01T00:00:00Z` |
 | Leap date | `2028-02-29` | `2028-02-29` | `2028-02-29T00:00:00Z` | `2028-03-01T00:00:00Z` |
-| Year end | `2026-12-31` | `2026-12-31` | `2026-12-31T00:00:00Z` | `2027-01-01T00:00:00Z` |
+| Year end  | `2026-12-31` | `2026-12-31` | `2026-12-31T00:00:00Z` | `2027-01-01T00:00:00Z` |
 
 The selected range MUST contain from 1 through 366 UTC calendar dates. A
 selection from `2028-01-01` through `2028-12-31` MUST be valid and MUST send
 `to=2029-01-01T00:00:00Z`. A selection of 367 dates MUST be invalid. A
 `Through` date before `From` MUST be invalid. If the next calendar date after
 `Through` cannot be represented as a valid API timestamp, the selection MUST
-be invalid. An invalid selection MUST NOT send an API request.
+be invalid. For example, `9999-12-31` MUST be invalid as `Through` because its
+exclusive next date is outside the API timestamp format. An invalid selection
+MUST NOT send an API request.
 
 The form MUST show these corrective errors next to the applicable control and
 in one live error summary:
@@ -131,34 +136,40 @@ in one live error summary:
 
 The first invalid control MUST have focus after submission. Each invalid
 control MUST use `aria-invalid` and MUST reference its error. Correcting a
-value MUST remove its obsolete error. The view MUST show the non-obvious UTC
-effect with the visible text `UTC dates. From and Through include the selected
-dates.`
+value MUST remove its obsolete error. The invalid-order, over-limit, and
+exclusive-next-date errors MUST belong to the `Through` control. The view MUST
+show the non-obvious UTC effect with the visible text `UTC dates. From and
+Through include the selected dates.`
 
 The basic filter surface MUST show `From`, `Through`, `Service`, and
 `Workspace`, with `Run statistics` outside any disclosure. One disclosure
 labelled `Advanced filters` MUST contain `Call actor`, `Administrator`,
 `Assignment configuration service`, `Assignment`, `Provider route`, `Outcome`,
 `Tag`, and `Group results`. The disclosure MUST be closed by default. When an
-advanced filter or group is active, its summary MUST show the active count.
-The count MUST add one for each non-empty advanced filter and one for each
-selected group. Closing it MUST keep all values. An error in it MUST open it
-before focus moves to the invalid control.
+advanced filter or group is active, its summary MUST show `Advanced filters
+({count} active)`. With no active value, it MUST show `Advanced filters`. The
+count MUST add one for each non-empty advanced filter and one for each selected
+group. Closing it MUST keep all values. An error in it MUST open it before
+focus moves to the invalid control.
 
 The view MUST use these exact human labels for API filters and group values:
 
-| API name | Filter label | Group label |
-| --- | --- | --- |
-| `date` | `From` and `Through` | `Date` |
-| `call_actor` | `Call actor` | `Call actor` |
-| `service` | `Service` | `Service` |
-| `workspace` | `Workspace` | `Workspace` |
-| `administrator` | `Administrator` | `Administrator` |
-| `configuration_service` | `Assignment configuration service` | `Assignment configuration service` |
-| `assignment` | `Assignment` | `Assignment` |
-| `provider_model` | `Provider route` | `Provider route` |
-| `outcome` | `Outcome` | `Outcome` |
-| `tag` | `Tag` | `Tag` |
+| API parameter or group value      | Filter label                       | Group label                        |
+| --------------------------------- | ---------------------------------- | ---------------------------------- |
+| `from`, `to`; `date` for grouping | `From` and `Through`               | `Date`                             |
+| `call_actor`                      | `Call actor`                       | `Call actor`                       |
+| `service`                         | `Service`                          | `Service`                          |
+| `workspace`                       | `Workspace`                        | `Workspace`                        |
+| `administrator`                   | `Administrator`                    | `Administrator`                    |
+| `configuration_service`           | `Assignment configuration service` | `Assignment configuration service` |
+| `assignment`                      | `Assignment`                       | `Assignment`                       |
+| `provider_model`                  | `Provider route`                   | `Provider route`                   |
+| `outcome`                         | `Outcome`                          | `Outcome`                          |
+| `tag`                             | `Tag`                              | `Tag`                              |
+
+The group selector and each corresponding result dimension MUST use the
+applicable `Group label`. A result MUST identify each dimension label and
+value in the requested group order.
 
 The visible call-actor values MUST be `Service calls` and `Administrator
 playground calls`. The visible exact-assignment value for the API value
@@ -192,14 +203,15 @@ option list MUST use a bounded local scroll region.
 Submitting a valid form MUST keep all submitted values visible. It MUST show
 the results table as loading and announce `Loading usage and cost.` It MUST
 prevent a duplicate submission for the same pending query. A later valid query
-MUST own the result, and an earlier response MUST NOT replace it. A successful
-query with no result buckets MUST show `No usage or cost matches these
-filters.` A failed query MUST keep the form values and show the corrective
-error `Unable to load usage and cost. Review the filters and try again.` A
-successful query MUST render calls, attempts, typed units, cost, currency, and
-dimensions with the shared data-table behavior. Loading, empty, error, and
-ready changes MUST use a live region. A valid submission MUST keep the current
-focus.
+MUST determine the displayed state and result. A response from an earlier
+query MUST NOT change the displayed state, result, live message, or notice. A
+successful query with no result buckets MUST show `No usage or cost matches
+these filters.` A failed query MUST keep the form values and show the
+corrective error `Unable to load usage and cost. Review the filters and try
+again.` A successful query MUST render calls, attempts, typed units, cost,
+currency, and dimensions with the shared data-table behavior. Loading, empty,
+error, and ready changes MUST use a live region. A valid submission MUST keep
+the current focus.
 
 This view mapping MUST NOT change the native statistics API. The API MUST keep
 the required timestamp query parameters `from` and `to`, with an inclusive
@@ -209,11 +221,12 @@ define the Detailed logs view, its filters, or its record-loading behavior.
 
 Unit tests MUST cover one date, the month boundary, the year boundary, the
 leap date, exactly 366 dates, 367 dates, invalid order, missing and invalid
-dates, and exclusive-next-date overflow. Browser time-zone tests MUST run the
-same date selections in `UTC`, `Pacific/Kiritimati`, `Pacific/Pago_Pago`, and
-`America/New_York` during a daylight-saving transition. They MUST also test the
-default range at one fixed instant near a UTC date boundary. Each case MUST
-produce the same exact UTC timestamps or the same client error.
+date syntax, invalid calendar dates, and exclusive-next-date overflow. Browser
+time-zone tests MUST run the same date selections in `UTC`,
+`Pacific/Kiritimati`, `Pacific/Pago_Pago`, and `America/New_York` during a
+daylight-saving transition. They MUST also test the default range at one fixed
+instant near a UTC date boundary. Each case MUST produce the same exact UTC
+timestamps or the same client error.
 
 API-request tests MUST confirm the exact `from` and `to` timestamps, every
 filter value, that each active filter is sent, that each inactive filter is
