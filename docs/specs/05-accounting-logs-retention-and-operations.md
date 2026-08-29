@@ -2,7 +2,8 @@
 
 Status: Accepted on 2026-08-23. The graph-first UI and administrator
 playground amendments were accepted on 2026-08-24. The administration
-statistics-filter and Logs-view amendments were accepted on 2026-08-29.
+statistics-filter, Logs-view, and Configuration activity Result-alignment
+amendments were accepted on 2026-08-29.
 
 ## Attempt and request accounting
 
@@ -524,6 +525,39 @@ posture as detailed request logs. Only a global administrator MAY read the
 complete activity log. A service API key MUST NOT query it. A service MAY
 receive the result of its own write without receiving a general activity-log
 query.
+
+### Configuration activity result presentation
+
+The Configuration activity `Result` column MUST use the shared center column
+alignment in
+[Authentication, administration, and shared UI](04-authentication-administration-and-shared-ui.md#shared-datatable-alignment-and-status-pill-sizing).
+On a desktop, the `Result` header and status pill MUST be centered in their
+applicable table cell content regions. On a phone, the status pill MUST be
+centered in the `Result` value region. It MUST NOT be centered across the
+complete label-and-value row.
+
+The Router MUST set the existing `DataTableColumn.align` value to `center` for
+this column. It MUST supply the activity result text and tone. It MUST NOT add
+a wrapper, asymmetric host margin, translated position, Router-only alignment
+class, or status-specific shared API. This requirement MUST NOT change the
+placement of a health-row status pill, a cooldown status pill, or another
+outcome or status column.
+
+Focused Router component tests MUST cover the activity result values
+`succeeded` and `failed` and one long synthetic result label. At desktop and
+phone widths, they MUST prove at least the shared `0.75rem` default clearance
+from each applicable outer inline edge. They MUST also prove that the two free
+inline spaces in the desktop cell or phone value region differ by no more than
+one CSS pixel. They MUST confirm the centered `Result` header, desktop cell
+placement, phone value-region placement, equal pill inline padding, and
+unchanged health-row pill placement. At 200% text size, the long label MUST
+wrap or break safely. It MUST NOT clip text, hide the status dot, or cause
+page-level horizontal overflow. Tests MUST preserve semantic desktop header and
+cell associations and the phone `Result` term-to-value association. The
+activity table at desktop and phone widths MUST
+pass Axe and have reviewed screenshots. Each React change MUST keep React
+Doctor at score 100 with zero diagnostics. Browser tests, when applicable, MUST
+use `http://127.0.0.1:5174` and the local test-session workflow.
 
 ## Deployment
 
