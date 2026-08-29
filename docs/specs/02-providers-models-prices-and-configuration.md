@@ -1,7 +1,8 @@
 # Providers, models, prices, and configuration
 
 Status: Accepted on 2026-08-23. The graph-first UI amendment was accepted on
-2026-08-24. The fixed compound-board amendment was accepted on 2026-08-29.
+2026-08-24. The fixed compound-board and reviewed configuration-deletion
+amendments were accepted on 2026-08-29.
 
 ## Global ownership
 
@@ -10,10 +11,11 @@ connections, canonical models, provider-model mappings, provider credentials,
 model capabilities, and price sources. A service API key MUST NOT perform
 these operations.
 
-Every enabled provider-model mapping MUST be available to every service in
-its assignment and exact-call surfaces. The product MUST NOT have a service or
-service-tree provider-model allowlist. A service API key MUST NOT create,
-change, delete, or read a provider credential value.
+Every provider-model mapping whose provider, canonical model, and mapping are
+enabled MUST be available to every service in its assignment and exact-call
+surfaces. The product MUST NOT have a service or service-tree provider-model
+allowlist. A service API key MUST NOT create, change, delete, or read a
+provider credential value.
 
 The first adapter set MUST include:
 
@@ -159,11 +161,12 @@ promise that a later provider call will succeed. Live provider health and
 cooldown details MUST keep their separate labels and MUST NOT change stored
 enablement.
 
-A canonical model MUST show `Ready` when at least one nested provider route is
-enabled and available. It MUST show `Unavailable` when it has no such route.
-This state is a board summary. The current canonical-model contract has no
-stored enablement field, so the board MUST NOT show a canonical-model
-enablement control or describe the summary as stored lifecycle state.
+A canonical model MUST show `Disabled` when its stored enablement is off. An
+enabled canonical model MUST show `Ready` when at least one nested provider
+route is enabled and available. It MUST show `Unavailable` when it has no such
+route. `Ready` and `Unavailable` are board summaries. `Disabled` is stored
+configuration. The canonical-model inspector MUST show the stored enablement
+control.
 
 An assignment MUST show `Ready` when its effective chain has at least one
 enabled and available route. It MUST show `Unavailable` when its effective
@@ -201,9 +204,10 @@ be able to inspect the source service or inherited assignment from this
 context. The board MUST NOT invent a local definition when it presents
 inherited state.
 
-These board states only present current configuration and readiness. They MUST
-NOT add delete effects, cascading changes, a canonical-model enablement field,
-or another lifecycle rule.
+These board states present current stored configuration and readiness. They
+MUST NOT add a lifecycle state other than the provider, canonical-model, and
+provider-route enablement fields in this specification. Deletion effects MUST
+use the reviewed configuration-deletion operation below.
 
 ### Search, empty state, and incomplete data
 
@@ -378,6 +382,21 @@ arbitrary authorization headers outside the credential schema.
 
 ## Models and capabilities
 
+Provider connections, canonical models, and provider-model mappings MUST each
+store one enablement value. Disabling one of these records MUST keep the
+record and its relationships. Routing MUST skip a candidate when its provider,
+canonical model, or provider-model mapping is disabled. A disabled record MUST
+stay disabled until an administrator enables it. A later refresh, price
+synchronization, catalog import, or service-assignment change MUST NOT enable
+it.
+
+The migration that adds canonical-model enablement MUST set `enabled` to
+`true` for each existing canonical model. It MUST preserve the stored
+enablement of each existing provider connection and provider-model mapping.
+The migration MUST finish before application code can require the new model
+field. A migration failure MUST leave the prior schema and data usable and
+MUST stop the new application version from serving calls.
+
 A canonical model MUST declare the input and output modalities and call
 capabilities that the Router can use. These declarations MUST cover, when
 applicable:
@@ -395,8 +414,9 @@ It MUST NOT claim a capability that the adapter and provider route cannot
 perform.
 
 The Router MUST filter each call against the actual required modalities and
-capabilities before provider work. It MUST fail before provider work when no
-eligible candidate remains.
+capabilities before provider work. It MUST also filter stored disablement
+before provider work. It MUST fail before provider work when no eligible
+candidate remains.
 
 ## Reasoning
 
@@ -486,6 +506,199 @@ every selected connection, every mapping, and the current database state again
 in the confirmation transaction. A concurrent duplicate or deleted connection
 MUST fail the complete import.
 
+## Reviewed configuration deletion
+
+A global administrator MUST delete a provider connection, canonical model,
+provider-model mapping, provider credential, or service-local assignment
+definition through one reviewed cascade. The administration API MUST use only
+these two operations for these administrator deletes:
+
+- `POST /v1/admin/configuration-deletion-previews` to create a deletion
+  preview; and
+- `POST /v1/admin/configuration-deletions` to confirm that exact preview.
+
+The administrator assignment delete operation and the direct global provider,
+model, provider-model, and credential delete operations MUST NOT provide a
+second administrator deletion path. A service can continue to delete its own
+local assignment definition through the service API. That service operation
+MUST use the same assignment deletion and inheritance rules, but it does not
+authorize a global cascade.
+
+### Preview and confirmation
+
+A preview MUST read one live target and the complete current relationship
+snapshot that controls its deletion. The snapshot MUST include each live
+resource and relation that the cascade can delete or change, each applicable
+credential reference, stored price, assignment candidate link,
+assignment-parent reference, local assignment definition, effective
+assignment resolution, and stored enablement value. The preview MUST make no
+product change.
+
+The preview response MUST contain the target and every live resource or
+relation that the confirmation will delete, change, or retain because it is
+shared. Each item
+MUST contain its resource kind, API identity, service API identity when the
+resource is service-local, readable display label when applicable, operation,
+and exact effects. An assignment-candidate-link item MUST identify its
+assignment and provider route. An assignment-parent-reference item MUST
+identify its child and parent assignments. An assignment effect MUST show the
+effective chain before and after confirmation. It MUST identify an inherited
+definition that becomes visible, or the empty implicit root `default`, when
+applicable. A retained credential item MUST state that another provider still
+refers to the credential. Retained immutable request, accounting, job, media,
+and activity snapshots MUST NOT appear as deletion effects because the
+confirmation does not change them.
+
+The preview MUST return a cryptographically random, opaque confirmation token.
+The token MUST reveal no resource identity, relationship, effect, credential,
+or revision. It MUST expire no later than 10 minutes after issue. It MUST be
+valid for one successful confirmation only. The server MUST bind it to the
+complete live relationship snapshot and the complete ordered preview result.
+This binding is internal confirmation state. It MUST NOT add a public resource
+revision or version.
+
+Confirmation MUST apply exactly the ordered target and effects in the bound
+preview. In the confirmation transaction, the Router MUST lock and read the
+live target, every applicable relation, and every effect again. If any target,
+relation, or effect is different, including a change that makes the cascade
+smaller or larger, confirmation MUST return `conflict` and MUST make no product
+write. It MUST NOT silently recalculate or apply a different cascade. The
+administrator MUST create and review a new preview.
+
+The token MUST become used in the same commit that applies the cascade. A
+second use of a committed token MUST return `conflict`. An expired token or a
+token that a successful confirmation already used MUST NOT reveal whether its
+former target still exists.
+
+The operations MUST use these errors and messages:
+
+| Condition | Error code | Message |
+| --- | --- | --- |
+| Preview target does not exist | `not_found` | `Configuration deletion target was not found.` |
+| Token is expired or already used | `conflict` | `Configuration deletion confirmation is expired or was already used.` |
+| Live target, relation, or effect differs from the preview | `conflict` | `Configuration changed after the deletion preview. Create a new preview.` |
+| Request or resulting configuration is invalid | `invalid_request` | `Configuration deletion validation failed.` |
+| The cascade cannot commit because of storage failure | `internal_error` | `Configuration deletion was not applied.` |
+
+An unknown target, expired or used token, changed live relationship,
+validation failure, or storage failure MUST change no configuration,
+credential, price, assignment, or retained call record. The failed
+confirmation activity requirement below is the only permitted record of a
+failed confirmation. A storage failure that also prevents that activity write
+MUST remain an operator-visible storage failure.
+
+### Cascade rules
+
+Deleting a provider connection MUST delete the provider and all its
+provider-model mappings. It MUST delete each deleted mapping's configured and
+synchronized price rows and remove each assignment candidate link that refers
+to a deleted mapping. It MUST NOT delete an assignment. It MUST delete the
+provider credential only when no provider that remains after the cascade
+refers to that credential. If another provider still refers to it, the cascade
+MUST retain the credential and the preview MUST state which credential is
+retained and why.
+
+Deleting a canonical model MUST delete the model and all its provider-model
+mappings. It MUST delete the model's configured and synchronized price rows,
+each deleted mapping's configured and synchronized price rows, and every
+assignment candidate link that refers to a deleted mapping. It MUST NOT delete
+an assignment.
+
+Deleting one provider-model mapping MUST delete that mapping, its configured
+and synchronized price rows, and every assignment candidate link that refers
+to it. It MUST NOT delete an assignment.
+
+Deleting a provider credential MUST delete the credential and clear the
+credential reference from every provider connection that names it. It MUST
+not delete a provider connection or provider-model mapping. Each changed
+provider MUST become unavailable when its adapter requires the deleted
+credential. The preview MUST list each provider change and every resulting
+effective routing change.
+
+Removing assignment candidate links MUST close each gap and keep all remaining
+links in their prior relative order. If the last link is removed, the Router
+MUST keep the assignment as an empty direct-chain assignment. An administrator
+MAY also create or save an empty direct chain. A call that resolves to an empty
+effective chain MUST fail before provider work until an administrator or the
+owning service configures an eligible chain.
+
+An assignment MUST be deleted only when it is the direct deletion target.
+Direct deletion of assignment A MUST delete A and its own candidate links. It
+MUST apply `SET NULL` to the assignment-parent reference of each direct child
+assignment that points to A, keep that child, and convert it to an empty
+direct-chain assignment. It MUST NOT change a grandchild reference that points
+to a direct child. Deleting the local definition MUST expose the next
+definition with the same name from the service parent chain. Deleting a local
+root `default` definition MUST expose the empty implicit root `default`.
+
+Routing changes and empty assignments are intended cascade effects. They MUST
+NOT block confirmation when they match the reviewed preview. After each
+candidate-link removal, direct assignment deletion, or direct-child
+conversion, the Router MUST resolve all affected assignment names for each
+affected service. The preview MUST list each deleted or changed live record,
+each removed relation, and each effective chain before and after the change.
+It MUST list each change to a definition source or route availability. The
+confirmation MUST validate cycles, references, chain uniqueness, capability
+rules, and reasoning mappings for the complete resulting live configuration.
+
+### Atomicity, calls, retained records, and activity
+
+The confirmation MUST apply its configuration changes, token use, successful
+operation activity event, and per-resource activity effects in one database
+transaction. A validation or commit failure MUST apply none of them. A failed
+confirmation MUST record one failed operation activity event and MUST NOT
+record a successful operation event or per-resource effect. A failure before
+the transaction can write MUST remain visible to operators.
+
+One successful confirmation MUST create one operation activity event and one
+effect event for each live resource or relation that it deleted or changed.
+The events MUST identify the actor, operation, target, resource kind, API
+identity, service API identity when applicable, result, and time. They MUST
+NOT contain a credential value, old field value, request content, model
+content, or confirmation token. A retained shared credential is not changed
+and MUST NOT create a per-resource effect event.
+
+An active call or provider attempt MAY finish with the immutable
+configuration and credential snapshot that it loaded before the confirmation
+committed. A new call admitted after commit MUST use the post-commit
+configuration. It MUST skip each disabled provider, canonical model, and
+provider-model mapping.
+
+Detailed logs, raw accounting, daily aggregates, media jobs, retained media,
+and activity events MUST keep their admitted immutable provider, model,
+provider-model, assignment, service-context, price, and actor references or
+snapshots. A configuration cascade MUST NOT rewrite, expose, transfer, or
+cascade-delete these retained records. Their existing authorization and
+retention rules continue to apply.
+
+### Verification
+
+Focused contract tests MUST cover the two administrator operations, all target
+kinds, ordered preview effects, token opacity and expiry, exact errors, and the
+absence of direct administrator delete operations. Database tests MUST cover
+each cascade, shared and unshared credentials, candidate-link removal,
+remaining-link order, retained empty direct chains, direct assignment
+deletion, direct-child `SET NULL`, empty-child conversion, unchanged
+grandchildren, exposed inheritance, the empty implicit root `default`, price
+deletion, and retained-record preservation.
+
+Routing tests MUST cover each stored enablement field, disabled-state
+persistence, post-delete effective chains, empty-chain create and save,
+empty-chain failure before provider work, active-call snapshots, and the
+canonical-model migration. Concurrency tests MUST change, add, and remove a
+target, relation, and effect between preview and confirmation. Each case MUST
+return the exact `conflict` and apply no product write. Activity tests MUST
+cover one successful operation event, all changed-resource and relation
+effects, retained credentials, failed confirmation, and sensitive-value
+exclusion.
+
+Localhost browser tests MUST use `http://127.0.0.1:5174`. They MUST show every
+deleted and changed live resource, each routing and inheritance effect, a
+retained shared credential, exact confirmation content, successful atomic
+completion, stale-preview conflict, focus return, phone layout, and Axe
+results. The test MUST confirm that the confirmation applies the exact preview
+and does not apply a smaller or larger cascade.
+
 ## Direct configuration changes
 
 Each configuration write MUST validate the complete affected current state and
@@ -494,9 +707,8 @@ MUST leave current state unchanged.
 
 Validation MUST reject an unknown reference, duplicate identity, assignment
 cycle, missing assignment parent, duplicate assignment candidate, unavailable
-provider-model, unsupported reasoning mapping, and capability mismatch. A
-delete MUST fail if a remaining assignment or provider-model mapping still
-requires the deleted record.
+provider-model, unsupported reasoning mapping, and capability mismatch.
+Administrator deletion validation MUST use the reviewed cascade above.
 
 Configuration resources MUST NOT have a public revision or version. A write
 MUST NOT require or return an expected revision. If two valid writes occur at
@@ -506,4 +718,5 @@ configuration revisions, publication state, rollout state, or rollback
 operations.
 
 The activity log MUST record each successful or failed configuration change.
-It MUST NOT be configuration history and MUST NOT store old field values.
+It MUST NOT be configuration history and MUST NOT store old field values. The
+reviewed deletion operation MUST use its operation and effect events above.

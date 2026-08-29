@@ -47,18 +47,15 @@ operations:
   adminListAssignments: {actor: administrator, permission: administrator.unrestricted}
   adminGetAssignment: {actor: administrator, permission: administrator.unrestricted}
   adminPutAssignment: {actor: administrator, permission: administrator.unrestricted}
-  adminDeleteAssignment: {actor: administrator, permission: administrator.unrestricted}
   adminRemoveObservedAssignmentRequirement: {actor: administrator, permission: administrator.unrestricted}
   adminListProviders: {actor: administrator, permission: administrator.unrestricted}
   adminCreateProvider: {actor: administrator, permission: administrator.unrestricted}
   adminGetProvider: {actor: administrator, permission: administrator.unrestricted}
   adminPutProvider: {actor: administrator, permission: administrator.unrestricted}
-  adminDeleteProvider: {actor: administrator, permission: administrator.unrestricted}
   adminListModels: {actor: administrator, permission: administrator.unrestricted}
   adminCreateModel: {actor: administrator, permission: administrator.unrestricted}
   adminGetModel: {actor: administrator, permission: administrator.unrestricted}
   adminPutModel: {actor: administrator, permission: administrator.unrestricted}
-  adminDeleteModel: {actor: administrator, permission: administrator.unrestricted}
   adminPreviewModelImport: {actor: administrator, permission: administrator.unrestricted}
   adminImportModels: {actor: administrator, permission: administrator.unrestricted}
   adminPreviewOpenRouterModelImport: {actor: administrator, permission: administrator.unrestricted}
@@ -67,11 +64,11 @@ operations:
   adminCreateProviderModel: {actor: administrator, permission: administrator.unrestricted}
   adminGetProviderModel: {actor: administrator, permission: administrator.unrestricted}
   adminPutProviderModel: {actor: administrator, permission: administrator.unrestricted}
-  adminDeleteProviderModel: {actor: administrator, permission: administrator.unrestricted}
   adminListCredentials: {actor: administrator, permission: administrator.unrestricted}
   adminCreateCredential: {actor: administrator, permission: administrator.unrestricted}
   adminPutCredential: {actor: administrator, permission: administrator.unrestricted}
-  adminDeleteCredential: {actor: administrator, permission: administrator.unrestricted}
+  adminPreviewConfigurationDeletion: {actor: administrator, permission: administrator.unrestricted}
+  adminConfirmConfigurationDeletion: {actor: administrator, permission: administrator.unrestricted}
   adminSynchronizePrices: {actor: administrator, permission: administrator.unrestricted}
   adminListRequestLogs: {actor: administrator, permission: administrator.unrestricted}
   adminGetRequestLog: {actor: administrator, permission: administrator.unrestricted}

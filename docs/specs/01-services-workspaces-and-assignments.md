@@ -2,6 +2,7 @@
 
 Status: Accepted on 2026-08-23. The graph-first UI amendment was accepted on
 2026-08-24. The service-details and compact-inspector amendment was accepted on
+2026-08-29. The empty-chain and assignment-deletion amendment was accepted on
 2026-08-29.
 
 ## Names and identity
@@ -329,7 +330,7 @@ Each assignment definition MUST contain either:
 - one direct ordered provider-model candidate chain; or
 - the name of one other assignment to inherit.
 
-It MUST NOT contain both. A direct chain MUST contain 1 through 16 unique
+It MUST NOT contain both. A direct chain MUST contain 0 through 16 unique
 provider-model candidates. An assignment MUST NOT store a temperature or
 output-limit default.
 
@@ -343,7 +344,9 @@ If the selected definition inherits another assignment name, the Router MUST
 resolve that name from the called service through the same service parent
 chain. A direct chain MUST replace the complete inherited assignment chain.
 Configuration validation MUST reject a missing inherited name and any cycle
-across assignment names and service inheritance.
+across assignment names and service inheritance. The direct assignment
+deletion rule below is the only exception. It clears each direct child
+reference instead of leaving a missing inherited name.
 
 A workspace MUST NOT take part in assignment resolution.
 
@@ -364,8 +367,9 @@ Concurrent first calls for the same service and assignment name MUST create at
 most one local assignment record. Each call MAY use that one record after its
 creation transaction commits.
 
-The call MUST fail before provider work when the effective `default` chain is
-empty or no candidate supports the call shape.
+The call MUST fail before provider work when its effective chain is empty or
+when no candidate supports the call shape. This rule applies to `default` and
+each other assignment.
 
 ## Use evidence
 
@@ -385,7 +389,31 @@ assignment and MUST show its last-used time and observed requirements.
 
 An authenticated service MAY create, change, or delete a local assignment
 definition for itself. A global administrator MAY perform the same operation
-for any service. Deleting a local definition MUST expose the next inherited
-definition. Deleting a local root `default` definition MUST expose the empty
-implicit root `default`. A delete MUST fail if it leaves another local
-assignment with a missing inherited name.
+for any service. The administrator MUST use the reviewed direct assignment
+deletion in
+[Providers, models, prices, and configuration](02-providers-models-prices-and-configuration.md#reviewed-configuration-deletion).
+Provider, canonical-model, and provider-route deletion MUST NOT delete an
+assignment.
+
+Direct deletion of assignment A MUST delete A and A's own provider-route
+candidate links. It MUST apply `SET NULL` to the assignment-parent reference
+of each direct child assignment that points to A. It MUST keep each direct
+child record and convert that child to an empty direct-chain assignment. It
+MUST NOT change a grandchild reference that points to one of those direct
+children. Deleting a local definition MUST also expose the next definition
+with the same name in the service parent chain. Deleting a local root
+`default` definition MUST expose the empty implicit root `default`.
+
+An administrator or authenticated service MAY create or save an empty direct
+assignment chain. A provider, canonical-model, or provider-route deletion MUST
+remove only affected candidate links. Remaining links MUST close the gap and
+keep their relative order. If the last link is removed, the Router MUST keep
+the assignment as an empty direct-chain assignment. A call through that empty
+effective chain MUST fail before provider work.
+
+Direct assignment deletion and each child conversion MUST be atomic. A
+validation or storage failure MUST keep the assignment, its candidate links,
+and each direct child reference unchanged. Focused tests MUST cover service and
+administrator deletion, direct-child `SET NULL`, empty-child conversion,
+unchanged grandchildren, exposed service inheritance, the implicit root
+`default`, empty-chain create and save, and failure before provider work.

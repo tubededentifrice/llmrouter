@@ -3,7 +3,7 @@ info:
   title: LLM Router native API
   version: 1.0.0
   description: Provider-neutral service and global administration contract.
-x-contract-policy-sha256: f1354e603c23cbbd8a34ed9e9136f10e1d2271bf30c4405dfcf9b9c9478d635a
+x-contract-policy-sha256: aad32561fed375270bf99ad55b5eef87fd5a97e67b61bd20b028fa628ce02ab9
 servers:
   - url: /
 paths:
@@ -329,7 +329,7 @@ paths:
   /v1/provider-models:
     get:
       operationId: listAvailableProviderModels
-      summary: List enabled provider-models that a service can select.
+      summary: List provider-models whose provider, canonical model, and route are enabled.
       security:
         - serviceKey: []
       parameters:
@@ -936,19 +936,6 @@ paths:
                 $ref: "#/components/schemas/Assignment"
         default:
           $ref: "#/components/responses/ErrorResponse"
-    delete:
-      operationId: adminDeleteAssignment
-      summary: Delete one service assignment.
-      security:
-        - administratorSession: []
-      parameters:
-        - $ref: "#/components/parameters/CsrfToken"
-        - $ref: "#/components/parameters/Origin"
-      responses:
-        "204":
-          description: Assignment deleted.
-        default:
-          $ref: "#/components/responses/ErrorResponse"
   /v1/admin/services/{service_api_name}/assignments/{assignment_api_name}/observed-requirements/{observed_requirement}:
     parameters:
       - $ref: "#/components/parameters/ServiceApiName"
@@ -1048,19 +1035,6 @@ paths:
                 $ref: "#/components/schemas/Provider"
         default:
           $ref: "#/components/responses/ErrorResponse"
-    delete:
-      operationId: adminDeleteProvider
-      summary: Delete one global provider connection.
-      security:
-        - administratorSession: []
-      parameters:
-        - $ref: "#/components/parameters/CsrfToken"
-        - $ref: "#/components/parameters/Origin"
-      responses:
-        "204":
-          description: Provider deleted.
-        default:
-          $ref: "#/components/responses/ErrorResponse"
   /v1/admin/models:
     get:
       operationId: adminListModels
@@ -1140,19 +1114,6 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Model"
-        default:
-          $ref: "#/components/responses/ErrorResponse"
-    delete:
-      operationId: adminDeleteModel
-      summary: Delete one global model.
-      security:
-        - administratorSession: []
-      parameters:
-        - $ref: "#/components/parameters/CsrfToken"
-        - $ref: "#/components/parameters/Origin"
-      responses:
-        "204":
-          description: Model deleted.
         default:
           $ref: "#/components/responses/ErrorResponse"
   /v1/admin/model-imports/preview:
@@ -1332,19 +1293,6 @@ paths:
                 $ref: "#/components/schemas/ProviderModel"
         default:
           $ref: "#/components/responses/ErrorResponse"
-    delete:
-      operationId: adminDeleteProviderModel
-      summary: Delete one global provider-model.
-      security:
-        - administratorSession: []
-      parameters:
-        - $ref: "#/components/parameters/CsrfToken"
-        - $ref: "#/components/parameters/Origin"
-      responses:
-        "204":
-          description: Provider-model deleted.
-        default:
-          $ref: "#/components/responses/ErrorResponse"
   /v1/admin/credentials:
     get:
       operationId: adminListCredentials
@@ -1412,17 +1360,64 @@ paths:
                 $ref: "#/components/schemas/Credential"
         default:
           $ref: "#/components/responses/ErrorResponse"
-    delete:
-      operationId: adminDeleteCredential
-      summary: Delete a global provider credential.
+  /v1/admin/configuration-deletion-previews:
+    post:
+      operationId: adminPreviewConfigurationDeletion
+      summary: Preview one complete configuration deletion cascade.
       security:
         - administratorSession: []
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
         - $ref: "#/components/parameters/Origin"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigurationDeletionPreviewRequest"
       responses:
-        "204":
-          description: Credential deleted.
+        "200":
+          description: Complete live deletion preview and one-use confirmation token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigurationDeletionPreview"
+        "400":
+          $ref: "#/components/responses/ConfigurationDeletionValidationError"
+        "404":
+          $ref: "#/components/responses/ConfigurationDeletionTargetNotFoundError"
+        "500":
+          $ref: "#/components/responses/ConfigurationDeletionStorageError"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+  /v1/admin/configuration-deletions:
+    post:
+      operationId: adminConfirmConfigurationDeletion
+      summary: Apply one exact reviewed configuration deletion cascade.
+      security:
+        - administratorSession: []
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/Origin"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigurationDeletionConfirmation"
+      responses:
+        "200":
+          description: Exact reviewed deletion result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigurationDeletionResult"
+        "400":
+          $ref: "#/components/responses/ConfigurationDeletionValidationError"
+        "409":
+          $ref: "#/components/responses/ConfigurationDeletionConflictError"
+        "500":
+          $ref: "#/components/responses/ConfigurationDeletionStorageError"
         default:
           $ref: "#/components/responses/ErrorResponse"
   /v1/admin/prices/synchronize:
@@ -1828,6 +1823,55 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ErrorEnvelope"
+    ConfigurationDeletionValidationError:
+      description: The configuration deletion request or resulting configuration is invalid.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ConfigurationDeletionValidationErrorEnvelope"
+          example:
+            error:
+              code: invalid_request
+              message: Configuration deletion validation failed.
+    ConfigurationDeletionTargetNotFoundError:
+      description: The configuration deletion preview target does not exist.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ConfigurationDeletionTargetNotFoundErrorEnvelope"
+          example:
+            error:
+              code: not_found
+              message: Configuration deletion target was not found.
+    ConfigurationDeletionConflictError:
+      description: The confirmation token cannot apply its exact reviewed deletion cascade.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ConfigurationDeletionConflictErrorEnvelope"
+          examples:
+            expired_or_used:
+              summary: The token expired or a successful confirmation already used it.
+              value:
+                error:
+                  code: conflict
+                  message: Configuration deletion confirmation is expired or was already used.
+            configuration_changed:
+              summary: The live cascade differs from the reviewed preview.
+              value:
+                error:
+                  code: conflict
+                  message: Configuration changed after the deletion preview. Create a new preview.
+    ConfigurationDeletionStorageError:
+      description: Storage could not apply the complete configuration deletion transaction.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ConfigurationDeletionStorageErrorEnvelope"
+          example:
+            error:
+              code: internal_error
+              message: Configuration deletion was not applied.
     AdministratorErrorResponse:
       description: Administrator playground API error.
       content:
@@ -1920,6 +1964,76 @@ components:
       properties:
         error:
           $ref: "#/components/schemas/Error"
+    ConfigurationDeletionValidationErrorEnvelope:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message]
+          properties:
+            code:
+              const: invalid_request
+            message:
+              const: Configuration deletion validation failed.
+    ConfigurationDeletionTargetNotFoundErrorEnvelope:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message]
+          properties:
+            code:
+              const: not_found
+            message:
+              const: Configuration deletion target was not found.
+    ConfigurationDeletionConflictErrorEnvelope:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [error]
+          properties:
+            error:
+              type: object
+              additionalProperties: false
+              required: [code, message]
+              properties:
+                code:
+                  const: conflict
+                message:
+                  const: Configuration deletion confirmation is expired or was already used.
+        - type: object
+          additionalProperties: false
+          required: [error]
+          properties:
+            error:
+              type: object
+              additionalProperties: false
+              required: [code, message]
+              properties:
+                code:
+                  const: conflict
+                message:
+                  const: Configuration changed after the deletion preview. Create a new preview.
+    ConfigurationDeletionStorageErrorEnvelope:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message]
+          properties:
+            code:
+              const: internal_error
+            message:
+              const: Configuration deletion was not applied.
     AdministratorErrorEnvelope:
       type: object
       additionalProperties: false
@@ -2011,7 +2125,7 @@ components:
           $ref: "#/components/schemas/ApiName"
     AssignmentChain:
       type: array
-      minItems: 1
+      minItems: 0
       maxItems: 16
       uniqueItems: true
       items:
@@ -2127,6 +2241,214 @@ components:
             $ref: "#/components/schemas/Assignment"
         page:
           $ref: "#/components/schemas/PageInfo"
+    ConfigurationDeletionTargetKind:
+      type: string
+      enum:
+        - provider
+        - canonical_model
+        - provider_route
+        - provider_credential
+        - assignment
+    ConfigurationDeletionResourceKind:
+      type: string
+      enum:
+        - provider
+        - canonical_model
+        - provider_route
+        - provider_credential
+        - canonical_model_price
+        - provider_route_price
+        - assignment
+        - assignment_candidate_link
+        - assignment_parent_reference
+        - assignment_resolution
+    ConfigurationDeletionOperation:
+      type: string
+      enum: [delete, change, retain]
+    ConfigurationDeletionEffectKind:
+      type: string
+      enum:
+        - delete
+        - clear_credential_reference
+        - remove_assignment_candidate_link
+        - close_assignment_candidate_gap
+        - keep_empty_direct_chain
+        - clear_assignment_parent_reference
+        - convert_to_empty_direct_chain
+        - expose_inherited_assignment
+        - expose_implicit_root_default
+        - retain_shared_credential
+        - change_effective_chain
+        - become_unavailable
+        - change_effective_routing
+    ConfigurationDeletionTarget:
+      type: object
+      additionalProperties: false
+      required: [kind, api_name]
+      properties:
+        kind:
+          $ref: "#/components/schemas/ConfigurationDeletionTargetKind"
+        api_name:
+          type: string
+          minLength: 1
+          maxLength: 127
+          description: The API identity of the target resource.
+        service_api_name:
+          $ref: "#/components/schemas/ApiName"
+        display_label:
+          type: string
+          minLength: 1
+          maxLength: 200
+          readOnly: true
+      oneOf:
+        - required: [service_api_name]
+          properties:
+            kind:
+              const: assignment
+            api_name:
+              $ref: "#/components/schemas/AssignmentName"
+        - properties:
+            kind:
+              enum: [provider, canonical_model, provider_route, provider_credential]
+            api_name:
+              $ref: "#/components/schemas/ApiName"
+          not:
+            required: [service_api_name]
+    ConfigurationDeletionPreviewRequest:
+      type: object
+      additionalProperties: false
+      required: [target]
+      properties:
+        target:
+          $ref: "#/components/schemas/ConfigurationDeletionTarget"
+    ConfigurationDeletionEffect:
+      type: object
+      additionalProperties: false
+      required: [resource_kind, api_name, operation, effects, description]
+      properties:
+        resource_kind:
+          $ref: "#/components/schemas/ConfigurationDeletionResourceKind"
+        api_name:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: The resource API identity. For a relation, this is the owning or child assignment API identity.
+        service_api_name:
+          $ref: "#/components/schemas/ApiName"
+        provider_route_api_name:
+          description: The other endpoint of an assignment candidate link.
+          $ref: "#/components/schemas/ApiName"
+        parent_assignment_api_name:
+          description: The parent endpoint of an assignment-parent reference.
+          $ref: "#/components/schemas/AssignmentName"
+        display_label:
+          type: string
+          minLength: 1
+          maxLength: 200
+        operation:
+          $ref: "#/components/schemas/ConfigurationDeletionOperation"
+        effects:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/ConfigurationDeletionEffectKind"
+        description:
+          type: string
+          minLength: 1
+          maxLength: 1000
+          description: The exact human-readable effect that the administrator reviews.
+        previous_effective_chain:
+          $ref: "#/components/schemas/EffectiveAssignmentChain"
+        resulting_effective_chain:
+          $ref: "#/components/schemas/EffectiveAssignmentChain"
+      oneOf:
+        - required: [service_api_name, previous_effective_chain, resulting_effective_chain]
+          properties:
+            resource_kind:
+              enum: [assignment, assignment_resolution]
+          not:
+            anyOf:
+              - required: [provider_route_api_name]
+              - required: [parent_assignment_api_name]
+        - required: [service_api_name, provider_route_api_name]
+          properties:
+            resource_kind:
+              const: assignment_candidate_link
+          not:
+            anyOf:
+              - required: [parent_assignment_api_name]
+              - required: [previous_effective_chain]
+              - required: [resulting_effective_chain]
+        - required: [service_api_name, parent_assignment_api_name]
+          properties:
+            resource_kind:
+              const: assignment_parent_reference
+          not:
+            anyOf:
+              - required: [provider_route_api_name]
+              - required: [previous_effective_chain]
+              - required: [resulting_effective_chain]
+        - properties:
+            resource_kind:
+              enum:
+                - provider
+                - canonical_model
+                - provider_route
+                - provider_credential
+                - canonical_model_price
+                - provider_route_price
+          not:
+            anyOf:
+              - required: [service_api_name]
+              - required: [provider_route_api_name]
+              - required: [parent_assignment_api_name]
+              - required: [previous_effective_chain]
+              - required: [resulting_effective_chain]
+    ConfigurationDeletionConfirmationToken:
+      type: string
+      minLength: 32
+      maxLength: 500
+      description: A cryptographically random opaque value for one exact preview. It contains no public resource identity, relationship, effect, credential, or revision and expires no later than 10 minutes after issue.
+    ConfigurationDeletionPreview:
+      type: object
+      additionalProperties: false
+      required: [target, effects, confirmation_token, expires_at]
+      properties:
+        target:
+          $ref: "#/components/schemas/ConfigurationDeletionTarget"
+        effects:
+          type: array
+          minItems: 1
+          description: The complete ordered set of live resources that confirmation will delete, change, or retain because they are shared.
+          items:
+            $ref: "#/components/schemas/ConfigurationDeletionEffect"
+        confirmation_token:
+          $ref: "#/components/schemas/ConfigurationDeletionConfirmationToken"
+        expires_at:
+          $ref: "#/components/schemas/Timestamp"
+    ConfigurationDeletionConfirmation:
+      type: object
+      additionalProperties: false
+      required: [confirmation_token]
+      properties:
+        confirmation_token:
+          $ref: "#/components/schemas/ConfigurationDeletionConfirmationToken"
+    ConfigurationDeletionResult:
+      type: object
+      additionalProperties: false
+      required: [target, effects, completed_at]
+      properties:
+        target:
+          $ref: "#/components/schemas/ConfigurationDeletionTarget"
+        effects:
+          type: array
+          minItems: 1
+          description: The exact ordered effects from the confirmed preview.
+          items:
+            $ref: "#/components/schemas/ConfigurationDeletionEffect"
+        completed_at:
+          $ref: "#/components/schemas/Timestamp"
     AssignmentSelector:
       type: object
       additionalProperties: false
@@ -3194,6 +3516,7 @@ components:
           $ref: "#/components/schemas/ApiName"
         enabled:
           type: boolean
+          description: Stored provider enablement. Routing skips each route for a disabled provider.
     Provider:
       type: object
       additionalProperties: false
@@ -3213,6 +3536,7 @@ components:
           $ref: "#/components/schemas/ApiName"
         enabled:
           type: boolean
+          description: Stored provider enablement. Routing skips each route for a disabled provider.
         created_at:
           $ref: "#/components/schemas/Timestamp"
     ProviderPage:
@@ -3282,7 +3606,7 @@ components:
     ModelWrite:
       type: object
       additionalProperties: false
-      required: [api_name, display_name, input_modalities, output_modalities, capabilities]
+      required: [api_name, display_name, enabled, input_modalities, output_modalities, capabilities]
       properties:
         api_name:
           $ref: "#/components/schemas/ApiName"
@@ -3290,6 +3614,9 @@ components:
           type: string
           minLength: 1
           maxLength: 200
+        enabled:
+          type: boolean
+          description: Stored canonical-model enablement. Routing skips every route for a disabled canonical model.
         input_modalities:
           type: array
           minItems: 1
@@ -3322,12 +3649,15 @@ components:
     Model:
       type: object
       additionalProperties: false
-      required: [api_name, display_name, input_modalities, output_modalities, capabilities, created_at]
+      required: [api_name, display_name, enabled, input_modalities, output_modalities, capabilities, created_at]
       properties:
         api_name:
           $ref: "#/components/schemas/ApiName"
         display_name:
           type: string
+        enabled:
+          type: boolean
+          description: Stored canonical-model enablement. Routing skips every route for a disabled canonical model.
         input_modalities:
           type: array
           items:
@@ -3378,6 +3708,7 @@ components:
           maxLength: 500
         enabled:
           type: boolean
+          description: Stored provider-route enablement. Routing skips this route when it is disabled.
         input_modalities:
           type: array
           minItems: 1
@@ -3438,6 +3769,7 @@ components:
           type: string
         enabled:
           type: boolean
+          description: Stored provider-route enablement. Routing skips this route when it is disabled.
         input_modalities:
           type: array
           items:
