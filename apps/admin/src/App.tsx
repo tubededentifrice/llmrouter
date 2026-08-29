@@ -66,6 +66,7 @@ import {
 import { ServiceManagement } from "./ServiceManagement.js";
 import { ConfigurationGraph } from "./ConfigurationGraph.js";
 import { createScopeLoadGuard } from "./accessState.js";
+import type { ConfigurationLoadPhase } from "./configurationState.js";
 import {
   expireAdministratorSessionLoads,
   invalidateRetainedMediaLoad,
@@ -95,9 +96,79 @@ interface AppData {
   readonly models: readonly Model[];
   readonly providerModels: readonly ProviderModel[];
   readonly credentials: readonly Credential[];
-  readonly health: AdministratorHealth;
-  readonly retentionDays: number;
-  readonly configurationPhase: "ready" | "partial";
+  readonly health: AdministratorHealth | null;
+  readonly retentionDays: number | null;
+}
+
+type GlobalSourceResults = Awaited<
+  ReturnType<typeof loadGlobalAdministrationSources>
+>;
+
+function callGlobalSource<T>(source: () => Promise<T>): Promise<T> {
+  return Promise.resolve().then(source);
+}
+
+export async function loadGlobalAdministrationSources(
+  client: AdministrationClient,
+) {
+  const [
+    services,
+    providers,
+    models,
+    providerModels,
+    credentials,
+    health,
+    retention,
+  ] = await Promise.allSettled([
+    callGlobalSource(() => client.services()),
+    callGlobalSource(() => client.providers()),
+    callGlobalSource(() => client.models()),
+    callGlobalSource(() => client.providerModels()),
+    callGlobalSource(() => client.credentials()),
+    callGlobalSource(() => client.health()),
+    callGlobalSource(() => client.retention()),
+  ] as const);
+  return {
+    services,
+    providers,
+    models,
+    providerModels,
+    credentials,
+    health,
+    retention,
+  };
+}
+
+function settledItems<T>(
+  result: PromiseSettledResult<{ readonly items: readonly T[] }>,
+  previous: readonly T[],
+): readonly T[] {
+  return result.status === "fulfilled" ? result.value.items : previous;
+}
+
+function settledPagePhase(
+  results: readonly PromiseSettledResult<{
+    readonly page: { readonly has_more: boolean };
+    readonly retrieval?: { readonly complete: boolean };
+  }>[],
+): ConfigurationLoadPhase {
+  if (results.some((result) => result.status === "rejected")) return "error";
+  return results.some(
+    (result) =>
+      result.status === "fulfilled" &&
+      (result.value.page.has_more ||
+        result.value.retrieval?.complete === false),
+  )
+    ? "partial"
+    : "ready";
+}
+
+function globalSourceFailures(
+  results: GlobalSourceResults,
+): readonly unknown[] {
+  return Object.values(results).flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
 }
 const routes: readonly {
   readonly id: Section;
@@ -462,27 +533,33 @@ function Overview({ data }: { readonly data: AppData }) {
           value={String(cooldowns.length)}
         />
       </section>
-      <Panel>
-        <PanelHeader
-          description={
-            <>
-              Checked <RouterDateTime value={data.health.checked_at} />
-            </>
-          }
-          title="Small health summary"
-        />
-        <ul className="health-list">
-          {data.health.components.map((item) => (
-            <li key={item.name}>
-              <span>
-                <strong>{item.name.replaceAll("_", " ")}</strong>
-                {item.message == null ? null : <small>{item.message}</small>}
-              </span>
-              <StatusPill tone={tone(item.status)}>{item.status}</StatusPill>
-            </li>
-          ))}
-        </ul>
-      </Panel>
+      {data.health === null ? (
+        <StatePanel kind="error" title="Health unavailable">
+          Refresh the administration data to try the health read again.
+        </StatePanel>
+      ) : (
+        <Panel>
+          <PanelHeader
+            description={
+              <>
+                Checked <RouterDateTime value={data.health.checked_at} />
+              </>
+            }
+            title="Small health summary"
+          />
+          <ul className="health-list">
+            {data.health.components.map((item) => (
+              <li key={item.name}>
+                <span>
+                  <strong>{item.name.replaceAll("_", " ")}</strong>
+                  {item.message == null ? null : <small>{item.message}</small>}
+                </span>
+                <StatusPill tone={tone(item.status)}>{item.status}</StatusPill>
+              </li>
+            ))}
+          </ul>
+        </Panel>
+      )}
     </PageSurface>
   );
 }
@@ -1291,11 +1368,11 @@ function OperationsPage({
 }: {
   readonly client: AdministrationClient;
   readonly csrf: string;
-  readonly health: AdministratorHealth;
+  readonly health: AdministratorHealth | null;
   readonly onNotice: (tone: "success" | "error", message: string) => void;
   readonly onRefresh: () => Promise<void>;
   readonly providerModels: readonly ProviderModel[];
-  readonly retentionDays: number;
+  readonly retentionDays: number | null;
 }) {
   const range = useMemo(() => isoRange(7), []);
   const [activityState, updateActivity] = useReducer(
@@ -1426,6 +1503,10 @@ function OperationsPage({
   const cooldowns = providerModels.filter((item) => item.cooldown != null);
   async function saveRetention(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (retentionDays === null) {
+      onNotice("error", "Retention is unavailable. Refresh and try again.");
+      return;
+    }
     const form = event.currentTarget;
     const days = Number(formText(new FormData(form), "days"));
     try {
@@ -1450,47 +1531,61 @@ function OperationsPage({
         title="Activity and health"
       />
       <div className="administration-sections">
-        <Panel>
-          <PanelHeader
-            description={<RouterDateTime value={health.checked_at} />}
-            title="Health components"
-          />
-          <ul className="health-list">
-            {health.components.map((item) => (
-              <li key={item.name}>
-                <span>
-                  <strong>{item.name.replaceAll("_", " ")}</strong>
-                  <small>{item.message ?? "No corrective message"}</small>
-                </span>
-                <StatusPill tone={tone(item.status)}>{item.status}</StatusPill>
-              </li>
-            ))}
-          </ul>
-        </Panel>
-        <Panel>
-          <PanelHeader
-            description="The duration applies to detailed logs, activity, uploaded images, and retained generated media."
-            title="Global retention"
-          />
-          <form
-            className="administration-form retention-form"
-            onSubmit={(event) => {
-              void saveRetention(event);
-            }}
-          >
-            <label>
-              Duration in whole days
-              <input
-                defaultValue={retentionDays}
-                max={30}
-                min={1}
-                name="days"
-                type="number"
-              />
-            </label>
-            <Button type="submit">Save retention</Button>
-          </form>
-        </Panel>
+        {health === null ? (
+          <StatePanel kind="error" title="Health unavailable">
+            Refresh the administration data to try the health read again.
+          </StatePanel>
+        ) : (
+          <Panel>
+            <PanelHeader
+              description={<RouterDateTime value={health.checked_at} />}
+              title="Health components"
+            />
+            <ul className="health-list">
+              {health.components.map((item) => (
+                <li key={item.name}>
+                  <span>
+                    <strong>{item.name.replaceAll("_", " ")}</strong>
+                    <small>{item.message ?? "No corrective message"}</small>
+                  </span>
+                  <StatusPill tone={tone(item.status)}>
+                    {item.status}
+                  </StatusPill>
+                </li>
+              ))}
+            </ul>
+          </Panel>
+        )}
+        {retentionDays === null ? (
+          <StatePanel kind="error" title="Retention unavailable">
+            Refresh the administration data to try the retention read again.
+          </StatePanel>
+        ) : (
+          <Panel>
+            <PanelHeader
+              description="The duration applies to detailed logs, activity, uploaded images, and retained generated media."
+              title="Global retention"
+            />
+            <form
+              className="administration-form retention-form"
+              onSubmit={(event) => {
+                void saveRetention(event);
+              }}
+            >
+              <label>
+                Duration in whole days
+                <input
+                  defaultValue={retentionDays}
+                  max={30}
+                  min={1}
+                  name="days"
+                  type="number"
+                />
+              </label>
+              <Button type="submit">Save retention</Button>
+            </form>
+          </Panel>
+        )}
       </div>
       <Panel>
         <PanelHeader
@@ -1593,10 +1688,14 @@ const defaultAdministrationClient = createAdministrationClient();
 
 interface MainState {
   readonly assignments: readonly Assignment[];
+  readonly assignmentPhase: ConfigurationLoadPhase;
   readonly assignmentPending: boolean;
+  readonly catalogPhase: ConfigurationLoadPhase;
+  readonly configurationPhase: ConfigurationLoadPhase;
   readonly data: AppData | null;
   readonly failure: string | null;
   readonly notice: Notice | null;
+  readonly providerPhase: ConfigurationLoadPhase;
   readonly assignmentDirty: boolean;
   readonly pendingService: string | null;
   readonly section: Section;
@@ -1612,10 +1711,14 @@ interface MainState {
 function initialMainState(): MainState {
   return {
     assignments: [],
+    assignmentPhase: "ready",
     assignmentPending: false,
+    catalogPhase: "loading",
+    configurationPhase: "loading",
     data: null,
     failure: null,
     notice: null,
+    providerPhase: "loading",
     assignmentDirty: false,
     pendingService: null,
     section: currentSection(),
@@ -1626,8 +1729,11 @@ function initialMainState(): MainState {
 
 function AuthenticatedAdministration({
   assignments,
+  assignmentPhase,
   assignmentPending,
+  catalogPhase,
   client,
+  configurationPhase,
   data,
   failure,
   loadGlobal,
@@ -1638,14 +1744,18 @@ function AuthenticatedAdministration({
   onDismissNotice,
   onAssignmentDirtyChange,
   onAssignmentPendingChange,
+  providerPhase,
   section,
   selectService,
   selectedService,
   session,
 }: {
   readonly assignments: readonly Assignment[];
+  readonly assignmentPhase: ConfigurationLoadPhase;
   readonly assignmentPending: boolean;
+  readonly catalogPhase: ConfigurationLoadPhase;
   readonly client: AdministrationClient;
+  readonly configurationPhase: ConfigurationLoadPhase;
   readonly data: AppData | null;
   readonly failure: string | null;
   readonly loadGlobal: () => Promise<void>;
@@ -1656,6 +1766,7 @@ function AuthenticatedAdministration({
   readonly onDismissNotice: () => void;
   readonly onAssignmentDirtyChange: (dirty: boolean) => void;
   readonly onAssignmentPendingChange: (pending: boolean) => void;
+  readonly providerPhase: ConfigurationLoadPhase;
   readonly section: Section;
   readonly selectService: (value: string) => void;
   readonly selectedService: string;
@@ -1815,11 +1926,13 @@ function AuthenticatedAdministration({
           title="LLM configuration"
         />
         <ConfigurationGraph
+          assignmentPhase={assignmentPhase}
           assignments={assignments}
+          catalogPhase={catalogPhase}
           client={client}
           credentials={data.credentials}
           csrf={session.csrf_token}
-          globalPhase={data.configurationPhase}
+          globalPhase={configurationPhase}
           models={data.models}
           onAssignmentDirtyChange={onAssignmentDirtyChange}
           onAssignmentPendingChange={onAssignmentPendingChange}
@@ -1827,8 +1940,10 @@ function AuthenticatedAdministration({
           onRefreshAssignments={loadScope}
           onRefreshGlobal={loadGlobal}
           providerModels={data.providerModels}
+          providerPhase={providerPhase}
           providers={data.providers}
           selectedService={selectedService}
+          services={data.services}
         />
       </PageSurface>
     );
@@ -1901,12 +2016,16 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
   );
   const {
     assignments,
+    assignmentPhase,
     assignmentPending,
     assignmentDirty,
+    catalogPhase,
+    configurationPhase,
     data,
     failure,
     notice,
     pendingService,
+    providerPhase,
     section,
     selectedService,
     sessionState,
@@ -1920,6 +2039,10 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
   const [scopeLoadGuard] = useState(createScopeLoadGuard);
   const [globalLoadGuard] = useState(createScopeLoadGuard);
   const selectedServiceRef = useRef(selectedService);
+  const dataRef = useRef(data);
+  useEffect(() => {
+    dataRef.current = data;
+  }, [data]);
   const replaceLegacyConfigurationPath = useCallback(() => {
     if (!legacyConfigurationPaths.has(globalThis.location.pathname.slice(1)))
       return;
@@ -1947,8 +2070,12 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
     expireAdministratorSessionLoads(globalLoadGuard, scopeLoadGuard, () => {
       update({
         assignments: [],
+        assignmentPhase: "ready",
         assignmentPending: false,
+        catalogPhase: "loading",
+        configurationPhase: "loading",
         data: null,
+        providerPhase: "loading",
         sessionState: { status: "expired" },
       });
     });
@@ -1978,84 +2105,97 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
   }, [client]);
   const loadGlobal = useCallback(async () => {
     const generation = globalLoadGuard.begin();
-    update({ failure: null });
-    try {
-      const [
-        services,
-        providers,
-        models,
-        providerModels,
-        credentials,
-        health,
-        retention,
-      ] = await Promise.all([
-        authenticatedClient.services(),
-        authenticatedClient.providers(),
-        authenticatedClient.models(),
-        authenticatedClient.providerModels(),
-        authenticatedClient.credentials(),
-        authenticatedClient.health(),
-        authenticatedClient.retention(),
-      ]);
-      if (globalLoadGuard.isCurrent(generation)) {
-        update({
-          data: {
-            services: services.items,
-            providers: providers.items,
-            models: models.items,
-            providerModels: providerModels.items,
-            credentials: credentials.items,
-            health,
-            retentionDays: retention.duration_days,
-            configurationPhase: [
-              providers,
-              models,
-              providerModels,
-              credentials,
-            ].some(
-              (page) =>
-                page.page.has_more || page.retrieval?.complete === false,
-            )
-              ? "partial"
-              : "ready",
-          },
-        });
-        const currentService = selectedServiceRef.current;
-        if (
-          currentService !== "" &&
-          !services.items.some((item) => item.api_name === currentService)
-        ) {
-          selectedServiceRef.current = "";
-          update({ selectedService: "" });
-          const url = new URL(globalThis.location.href);
-          url.searchParams.delete("service");
-          globalThis.history.replaceState(
-            {},
-            "",
-            `${url.pathname}${url.search}`,
-          );
-        }
+    update({
+      catalogPhase: "loading",
+      configurationPhase: "loading",
+      failure: null,
+      providerPhase: "loading",
+    });
+    const results = await loadGlobalAdministrationSources(authenticatedClient);
+    if (!globalLoadGuard.isCurrent(generation)) return;
+    const previous = dataRef.current;
+    const providerPhase = settledPagePhase([
+      results.providers,
+      results.credentials,
+    ]);
+    const catalogPhase = settledPagePhase([
+      results.models,
+      results.providerModels,
+    ]);
+    const configurationPhase = settledPagePhase([
+      results.providers,
+      results.models,
+      results.providerModels,
+      results.credentials,
+    ]);
+    update({
+      catalogPhase,
+      configurationPhase,
+      data: {
+        services: settledItems(results.services, previous?.services ?? []),
+        providers: settledItems(results.providers, previous?.providers ?? []),
+        models: settledItems(results.models, previous?.models ?? []),
+        providerModels: settledItems(
+          results.providerModels,
+          previous?.providerModels ?? [],
+        ),
+        credentials: settledItems(
+          results.credentials,
+          previous?.credentials ?? [],
+        ),
+        health:
+          results.health.status === "fulfilled"
+            ? results.health.value
+            : (previous?.health ?? null),
+        retentionDays:
+          results.retention.status === "fulfilled"
+            ? results.retention.value.duration_days
+            : (previous?.retentionDays ?? null),
+      },
+      providerPhase,
+    });
+    const failures = globalSourceFailures(results);
+    if (failures.length > 0)
+      notify("error", failures.map(errorMessage).join(" "));
+    if (results.services.status === "fulfilled") {
+      const currentService = selectedServiceRef.current;
+      if (
+        currentService !== "" &&
+        !results.services.value.items.some(
+          (item) => item.api_name === currentService,
+        )
+      ) {
+        selectedServiceRef.current = "";
+        update({ selectedService: "" });
+        const url = new URL(globalThis.location.href);
+        url.searchParams.delete("service");
+        globalThis.history.replaceState({}, "", `${url.pathname}${url.search}`);
       }
-    } catch (error) {
-      if (!globalLoadGuard.isCurrent(generation)) return;
-      update({ failure: errorMessage(error) });
-      notify("error", errorMessage(error));
     }
   }, [authenticatedClient, globalLoadGuard, notify]);
   const loadScope = useCallback((): Promise<void> => {
     const generation = scopeLoadGuard.begin();
     if (selectedService === "") {
-      update({ assignments: [] });
+      update({ assignmentPhase: "ready", assignments: [] });
       return Promise.resolve();
     }
+    update({ assignmentPhase: "loading" });
     return authenticatedClient
       .assignments(selectedService)
       .then((assignmentPage) => {
         if (!scopeLoadGuard.isCurrent(generation)) return;
-        update({ assignments: assignmentPage.items });
+        update({
+          assignmentPhase:
+            assignmentPage.page.has_more ||
+            assignmentPage.retrieval?.complete === false
+              ? "partial"
+              : "ready",
+          assignments: assignmentPage.items,
+        });
       })
       .catch((error: unknown) => {
         if (!scopeLoadGuard.isCurrent(generation)) return;
+        update({ assignmentPhase: "error" });
         notify("error", errorMessage(error));
       });
   }, [authenticatedClient, notify, scopeLoadGuard, selectedService]);
@@ -2098,6 +2238,8 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
       selectedServiceRef.current = selectedServiceFromLocation();
       update({
         assignments: [],
+        assignmentPhase:
+          selectedServiceFromLocation() === "" ? "ready" : "loading",
         section: currentSection(),
         selectedService: selectedServiceFromLocation(),
       });
@@ -2112,6 +2254,7 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
     selectedServiceRef.current = value;
     update({
       assignments: [],
+      assignmentPhase: value === "" ? "ready" : "loading",
       assignmentPending: false,
       assignmentDirty: false,
       pendingService: null,
@@ -2229,8 +2372,11 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
     <>
       <AuthenticatedAdministration
         assignments={assignments}
+        assignmentPhase={assignmentPhase}
         assignmentPending={assignmentPending}
+        catalogPhase={catalogPhase}
         client={authenticatedClient}
+        configurationPhase={configurationPhase}
         data={data}
         failure={failure}
         loadGlobal={loadGlobal}
@@ -2244,6 +2390,7 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
         onAssignmentPendingChange={(pending) => {
           update({ assignmentPending: pending });
         }}
+        providerPhase={providerPhase}
         onDismissNotice={() => {
           update({ notice: null });
         }}

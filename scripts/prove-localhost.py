@@ -1784,6 +1784,40 @@ def _prove_configuration_graph(browser: _Cdp, *, mobile: bool) -> None:
     )
     _assert_accessibility_tree(browser, {"Fake provider", "Workflow"})
 
+    for node_id, key, expected_facts in (
+        (
+            "provider:fake-provider",
+            "Enter",
+            ("Provider ID", "fake-provider", "Adapter", "Fake", "State", "Ready"),
+        ),
+        (
+            "model:text-model",
+            "Space",
+            ("Model ID", "text-model", "Text input", "Text output"),
+        ),
+    ):
+        browser.evaluate(
+            f"document.querySelector({json.dumps(f'[data-node-id={node_id!r}]')})?.focus()"
+        )
+        _press_key(browser, key)
+        _wait_browser(
+            browser,
+            "document.querySelector('.od-graph-inspector[open]') !== null",
+            f"The {node_id} inspector did not open with {key}",
+        )
+        inspector_text = browser.evaluate(
+            "document.querySelector('.od-graph-inspector[open]')?.innerText ?? ''"
+        )
+        assert isinstance(inspector_text, str)
+        for fact in expected_facts:
+            assert fact in inspector_text
+        _press_key(browser, "Escape")
+        _wait_browser(
+            browser,
+            f"document.activeElement?.getAttribute('data-node-id') === {json.dumps(node_id)}",
+            f"The {node_id} inspector did not restore focus",
+        )
+
     _set_control(
         browser,
         "input[aria-label='Search configuration']",
@@ -1867,6 +1901,27 @@ def _prove_configuration_graph(browser: _Cdp, *, mobile: bool) -> None:
         "(document.querySelector('.od-graph-inspector[open]')?.innerText ?? '').includes('Selected rung')",
         "The assignment rung did not identify itself in the inspector",
     )
+    assignment_inspector_text = browser.evaluate(
+        "document.querySelector('.od-graph-inspector[open]')?.innerText ?? ''"
+    )
+    assert isinstance(assignment_inspector_text, str)
+    for fact in (
+        "Assignment ID",
+        "workflow",
+        "Selected route",
+        "text",
+        "Provider",
+        "Fake provider",
+        "Canonical model",
+        "Text model",
+        "Route state",
+        "Enabled",
+        "Definition source",
+        "Local definition",
+        "Text input",
+        "Text output",
+    ):
+        assert fact in assignment_inspector_text
     _press_key(browser, "Escape")
     _wait_browser(
         browser,
@@ -1895,6 +1950,23 @@ def _prove_configuration_graph(browser: _Cdp, *, mobile: bool) -> None:
         "[...document.querySelectorAll('.od-graph-inspector[open] button')].some((item) => item.textContent?.trim() === 'Play exact route')",
         "The exact mapping inspector did not offer its playground",
     )
+    route_inspector_text = browser.evaluate(
+        "document.querySelector('.od-graph-inspector[open]')?.innerText ?? ''"
+    )
+    assert isinstance(route_inspector_text, str)
+    for fact in (
+        "Route ID",
+        "text",
+        "Provider",
+        "Fake provider",
+        "Canonical model",
+        "Text model",
+        "Provider wire model",
+        "fake-text-v1",
+        "State",
+        "Enabled",
+    ):
+        assert fact in route_inspector_text
     _click_text(browser, "Play exact route", scope=".od-graph-inspector[open]")
     _wait_browser(
         browser,
@@ -2221,11 +2293,42 @@ def _prove_route_and_state_matrix(browser: _Cdp, *, mobile: bool) -> None:
 
     _navigate(browser, "/overview?proof_mode=loading", "Loading administration data")
     _assert_layout(browser, mobile=mobile)
+    _navigate(browser, "/overview?proof_mode=error", "Router overview")
+    _wait_browser(
+        browser,
+        "document.querySelector(\"[role='alert']\")?.textContent?.includes('Injected proof failure.') === true && "
+        "(document.body?.innerText ?? '').includes('Services\\n2') && "
+        "(document.body?.innerText ?? '').includes('Provider-models\\n5')",
+        "One failed global source discarded unrelated overview results",
+    )
+    _assert_layout(browser, mobile=mobile)
     _navigate(
         browser,
-        "/overview?proof_mode=error",
-        "The administration data is not available",
+        "/configuration?proof_mode=error",
+        "Unable to load Providers.",
     )
+    initial_failure_state = browser.evaluate(
+        """({
+          canonicalFailure: (document.body?.innerText ?? "").includes(
+            "Unable to load Canonical models."
+          ),
+          modelVisible: document.querySelector(
+            "[data-node-id='model:text-model']"
+          ) !== null,
+          retryVisible: [...document.querySelectorAll(
+            "[data-column-id='providers'] button"
+          )].some((item) => item.textContent?.trim() === "Retry"),
+          wholePageFailure: (document.body?.innerText ?? "").includes(
+            "The administration data is not available"
+          )
+        })"""
+    )
+    assert initial_failure_state == {
+        "canonicalFailure": False,
+        "modelVisible": True,
+        "retryVisible": True,
+        "wholePageFailure": False,
+    }
     _assert_layout(browser, mobile=mobile)
     _navigate(browser, "/services?proof_mode=empty", "No services")
     _assert_layout(browser, mobile=mobile)
@@ -2248,7 +2351,10 @@ def _prove_route_and_state_matrix(browser: _Cdp, *, mobile: bool) -> None:
     _wait_browser(
         browser,
         "document.querySelector(\"[role='alert']\")?.textContent?.includes('Injected proof failure.') === true && "
-        "document.querySelector(\"[aria-label='LLM configuration relationships']\") !== null",
+        "document.querySelector(\"[data-node-id='provider:fake-provider']\") !== null && "
+        "(document.querySelector(\"[data-column-id='providers']\")?.innerText ?? '').includes('Unable to load Providers.') && "
+        "[...document.querySelectorAll(\"[data-column-id='providers'] button\")].some("
+        "(item) => item.textContent?.trim() === 'Retry')",
         "A failed refresh did not retain and label the current configuration graph",
     )
     browser.evaluate("globalThis.__llmrouterProofMode = 'normal'")

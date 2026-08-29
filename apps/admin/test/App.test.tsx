@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { App } from "../src/App.js";
+import { App, loadGlobalAdministrationSources } from "../src/App.js";
 import {
   expireAdministratorSessionLoads,
   invalidateRetainedMediaLoad,
@@ -598,6 +598,31 @@ describe("accepted administration composition", () => {
 });
 
 describe("load isolation", () => {
+  it("keeps successful global source results when one source fails", async () => {
+    const administration = {
+      ...client(),
+      providers: vi.fn(() => {
+        throw new Error("The provider source failed.");
+      }),
+    };
+
+    const results = await loadGlobalAdministrationSources(administration);
+
+    expect(results.providers).toMatchObject({
+      status: "rejected",
+      reason: new Error("The provider source failed."),
+    });
+    for (const result of [
+      results.services,
+      results.models,
+      results.providerModels,
+      results.credentials,
+      results.health,
+      results.retention,
+    ])
+      expect(result.status).toBe("fulfilled");
+  });
+
   it("rejects a late completion after the selected scope changes", () => {
     const guard = createScopeLoadGuard();
     const first = guard.begin();

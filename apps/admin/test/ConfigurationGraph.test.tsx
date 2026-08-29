@@ -24,6 +24,7 @@ import type {
   Model,
   Provider,
   ProviderModel,
+  Service,
 } from "../src/api.js";
 import { configuredPriceValue } from "../src/formContracts.js";
 
@@ -76,6 +77,18 @@ const assignment: Assignment = {
   effective_chain: [{ provider_model_api_name: mapping.api_name }],
   observed_requirements: ["text_input", "reasoning"],
 };
+const services: readonly Service[] = [
+  {
+    api_name: "crewday",
+    display_name: "Crewday",
+    created_at: "2026-08-25T00:00:00Z",
+  },
+  {
+    api_name: "root",
+    display_name: "Root service",
+    created_at: "2026-08-25T00:00:00Z",
+  },
+];
 
 describe("configuration graph projection", () => {
   it("uses exact route and assignment rung endpoints", () => {
@@ -399,11 +412,15 @@ describe("configuration graph composition", () => {
         <ConfigurationGraph {...properties} globalPhase="loading" />,
       ),
     ).toContain("Loading configuration");
-    expect(
-      renderToStaticMarkup(
-        <ConfigurationGraph {...properties} globalPhase="error" />,
-      ),
-    ).toContain("Configuration unavailable");
+    const errorMarkup = renderToStaticMarkup(
+      <ConfigurationGraph {...properties} globalPhase="error" />,
+    );
+    expect(errorMarkup).toContain("Configuration unavailable");
+    expect(errorMarkup).toContain("Unable to load Providers.");
+    expect(errorMarkup).toContain("Unable to load Canonical models.");
+    expect(errorMarkup).toContain(">Retry</button>");
+    expect(errorMarkup).not.toContain("No providers are configured.");
+    expect(errorMarkup).not.toContain("No canonical models are configured.");
     expect(
       renderToStaticMarkup(<ConfigurationGraph {...properties} />),
     ).toContain("No providers are configured.");
@@ -413,6 +430,136 @@ describe("configuration graph composition", () => {
     expect(
       renderToStaticMarkup(<ConfigurationGraph {...properties} />),
     ).toContain("Select a service to view assignments.");
+  });
+
+  it("keeps safe board records visible after a refresh error", () => {
+    const markup = renderToStaticMarkup(
+      <ConfigurationGraph
+        assignments={[assignment]}
+        client={createAdministrationClient(vi.fn())}
+        credentials={[credential]}
+        csrf="csrf"
+        globalPhase="error"
+        models={[model]}
+        onAssignmentDirtyChange={vi.fn()}
+        onNotice={vi.fn()}
+        onRefreshAssignments={vi.fn()}
+        onRefreshGlobal={vi.fn()}
+        providerModels={[mapping]}
+        providers={[provider]}
+        selectedService="crewday"
+        services={services}
+      />,
+    );
+
+    expect(markup).not.toContain("Configuration unavailable");
+    expect(markup).toContain("Unable to load Providers.");
+    expect(markup).toContain("Unable to load Canonical models.");
+    expect(markup).toContain("OpenRouter main");
+    expect(markup).toContain("Reasoning model");
+    expect(markup).toContain("Default");
+  });
+
+  it("keeps an unrelated configuration column ready after one initial source failure", () => {
+    const markup = renderToStaticMarkup(
+      <ConfigurationGraph
+        assignments={[]}
+        catalogPhase="ready"
+        client={createAdministrationClient(vi.fn())}
+        credentials={[]}
+        csrf="csrf"
+        globalPhase="error"
+        models={[model]}
+        onAssignmentDirtyChange={vi.fn()}
+        onNotice={vi.fn()}
+        onRefreshAssignments={vi.fn()}
+        onRefreshGlobal={vi.fn()}
+        providerModels={[mapping]}
+        providerPhase="error"
+        providers={[]}
+        selectedService=""
+      />,
+    );
+
+    expect(markup).toContain("Unable to load Providers.");
+    expect(markup).not.toContain("Unable to load Canonical models.");
+    expect(markup).toContain("Reasoning model");
+    expect(markup).toContain("Unavailable provider: openrouter-main");
+    expect(markup).toContain(">Retry</button>");
+
+    const catalogFailureMarkup = renderToStaticMarkup(
+      <ConfigurationGraph
+        assignments={[]}
+        catalogPhase="error"
+        client={createAdministrationClient(vi.fn())}
+        credentials={[credential]}
+        csrf="csrf"
+        globalPhase="error"
+        models={[]}
+        onAssignmentDirtyChange={vi.fn()}
+        onNotice={vi.fn()}
+        onRefreshAssignments={vi.fn()}
+        onRefreshGlobal={vi.fn()}
+        providerModels={[]}
+        providerPhase="ready"
+        providers={[provider]}
+        selectedService=""
+      />,
+    );
+
+    expect(catalogFailureMarkup).not.toContain("Unable to load Providers.");
+    expect(catalogFailureMarkup).toContain(
+      "Unable to load Canonical models.",
+    );
+    expect(catalogFailureMarkup).toContain("OpenRouter main");
+    expect(catalogFailureMarkup).toContain(">Retry</button>");
+  });
+
+  it("shows assignment loading and error states without removing safe records", () => {
+    const properties = {
+      assignments: [assignment],
+      client: createAdministrationClient(vi.fn()),
+      credentials: [credential],
+      csrf: "csrf",
+      models: [model],
+      onAssignmentDirtyChange: vi.fn(),
+      onNotice: vi.fn(),
+      onRefreshAssignments: vi.fn(),
+      onRefreshGlobal: vi.fn(),
+      providerModels: [mapping],
+      providers: [provider],
+      selectedService: "crewday",
+      services,
+    } as const;
+    const loadingMarkup = renderToStaticMarkup(
+      <ConfigurationGraph {...properties} assignmentPhase="loading" />,
+    );
+    expect(loadingMarkup).toContain(">Loading<");
+    expect(loadingMarkup).toContain("Default");
+    expect(loadingMarkup).toMatch(
+      /data-node-id="assignment:default"[^>]*data-state="loading"/,
+    );
+    const emptyLoadingMarkup = renderToStaticMarkup(
+      <ConfigurationGraph
+        {...properties}
+        assignmentPhase="loading"
+        assignments={[]}
+        models={[]}
+        providerModels={[]}
+        providers={[]}
+      />,
+    );
+    expect(emptyLoadingMarkup).toContain("Loading Assignments.");
+    expect(emptyLoadingMarkup).not.toContain(
+      "No assignments are configured for this service.",
+    );
+
+    const errorMarkup = renderToStaticMarkup(
+      <ConfigurationGraph {...properties} assignmentPhase="error" />,
+    );
+    expect(errorMarkup).toContain("Unable to load Assignments.");
+    expect(errorMarkup).toContain(">Retry</button>");
+    expect(errorMarkup).toContain("Default");
   });
 
   it("marks disabled global connections without changing their ownership", () => {
@@ -509,6 +656,7 @@ describe("configuration graph composition", () => {
         providerModels={[mapping, secondRoute]}
         providers={[provider, localProvider]}
         selectedService="crewday"
+        services={services}
       />,
     );
 
@@ -538,7 +686,7 @@ describe("configuration graph composition", () => {
     expect(markup).toContain(">Primary<");
     expect(markup).toContain(">Fallback 2<");
     expect(markup).toContain("Local definition");
-    expect(markup).toContain("Inherited from root (root)");
+    expect(markup).toContain("Inherited from Root service (root)");
     expect(markup).toContain("Implicit root default");
     expect(markup).toContain("Last used: 2026-08-29T12:00:00Z");
     expect(markup).toContain("No observed requirements.");
@@ -560,5 +708,65 @@ describe("configuration graph composition", () => {
     expect(markup).toContain('data-state="unavailable"');
     expect(markup).toContain('data-state="empty"');
     expect(markup.match(/tabindex="0"/g)).toHaveLength(1);
+  });
+
+  it("keeps missing references explicit and provides retry actions", () => {
+    const missingModelRoute: ProviderModel = {
+      ...mapping,
+      api_name: "missing-model-route",
+      model_api_name: "missing-model",
+    };
+    const missingReferences: Assignment = {
+      ...assignment,
+      api_name: "missing-references",
+      display_name: "Missing references",
+      defined_by_service_api_name: "missing-service",
+      inherits_assignment_api_name: "missing-assignment",
+      effective_chain: [{ provider_model_api_name: "missing-route" }],
+    };
+    const markup = renderToStaticMarkup(
+      <ConfigurationGraph
+        assignments={[missingReferences]}
+        client={createAdministrationClient(vi.fn())}
+        credentials={[credential]}
+        csrf="csrf"
+        models={[model]}
+        onAssignmentDirtyChange={vi.fn()}
+        onNotice={vi.fn()}
+        onRefreshAssignments={vi.fn()}
+        onRefreshGlobal={vi.fn()}
+        providerModels={[
+          { ...mapping, provider_api_name: "missing-provider" },
+          missingModelRoute,
+        ]}
+        providers={[provider]}
+        selectedService="crewday"
+        services={services}
+      />,
+    );
+
+    expect(markup).toContain(
+      "Inherited from unavailable service (missing-service)",
+    );
+    expect(markup).toContain(
+      "Inherits unavailable assignment (missing-assignment)",
+    );
+    expect(markup).toContain("Unavailable provider: missing-provider");
+    expect(markup).toContain(
+      "Unavailable model: missing-model · Route ID: missing-model-route",
+    );
+    expect(markup).toContain("Unavailable route: missing-route");
+    expect(markup).toMatch(
+      /data-node-id="mapping:openrouter-reasoning"[^>]*data-state="unavailable"/,
+    );
+    expect(markup).toMatch(
+      /data-node-id="mapping:missing-model-route"[^>]*data-state="unavailable"/,
+    );
+    expect(markup).toMatch(
+      /data-node-id="assignment:missing-references"[^>]*data-state="unavailable"/,
+    );
+    expect(
+      markup.match(/>Retry<\/button>/g)?.length ?? 0,
+    ).toBeGreaterThanOrEqual(3);
   });
 });
