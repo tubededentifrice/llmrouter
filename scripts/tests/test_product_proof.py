@@ -127,6 +127,21 @@ def test_live_proof_covers_sdk_harness_and_native_operation_families() -> None:
         "Target unavailable",
         "Refresh target",
         "Prepare retained media download",
+        "width=1440, mobile=False",
+        "width=390, mobile=True",
+        '"height": 844 if mobile else 900',
+        '"Providers",\n            "Canonical models",\n            "Assignments"',
+        "[aria-label='LLM configuration relationships']",
+        "input[aria-label='Search configuration']",
+        "[data-group-id='model:text-model']",
+        "[data-group-id='assignment:workflow']",
+        "[data-node-id='rung:workflow:1']",
+        "[data-node-id='rung:workflow:2']",
+        "data-source-node-id='mapping:text'",
+        "data-target-node-id='rung:workflow:2'",
+        "The assignment inspector did not restore rung focus",
+        "The route search did not keep its connected context",
+        "Text model with a deliberately long name for responsive proof",
     ):
         assert evidence in source
     assert "if opcode == 9:\n                self._send_frame(10, payload)" in source

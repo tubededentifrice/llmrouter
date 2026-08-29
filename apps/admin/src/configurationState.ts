@@ -9,13 +9,16 @@ import type {
 export type ConfigurationRecordKind =
   "provider" | "model" | "mapping" | "assignment";
 
+export type ConfigurationNodeKind = ConfigurationRecordKind | "rung";
+
 export type ConfigurationLoadPhase =
   "loading" | "ready" | "empty" | "error" | "partial";
 
 export interface ConfigurationNodeIdentity {
   readonly id: string;
-  readonly kind: ConfigurationRecordKind;
+  readonly kind: ConfigurationNodeKind;
   readonly apiName: string;
+  readonly position?: number;
 }
 
 export interface ConfigurationGraphProjection {
@@ -34,6 +37,8 @@ export const configurationNodeId = {
   model: (apiName: string) => `model:${apiName}`,
   mapping: (apiName: string) => `mapping:${apiName}`,
   assignment: (apiName: string) => `assignment:${apiName}`,
+  rung: (assignmentApiName: string, position: number) =>
+    `rung:${assignmentApiName}:${String(position)}`,
 } as const;
 
 export function parseConfigurationNodeId(
@@ -42,6 +47,15 @@ export function parseConfigurationNodeId(
   const separator = value.indexOf(":");
   if (separator < 1 || separator === value.length - 1) return null;
   const kind = value.slice(0, separator);
+  if (kind === "rung") {
+    const payload = value.slice(separator + 1);
+    const positionSeparator = payload.lastIndexOf(":");
+    if (positionSeparator < 1) return null;
+    const apiName = payload.slice(0, positionSeparator);
+    const position = Number(payload.slice(positionSeparator + 1));
+    if (!Number.isInteger(position) || position < 1) return null;
+    return { id: value, kind, apiName, position };
+  }
   if (
     kind !== "provider" &&
     kind !== "model" &&
@@ -101,7 +115,17 @@ export function projectConfigurationGraph(
   const assignmentIds = sortedAssignments.map((item) =>
     configurationNodeId.assignment(item.api_name),
   );
-  const nodeIds = new Set([...providerIds, ...catalogIds, ...assignmentIds]);
+  const rungIds = sortedAssignments.flatMap((assignment) =>
+    assignment.effective_chain.map((_, index) =>
+      configurationNodeId.rung(assignment.api_name, index + 1),
+    ),
+  );
+  const nodeIds = new Set([
+    ...providerIds,
+    ...catalogIds,
+    ...assignmentIds,
+    ...rungIds,
+  ]);
   const relationships = [
     ...sortedMappings.map((mapping) => ({
       id: `provider-mapping:${mapping.provider_api_name}:${mapping.api_name}`,
@@ -114,7 +138,7 @@ export function projectConfigurationGraph(
         sourceId: configurationNodeId.mapping(
           candidate.provider_model_api_name,
         ),
-        targetId: configurationNodeId.assignment(assignment.api_name),
+        targetId: configurationNodeId.rung(assignment.api_name, index + 1),
       })),
     ),
   ].filter(

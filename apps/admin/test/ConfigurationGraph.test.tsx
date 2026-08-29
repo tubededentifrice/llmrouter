@@ -18,7 +18,13 @@ import {
   validateAssignmentChain,
 } from "../src/configurationState.js";
 import { createAdministrationClient } from "../src/api.js";
-import type { Assignment, Model, Provider, ProviderModel } from "../src/api.js";
+import type {
+  Assignment,
+  Credential,
+  Model,
+  Provider,
+  ProviderModel,
+} from "../src/api.js";
 import { configuredPriceValue } from "../src/formContracts.js";
 
 const provider: Provider = {
@@ -28,6 +34,12 @@ const provider: Provider = {
   credential_api_name: "openrouter-key",
   enabled: true,
   created_at: "2026-08-25T00:00:00Z",
+};
+const credential: Credential = {
+  api_name: "openrouter-key",
+  fingerprint: "sha256:proof",
+  created_at: "2026-08-25T00:00:00Z",
+  updated_at: "2026-08-25T00:00:00Z",
 };
 const model: Model = {
   api_name: "reasoning-model",
@@ -66,7 +78,7 @@ const assignment: Assignment = {
 };
 
 describe("configuration graph projection", () => {
-  it("uses separate stable identities and provider to mapping to assignment edges", () => {
+  it("uses exact route and assignment rung endpoints", () => {
     const result = projectConfigurationGraph(
       [provider],
       [model],
@@ -88,7 +100,7 @@ describe("configuration graph projection", () => {
       {
         id: "mapping-assignment:openrouter-reasoning:default:0",
         sourceId: "mapping:openrouter-reasoning",
-        targetId: "assignment:default",
+        targetId: "rung:default:1",
       },
     ]);
     expect(configurationNodeId.model("same")).not.toBe(
@@ -99,6 +111,13 @@ describe("configuration graph projection", () => {
       kind: "assignment",
       apiName: "default",
     });
+    expect(parseConfigurationNodeId("rung:default:1")).toEqual({
+      id: "rung:default:1",
+      kind: "rung",
+      apiName: "default",
+      position: 1,
+    });
+    expect(parseConfigurationNodeId("rung:default:0")).toBeNull();
     expect(parseConfigurationNodeId("unknown:default")).toBeNull();
   });
 
@@ -309,7 +328,7 @@ describe("configuration graph composition", () => {
       <ConfigurationGraph
         assignments={[]}
         client={client}
-        credentials={[]}
+        credentials={[credential]}
         csrf="csrf"
         models={[model]}
         onAssignmentDirtyChange={vi.fn()}
@@ -321,11 +340,14 @@ describe("configuration graph composition", () => {
         selectedService=""
       />,
     );
-    expect(markup).toContain("Global providers");
-    expect(markup).toContain("Global models and mappings");
-    expect(markup).toContain("Select one service to configure assignments");
+    expect(markup).toContain("LLM configuration relationships");
+    expect(markup).toContain(">Providers<");
+    expect(markup).toContain(">Canonical models<");
+    expect(markup).toContain(">Assignments<");
+    expect(markup).toContain("Select a service to view assignments.");
     expect(markup).toContain("OpenRouter main");
-    expect(markup).toContain("Reasoning model — openrouter-reasoning");
+    expect(markup).toContain("Model ID: reasoning-model");
+    expect(markup).toContain("Route ID: openrouter-reasoning");
     expect(markup.match(/tabindex="0"/g)).toHaveLength(1);
     expect(markup).not.toContain("ServiceAssignmentGraph");
   });
@@ -335,7 +357,7 @@ describe("configuration graph composition", () => {
       <ConfigurationGraph
         assignments={[assignment]}
         client={createAdministrationClient(vi.fn())}
-        credentials={[]}
+        credentials={[credential]}
         csrf="csrf"
         globalPhase="partial"
         models={[model]}
@@ -350,7 +372,11 @@ describe("configuration graph composition", () => {
     );
     expect(markup).toContain("Partial configuration graph");
     expect(markup).toContain("does not claim to be complete");
-    expect(markup).toContain("crewday assignments");
+    expect(markup).toContain(">Assignments<");
+    expect(markup).toContain("Partial");
+    expect(markup).toContain('aria-label="Load more Providers"');
+    expect(markup).toContain('aria-label="Load more Canonical models"');
+    expect(markup).toContain('aria-label="Load more Assignments"');
   });
 
   it("renders deterministic loading, error, and complete empty states", () => {
@@ -380,7 +406,13 @@ describe("configuration graph composition", () => {
     ).toContain("Configuration unavailable");
     expect(
       renderToStaticMarkup(<ConfigurationGraph {...properties} />),
-    ).toContain("No configuration records are available");
+    ).toContain("No providers are configured.");
+    expect(
+      renderToStaticMarkup(<ConfigurationGraph {...properties} />),
+    ).toContain("No canonical models are configured.");
+    expect(
+      renderToStaticMarkup(<ConfigurationGraph {...properties} />),
+    ).toContain("Select a service to view assignments.");
   });
 
   it("marks disabled global connections without changing their ownership", () => {
@@ -400,8 +432,133 @@ describe("configuration graph composition", () => {
         selectedService="crewday"
       />,
     );
-    expect(markup).toContain("Global and disabled");
-    expect(markup).toContain("Global provider-model mapping, disabled");
+    expect(markup).toContain("Disabled");
     expect(markup.match(/data-state="disabled"/g)).toHaveLength(2);
+  });
+
+  it("renders compound cards, exact identities, rungs, and relationships", () => {
+    const localProvider: Provider = {
+      api_name: "local-proof",
+      display_name: "Local proof",
+      adapter: "fake",
+      enabled: true,
+      created_at: "2026-08-25T00:00:00Z",
+    };
+    const secondRoute: ProviderModel = {
+      ...mapping,
+      api_name: "local-reasoning",
+      provider_api_name: localProvider.api_name,
+      provider_model_name: "proof/reasoning",
+      enabled: false,
+      capabilities: ["streaming"],
+    };
+    const emptyModel: Model = {
+      ...model,
+      api_name: "long-empty-model",
+      display_name:
+        "A very long canonical model name that must wrap inside its card",
+      input_modalities: ["image"],
+      output_modalities: ["image"],
+      capabilities: [],
+    };
+    const inherited: Assignment = {
+      ...assignment,
+      api_name: "inherited",
+      display_name: "Inherited workflow",
+      definition_kind: "direct_chain",
+      defined_by_service_api_name: "root",
+      direct_chain: null,
+      effective_chain: [{ provider_model_api_name: mapping.api_name }],
+      observed_requirements: ["image_input"],
+      last_used_at: "2026-08-29T12:00:00Z",
+    };
+    const local: Assignment = {
+      ...assignment,
+      api_name: "workflow",
+      display_name: "Workflow",
+      effective_chain: [
+        { provider_model_api_name: mapping.api_name },
+        { provider_model_api_name: secondRoute.api_name },
+      ],
+      direct_chain: [
+        { provider_model_api_name: mapping.api_name },
+        { provider_model_api_name: secondRoute.api_name },
+      ],
+    };
+    const implicit: Assignment = {
+      ...assignment,
+      api_name: "implicit-default",
+      display_name: "Implicit default",
+      definition_kind: "implicit",
+      defined_by_service_api_name: null,
+      direct_chain: null,
+      effective_chain: [],
+      observed_requirements: [],
+    };
+    const markup = renderToStaticMarkup(
+      <ConfigurationGraph
+        assignments={[local, inherited, implicit]}
+        client={createAdministrationClient(vi.fn())}
+        credentials={[credential]}
+        csrf="csrf"
+        models={[model, emptyModel]}
+        onAssignmentDirtyChange={vi.fn()}
+        onNotice={vi.fn()}
+        onRefreshAssignments={vi.fn()}
+        onRefreshGlobal={vi.fn()}
+        providerModels={[mapping, secondRoute]}
+        providers={[provider, localProvider]}
+        selectedService="crewday"
+      />,
+    );
+
+    expect(markup).toContain('aria-label="LLM configuration relationships"');
+    expect(markup.indexOf(">Providers<")).toBeLessThan(
+      markup.indexOf(">Canonical models<"),
+    );
+    expect(markup.indexOf(">Canonical models<")).toBeLessThan(
+      markup.indexOf(">Assignments<"),
+    );
+    expect(markup).toContain('data-group-id="model:reasoning-model"');
+    expect(markup).toContain('data-node-id="mapping:openrouter-reasoning"');
+    expect(markup).toContain('data-node-id="mapping:local-reasoning"');
+    expect(markup).toContain("Provider routes");
+    expect(markup).toContain(
+      "Provider ID: openrouter-main · Adapter: OpenRouter",
+    );
+    expect(markup).toContain("Model ID: reasoning-model");
+    expect(markup).toContain(
+      "Route ID: openrouter-reasoning · Wire model: vendor/model",
+    );
+    expect(markup).toContain(
+      "Text input · Text output · Reasoning · Streaming",
+    );
+    expect(markup).toContain('data-node-id="rung:workflow:1"');
+    expect(markup).toContain('data-node-id="rung:workflow:2"');
+    expect(markup).toContain(">Primary<");
+    expect(markup).toContain(">Fallback 2<");
+    expect(markup).toContain("Local definition");
+    expect(markup).toContain("Inherited from root (root)");
+    expect(markup).toContain("Implicit root default");
+    expect(markup).toContain("Last used: 2026-08-29T12:00:00Z");
+    expect(markup).toContain("No observed requirements.");
+    expect(markup).toContain("Does not meet observed requirements");
+    expect(markup).toContain(
+      "OpenRouter main (Provider ID: openrouter-main) provides Route ID: openrouter-reasoning for Reasoning model (Model ID: reasoning-model)",
+    );
+    expect(markup).toContain(
+      "Primary: Route ID: openrouter-reasoning for Workflow (Assignment ID: workflow)",
+    );
+    expect(markup).toContain(
+      "Primary: Route ID: openrouter-reasoning for Inherited workflow (Assignment ID: inherited)",
+    );
+    expect(markup).toContain("No provider routes.");
+    expect(markup).toContain("Add provider route");
+    expect(markup).toContain('data-state="ready"');
+    expect(markup).toContain('data-state="enabled"');
+    expect(markup).toContain('data-state="disabled"');
+    expect(markup).toContain('data-state="unavailable"');
+    expect(markup).toContain('data-state="empty"');
+    expect(markup.match(/tabindex="0"/g)).toHaveLength(1);
   });
 });

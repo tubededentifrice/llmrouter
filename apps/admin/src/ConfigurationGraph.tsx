@@ -45,6 +45,7 @@ import {
   discardConfirmedRecord,
   excludeDeletedRecords,
   includeConfirmedRecords,
+  configurationNodeId,
   parseConfigurationNodeId,
   projectConfigurationGraph,
   providerModelPriceFormDefaults,
@@ -94,6 +95,7 @@ interface Inspector {
   readonly providerApiName?: string;
   readonly modelApiName?: string;
   readonly serviceApiName?: string;
+  readonly rungPosition?: number;
 }
 
 interface InspectorTransition {
@@ -119,12 +121,16 @@ interface ChainDraft {
   readonly providerModel: string;
 }
 
+function assignmentPositionLabel(position: number): string {
+  return position === 1 ? "Primary" : `Fallback ${String(position)}`;
+}
+
 function orderChainRows(
   rows: readonly EditableTableRow<ChainDraft>[],
 ): readonly EditableTableRow<ChainDraft>[] {
   return rows.map((row, index) => ({
     ...row,
-    label: `Fallback ${String(index + 1)}`,
+    label: assignmentPositionLabel(index + 1),
   }));
 }
 
@@ -329,6 +335,183 @@ const providerAdapters: readonly ProviderAdapter[] = [
   "local_embeddings",
   "fake",
 ];
+
+const adapterLabels: Readonly<Record<ProviderAdapter, string>> = {
+  openai: "OpenAI",
+  openai_compatible: "OpenAI-compatible",
+  openrouter: "OpenRouter",
+  custom: "Custom",
+  wavespeed: "WaveSpeed",
+  ollama: "Ollama",
+  local_embeddings: "Local embeddings",
+  fake: "Fake",
+};
+
+const requirementLabels: Readonly<Record<ObservedRequirement, string>> = {
+  text_input: "Text input",
+  image_input: "Image input",
+  text_output: "Text output",
+  structured_json_output: "Structured JSON",
+  embedding_output: "Embeddings",
+  image_output: "Image output",
+  video_output: "Video output",
+  audio_output: "Audio output",
+  tool_calling: "Tool calling",
+  streaming: "Streaming",
+  reasoning: "Reasoning",
+};
+
+function modelCapabilityLabels(
+  model: Pick<Model, "input_modalities" | "output_modalities" | "capabilities">,
+): readonly string[] {
+  const labels: string[] = [];
+  for (const input of model.input_modalities)
+    labels.push(input === "text" ? "Text input" : "Image input");
+  for (const output of model.output_modalities) {
+    const label: Readonly<
+      Record<(typeof model.output_modalities)[number], string>
+    > = {
+      text: "Text output",
+      structured_json: "Structured JSON",
+      embedding: "Embeddings",
+      image: "Image output",
+      video: "Video output",
+      audio: "Audio output",
+    };
+    labels.push(label[output]);
+  }
+  for (const capability of model.capabilities) {
+    const label = {
+      tool_calling: "Tool calling",
+      streaming: "Streaming",
+      reasoning: "Reasoning",
+    }[capability];
+    labels.push(label);
+  }
+  return labels;
+}
+
+interface BoardState {
+  readonly available: boolean;
+  readonly content?: string;
+  readonly state: "disabled" | "enabled" | "unavailable";
+  readonly stateLabel: "Disabled" | "Enabled" | "Unavailable";
+}
+
+function providerBoardState(
+  provider: Provider,
+  credentialNames: ReadonlySet<string>,
+): {
+  readonly available: boolean;
+  readonly content?: string;
+  readonly state: "disabled" | "ready" | "unavailable";
+  readonly stateLabel: "Disabled" | "Ready" | "Unavailable";
+} {
+  if (!provider.enabled)
+    return { available: false, state: "disabled", stateLabel: "Disabled" };
+  const policy = adapterFieldPolicy[provider.adapter];
+  if (policy.endpoint === "required" && !provider.endpoint?.trim())
+    return {
+      available: false,
+      content: "Add the required endpoint.",
+      state: "unavailable",
+      stateLabel: "Unavailable",
+    };
+  if (
+    policy.credential === "required" &&
+    (provider.credential_api_name === null ||
+      provider.credential_api_name === undefined ||
+      !credentialNames.has(provider.credential_api_name))
+  )
+    return {
+      available: false,
+      content: "Add the required credential.",
+      state: "unavailable",
+      stateLabel: "Unavailable",
+    };
+  return { available: true, state: "ready", stateLabel: "Ready" };
+}
+
+function routeBoardState(
+  route: ProviderModel,
+  providerState: ReturnType<typeof providerBoardState> | undefined,
+): BoardState {
+  if (!route.enabled)
+    return { available: false, state: "disabled", stateLabel: "Disabled" };
+  if (route.cooldown)
+    return {
+      available: false,
+      content: `Cooldown until ${route.cooldown.until}`,
+      state: "unavailable",
+      stateLabel: "Unavailable",
+    };
+  if (providerState === undefined)
+    return {
+      available: false,
+      content: `Unavailable provider: ${route.provider_api_name}`,
+      state: "unavailable",
+      stateLabel: "Unavailable",
+    };
+  if (!providerState.available)
+    return {
+      available: false,
+      content:
+        providerState.state === "disabled"
+          ? `Provider disabled: ${route.provider_api_name}`
+          : `Provider unavailable: ${route.provider_api_name}`,
+      state: "unavailable",
+      stateLabel: "Unavailable",
+    };
+  return { available: true, state: "enabled", stateLabel: "Enabled" };
+}
+
+function routeMeetsRequirement(
+  route: ProviderModel,
+  requirement: ObservedRequirement,
+): boolean {
+  if (requirement === "text_input")
+    return route.input_modalities.includes("text");
+  if (requirement === "image_input")
+    return route.input_modalities.includes("image");
+  if (requirement === "text_output")
+    return route.output_modalities.includes("text");
+  if (requirement === "structured_json_output")
+    return route.output_modalities.includes("structured_json");
+  if (requirement === "embedding_output")
+    return route.output_modalities.includes("embedding");
+  if (requirement === "image_output")
+    return route.output_modalities.includes("image");
+  if (requirement === "video_output")
+    return route.output_modalities.includes("video");
+  if (requirement === "audio_output")
+    return route.output_modalities.includes("audio");
+  return route.capabilities.includes(requirement);
+}
+
+function assignmentSourceLabel(
+  assignment: Assignment,
+  selectedService: string,
+): string {
+  if (assignment.definition_kind === "implicit") return "Implicit root default";
+  if (assignment.defined_by_service_api_name === selectedService)
+    return "Local definition";
+  const source = assignment.defined_by_service_api_name;
+  return source
+    ? `Inherited from ${source} (${source})`
+    : "Implicit root default";
+}
+
+function assignmentInheritanceLabel(
+  assignment: Assignment,
+  assignments: ReadonlyMap<string, Assignment>,
+): string | null {
+  const inheritedName = assignment.inherits_assignment_api_name;
+  if (!inheritedName) return null;
+  const inherited = assignments.get(inheritedName);
+  return inherited
+    ? `Inherits ${inherited.display_name} (${inherited.api_name})`
+    : `Inherits unavailable assignment (${inheritedName})`;
+}
 
 function formValue(form: FormData, name: string): string {
   const value = form.get(name);
@@ -748,6 +931,30 @@ function useConfigurationController({
     () => new Map(visibleAssignments.map((item) => [item.api_name, item])),
     [visibleAssignments],
   );
+  const credentialNames = useMemo(
+    () => new Set(visibleCredentials.map((item) => item.api_name)),
+    [visibleCredentials],
+  );
+  const providerStates = useMemo(
+    () =>
+      new Map(
+        visibleProviders.map((item) => [
+          item.api_name,
+          providerBoardState(item, credentialNames),
+        ]),
+      ),
+    [credentialNames, visibleProviders],
+  );
+  const routeStates = useMemo(
+    () =>
+      new Map(
+        visibleMappings.map((item) => [
+          item.api_name,
+          routeBoardState(item, providerStates.get(item.provider_api_name)),
+        ]),
+      ),
+    [providerStates, visibleMappings],
+  );
 
   useEffect(() => {
     if (previousSelectedServiceRef.current === selectedService) return;
@@ -845,30 +1052,36 @@ function useConfigurationController({
     const identity = parseConfigurationNodeId(context.node.id);
     if (identity === null) return;
     if (pendingRef.current) return;
+    const inspectorKind =
+      identity.kind === "rung" ? "assignment" : identity.kind;
     if (
-      inspector?.kind === identity.kind &&
+      inspector?.kind === inspectorKind &&
       inspector.apiName === identity.apiName &&
-      (identity.kind !== "assignment" ||
+      inspector.rungPosition === identity.position &&
+      (inspectorKind !== "assignment" ||
         inspector.serviceApiName === selectedService)
     ) {
       returnFocusRef.current = context.trigger;
       return;
     }
     const nextInspector: Inspector = {
-      kind: identity.kind,
+      kind: inspectorKind,
       apiName: identity.apiName,
-      ...(identity.kind === "assignment"
+      ...(inspectorKind === "assignment"
         ? { serviceApiName: selectedService }
         : {}),
+      ...(identity.position === undefined
+        ? {}
+        : { rungPosition: identity.position }),
     };
     let nextChainRows: readonly EditableTableRow<ChainDraft>[] | undefined;
-    if (identity.kind === "assignment") {
+    if (inspectorKind === "assignment") {
       const assignment = assignmentByName.get(identity.apiName);
       const chain =
         assignment?.direct_chain ?? assignment?.effective_chain ?? [];
       nextChainRows = chain.map((candidate, index) => ({
         id: `chain:${String(index)}:${candidate.provider_model_api_name}`,
-        label: `Fallback ${String(index + 1)}`,
+        label: assignmentPositionLabel(index + 1),
         draft: { providerModel: candidate.provider_model_api_name },
       }));
     }
@@ -903,8 +1116,8 @@ function useConfigurationController({
   ] = [
     {
       id: "providers",
-      label: "Global providers",
-      countLabel: `${String(visibleProviders.length)} global`,
+      label: "Providers",
+      countLabel: `${String(visibleProviders.length)} providers`,
       actions: (
         <Button
           disabled={pending}
@@ -916,28 +1129,52 @@ function useConfigurationController({
           Add provider
         </Button>
       ),
-      emptyState: "No global provider connections.",
+      emptyState: "No providers are configured.",
+      ...(globalPhase === "partial"
+        ? {
+            partialResult: {
+              label: "Partial",
+              action: (
+                <Button
+                  aria-label="Load more Providers"
+                  disabled={pending}
+                  onClick={() => void onRefreshGlobal()}
+                  variant="quiet"
+                >
+                  Load more
+                </Button>
+              ),
+            },
+          }
+        : {}),
       nodes: projection.providerIds.map((id) => {
         const provider = providerByName.get(id.slice("provider:".length));
         if (provider === undefined) throw new Error(`Missing ${id}.`);
+        const boardState = providerStates.get(provider.api_name);
+        if (boardState === undefined)
+          throw new Error(`Missing state for ${id}.`);
         return {
           id,
           label: provider.display_name,
-          detail: `${provider.api_name} · ${provider.adapter}`,
-          searchText: [provider.api_name, provider.adapter],
-          state: provider.enabled
-            ? ("default" as const)
-            : ("disabled" as const),
-          stateLabel: provider.enabled
-            ? "Global and enabled"
-            : "Global and disabled",
+          detail: `Provider ID: ${provider.api_name} · Adapter: ${adapterLabels[provider.adapter]}`,
+          searchText: [
+            provider.api_name,
+            provider.adapter,
+            adapterLabels[provider.adapter],
+            boardState.stateLabel,
+          ],
+          state: boardState.state,
+          stateLabel: boardState.stateLabel,
+          ...(boardState.content === undefined
+            ? {}
+            : { content: boardState.content }),
         };
       }),
     },
     {
       id: "catalog",
-      label: "Global models and mappings",
-      countLabel: `${String(visibleModels.length)} models · ${String(visibleMappings.length)} mappings`,
+      label: "Canonical models",
+      countLabel: `${String(visibleModels.length)} models · ${String(visibleMappings.length)} routes`,
       actions: (
         <span className="configuration-column-actions">
           <Button
@@ -947,7 +1184,7 @@ function useConfigurationController({
             }}
             variant="secondary"
           >
-            Add model
+            Add canonical model
           </Button>
           <Button
             disabled={pending}
@@ -956,50 +1193,161 @@ function useConfigurationController({
             }}
             variant="secondary"
           >
-            Add mapping
+            Add provider route
           </Button>
         </span>
       ),
-      emptyState: "No canonical models or provider-model mappings.",
-      nodes: projection.catalogIds.map((id) => {
-        const identity = parseConfigurationNodeId(id);
-        if (identity?.kind === "model") {
+      emptyState: "No canonical models are configured.",
+      ...(globalPhase === "partial"
+        ? {
+            partialResult: {
+              label: "Partial",
+              action: (
+                <Button
+                  aria-label="Load more Canonical models"
+                  disabled={pending}
+                  onClick={() => void onRefreshGlobal()}
+                  variant="quiet"
+                >
+                  Load more
+                </Button>
+              ),
+            },
+          }
+        : {}),
+      nodes: [
+        ...projection.catalogIds.flatMap((id) => {
+          const identity = parseConfigurationNodeId(id);
+          if (identity?.kind !== "model") return [];
           const model = modelByName.get(identity.apiName);
           if (model === undefined) throw new Error(`Missing ${id}.`);
-          return {
-            id,
-            label: model.display_name,
-            detail: `${model.api_name} · canonical model`,
-            searchText: [model.api_name, ...model.capabilities],
-            stateLabel: "Global canonical model",
-          };
-        }
-        const mapping = mappingByName.get(identity?.apiName ?? "");
-        if (mapping === undefined) throw new Error(`Missing ${id}.`);
-        const model = modelByName.get(mapping.model_api_name);
-        return {
-          id,
-          label: `${model?.display_name ?? mapping.model_api_name} — ${mapping.api_name}`,
-          detail: `${mapping.provider_api_name} · ${mapping.provider_model_name}`,
-          searchText: [
-            mapping.api_name,
-            mapping.model_api_name,
-            mapping.provider_api_name,
-            mapping.provider_model_name,
-          ],
-          state: mapping.enabled ? ("default" as const) : ("disabled" as const),
-          stateLabel: mapping.enabled
-            ? "Global provider-model mapping"
-            : "Global provider-model mapping, disabled",
-        };
-      }),
+          const routes = projection.catalogIds.flatMap((routeId) => {
+            const routeIdentity = parseConfigurationNodeId(routeId);
+            if (routeIdentity?.kind !== "mapping") return [];
+            const route = mappingByName.get(routeIdentity.apiName);
+            return route?.model_api_name === model.api_name ? [route] : [];
+          });
+          const routeAvailable = routes.some(
+            (item) => routeStates.get(item.api_name)?.available === true,
+          );
+          const modelState =
+            globalPhase === "partial"
+              ? ("partial" as const)
+              : routeAvailable
+                ? ("ready" as const)
+                : ("unavailable" as const);
+          const modelStateLabel =
+            globalPhase === "partial"
+              ? "Partial"
+              : routeAvailable
+                ? "Ready"
+                : "Unavailable";
+          const capabilityLabels = modelCapabilityLabels(model);
+          return [
+            {
+              id,
+              label: model.display_name,
+              detail: `Model ID: ${model.api_name}`,
+              content: capabilityLabels.join(" · "),
+              searchText: [
+                model.api_name,
+                ...capabilityLabels,
+                modelStateLabel,
+              ],
+              state: modelState,
+              stateLabel: modelStateLabel,
+              rowsLabel: "Provider routes",
+              rowsEmptyState: "No provider routes.",
+              rowsActions: (
+                <Button
+                  disabled={pending}
+                  onClick={(event) => {
+                    requestInspectorTransition({
+                      inspector: {
+                        kind: "mapping",
+                        apiName: null,
+                        modelApiName: model.api_name,
+                      },
+                      selectedNodeId: null,
+                      trigger: event.currentTarget,
+                    });
+                  }}
+                  variant="quiet"
+                >
+                  Add provider route
+                </Button>
+              ),
+              rows: routes.map((route) => {
+                const provider = providerByName.get(route.provider_api_name);
+                const routeState = routeStates.get(route.api_name);
+                if (routeState === undefined)
+                  throw new Error(`Missing state for ${route.api_name}.`);
+                const routeCapabilities = modelCapabilityLabels(route);
+                return {
+                  id: configurationNodeId.mapping(route.api_name),
+                  label:
+                    provider?.display_name ??
+                    `Unavailable provider: ${route.provider_api_name}`,
+                  detail: `Route ID: ${route.api_name} · Wire model: ${route.provider_model_name}`,
+                  content: [routeCapabilities.join(" · "), routeState.content]
+                    .filter(Boolean)
+                    .join(" · "),
+                  searchText: [
+                    route.api_name,
+                    route.model_api_name,
+                    route.provider_api_name,
+                    route.provider_model_name,
+                    ...routeCapabilities,
+                    routeState.stateLabel,
+                  ],
+                  state: routeState.state,
+                  stateLabel: routeState.stateLabel,
+                };
+              }),
+            },
+          ];
+        }),
+        ...(visibleMappings.some(
+          (route) => !modelByName.has(route.model_api_name),
+        )
+          ? [
+              {
+                id: "group:unavailable-referenced-records",
+                label: "Unavailable referenced records",
+                headerActionable: false,
+                rowsLabel: "Provider routes",
+                state: "unavailable" as const,
+                stateLabel: "Unavailable",
+                rows: visibleMappings.flatMap((route) => {
+                  if (modelByName.has(route.model_api_name)) return [];
+                  const provider = providerByName.get(route.provider_api_name);
+                  return [
+                    {
+                      id: configurationNodeId.mapping(route.api_name),
+                      label: `Unavailable model: ${route.model_api_name} · Route ID: ${route.api_name}`,
+                      detail:
+                        provider?.display_name ??
+                        `Unavailable provider: ${route.provider_api_name}`,
+                      searchText: [
+                        route.api_name,
+                        route.model_api_name,
+                        route.provider_api_name,
+                        route.provider_model_name,
+                        "Unavailable",
+                      ],
+                      state: "unavailable" as const,
+                      stateLabel: "Unavailable",
+                    },
+                  ];
+                }),
+              },
+            ]
+          : []),
+      ],
     },
     {
       id: "assignments",
-      label:
-        selectedService === ""
-          ? "Service assignments"
-          : `${selectedService} assignments`,
+      label: "Assignments",
       countLabel:
         selectedService === ""
           ? "Select a service"
@@ -1017,32 +1365,193 @@ function useConfigurationController({
       ),
       emptyState:
         selectedService === ""
-          ? "Select one service to configure assignments. Providers, models, mappings, credentials, and prices remain global."
-          : "This service has no effective assignment records.",
+          ? "Select a service to view assignments."
+          : "No assignments are configured for this service.",
+      ...(globalPhase === "partial"
+        ? {
+            partialResult: {
+              label: "Partial",
+              action: (
+                <Button
+                  aria-label="Load more Assignments"
+                  disabled={pending || selectedService === ""}
+                  onClick={() => void onRefreshAssignments()}
+                  variant="quiet"
+                >
+                  Load more
+                </Button>
+              ),
+            },
+          }
+        : {}),
       nodes: projection.assignmentIds.map((id) => {
         const assignment = assignmentByName.get(id.slice("assignment:".length));
         if (assignment === undefined) throw new Error(`Missing ${id}.`);
         const local =
           assignment.defined_by_service_api_name === selectedService;
+        const sourceLabel = assignmentSourceLabel(assignment, selectedService);
+        const inheritanceLabel = assignmentInheritanceLabel(
+          assignment,
+          assignmentByName,
+        );
+        const requirementLabel =
+          assignment.observed_requirements.length === 0
+            ? "No observed requirements."
+            : assignment.observed_requirements
+                .map((item) => requirementLabels[item])
+                .join(" · ");
+        const rungStates = assignment.effective_chain.map((candidate) => {
+          const route = mappingByName.get(candidate.provider_model_api_name);
+          return route === undefined
+            ? undefined
+            : routeStates.get(route.api_name);
+        });
+        const assignmentAvailable = rungStates.some(
+          (state) => state?.available === true,
+        );
+        const assignmentState =
+          globalPhase === "partial"
+            ? ("partial" as const)
+            : assignment.effective_chain.length === 0
+              ? ("empty" as const)
+              : assignmentAvailable
+                ? ("ready" as const)
+                : ("unavailable" as const);
+        const assignmentStateLabel =
+          globalPhase === "partial"
+            ? "Partial"
+            : assignment.effective_chain.length === 0
+              ? "Empty"
+              : assignmentAvailable
+                ? "Ready"
+                : "Unavailable";
         return {
           id,
           label: assignment.display_name,
-          detail: `${assignment.api_name} · ${local ? "local" : `inherited from ${assignment.defined_by_service_api_name ?? "implicit root"}`}`,
+          detail: `Assignment ID: ${assignment.api_name}`,
+          content: [
+            sourceLabel,
+            inheritanceLabel,
+            `Last used: ${assignment.last_used_at ?? "Never"}`,
+            requirementLabel,
+          ]
+            .filter(Boolean)
+            .join(" · "),
           searchText: [
             assignment.api_name,
             assignment.definition_kind,
             assignment.defined_by_service_api_name ?? "implicit",
+            sourceLabel,
+            inheritanceLabel ?? "",
+            requirementLabel,
+            assignmentStateLabel,
             ...assignment.effective_chain.map(
               (item) => item.provider_model_api_name,
             ),
           ],
-          stateLabel: local
-            ? "Selected service assignment, local definition"
-            : "Selected service assignment, inherited definition",
+          state: assignmentState,
+          stateLabel: assignmentStateLabel,
+          rowsLabel: "Effective provider routes",
+          rowsEmptyState: "No effective provider routes.",
+          rows: assignment.effective_chain.map((candidate, index) => {
+            const position = index + 1;
+            const positionLabel = assignmentPositionLabel(position);
+            const route = mappingByName.get(candidate.provider_model_api_name);
+            const routeState =
+              route === undefined ? undefined : routeStates.get(route.api_name);
+            const provider =
+              route === undefined
+                ? undefined
+                : providerByName.get(route.provider_api_name);
+            const routeModel =
+              route === undefined
+                ? undefined
+                : modelByName.get(route.model_api_name);
+            const mismatch =
+              route !== undefined &&
+              assignment.observed_requirements.some(
+                (requirement) => !routeMeetsRequirement(route, requirement),
+              );
+            return {
+              id: configurationNodeId.rung(assignment.api_name, position),
+              label: positionLabel,
+              detail:
+                route === undefined
+                  ? `Unavailable route: ${candidate.provider_model_api_name}`
+                  : `${provider?.display_name ?? `Unavailable provider: ${route.provider_api_name}`} · ${routeModel?.display_name ?? `Unavailable model: ${route.model_api_name}`}`,
+              content: [
+                route === undefined ? null : `Route ID: ${route.api_name}`,
+                local ? null : "Inherited",
+                mismatch ? "Does not meet observed requirements" : null,
+                routeState?.content,
+              ]
+                .filter(Boolean)
+                .join(" · "),
+              searchText: [
+                positionLabel,
+                candidate.provider_model_api_name,
+                provider?.display_name ?? "",
+                routeModel?.display_name ?? "",
+                routeState?.stateLabel ?? "Unavailable",
+                local ? "Local" : "Inherited",
+              ],
+              state: routeState?.state ?? ("unavailable" as const),
+              stateLabel: [
+                routeState?.stateLabel ?? "Unavailable",
+                local ? null : "Inherited",
+              ]
+                .filter(Boolean)
+                .join(" · "),
+            };
+          }),
         };
       }),
     },
   ];
+
+  const relationships = projection.relationships.flatMap((relationship) => {
+    const source = parseConfigurationNodeId(relationship.sourceId);
+    const target = parseConfigurationNodeId(relationship.targetId);
+    if (source?.kind === "provider" && target?.kind === "mapping") {
+      const provider = providerByName.get(source.apiName);
+      const route = mappingByName.get(target.apiName);
+      const routeModel =
+        route === undefined ? undefined : modelByName.get(route.model_api_name);
+      if (
+        provider === undefined ||
+        route === undefined ||
+        routeModel === undefined
+      )
+        return [];
+      return [
+        {
+          ...relationship,
+          label: "Provides",
+          accessibleLabel: `${provider.display_name} (Provider ID: ${provider.api_name}) provides Route ID: ${route.api_name} for ${routeModel.display_name} (Model ID: ${routeModel.api_name})`,
+        },
+      ];
+    }
+    if (source?.kind === "mapping" && target?.kind === "rung") {
+      const route = mappingByName.get(source.apiName);
+      const assignment = assignmentByName.get(target.apiName);
+      if (
+        route === undefined ||
+        !modelByName.has(route.model_api_name) ||
+        assignment === undefined ||
+        target.position === undefined
+      )
+        return [];
+      const label = assignmentPositionLabel(target.position);
+      return [
+        {
+          ...relationship,
+          label,
+          accessibleLabel: `${label}: Route ID: ${route.api_name} for ${assignment.display_name} (Assignment ID: ${assignment.api_name})`,
+        },
+      ];
+    }
+    return [];
+  });
 
   async function saveProvider(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1569,9 +2078,12 @@ function useConfigurationController({
     inspector?.apiName === null ? null : inspectorContent;
   const emptyCatalogState = (
     <div>
+      <p>No providers are configured.</p>
+      <p>No canonical models are configured.</p>
       <p>
-        No configuration records are available. Add a global provider or
-        canonical model.
+        {selectedService === ""
+          ? "Select a service to view assignments."
+          : "No assignments are configured for this service."}
       </p>
       <div className="configuration-column-actions">
         <Button
@@ -1590,7 +2102,7 @@ function useConfigurationController({
           }}
           variant="secondary"
         >
-          Add model
+          Add canonical model
         </Button>
       </div>
     </div>
@@ -1634,10 +2146,10 @@ function useConfigurationController({
               }
               const fallback =
                 document.querySelector<HTMLElement>(
-                  '.od-graph-node[data-selected="true"]:not(:disabled)',
+                  '.od-relationship-graph-node[data-selected="true"]:not(:disabled)',
                 ) ??
                 document.querySelector<HTMLElement>(
-                  '.od-graph-node[tabindex="0"]:not(:disabled), .od-graph-empty-state button:not(:disabled), .configuration-graph-page button:not(:disabled)',
+                  '.od-relationship-graph-node[tabindex="0"]:not(:disabled), .od-relationship-graph-empty button:not(:disabled), .configuration-graph-page button:not(:disabled)',
                 );
               fallback?.focus({ preventScroll: true });
             };
@@ -1674,7 +2186,7 @@ function useConfigurationController({
           target={playgroundTarget}
         />
       ),
-    relationships: projection.relationships,
+    relationships,
     returnFocusRef,
     setDeleteTarget,
     selectedNodeId,
@@ -1741,16 +2253,19 @@ export function ConfigurationGraph(props: ConfigurationGraphProps) {
         graphState
       ) : (
         <RelationshipGraph
-          aria-label="Global LLM configuration and selected service assignments"
+          aria-label="LLM configuration relationships"
           auxiliaryInspector={auxiliaryInspector}
           columns={columns}
           emptyState={emptyCatalogState}
           inspector={selectedNodeInspector}
-          noResultsDescription="Change the search or restore the complete global configuration graph."
+          noResultsDescription="Change the search or restore the complete configuration board."
+          noResultsTitle="No configuration matches this search."
           onNodeActivate={activate}
           onSelectionChange={onSelectionChange}
           relationships={relationships}
-          searchLabel="Search providers, models, mappings, and assignments"
+          partialNoResultsDescription="Load more records or change the search to continue."
+          partialNoResultsTitle="No matches in loaded records."
+          searchLabel="Search configuration"
           selectedNodeId={selectedNodeId}
         />
       )}
@@ -1819,7 +2334,7 @@ function ConfigurationInspector({
   return (
     <AssignmentInspector
       context={context}
-      key={`assignment:${context.inspector.serviceApiName ?? "none"}:${context.inspector.apiName ?? "new"}`}
+      key={`assignment:${context.inspector.serviceApiName ?? "none"}:${context.inspector.apiName ?? "new"}:${String(context.inspector.rungPosition ?? "header")}`}
     />
   );
 }
@@ -2062,7 +2577,7 @@ function ProviderInspector({
             }}
             variant="secondary"
           >
-            Add mapping for this provider
+            Add provider route for this provider
           </Button>
           <Button
             disabled={pending}
@@ -2125,7 +2640,7 @@ function ModelInspector({
       eyebrow="Global canonical model"
       {...(pending ? {} : { onClose: closeInspector })}
       returnFocusRef={returnFocusRef}
-      title={model?.display_name ?? "Add model"}
+      title={model?.display_name ?? "Add canonical model"}
     >
       {model === undefined
         ? null
@@ -2198,7 +2713,7 @@ function ModelInspector({
             }}
             variant="secondary"
           >
-            Add mapping for this model
+            Add provider route for this model
           </Button>
           <Button
             disabled={pending || applicableMappings.length === 0}
@@ -2420,6 +2935,9 @@ function MappingInspector({
     inspector.apiName === null
       ? undefined
       : mappingByName.get(inspector.apiName);
+  const mappingProvider = providers.find(
+    (item) => item.api_name === mapping?.provider_api_name,
+  );
   const playgroundTarget =
     mapping === undefined
       ? null
@@ -2432,10 +2950,15 @@ function MappingInspector({
   return (
     <GraphInspector
       activationKey={`${inspector.kind}:${inspector.apiName ?? "new"}`}
-      eyebrow="Global provider-model mapping"
+      eyebrow="Global provider route"
       {...(pending ? {} : { onClose: closeInspector })}
       returnFocusRef={returnFocusRef}
-      title={mapping?.api_name ?? "Add mapping"}
+      title={
+        mapping === undefined
+          ? "Add provider route"
+          : (mappingProvider?.display_name ??
+            `Unavailable provider: ${mapping.provider_api_name}`)
+      }
     >
       {mapping === undefined
         ? null
@@ -2456,7 +2979,7 @@ function MappingInspector({
         onSubmit={(event) => void saveMapping(event)}
       >
         <label>
-          Mapping API name
+          Route API name
           <input
             defaultValue={mapping?.api_name}
             readOnly={mapping !== undefined}
@@ -2532,7 +3055,7 @@ function MappingInspector({
         </label>
         <MappingAdvancedFields mapping={mapping} />
         <Button disabled={pending} type="submit">
-          Save mapping
+          Save provider route
         </Button>
       </form>
       {mapping === undefined ? null : (
@@ -2767,7 +3290,7 @@ function AssignmentInspector({
   );
   return (
     <GraphInspector
-      activationKey={`${inspector.kind}:${inspector.apiName ?? "new"}`}
+      activationKey={`${inspector.kind}:${inspector.apiName ?? "new"}:${String(inspector.rungPosition ?? "header")}`}
       eyebrow={
         selectedService === ""
           ? "Select a service"
@@ -2788,6 +3311,19 @@ function AssignmentInspector({
             <>
               {recordFacts([
                 ["API name", assignment.api_name],
+                ...(inspector.rungPosition === undefined
+                  ? []
+                  : [
+                      [
+                        "Selected rung",
+                        assignmentPositionLabel(inspector.rungPosition),
+                      ] as const,
+                      [
+                        "Selected route",
+                        assignment.effective_chain[inspector.rungPosition - 1]
+                          ?.provider_model_api_name ?? "Unavailable",
+                      ] as const,
+                    ]),
                 ["Definition", assignment.definition_kind],
                 [
                   "Direct source",
@@ -2980,17 +3516,17 @@ function AssignmentChainEditor({
   const columns: readonly EditableTableColumn<ChainDraft>[] = [
     {
       key: "mapping",
-      header: "Provider-model mapping",
+      header: "Provider route",
       renderRead: ({ row, update }) => (
         <select
-          aria-label={`${row.label} provider-model mapping`}
+          aria-label={`${row.label} provider route`}
           onChange={(event) => {
             update({ providerModel: event.currentTarget.value });
             onDirty();
           }}
           value={row.draft.providerModel}
         >
-          <option value="">Select mapping</option>
+          <option value="">Select provider route</option>
           {providerModels.map((item) => (
             <option disabled={!item.enabled} key={item.api_name}>
               {item.api_name}
@@ -3005,7 +3541,7 @@ function AssignmentChainEditor({
     <section className="configuration-chain-editor">
       <h3>Ordered fallback chain</h3>
       <EditableTable
-        ariaLabel="Ordered assignment provider-model chain"
+        ariaLabel="Ordered assignment provider-route chain"
         columns={columns}
         density="compact"
         onDelete={(rowId) => {
@@ -3034,8 +3570,7 @@ function AssignmentChainEditor({
           rows.length === 0
             ? {
                 kind: "empty",
-                message:
-                  "No direct candidates. Add the first provider-model mapping.",
+                message: "No direct candidates. Add the first provider route.",
               }
             : { kind: "ready" }
         }
@@ -3048,7 +3583,7 @@ function AssignmentChainEditor({
             ...current,
             {
               id: `chain:new:${String(nextRowIdRef.current)}`,
-              label: `Fallback ${String(current.length + 1)}`,
+              label: assignmentPositionLabel(current.length + 1),
               draft: { providerModel: "" },
             },
           ]);

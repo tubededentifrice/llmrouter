@@ -201,7 +201,15 @@ describe("accepted administration composition", () => {
     expect(application).not.toContain("function AssignmentsPage");
     expect(application).not.toContain("function PlaygroundPage");
     expect(configuration).toContain("RelationshipGraph");
-    expect(configuration).toContain("Global models and mappings");
+    expect(configuration).toContain('label: "Providers"');
+    expect(configuration).toContain('label: "Canonical models"');
+    expect(configuration).toContain('label: "Assignments"');
+    expect(configuration).toContain('rowsLabel: "Provider routes"');
+    expect(configuration).toContain('label: "Provides"');
+    expect(configuration).toContain(
+      'aria-label="LLM configuration relationships"',
+    );
+    expect(configuration).toContain('searchLabel="Search configuration"');
     expect(application).not.toContain("key={selectedService}");
     expect(application).toContain("assignmentPending");
     expect(configuration).toContain("Play exact route");
@@ -210,7 +218,7 @@ describe("accepted administration composition", () => {
     expect(configuration).toContain(
       "playgroundTarget.serviceContext === selectedService",
     );
-    expect(configuration).toContain(".od-graph-empty-state button");
+    expect(configuration).toContain(".od-relationship-graph-empty button");
     expect(configuration).not.toContain("setPlaygroundTarget(null);\n\n  if (");
     expect(configuration).not.toContain(
       "Playground available after configuration delivery",

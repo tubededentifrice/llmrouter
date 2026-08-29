@@ -345,7 +345,11 @@ def _seed_fake_catalog(
                VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb)""",
             (
                 name,
-                name.replace("-", " ").title(),
+                (
+                    "Text model with a deliberately long name for responsive proof"
+                    if name == "text-model"
+                    else name.replace("-", " ").title()
+                ),
                 inputs,
                 outputs,
                 capabilities,
@@ -1279,7 +1283,7 @@ def _prove_hydrated_administration(admin_session: str) -> None:
                 )
                 assert cookie.get("success") is True
                 _prove_viewport(browser, width=1440, mobile=False)
-                _prove_viewport(browser, width=360, mobile=True)
+                _prove_viewport(browser, width=390, mobile=True)
         finally:
             process.terminate()
             try:
@@ -1674,11 +1678,11 @@ def _prove_configuration_graph(browser: _Cdp, *, mobile: bool) -> None:
           const columns = [...document.querySelectorAll(".od-relationship-graph-column h2")]
             .map((item) => item.textContent?.trim());
           return JSON.stringify(columns) === JSON.stringify([
-            "Global providers",
-            "Global models and mappings",
-            "Service assignments"
+            "Providers",
+            "Canonical models",
+            "Assignments"
           ]) && document.querySelector(
-            "[aria-label='Global LLM configuration and selected service assignments']"
+            "[aria-label='LLM configuration relationships']"
           ) !== null;
         })()""",
         "The global configuration graph columns did not become ready",
@@ -1696,13 +1700,13 @@ def _prove_configuration_graph(browser: _Cdp, *, mobile: bool) -> None:
     )
     assert isinstance(initial, dict)
     assert initial["columns"] == [
-        "Global providers",
-        "Global models and mappings",
-        "Service assignments",
+        "Providers",
+        "Canonical models",
+        "Assignments",
     ]
     assert initial["assignmentDisabled"] is True
     assert initial["tabStops"] == 1
-    assert "Select one service to configure assignments" in initial["pageText"]
+    assert "Select a service to view assignments." in initial["pageText"]
     for removed in (
         "Workspaces & keys",
         "Accessible service list",
@@ -1712,12 +1716,12 @@ def _prove_configuration_graph(browser: _Cdp, *, mobile: bool) -> None:
 
     _set_control(
         browser,
-        "input[aria-label='Search providers, models, mappings, and assignments']",
+        "input[aria-label='Search configuration']",
         "no-such-route",
     )
     _wait_browser(
         browser,
-        "(document.body.innerText ?? '').includes('No matching items')",
+        "(document.body.innerText ?? '').includes('No configuration matches this search.')",
         "The graph did not show its no-result state",
     )
     _click_text(browser, "Clear search")
@@ -1737,11 +1741,99 @@ def _prove_configuration_graph(browser: _Cdp, *, mobile: bool) -> None:
         "[...document.querySelectorAll('.od-relationship-graph-column h2')].map((item) => item.textContent?.trim())"
     )
     assert columns == [
-        "Global providers",
-        "Global models and mappings",
-        "alpha assignments",
+        "Providers",
+        "Canonical models",
+        "Assignments",
     ]
+    compound = browser.evaluate(
+        """(() => {
+          const model = document.querySelector("[data-group-id='model:text-model']");
+          const routes = model?.querySelectorAll("[data-node-id^='mapping:']") ?? [];
+          const workflow = document.querySelector("[data-group-id='assignment:workflow']");
+          const columns = [...document.querySelectorAll(".od-relationship-graph-column")];
+          const columnTops = columns.map((item) => item.getBoundingClientRect().top);
+          const longName = [...document.querySelectorAll("[data-node-id='model:text-model'] strong")]
+            .find((item) => item.textContent?.includes("deliberately long"));
+          return {
+            modelRoutes: routes.length,
+            primary: workflow?.querySelector("[data-node-id='rung:workflow:1']") !== null,
+            fallback: workflow?.querySelector("[data-node-id='rung:workflow:2']") !== null,
+            stacked: columnTops[0] < columnTops[1] && columnTops[1] < columnTops[2],
+            sideBySide: Math.max(...columnTops) - Math.min(...columnTops) < 4,
+            longNameWraps: longName instanceof HTMLElement &&
+              longName.scrollWidth <= longName.clientWidth + 1
+          };
+        })()"""
+    )
+    assert isinstance(compound, dict)
+    assert int(compound["modelRoutes"]) == 3
+    assert compound["primary"] is True
+    assert compound["fallback"] is True
+    assert compound["stacked" if mobile else "sideBySide"] is True
+    assert compound["longNameWraps"] is True
+    _wait_browser(
+        browser,
+        "document.querySelector(\"[data-relationship-id='mapping-assignment:text:workflow:1'][data-source-node-id='mapping:text'][data-target-node-id='rung:workflow:2']\") !== null",
+        "The exact route-to-rung connector did not render",
+    )
+    route_relationship = browser.evaluate(
+        "document.querySelector(\"[data-node-id='rung:workflow:2']\")?.getAttribute('aria-label') ?? ''"
+    )
+    assert "Fallback 2: Route ID: text for Workflow (Assignment ID: workflow)" in str(
+        route_relationship
+    )
     _assert_accessibility_tree(browser, {"Fake provider", "Workflow"})
+
+    _set_control(
+        browser,
+        "input[aria-label='Search configuration']",
+        "fake-text-v1",
+    )
+    _wait_browser(
+        browser,
+        "document.querySelector(\"[data-node-id='mapping:text'][data-search-match='true']\") !== null && document.querySelectorAll('[data-search-context=true]').length >= 3",
+        "The route search did not keep its connected context",
+    )
+    _click_text(browser, "Clear search")
+    _wait_browser(
+        browser,
+        "document.querySelector(\"[data-node-id='rung:workflow:2']\") !== null",
+        "The compound board did not restore after route search",
+    )
+
+    browser.evaluate(
+        "document.querySelector(\"[data-node-id='mapping:text']\")?.focus()"
+    )
+    _press_key(browser, "Home")
+    _wait_browser(
+        browser,
+        "document.activeElement?.getAttribute('data-node-id')?.startsWith('model:') ?? false",
+        "Home did not move to the first canonical-model control",
+    )
+    _press_key(browser, "End")
+    _wait_browser(
+        browser,
+        "document.activeElement?.getAttribute('data-node-id') === 'mapping:text'",
+        "End did not move to the last provider-route control",
+    )
+    _press_key(browser, "ArrowUp")
+    _wait_browser(
+        browser,
+        "document.activeElement?.getAttribute('data-node-id') !== 'mapping:text'",
+        "Arrow Up did not move through the compound model card",
+    )
+    _press_key(browser, "ArrowDown")
+    _wait_browser(
+        browser,
+        "document.activeElement?.getAttribute('data-node-id') === 'mapping:text'",
+        "Arrow Down did not move through the compound model card",
+    )
+    _press_key(browser, "/")
+    _wait_browser(
+        browser,
+        "document.activeElement?.getAttribute('aria-label') === 'Search configuration'",
+        "The slash key did not focus configuration search",
+    )
 
     browser.evaluate(
         "document.querySelector(\"[data-node-id='provider:fake-provider']\")?.focus()"
@@ -1753,18 +1845,40 @@ def _prove_configuration_graph(browser: _Cdp, *, mobile: bool) -> None:
         "The configuration graph did not move to a connected mapping",
     )
     assert moved is True
+    _press_key(browser, "ArrowLeft")
+    _wait_browser(
+        browser,
+        "document.activeElement?.getAttribute('data-node-id') === 'provider:fake-provider'",
+        "The configuration board did not return to the connected provider",
+    )
+    _press_key(browser, "ArrowRight")
     _press_key(browser, "ArrowRight")
     _wait_browser(
         browser,
-        "document.activeElement?.getAttribute('data-node-id')?.startsWith('assignment:') ?? false",
-        "The configuration graph did not move to a connected assignment",
+        "document.activeElement?.getAttribute('data-node-id')?.startsWith('rung:') ?? false",
+        "The configuration board did not move to an exact assignment rung",
+    )
+    active_rung = browser.evaluate(
+        "document.activeElement?.getAttribute('data-node-id') ?? ''"
+    )
+    _press_key(browser, "Enter")
+    _wait_browser(
+        browser,
+        "(document.querySelector('.od-graph-inspector[open]')?.innerText ?? '').includes('Selected rung')",
+        "The assignment rung did not identify itself in the inspector",
+    )
+    _press_key(browser, "Escape")
+    _wait_browser(
+        browser,
+        f"document.activeElement?.getAttribute('data-node-id') === {json.dumps(active_rung)}",
+        "The assignment inspector did not restore rung focus",
     )
 
-    _click_text(browser, "Add model", scope="[data-column-id='catalog']")
+    _click_text(browser, "Add canonical model", scope="[data-column-id='catalog']")
     _wait_browser(
         browser,
         "(() => { const text = document.querySelector('.od-graph-inspector[open]')?.innerText ?? ''; "
-        "return text.includes('Add model') && text.includes('Create from OpenRouter'); })()",
+        "return text.includes('Add canonical model') && text.includes('Create from OpenRouter'); })()",
         "The model-create inspector did not open in the graph",
     )
     _assert_dialog_layout(browser, ".od-graph-inspector[open]", mobile=mobile)
@@ -2118,13 +2232,13 @@ def _prove_route_and_state_matrix(browser: _Cdp, *, mobile: bool) -> None:
     _navigate(
         browser,
         "/configuration?proof_mode=empty",
-        "No configuration records are available",
+        "No providers are configured.",
     )
     _assert_layout(browser, mobile=mobile)
     _navigate(browser, "/configuration", "LLM configuration")
     _wait_browser(
         browser,
-        "document.querySelector(\"[aria-label='Global LLM configuration and selected service assignments']\") !== null && "
+        "document.querySelector(\"[aria-label='LLM configuration relationships']\") !== null && "
         "[...document.querySelectorAll('.administration-topbar-actions button')].some("
         "(item) => item.textContent?.trim() === 'Refresh' && !item.disabled)",
         "The current configuration graph was not ready for its failed refresh proof",
@@ -2134,7 +2248,7 @@ def _prove_route_and_state_matrix(browser: _Cdp, *, mobile: bool) -> None:
     _wait_browser(
         browser,
         "document.querySelector(\"[role='alert']\")?.textContent?.includes('Injected proof failure.') === true && "
-        "document.querySelector(\"[aria-label='Global LLM configuration and selected service assignments']\") !== null",
+        "document.querySelector(\"[aria-label='LLM configuration relationships']\") !== null",
         "A failed refresh did not retain and label the current configuration graph",
     )
     browser.evaluate("globalThis.__llmrouterProofMode = 'normal'")
@@ -2172,7 +2286,7 @@ def _prove_viewport(browser: _Cdp, *, width: int, mobile: bool) -> None:
         "Emulation.setDeviceMetricsOverride",
         {
             "width": width,
-            "height": 900,
+            "height": 844 if mobile else 900,
             "deviceScaleFactor": 1,
             "mobile": mobile,
         },
