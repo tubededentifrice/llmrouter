@@ -1,7 +1,8 @@
 # Authentication, administration, and shared UI
 
 Status: Accepted on 2026-08-23. The graph-first UI and administrator
-playground amendments were accepted on 2026-08-24.
+playground amendments were accepted on 2026-08-24. The fixed compound-board
+amendment was accepted on 2026-08-29.
 
 ## Service API keys
 
@@ -65,20 +66,20 @@ an administrator:
 - create, inspect, and delete workspaces in the selected-service inspector;
 - create and revoke service API keys in the selected-service inspector;
 - manage provider connections, credentials, models, capabilities, prices, and
-  service assignments in one configuration graph;
+  service assignments in one configuration board;
 - preview and import model catalog entries from the model-create workflow;
 - start price synchronization and inspect its results;
 - open a contextual model, embedding, and media playground from an assignment
-  or exact provider-model node;
+  or exact provider-route row;
 - inspect accounting, detailed request logs, media, activity, cooldowns, and
   the small health summary.
 
 The sidebar MUST NOT contain separate workspace-and-key, provider, model,
 assignment, or playground destinations. The service tree MUST own service,
-workspace, and key administration. The three-column configuration graph MUST
+workspace, and key administration. The three-column configuration board MUST
 own provider, model, provider-model, assignment, and contextual playground
 administration. Direct application paths for removed destinations MAY redirect
-to the applicable retained graph, but MUST NOT keep a second configuration
+to the applicable retained board, but MUST NOT keep a second configuration
 page.
 
 The application shell and each retained page MUST use the complete available
@@ -91,74 +92,113 @@ horizontal overflow. A graph or dense data region MAY scroll in its own
 labelled viewport when its content cannot reflow. Its heading, filters, and
 primary actions MUST remain outside that scrolling region.
 
-The service tree and the three-column configuration graph MUST use graph nodes
-and inspectors as their complete interaction surface. A graph toolbar MUST NOT
+The service tree and the three-column configuration board MUST use nodes,
+compound cards, and inspectors as their complete interaction surface. A graph toolbar MUST NOT
 show a visible graph title such as `Service tree`. The page heading and the
 graph's accessible name MUST provide the necessary context. A tree that is
 smaller than its viewport MUST be centered in the available graph stage. A
 larger tree MUST keep its layout origin and MUST be reachable with bounded
 graph-viewport scrolling.
 
-Each actionable graph node MUST be a semantic control in the browser
-accessibility tree. Its accessible name MUST identify the record and its
-important state, column or tree level, and relationship to other records.
-Decorative edges MUST be hidden from assistive technology only when the
-connected node descriptions provide the same relationship. The application
-MUST NOT render a duplicate service or assignment table or list. The graph
-nodes MUST provide the complete accessible record and action surface.
+Each actionable node, compound-card header, nested row, and assignment rung
+MUST be a semantic control in the browser accessibility tree. Its accessible
+name MUST identify the record and its important state, column or tree level,
+and relationship to other records. A compound card MUST expose its header and
+nested rows as one labelled group without making one control contain another
+control. Decorative edges MUST be hidden from assistive technology only when
+the connected control descriptions provide the same relationship. The
+application MUST NOT render a duplicate service, provider, model, route, or
+assignment table or list. The nodes and rows MUST provide the complete
+accessible record and action surface.
 
-Each graph MUST have one active keyboard tab stop. When no inspector or modal
-is open, Tab MUST enter at the selected node, or at the first node when there is
-no selection, and the next Tab MUST leave the graph. In the service tree, Up
-and Down MUST move through the visible nodes, Right MUST move to the first
-child, Left MUST move to the parent, and Home and End MUST move to the first
-and last visible nodes. If the tree permits branch collapse, Right MUST first
-expand a collapsed node and Left MUST first collapse an expanded node. In the
-configuration graph, Up and Down MUST move in the current column, Left and
-Right MUST move to the nearest connected node in rendered order in the
-adjacent column, and Home and End MUST move to the first and last node in the
-current column. A key that has no valid target MUST keep focus on the current
-node. A focus change MUST scroll the focused node into the labelled graph
-viewport. Enter or Space MUST open the same inspector or modal as a pointer
-action. Escape MUST close it and return focus to the opening node.
+Each graph or board MUST have one active keyboard tab stop. When no inspector
+or modal is open, Tab MUST enter at the selected control, or at the first
+control when there is no selection, and the next Tab MUST leave the surface.
+In the service tree, Up and Down MUST move through the visible nodes, Right
+MUST move to the first child, Left MUST move to the parent, and Home and End
+MUST move to the first and last visible nodes. If the tree permits branch
+collapse, Right MUST first expand a collapsed node and Left MUST first collapse
+an expanded node.
 
-The graph MUST expose selected, expanded, inherited, disabled, empty, loading,
-error, partial, and unavailable state without color alone. A refresh MUST keep
-focus and selection when the record still exists. If the record no longer
-exists, the graph MUST close its inspector, move focus to the first available
-node or its empty-state action, and announce that the record is unavailable.
+In the configuration board, Up and Down MUST move through every visible
+actionable control in the current column. The rendered order of a compound
+card MUST put its header before its nested rows. The rendered order of an
+assignment card MUST put its header before its fallback rungs. Left and Right
+MUST move only through an actual relationship to the nearest connected control
+in rendered order in the adjacent column. A provider connection MUST connect
+to its provider-route rows. A provider-route row MUST connect to its provider
+on the left and its exact assignment rungs on the right. An assignment rung
+MUST connect to its exact provider route on the left. Home and End MUST move to
+the first and last visible actionable control in the current column.
 
-OpenDLE UI MUST own the reusable behavior for graph nodes, viewports, keyboard
-use, focus return, and responsive inspectors. The Router MUST own the
-composition of the service tree and configuration graph, record relationships,
-domain labels, permissions, and mutations.
+A key that has no valid target MUST keep focus on the current control. A focus
+change MUST scroll the focused control into the labelled local viewport. Enter
+or Space MUST open the same inspector or modal as a pointer action. A fallback
+rung action MUST open its assignment inspector and identify that rung. Escape
+MUST close the inspector or modal and return focus to the opening control. If
+that control no longer exists, focus MUST follow the unavailable-record rule
+below.
 
-The three-column configuration graph MUST make each provider-to-model mapping
-and each ordered assignment route clear. Selecting a provider, canonical
-model, provider-model, or assignment MUST open its details and applicable
-actions without navigation. Create actions MUST use the current column and
-selected node as context so the form does not ask for known references. The
-assignment column MUST show inherited assignment sources, direct replacement
-chains, default inheritance, empty default chains, last use, and observed call
-requirements for the selected service.
+The graph or board MUST expose selected, expanded, inherited, disabled, empty,
+loading, error, partial, and unavailable state without color alone. A refresh
+MUST keep focus and selection when the record still exists. If the record no
+longer exists, the surface MUST close its inspector, move focus to the first
+available control or its empty-state action, and announce that the record is
+unavailable.
 
-Each graph inspector MUST use a right-side panel on a wide screen and a bottom
-sheet on a phone. Its content MUST use a local scroll region when necessary.
+OpenDLE UI MUST own the host-neutral relationship engine. This engine MUST own
+the fixed three-column layout, compound groups, nested actionable rows,
+connector geometry, connector endpoints on nested rows, contextual dimming,
+search-result context, bounded local viewports, the one-tab-stop model,
+arrow-key movement, selection, focus return, state presentation, live
+announcements, phone stacking, and responsive inspector primitives. It MUST
+accept host-supplied records, relationships, labels, actions, and state. It
+MUST NOT contain a Router provider, canonical-model, provider-route,
+assignment, service, credential, capability, or mutation type.
+
+The Router MUST own the service-tree and configuration-board composition. It
+MUST own record projection, technical identities, provider readiness,
+canonical and route capabilities, assignment inheritance, fallback positions,
+domain relationship labels, search fields, permissions, API calls, mutations,
+inspector content, playground context, and corrective errors. The Router MUST
+use the shared OpenDLE UI engine and inspector primitives. It MUST NOT copy or
+fork that reusable behavior in this repository.
+
+The Router configuration board MUST use the exact domain content, state,
+relationships, search behavior, empty states, and focused verification in
+[Providers, models, prices, and configuration](02-providers-models-prices-and-configuration.md#fixed-configuration-board).
+Selecting a provider, canonical model, provider route, or assignment MUST open
+its details and applicable actions without navigation. Create actions MUST use
+the current column and selected control as context so the form does not ask for
+known references.
+
+OpenDLE UI component tests MUST cover compound-group semantics, nested-row
+connector endpoints, shared routes, the one-tab-stop model, all specified
+keyboard keys, search-result context, focus return, partial and unavailable
+state, fixed wide-screen columns, phone stacking, local scrolling, and
+responsive inspectors. Router tests MUST supply the domain assertions defined
+in the linked configuration-board specification. A consumer test MUST prove
+that the shared engine renders host data without importing Router domain
+types.
+
+Each graph or board inspector MUST use a right-side panel on a wide screen and
+a bottom sheet on a phone. Its content MUST use a local scroll region when
+necessary.
 Opening or closing an inspector MUST NOT change the page width or hide the
-focused graph node outside the reachable graph viewport. A failed create,
+focused control outside the reachable local viewport. A failed create,
 change, or delete MUST keep the applicable inspector open, keep the entered
 non-secret values, and show a corrective error. It MUST NOT show success or
-change the graph until the server confirms the write.
+change the graph or board until the server confirms the write.
 
-The playground MUST open as a modal from an applicable provider-model or
-assignment node. It MUST infer the exact provider-model or assignment target,
+The playground MUST open as a modal from an applicable provider-route row or
+assignment card. It MUST infer the exact provider-model or assignment target,
 the available operations, and the controls that apply to its capabilities. It
 MUST show the inferred target instead of asking the administrator to select it
 again. It MUST show input, output, selected route, latency, usage, cost, media,
 and a corrective safe error. The modal MUST fit the available desktop or phone
 viewport, keep its long content in a local scroll region, move focus into the
 dialog, and make the background inactive. Escape and the close action MUST
-close it and restore focus to the node or action that opened it.
+close it and restore focus to the row, card, or action that opened it.
 
 The playground modal is a global administration presentation and is not a
 workspace-owned navigation page. An allowlisted administrator session MUST
@@ -167,8 +207,8 @@ ask for, fetch, store, or send a service API key or workspace identity. It
 MUST NOT show a permission-scope control because the product has no
 fine-grained administrator permissions.
 
-An exact provider-model node MUST supply its global provider-model identity
-and no service context. An assignment node MUST supply its assignment name
+An exact provider-route row MUST supply its global provider-model identity
+and no service context. An assignment card MUST supply its assignment name
 and the currently selected service as configuration context. The modal MUST
 show that service context but MUST NOT describe it as authorization or
 accounting ownership. Its run action MUST require the normal administrator
@@ -176,10 +216,10 @@ session, CSRF, and exact-Origin controls. Administrator playground accounting,
 logs, and media MUST remain visible only to an administrator through the
 global administration interfaces.
 
-If the target node becomes disabled, deleted, or unavailable while the modal
+If the target record becomes disabled, deleted, or unavailable while the modal
 is open, the modal MUST keep the reviewed input, prevent execution, and show
 the target state. It MUST NOT silently change to a different assignment or
-provider-model.
+provider route.
 
 The application MUST use reusable components, layout, tokens, and interaction
 patterns from `../opendle-ui`. Router-specific data and actions MUST stay in

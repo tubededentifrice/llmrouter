@@ -10,6 +10,7 @@ The accepted decision set is:
 - [0006: Use structured control fields and standard endpoint trust](0006-use-structured-control-fields-and-standard-endpoint-trust.md)
 - [0007: Keep the applied npm security pins](0007-keep-the-applied-npm-security-pins.md)
 - [0008: Authorize administrator playground calls](0008-authorize-administrator-playground-calls.md)
+- [0009: Use a fixed compound configuration board](0009-use-a-fixed-compound-configuration-board.md)
 
 Product requirements belong in `docs/specs/`. A decision record explains why
 an accepted material choice exists. It does not duplicate normative behavior.

@@ -33,6 +33,8 @@ required_files=(
   "docs/decisions/0005-use-built-in-encrypted-provider-credential-storage.md"
   "docs/decisions/0006-use-structured-control-fields-and-standard-endpoint-trust.md"
   "docs/decisions/0007-keep-the-applied-npm-security-pins.md"
+  "docs/decisions/0008-authorize-administrator-playground-calls.md"
+  "docs/decisions/0009-use-a-fixed-compound-configuration-board.md"
   "docs/interviews/service-simplification-2026-08-23.md"
   "docs/research/README.md"
   "docs/research/source-services-2026-08.md"
