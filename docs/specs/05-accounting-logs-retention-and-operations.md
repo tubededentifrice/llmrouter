@@ -2,7 +2,7 @@
 
 Status: Accepted on 2026-08-23. The graph-first UI and administrator
 playground amendments were accepted on 2026-08-24. The administration
-statistics-filter amendment was accepted on 2026-08-29.
+statistics-filter and Logs-view amendments were accepted on 2026-08-29.
 
 ## Attempt and request accounting
 
@@ -268,6 +268,149 @@ Detailed logs MUST be best-effort diagnostic data. Cache loss or eviction MAY
 delete them before the configured maximum period. The Router MUST NOT claim a
 minimum durability period. Only a global administrator MAY read them. A
 service API key and a service API MUST NOT expose detailed request logs.
+
+### Administration Logs view
+
+All visible navigation, page, region, state, and action text that names this
+administration resource MUST use the exact product name `Logs`. It MUST NOT use
+`Detailed logs`, `Detailed request logs`, `Request logs`, `Load logs`, or
+another destination name. The navigation label, page heading, and list region
+accessible name MUST each be `Logs`. The filter region MUST be `Logs filters`.
+
+On page entry, the view MUST automatically read the current configured
+retention duration and load the newest 100 retained records. At the start of
+the list request, it MUST capture one current instant `T`, remove fractional
+seconds, and express it in UTC. For a configured duration of `D` whole days,
+it MUST use `R = T - D * 24 hours`. The first list request MUST send these
+exact query values:
+
+- `from={R in YYYY-MM-DDTHH:mm:ssZ}`;
+- `to={T in YYYY-MM-DDTHH:mm:ssZ}`;
+- `limit=100`;
+- no `cursor`.
+
+The lower bound MUST be inclusive and the upper bound MUST be exclusive. A
+record created at or after `T` MUST first be eligible after `Refresh Logs`.
+The view MUST NOT make the initial list request until it has a valid configured
+duration. If that read fails, the view MUST show `Logs are unavailable.` and
+`Retry Logs`.
+
+The list MUST use stable newest-first order by `started_at` descending and
+then `id` descending. The first page MUST contain zero through 100 records. If
+more records are available, the view MUST show `Load more Logs`. Each load-more
+request MUST send `limit=100`, the next server cursor, and the same exact
+`from`, `to`, and active filters as the first page. It MUST append only older
+records in the server order. It MUST NOT calculate a cursor from visible data.
+
+The view MUST add a record at most once for one cursor walk, identified by its
+request-log `id`. A repeated record MUST NOT change the first copy or its
+position. A repeated cursor, a missing next cursor when `has_more` is true, or
+a cursor that produces no progress MUST stop the walk and show `More Logs are
+unavailable.` It MUST keep the safe loaded records and offer `Refresh Logs`.
+A failed load-more request MUST also keep the safe records and show `Retry
+loading more Logs` for the same cursor.
+
+`Refresh Logs` MUST read the current configured duration again, capture a new
+`T`, preserve active filter values, clear the cursor walk, close selected
+details, and make a new first-page request. `Retry Logs` MUST repeat this
+refresh sequence. Applying a valid filter or clearing filters MUST also clear
+the cursor walk and close selected details. Entry, refresh, filter, load-more,
+and detail requests MUST each reject stale responses. An older response,
+error, or notice MUST NOT change the current records, cursor, details, state,
+live message, or focus. Repeated activation of the same pending action MUST
+NOT send a duplicate request.
+
+The default retention range MUST require no filter input. One optional region
+named `Logs filters` MUST provide `From time (UTC)` and `Before time (UTC)`.
+Each value MUST use `YYYY-MM-DDTHH:mm:ss` and identify a real Gregorian UTC
+date and time. `From time (UTC)` replaces `R` as the inclusive lower bound.
+`Before time (UTC)` replaces `T` as the exclusive upper bound. An empty control
+MUST use its automatic retention bound. The view MUST append `Z` directly and
+MUST NOT apply the browser time zone or a local UTC offset.
+
+The effective filter range MUST stay inside `[R, T)` and its lower bound MUST
+be before its upper bound. An invalid filter MUST not send a list request. It
+MUST keep the current list, cursor, and selected details for the last valid
+range. It MUST use `aria-invalid`, reference its corrective error, announce
+the error, and move focus to the first invalid control. The applicable exact
+error MUST be `Enter a valid From time in UTC.`, `Enter a valid Before time in
+UTC.`, `From time must be before Before time.`, or `Select times inside the
+configured Logs retention window.` `Apply Logs filters` MUST start a new
+first-page request. `Clear Logs filters` MUST clear both values and load the
+automatic retention range.
+
+The list MUST use these visible states and actions:
+
+- initial and refresh state: `Loading Logs.`;
+- unfiltered empty state: `No Logs are available in the configured retention
+window.`;
+- filtered empty state: `No Logs match these filters.`;
+- first-page error state: `Logs are unavailable.` and `Retry Logs`;
+- ready state: `Logs loaded: 1 record.` or `Logs loaded: {count} records.`,
+  with `More Logs are available.` or `All Logs in this range are loaded.`;
+- load-more pending state: `Loading more Logs.`;
+- load-more error state: `More Logs are unavailable.` with `Retry loading more
+Logs` or `Refresh Logs` as applicable.
+
+Each state change MUST use a live region. A pending first-page request MUST not
+show an empty state. Refresh and filter failures MUST keep the submitted
+filter values. A first-page failure MUST NOT show stale records as current.
+Load-more completion MUST keep focus on `Load more Logs` when that action
+remains available. Refresh and filter actions MUST keep focus on the action
+that started the request.
+
+Each visible row action MUST be `Inspect Logs details`. Its accessible name
+MUST be `Inspect Logs details for request {id}`. It MUST read the selected
+record from `/v1/admin/request-logs/{request_log_id}` and MUST NOT treat the
+list summary as complete detail. The detail region accessible name MUST be
+`Logs details`, and its heading MUST be `Logs details for request {id}`.
+Opening it MUST move focus to its heading. `Close Logs details` and Escape MUST
+close it and return focus to the row action. If that action no longer exists,
+focus MUST move to `Refresh Logs`.
+
+Only the latest detail selection MUST control the detail region. A load-more
+request MUST NOT change the selection. While detail loads, the region MUST
+show `Loading Logs details.` If the record expires, disappears, or fails to
+load, the list MUST stay usable and the region MUST show `Logs details are
+unavailable.` with `Retry Logs details` and `Close Logs details`. It MUST NOT
+select a different record. `Retry Logs details` MUST request the same selected
+record and MUST keep the selection. Retained media that disappears MUST follow
+the unavailable behavior below without closing the detail region.
+
+The list and selected detail MUST use the shared data-table page grid and the
+complete available width. On a desktop, the detail region MUST stay visually
+associated with the selected row. On a phone, it MUST follow the list, keep
+its heading and close action reachable, and use a bounded local scroll region
+for long content. Both layouts MUST keep all columns, row actions, filters,
+states, and detail content usable without page-level horizontal overflow.
+Enter or Space on a focused row action MUST open the same detail as a pointer
+action.
+
+This view rule MUST NOT change the public request-log API. The list API MUST
+keep required timestamp parameters `from` and `to`, cursor pagination, and a
+`limit` from 1 through 200. The administration view uses 100 for each page,
+but an API client MAY use another valid limit. The technical API paths and
+schema names MAY continue to use `request-log`; the visible administration
+application MUST use `Logs`. The date-only `From` and `Through` rules for the
+Usage and cost view MUST NOT apply to these optional UTC date-and-time filters.
+
+API tests MUST cover zero, fewer than 100, exactly 100, and more than 100
+retained records. They MUST confirm exact `from`, `to`, and `limit=100` values,
+no initial cursor, stable `started_at` and `id` order, the next cursor, the same
+bounds and filters on load more, detail success, detail expiry, and `limit`
+compatibility at 1 and 200. Client and browser tests MUST cover entry,
+retention-read failure, refresh, optional filters, clear, duplicate records,
+repeated and invalid cursors, duplicate-action prevention, stale list and
+detail responses, load-more failure and retry, and selected-detail focus and
+expiry. Fixed-instant client tests in `UTC`, `Pacific/Kiritimati`,
+`Pacific/Pago_Pago`, and `America/New_York` MUST produce the same exact `R`
+and `T` request values.
+
+Browser tests MUST run at desktop and phone widths. They MUST cover every
+specified `Logs` label, loading, empty, error, ready, load-more, and detail
+state; keyboard entry, Escape, and focus return; local scrolling; and no
+page-level horizontal overflow. The entry, filter, table, and detail states
+MUST pass Axe at both widths.
 
 The administration log view MUST use the shared OpenDLE UI data-table
 behavior for the bounded record list. Filters, loading state, error state,
