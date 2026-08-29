@@ -304,6 +304,9 @@ A false or omitted value MUST NOT show the pending label.
 `statusMessage` MUST let the host send domain result text to the graph's shared
 polite live region. The component MUST announce each non-empty changed value
 once and MUST keep its internal search and unavailable-item announcements.
+When a host message and an internal message are pending at the same time, the
+component MUST queue and announce both in their arrival order. It MUST NOT
+replace, combine, or omit either message.
 The host MUST clear the value before it uses the same text for a later result.
 
 OpenDLE UI MUST map the unmodified keys as follows:
@@ -340,7 +343,9 @@ request. After success, the Router MUST supply commands from the new state. A
 second `d` after a successful disable and a second `e` after a successful
 enable MUST do nothing because that same command is no longer available. The
 opposite command can become available. One command MUST create at most one
-preview or mutation request.
+initial preview or direct mutation request. A later explicit confirmation is a
+separate user action. It MUST create at most one confirmation request or
+assignment write.
 
 The Router MUST supply command eligibility as follows:
 
@@ -349,12 +354,18 @@ The Router MUST supply command eligibility as follows:
 | Live provider connection | yes | when its stored enablement is on | when its stored enablement is off |
 | Live canonical model | yes | when its stored enablement is on | when its stored enablement is off |
 | Live provider-route row | yes | when its stored enablement is on | when its stored enablement is off |
-| Direct local assignment header | yes | no | no |
+| Service-local assignment-definition header, including a definition that names another assignment | yes | no | no |
 | Rung stored in a local direct-chain assignment | yes | no | no |
 | Rung resolved through an assignment-name reference or ancestor service | no | no | no |
 | Assignment header from an ancestor service | no | no | no |
 | Empty implicit root `default` | no | no | no |
 | Unresolved, deleted, loading, error, or placeholder item | no | no | no |
+
+A service-local assignment-definition header MUST keep `Delete` when its
+stored definition names another assignment. That command targets the local
+definition that the header represents. It MUST NOT target the named assignment
+or any resolved rung. The rungs shown through that local assignment-name
+reference are inherited relationship controls and MUST NOT get `Delete`.
 
 An unavailable live provider, canonical model, or provider route MUST keep the
 enablement command that matches its own stored value. A dependency state does
@@ -377,9 +388,9 @@ a confirmation.
 
 `Delete` MUST only request a deletion. It MUST NOT apply a change before the
 administrator confirms it. For a provider connection, canonical model,
-provider-model mapping, or direct local assignment header, the Router MUST
-create and show the exact reviewed cascade preview and MUST confirm it through
-the operations in
+provider-model mapping, or service-local assignment-definition header, the
+Router MUST create and show the exact reviewed cascade preview and MUST confirm
+it through the operations in
 [Reviewed configuration deletion](02-providers-models-prices-and-configuration.md#reviewed-configuration-deletion).
 The confirmation MUST show the target, each delete or change effect, each
 retained shared credential, and each routing or inheritance effect that the
@@ -388,14 +399,14 @@ reviewed operation requires.
 For a rung stored in a local direct-chain assignment, `Delete` MUST open a
 confirmation that identifies the assignment, provider route, fallback
 position, and effective chain before and after removal. Confirmation MUST
-replace that direct local assignment through its existing administrator
-assignment write with only the selected candidate link removed. It MUST close
-the gap and keep the other links in their prior relative order. Removal of the
-last link MUST keep an empty direct-chain assignment. It MUST NOT delete the
-assignment or the provider-model mapping. A resolved rung MUST NOT become a
-stored local link or permit removal from its source. The normal complete-state
-validation, concurrent-write, and activity rules for a direct configuration
-change MUST apply.
+replace that local direct-chain assignment definition through its existing
+administrator assignment write with only the selected candidate link removed.
+It MUST close the gap and keep the other links in their prior relative order.
+Removal of the last link MUST keep an empty direct-chain assignment. It MUST
+NOT delete the assignment or the provider-model mapping. A resolved rung MUST
+NOT become a stored local link or permit removal from its source. The normal
+complete-state validation, concurrent-write, and activity rules for a direct
+configuration change MUST apply.
 
 Canceling a reviewed-cascade confirmation MUST NOT send its confirmation
 request. Canceling an assignment-rung confirmation MUST NOT send its
@@ -418,27 +429,33 @@ After successful removal of an assignment rung, the board MUST select and
 focus its assignment card header and announce the removed provider route and
 the new number of candidates. After successful removal of a provider-route
 row, the board MUST select and focus its canonical-model card header when that
-header remains available. After successful deletion of a direct local
-assignment that exposes an inherited definition or the empty implicit root
-`default`, the board MUST select and focus that replacement control and
-announce its source. For another deleted selected record, or when the named
-fallback control is not available, the board MUST select and focus the first
-available control in rendered board order. When no control is available, it
-MUST clear graph selection and focus its empty-state action. The success
-announcement MUST identify the deleted record and MUST state that the shown
-board contains the applied result.
+header remains available. After successful deletion of a service-local
+assignment definition that exposes an inherited definition or the empty
+implicit root `default`, the board MUST select and focus that replacement
+control and announce its source. This rule applies when the deleted local
+definition had a direct chain or named another assignment. For another deleted
+selected record, or when the named fallback control is not available, the
+board MUST select and focus the first available control in rendered board
+order. When no control is available, it MUST clear graph selection and focus
+its empty-state action. The success announcement MUST identify the deleted
+record and MUST state that the shown board contains the applied result.
 
 A failed preview, confirmation, enable, disable, or candidate-link removal
 MUST keep the selected board control and current non-secret inspector values.
 It MUST make no success change. A failed preview MUST keep or return focus to
-the opening control and show a corrective error. A failed confirmation or
-mutation MUST keep its dialog or inspector open, move focus to or keep focus
-on the corrective error, and let the administrator retry or cancel. Canceling
-after a failure MUST return focus and selection to the opening control. The
-error MUST use an alert. A polite live announcement MUST report a successful
-state change or removal. It MUST NOT announce success before the server
-confirms the write, announce one operation twice, or put a credential value or
-confirmation token in a live region.
+the opening control and show a corrective error. A failed confirmation, or a
+failed mutation for which an applicable dialog or inspector is open, MUST keep
+that surface open, move focus to or keep focus on the corrective error, and let
+the administrator retry or cancel. Canceling after such a failure MUST return
+focus and selection to the opening control. When a graph key starts a failed
+enable or disable while no applicable inspector or confirmation dialog is
+open, the board MUST keep focus on the selected control, show a corrective
+alert associated with that control, and let the administrator retry the
+command or dismiss the error. The error MUST identify the selected record and
+MUST use an alert. A polite live announcement MUST report a successful state
+change or removal. It MUST NOT announce success before the server confirms the
+write, announce one operation twice, or put a credential value or confirmation
+token in a live region.
 
 An expired, used, or stale reviewed-cascade preview MUST keep the old
 confirmation content visible with its exact conflict error. Its corrective
@@ -474,25 +491,37 @@ extended `RelationshipGraphNode` and `RelationshipGraphProps` from the built
 package root. They MUST cover every command key, exact callback context,
 selection before dispatch, command omission, duplicate-command rejection,
 pending-state validation and presentation, `aria-keyshortcuts`, host status
-messages, internal announcement preservation, case and modifier handling,
-prevented events, input method composition, automatic and physical repeated
-keys, editable controls, inspectors, dialogs, pending items, and unsupported
-items. They MUST also prove that connector strokes have no pointer, focus, or
-accessibility target and that assignment rungs remain complete semantic
-relationship controls.
+messages, internal announcement preservation, simultaneous host and internal
+messages in arrival order, case and modifier handling, prevented events, input
+method composition, automatic and physical repeated keys, editable controls,
+inspectors, dialogs, pending items, and unsupported items. They MUST also prove
+that connector strokes have no pointer, focus, or accessibility target and
+that assignment rungs remain complete semantic relationship controls.
+
+Router command-projection tests MUST prove the exact command list for each row
+in the eligibility table. They MUST cover stored enablement separately from
+dependency readiness, incomplete data, pending projection, a local direct-chain
+definition, a local definition that names another assignment, its resolved
+rungs, an ancestor definition, and the implicit root `default`.
 
 Router localhost browser tests MUST use `http://127.0.0.1:5174`. They MUST
-cover provider, canonical-model, provider-route, direct assignment, and direct
-assignment-rung selection by keyboard, pointer, and touch. They MUST cover
-each eligible and ineligible `Delete`, `d`, and `e` case; unavailable records;
-inherited assignments; the implicit root `default`; confirmation cancel,
-success, stale-preview conflict, validation failure, and storage failure;
-rapid repeated keys; focus and selection after each result; visible non-color
-state; exact live announcements; and retained non-secret values. Desktop and
-phone tests MUST cover keyboard and touch-equivalent actions, local board
-scrolling, 200% text, no page-level overflow, and Axe results. The tests MUST
-prove that one user command creates no more than one preview or mutation
-request and that a connector stroke is not an action target.
+cover provider, canonical-model, provider-route, service-local direct-chain
+assignment, service-local definition that names another assignment, and direct
+assignment-rung selection by keyboard, pointer, and touch. They MUST prove that
+`Delete` is available on both service-local assignment-definition headers and
+is not available on a rung resolved through the assignment-name reference.
+They MUST cover each other eligible and ineligible `Delete`, `d`, and `e` case;
+unavailable records; ancestor assignments; the implicit root `default`;
+confirmation cancel, success, stale-preview conflict, validation failure, and
+storage failure; a graph-key mutation failure with no open inspector; rapid
+repeated keys; focus and selection after each result; visible non-color state;
+exact live announcements; and retained non-secret values. Desktop and phone
+tests MUST cover keyboard and touch-equivalent actions, local board scrolling,
+200% text, no page-level overflow, and Axe results. The tests MUST prove that
+one user command creates no more than one initial preview or direct mutation
+request, that one later confirmation action creates no more than one
+confirmation request or assignment write, and that a connector stroke is not
+an action target.
 
 ### Shared relationship-graph toolbar
 
