@@ -85,24 +85,27 @@ page.
 ### Administration content
 
 Visible static helper text includes page and section descriptions, field
-notes, and instructional paragraphs. It does not include headings, labels,
-actions, record values, corrective errors, state messages, live-region
+notes, and instructional paragraphs. This term does not include headings,
+labels, actions, record values, corrective errors, state messages, live-region
 messages, or accessible names. One exact keep rule applies: visible static
-helper text MUST explain a required action, a non-obvious effect, a security
-boundary, a retention effect, a loading, empty, unavailable, or failure state,
-a destructive impact, or an accessibility state. The application MUST remove
-visible static helper text that does not meet this rule.
+helper text MUST explain a required action, a non-obvious effect, a safety
+fact, a security boundary, a retention effect, a loading, empty, unavailable,
+or failure state, a destructive impact, or an accessibility state. The
+application MUST remove visible static helper text that does not meet this
+rule.
 
-Corrective errors, required actions, non-obvious effects, security and
-retention facts, loading, empty, unavailable, and failure states, destructive
-impacts, and accessibility states MUST remain available. This rule MUST NOT
-remove a live region or an accessible name. It MUST NOT use helper text in
-place of a required accessible name or state message.
+Corrective errors, required actions, non-obvious effects, safety facts,
+security facts, retention facts, loading states, empty states, unavailable
+states, failure states, destructive impacts, and accessibility states MUST
+remain available. This rule MUST NOT remove a live region or an accessible
+name. It MUST NOT use helper text in place of a required accessible name or
+state message.
 
 A health-component message is optional. When it is absent, the application
 MUST omit the message and MUST NOT show `No corrective message` or another
 placeholder. When it is present, the application MUST show it if it gives a
-corrective error, required action, non-obvious effect, or applicable state.
+corrective error, required action, non-obvious effect, safety fact, security
+boundary, retention effect, or applicable state.
 
 The activity panel MUST NOT show `This is a basic activity record. It is not
 immutable configuration history.` or a replacement disclaimer with the same
@@ -111,25 +114,26 @@ purpose. This removal does not change the basic-activity requirements in
 
 The content inventory MUST cover these retained routes:
 
-| Path | View | Content that the inventory MUST check |
-| --- | --- | --- |
-| `/overview` | overview | totals, health, and cooldown summaries |
-| `/services` | service administration | the service tree, inspectors, workspaces, and keys |
-| `/configuration` | configuration administration | all three board columns, inspectors, forms, and playground entry points |
-| `/logs` | retained-log inspection | filters, retained records, selected details, media, and retention states |
-| `/statistics` | accounting statistics | filters, query states, and accounting results |
-| `/operations` | operations | health, retention, cooldowns, and activity |
+| Path             | View                         | Content that the inventory MUST check                                    |
+| ---------------- | ---------------------------- | ------------------------------------------------------------------------ |
+| `/overview`      | overview                     | totals, health, and cooldown summaries                                   |
+| `/services`      | service administration       | the service tree, inspectors, workspaces, and keys                       |
+| `/configuration` | configuration administration | all three board columns, inspectors, forms, and playground entry points  |
+| `/logs`          | retained-log inspection      | filters, retained records, selected details, media, and retention states |
+| `/statistics`    | accounting statistics        | filters, query states, and accounting results                            |
+| `/operations`    | operations                   | health, retention, cooldowns, and activity                               |
 
 For each route, the test inventory MUST list each static helper text item, its
 expected presence or absence, and one allowed keep reason for each retained
 item. An automated browser test MUST compare the rendered text with this
 reviewed inventory at desktop and phone widths. The test inventory MUST
 include fixtures for corrective errors, required actions, non-obvious effects,
-security and retention facts, loading, empty, unavailable, failure,
-destructive, and accessibility states. It MUST confirm the two named removals,
-live regions, and accessible names. Each route MUST pass Axe at both widths and
-MUST have a reviewed snapshot at both widths. Focused snapshots MUST also cover
-each conditional state that is not present in the route's normal snapshot.
+safety facts, security facts, retention facts, loading states, empty states,
+unavailable states, failure states, destructive impacts, and accessibility
+states. It MUST confirm the two named removals, live regions, and accessible
+names. Each route MUST pass Axe at both widths and MUST have a reviewed
+snapshot at both widths. Focused snapshots MUST also cover each conditional
+state that is not present in the route's normal snapshot.
 
 This content rule MUST NOT remove or hide a retained page heading. A change to
 the height or visibility of a graph page heading needs its own accepted
