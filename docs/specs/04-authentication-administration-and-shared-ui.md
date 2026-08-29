@@ -217,7 +217,8 @@ assignment, service, credential, capability, or mutation type.
 
 ### Shared relationship-graph toolbar
 
-OpenDLE UI MUST export this optional toolbar API for `RelationshipGraph`:
+OpenDLE UI MUST export this optional toolbar API for `RelationshipGraph` from
+its package root:
 
 ```tsx
 export interface RelationshipGraphToolbarOptions {
@@ -230,38 +231,71 @@ export interface RelationshipGraphProps {
 }
 ```
 
-When `toolbar` is absent, `RelationshipGraph` MUST keep its current standalone
-search rendering and MUST NOT render a `GraphToolbar`. This rule keeps existing
-consumers compatible. When `toolbar` is present, `RelationshipGraph` MUST
-render one shared `GraphToolbar`. An empty object MUST render a search-only
-toolbar. The graph MUST render its search control in the center slot. The host
-MAY put context in `leading` and controls in `actions`. Host content MUST NOT
-replace, remove, or add content to the center slot. It MUST NOT add a visible
-graph title. The page heading and the graph accessible name MUST continue to
-give the graph context.
+When `toolbar` is omitted or `undefined`, `RelationshipGraph` MUST keep its
+current standalone search rendering and MUST NOT render a `GraphToolbar`. This
+rule keeps existing consumers compatible. When `toolbar` is present,
+`RelationshipGraph` MUST render one shared `GraphToolbar`. An empty object, or
+an object whose host slots add no rendered child, MUST render a search-only
+toolbar. An absent host slot or one that adds no rendered child MUST NOT render
+an empty wrapper or reserve space.
+The graph MUST render its search control in the center slot. The host MAY put
+context in `leading` and controls in `actions`. Host content MUST NOT replace,
+remove, or add content to the center slot. Neither `RelationshipGraph` nor a
+host slot MAY add a visible title for the graph surface, or a heading that
+repeats the page title. The page heading and the graph accessible name MUST
+continue to give the graph context.
 
-The graph MUST own the center search rendering and style. It MUST preserve the
-controlled `searchQuery` and `onSearchQueryChange` behavior and the uncontrolled
-`defaultSearchQuery` behavior. It MUST also preserve slash-key focus, the clear
-action, focus return after clear, complete and partial no-result states, search
-context, live announcements, search labels, and accessible names. The toolbar
-option MUST NOT change selection, graph keyboard movement, or the graph's one
-active tab stop.
+The graph MUST own the center search rendering and style. When `searchQuery`
+is defined, that value alone MUST control the rendered input and graph result.
+Typing or clearing MUST call `onSearchQueryChange` with the requested value,
+and the graph MUST NOT change the effective query before the host supplies a
+new `searchQuery`. `defaultSearchQuery` MUST only initialize uncontrolled
+search. In uncontrolled mode, typing or clearing MUST change the internal
+query and MUST also call `onSearchQueryChange` when the callback is present.
+Adding, removing, or changing `toolbar` or either host slot MUST NOT reset the
+effective query, graph selection, or search origin.
+
+The clear action MUST be available for a non-empty effective query and MUST
+request the empty value. After the effective query becomes empty, the graph
+MUST restore focus and selection to the control that was selected before
+search when it still exists. Otherwise, it MUST move focus and selection to the
+first available graph control. When the graph has no control, it MUST clear
+selection and focus the graph-owned search. A slash key MUST focus the
+graph-owned search unless the event was prevented or started in an editable
+control. When focus is in one of several relationship graphs, that graph MUST
+own slash. When no graph contains focus, the first relationship graph in
+document order MUST own slash.
+
+The toolbar option MUST also preserve complete and partial no-result states,
+search context, live announcements, search labels, accessible names,
+selection, graph keyboard movement, and the graph's one active graph-control
+tab stop.
 
 Keyboard order MUST follow the rendered toolbar slots. Focus MUST move through
 focusable leading-slot content, the graph search and its conditional clear
-action, focusable action-slot content, the graph's one active tab stop, and the
-following page content. Focus order within each host slot MUST follow its
-rendered order. A slash-key search focus action MUST move focus to the same
-graph-owned search control.
+action, focusable action-slot content, the graph's one active graph-control tab
+stop, and the following page content. Focus order within each host slot MUST
+follow its rendered order. An absent or non-focusable slot MUST add no tab stop.
+Without a toolbar, the existing standalone search, conditional clear action,
+active graph-control tab stop, and following page content MUST keep this same
+relative order. A slash-key search focus action MUST move focus to the same
+graph-owned search control that is in the applicable tab order.
 
-The shared toolbar MUST stay outside the labelled scrolling graph viewport. It
-MUST remain in place when that local viewport scrolls. On a wide screen, the
-three slots MUST use the shared `GraphToolbar` layout. On a phone, the shared
-component MUST reflow the slots in leading, center, and actions order. Long
-context and action labels MUST wrap or reflow in their slots. They MUST NOT
-cover the search, hide a control, or cause page-level horizontal overflow. The
-graph viewport MAY continue to scroll locally.
+The shared toolbar MUST be a sibling before the labelled scrolling graph
+viewport. It MUST NOT be inside that viewport, and it MUST remain in place when
+the viewport scrolls. The viewport MUST keep its bounded local horizontal and
+vertical scrolling when its graph content cannot reflow. On a wide screen, the
+rendered slots MUST use the shared `GraphToolbar` layout in leading, center,
+and actions order. On a phone, the shared component MUST reflow the rendered
+slots in that same order. An absent slot MUST collapse without an empty row,
+column, gap, or container.
+
+Long leading content, search labels, search values, placeholders, and action
+labels MUST wrap, clip safely, or reflow in their applicable slots. At 200%
+text size and at phone width, they MUST NOT cover the search, hide a control,
+change the toolbar order, or cause page-level horizontal overflow. The toolbar
+MUST NOT scroll with the graph viewport or make the page scroll horizontally
+to reach graph content.
 
 OpenDLE UI MUST own toolbar composition, slot layout, search rendering and
 behavior, responsive reflow, keyboard order, and separation from the graph
@@ -269,22 +303,41 @@ viewport. The host MUST own context copy, action controls, permissions, action
 behavior, domain labels, and search-label values. A host MUST NOT copy the
 shared toolbar or search layout.
 
-Focused OpenDLE UI tests MUST cover an absent toolbar, an empty search-only
-toolbar, actions with the graph-owned center search, and all three rendered
-slots. They MUST cover controlled and uncontrolled search, slash focus, clear
-and focus return, complete and partial no-result states, live announcements,
-one graph tab stop, the specified keyboard order, and accessible names. They
-MUST also cover long leading and action labels, wide-screen and phone reflow,
-a fixed toolbar during local viewport scrolling, and no page-level overflow.
-The focused surface MUST pass Axe. Each OpenDLE UI change MUST keep React
-Doctor at score 100 with zero diagnostics.
+Focused OpenDLE UI tests MUST import `RelationshipGraph`,
+`RelationshipGraphProps`, and `RelationshipGraphToolbarOptions` from the
+package root. They MUST cover an omitted and explicitly `undefined` toolbar,
+an empty search-only toolbar, host slots that add no rendered child, actions
+with the graph-owned center search, and all three rendered slots. They MUST
+confirm that a host slot that adds no rendered child has no wrapper and reserves
+no layout space.
 
-Router integration tests MUST cover the configuration graph with graph search,
-host context, and host actions in the shared toolbar. They MUST prove that the
-toolbar does not add a second visible graph title and does not change Router
-domain behavior. Source-consumer checks MUST prove that Router, Ontology, and
-Xbot continue to compile and render. Shared consumer fixtures MUST cover both
-an omitted toolbar and selected toolbar configurations.
+The tests MUST cover controlled and uncontrolled search, callback values, a
+delayed controlled update, toolbar changes without state reset, slash focus in
+one and several graphs, prevented and editable-target slash events, clear and
+each focus-return fallback, complete and partial no-result states, live
+announcements, one active graph-control tab stop, the specified keyboard order,
+and accessible names. They MUST also cover long content in all three slots,
+200% text, wide-screen and phone reflow, stable toolbar geometry during local
+viewport scrolling, bounded local scrolling, and no page-level overflow. The
+absent, search-only, and all-slot surfaces MUST pass Axe at wide-screen and
+phone widths. Each OpenDLE UI change MUST keep React Doctor at score 100 with
+zero diagnostics.
+
+A Router integration fixture MUST supply configuration-graph data, test-only
+host context, and test-only host actions to a `RelationshipGraph` with the
+shared toolbar. It MUST prove that the toolbar does not add a second visible
+graph title and does not change Router domain behavior. The optional API alone
+MUST NOT require a production host to add context copy or an action that its
+own accepted specification does not define.
+
+Source-consumer checks MUST use the built package root and prove that Router,
+Ontology, and Xbot continue to compile and render. They MUST cover Router's
+omitted `RelationshipGraph` toolbar and actions-only `GraphToolbar`, Ontology's
+leading-and-actions toolbar, Xbot's center-and-actions toolbar, and the Router
+integration fixture with all three rendered slots. They MUST prove that a
+consumer does not copy the shared toolbar or search layout. Each changed
+consumer surface MUST pass Axe at wide-screen and phone widths and keep React
+Doctor at score 100 with zero diagnostics.
 
 The Router MUST own the service-tree and configuration-board composition. It
 MUST own record projection, technical identities, provider readiness,
