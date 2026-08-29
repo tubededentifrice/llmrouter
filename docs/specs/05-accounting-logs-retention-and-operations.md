@@ -278,11 +278,12 @@ another destination name. The navigation label, page heading, and list region
 accessible name MUST each be `Logs`. The filter region MUST be `Logs filters`.
 
 On page entry, the view MUST automatically read the current configured
-retention duration and load the newest 100 retained records. At the start of
-the list request, it MUST capture one current instant `T`, remove fractional
-seconds, and express it in UTC. For a configured duration of `D` whole days,
-it MUST use `R = T - D * 24 hours`. The first list request MUST send these
-exact query values:
+retention duration from `/v1/admin/settings/log-retention` and load the newest
+100 retained records from `/v1/admin/request-logs`. After it reads a valid
+`duration_days` value, it MUST capture one current instant `T`, truncate its
+fractional seconds, express it in UTC, and start a new cursor walk. For a
+configured duration of `D` whole days, it MUST use `R = T - D * 24 hours`. The
+initial list request MUST send these exact query values:
 
 - `from={R in YYYY-MM-DDTHH:mm:ssZ}`;
 - `to={T in YYYY-MM-DDTHH:mm:ssZ}`;
@@ -299,49 +300,97 @@ The list MUST use stable newest-first order by `started_at` descending and
 then `id` descending. The first page MUST contain zero through 100 records. If
 more records are available, the view MUST show `Load more Logs`. Each load-more
 request MUST send `limit=100`, the next server cursor, and the same exact
-`from`, `to`, and active filters as the first page. It MUST append only older
-records in the server order. It MUST NOT calculate a cursor from visible data.
+`from`, `to`, and active filters as the first page in that cursor walk. It MUST
+append only older records in the server order. It MUST NOT calculate or change
+a cursor from visible data.
 
 The view MUST add a record at most once for one cursor walk, identified by its
 request-log `id`. A repeated record MUST NOT change the first copy or its
-position. A repeated cursor, a missing next cursor when `has_more` is true, or
-a cursor that produces no progress MUST stop the walk and show `More Logs are
+position. `has_more=false` MUST end the walk even if the response contains a
+next cursor. A repeated cursor, a cursor that does not satisfy the public
+`Cursor` schema, a missing next cursor when `has_more` is true, or a cursor
+that produces no progress MUST stop the walk and show `More Logs are
 unavailable.` It MUST keep the safe loaded records and offer `Refresh Logs`.
 A failed load-more request MUST also keep the safe records and show `Retry
 loading more Logs` for the same cursor.
 
-`Refresh Logs` MUST read the current configured duration again, capture a new
-`T`, preserve active filter values, clear the cursor walk, close selected
-details, and make a new first-page request. `Retry Logs` MUST repeat this
-refresh sequence. Applying a valid filter or clearing filters MUST also clear
-the cursor walk and close selected details. Entry, refresh, filter, load-more,
-and detail requests MUST each reject stale responses. An older response,
-error, or notice MUST NOT change the current records, cursor, details, state,
-live message, or focus. Repeated activation of the same pending action MUST
-NOT send a duplicate request.
+`Refresh Logs` MUST close selected details and start a new first-page sequence.
+That sequence MUST read the current configured duration again, capture a new
+`T`, truncate its fractional seconds, express it in UTC, calculate a new `R`,
+preserve all active filter values, and validate those values against the new
+bounds. If they are valid, it MUST clear the cursor walk and start a new
+first-page request. If they are invalid, it MUST use the invalid-filter
+behavior below, keep the old list and cursor, and keep details closed. `Retry
+Logs` MUST repeat this refresh sequence. Applying a valid filter or clearing
+filters MUST start a new first-page sequence with the current `R` and `T`,
+clear the cursor walk, and close selected details. These filter actions MUST
+NOT capture a new `T`.
+
+Each first-page sequence, cursor walk, and detail selection MUST have an
+identity. Starting a new first-page sequence MUST immediately make all older
+list, load-more, and detail responses stale. Only the current sequence and its
+cursor walk MAY change the records, cursor, list state, list live message, list
+notice, or list focus. A sequence that rejects an invalid filter MUST restore
+the last valid cursor walk as current, but it MUST NOT restore an invalidated
+request or closed detail selection. Only the current detail selection in the
+current cursor walk MAY change the detail state, detail live message, detail
+notice, or detail focus. A new detail selection MUST invalidate all requests
+for the old selection. A load-more request in the current walk MUST NOT
+invalidate its current detail selection. `Close Logs details` and Escape MUST
+invalidate the current detail selection and its pending requests. A stale
+response, error, or notice MUST NOT change visible state or focus. Repeated
+activation of the same pending action MUST NOT send a duplicate request.
 
 The default retention range MUST require no filter input. One optional region
-named `Logs filters` MUST provide `From time (UTC)` and `Before time (UTC)`.
-Each value MUST use `YYYY-MM-DDTHH:mm:ss` and identify a real Gregorian UTC
-date and time. `From time (UTC)` replaces `R` as the inclusive lower bound.
-`Before time (UTC)` replaces `T` as the exclusive upper bound. An empty control
-MUST use its automatic retention bound. The view MUST append `Z` directly and
-MUST NOT apply the browser time zone or a local UTC offset.
+named `Logs filters` MUST provide controls in this order: `From time (UTC)`,
+`Before time (UTC)`, `Call actor`, `Administrator`, and `Assignment
+configuration service`. Each time value MUST use `YYYY-MM-DDTHH:mm:ss` and
+identify a real Gregorian UTC date and time. `From time (UTC)` replaces `R` as
+the inclusive lower bound. `Before time (UTC)` replaces `T` as the exclusive
+upper bound. An empty time control MUST use its automatic retention bound. The
+view MUST append `Z` directly and MUST NOT apply the browser time zone or a
+local UTC offset.
 
-The effective filter range MUST stay inside `[R, T)` and its lower bound MUST
-be before its upper bound. An invalid filter MUST not send a list request. It
-MUST keep the current list, cursor, and selected details for the last valid
-range. It MUST use `aria-invalid`, reference its corrective error, announce
-the error, and move focus to the first invalid control. The applicable exact
-error MUST be `Enter a valid From time in UTC.`, `Enter a valid Before time in
-UTC.`, `From time must be before Before time.`, or `Select times inside the
-configured Logs retention window.` `Apply Logs filters` MUST start a new
-first-page request. `Clear Logs filters` MUST clear both values and load the
-automatic retention range.
+`Call actor` MUST send `call_actor` with the API value `service` or
+`administrator`. Its visible values MUST be `Service calls` and `Administrator
+playground calls`, and its empty option MUST be `All call actors`.
+`Administrator` MUST send `administrator` with an administrator subject that
+has a maximum of 500 characters. `Assignment configuration service` MUST send
+`configuration_service` with a value that satisfies the public `ApiName`
+schema. An empty optional filter MUST have no corresponding API query
+parameter. Each first-page request after entry MUST send the effective `from`
+and `to`, `limit=100`, no `cursor`, each active non-time optional filter, and
+no inactive optional filter.
+
+For each new cursor walk, the effective filter range MUST satisfy
+`R <= from < to <= T`. The view MUST validate preserved time filters against
+the new `R` and `T` after a refresh. An invalid filter MUST not send a list
+request. An invalid `Apply Logs filters` action MUST keep the current list,
+cursor, and selected details for the last valid range. A refresh that finds an
+invalid preserved filter MUST use the refresh behavior above. The view MUST
+use `aria-invalid`, reference its corrective error, announce the error, and
+move focus to the first invalid control in the order above. It MUST use these
+exact errors:
+
+- `Enter a valid From time in UTC.`;
+- `Enter a valid Before time in UTC.`;
+- `From time must be before Before time.`;
+- `Select times inside the configured Logs retention window.`;
+- `Select a valid call actor.`;
+- `Enter an administrator subject of 500 characters or fewer.`;
+- `Enter a valid assignment configuration service API name.`
+
+A syntax or value error MUST belong to its control. The range-order error MUST
+belong to `Before time (UTC)`. The retention-window error MUST belong to the
+first custom time control that puts the range outside the window. `Apply Logs
+filters` MUST start a new first-page request only after a valid submission.
+`Clear Logs filters` MUST clear all five controls and load the automatic
+retention range. A filtered state is a state in which one or more of these
+controls has a non-empty submitted value.
 
 The list MUST use these visible states and actions:
 
-- initial and refresh state: `Loading Logs.`;
+- initial, refresh, and valid filter state: `Loading Logs.`;
 - unfiltered empty state: `No Logs are available in the configured retention
 window.`;
 - filtered empty state: `No Logs match these filters.`;
@@ -352,12 +401,17 @@ window.`;
 - load-more error state: `More Logs are unavailable.` with `Retry loading more
 Logs` or `Refresh Logs` as applicable.
 
-Each state change MUST use a live region. A pending first-page request MUST not
-show an empty state. Refresh and filter failures MUST keep the submitted
-filter values. A first-page failure MUST NOT show stale records as current.
-Load-more completion MUST keep focus on `Load more Logs` when that action
-remains available. Refresh and filter actions MUST keep focus on the action
-that started the request.
+Each list state change MUST use a live region. A pending first-page request
+MUST not show an empty state. Refresh and filter failures MUST keep the
+submitted filter values. A first-page failure MUST NOT show stale records as
+current. Load-more completion MUST keep focus on `Load more Logs` when that
+action remains available. When a completed load-more request reports that all
+records are loaded, removes that action, and does not trigger a stopped-walk
+error, focus MUST move to the ready status. A load-more request failure MUST
+move focus to `Retry loading more Logs`. A stopped cursor walk MUST move focus
+to `Refresh Logs`. A refresh action MUST keep focus on the action that started
+it unless validation moves focus to an invalid control. A valid filter action
+that sends a first-page request MUST keep focus on the action that started it.
 
 Each visible row action MUST be `Inspect Logs details`. Its accessible name
 MUST be `Inspect Logs details for request {id}`. It MUST read the selected
@@ -374,8 +428,9 @@ show `Loading Logs details.` If the record expires, disappears, or fails to
 load, the list MUST stay usable and the region MUST show `Logs details are
 unavailable.` with `Retry Logs details` and `Close Logs details`. It MUST NOT
 select a different record. `Retry Logs details` MUST request the same selected
-record and MUST keep the selection. Retained media that disappears MUST follow
-the unavailable behavior below without closing the detail region.
+record and MUST keep the selection. Detail loading, ready, and unavailable
+changes MUST use a live region. Retained media that disappears MUST follow the
+unavailable behavior below without closing the detail region.
 
 The list and selected detail MUST use the shared data-table page grid and the
 complete available width. On a desktop, the detail region MUST stay visually
@@ -396,21 +451,26 @@ Usage and cost view MUST NOT apply to these optional UTC date-and-time filters.
 
 API tests MUST cover zero, fewer than 100, exactly 100, and more than 100
 retained records. They MUST confirm exact `from`, `to`, and `limit=100` values,
-no initial cursor, stable `started_at` and `id` order, the next cursor, the same
-bounds and filters on load more, detail success, detail expiry, and `limit`
-compatibility at 1 and 200. Client and browser tests MUST cover entry,
-retention-read failure, refresh, optional filters, clear, duplicate records,
-repeated and invalid cursors, duplicate-action prevention, stale list and
-detail responses, load-more failure and retry, and selected-detail focus and
-expiry. Fixed-instant client tests in `UTC`, `Pacific/Kiritimati`,
-`Pacific/Pago_Pago`, and `America/New_York` MUST produce the same exact `R`
-and `T` request values.
+no initial cursor, inclusion at `R`, exclusion at `T`, stable `started_at` and
+`id` order, the next cursor, the same bounds and filters on load more, detail
+success, detail `not_found`, and `limit` compatibility at 1 and 200. Client and
+browser tests MUST cover entry, retention-read failure, refresh, a changed
+retention duration with preserved filters, each optional filter, exact active
+filter query values, inactive-filter omission, clear, filter validation and
+focus, duplicate records, repeated, missing, and invalid cursors,
+duplicate-action prevention, stale cursor-walk and detail responses,
+concurrent load-more and detail responses, load-more failure and retry, and
+selected-detail focus and expiry. Fixed-instant client tests with 1-day and
+30-day durations in `UTC`, `Pacific/Kiritimati`, `Pacific/Pago_Pago`, and
+`America/New_York` MUST produce the same exact `R` and `T` request values and
+MUST confirm fractional-second truncation.
 
 Browser tests MUST run at desktop and phone widths. They MUST cover every
 specified `Logs` label, loading, empty, error, ready, load-more, and detail
 state; keyboard entry, Escape, and focus return; local scrolling; and no
 page-level horizontal overflow. The entry, filter, table, and detail states
-MUST pass Axe at both widths.
+MUST pass Axe at both widths. The React application MUST keep React Doctor at
+score 100 with zero diagnostics.
 
 The administration log view MUST use the shared OpenDLE UI data-table
 behavior for the bounded record list. Filters, loading state, error state,
