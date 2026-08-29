@@ -3,8 +3,8 @@
 Status: Accepted on 2026-08-23. The graph-first UI and administrator
 playground amendments were accepted on 2026-08-24. The fixed compound-board,
 administration-content, optional relationship-graph toolbar, compact shared
-graph-inspector, and shared table-alignment amendments were accepted on
-2026-08-29.
+graph-inspector, shared table-alignment, and selectable configuration-command
+amendments were accepted on 2026-08-29.
 
 ## Service API keys
 
@@ -225,6 +225,274 @@ announcements, phone stacking, and responsive inspector primitives. It MUST
 accept host-supplied records, relationships, labels, actions, and state. It
 MUST NOT contain a Router provider, canonical-model, provider-route,
 assignment, service, credential, capability, or mutation type.
+
+### Selectable configuration controls and commands
+
+The configuration board MUST use its compound controls to separate resources
+from stored relationships. These controls MUST be selectable:
+
+- a provider-connection card, which selects one provider connection;
+- a canonical-model card header, which selects one canonical model;
+- a provider-route nested row, which selects one provider-model mapping;
+- an assignment card header, which selects the effective assignment with that
+  name for the selected service; and
+- an assignment rung, which selects one ordered assignment candidate link in
+  the effective assignment.
+
+An assignment rung is a relationship control. Its accessible name and visible
+content MUST identify the assignment, the provider route, its one-based
+fallback position, and whether the link is `Direct` or `Inherited`. `Direct`
+means that the candidate link is in a direct-chain definition on the selected
+service. `Inherited` means that the rung comes through an assignment-name
+reference or a definition on an ancestor service. A provider-route row is a
+resource control. It MUST NOT describe its provider-model mapping as an
+assignment candidate link.
+
+The drawn connector between a provider and a provider-route row and the drawn
+connector between a provider-route row and an assignment rung MUST remain
+presentational. A connector stroke MUST NOT be a pointer target, tab stop, or
+separate accessibility-tree item. Its connected controls MUST contain the full
+relationship text. A credential, price row, capability value, state label,
+column heading, non-actionable group header, loading or error placeholder, and
+empty-state message MUST NOT become a selectable graph item. An action in one
+of these regions MAY keep its normal independent control.
+
+Pointer click, pointer tap, and touch tap on a selectable control MUST select
+that control and open the same inspector as Enter or Space. The assignment
+inspector MUST identify a selected rung and its fallback position. A visible
+inspector action MUST provide the pointer and touch equivalent of each
+available keyboard command. The application MUST NOT require a long press,
+double tap, context menu, hover, or precise selection of a connector stroke.
+
+OpenDLE UI MUST extend the current host-neutral `RelationshipGraph` API with
+these package-root exports:
+
+```tsx
+export type RelationshipGraphCommand = "delete" | "disable" | "enable";
+
+export interface RelationshipGraphNode {
+  readonly commands?: readonly RelationshipGraphCommand[];
+  readonly commandPending?: boolean;
+  readonly commandPendingLabel?: string;
+}
+
+export interface RelationshipGraphNodeCommandContext
+  extends RelationshipGraphNodeContext {
+  readonly command: RelationshipGraphCommand;
+}
+
+export interface RelationshipGraphProps {
+  readonly onNodeCommand?: (
+    context: RelationshipGraphNodeCommandContext,
+  ) => void;
+  readonly statusMessage?: string;
+}
+```
+
+`commands` MUST contain the commands that are available for the current item
+and current host state. Omission or an empty list MUST mean that the item has
+no keyboard command. Duplicate command values MUST be invalid. When one item
+has a command, the host MUST supply `onNodeCommand`. The shared component MUST
+put only the applicable keys in `aria-keyshortcuts`. It MUST dispatch the
+focused item, command, column, group, and control element. It MUST NOT infer a
+mutation from a node state, label, column, relationship, or command key.
+`commandPending` MUST make the control busy, remove all key shortcuts, and show
+`commandPendingLabel` as visible state text. It MUST set `aria-busy` to true
+and MUST keep the control selected and focusable. A true `commandPending`
+value MUST require a non-empty label and an empty or omitted `commands` list.
+A false or omitted value MUST NOT show the pending label.
+`statusMessage` MUST let the host send domain result text to the graph's shared
+polite live region. The component MUST announce each non-empty changed value
+once and MUST keep its internal search and unavailable-item announcements.
+The host MUST clear the value before it uses the same text for a later result.
+
+OpenDLE UI MUST map the unmodified keys as follows:
+
+| Key | Host-neutral command |
+| --- | --- |
+| `Delete` | `delete` |
+| `d` | `disable` |
+| `e` | `enable` |
+
+When more than one command is available, `aria-keyshortcuts` MUST list its
+applicable `Delete`, `d`, and `e` tokens in that order with one space between
+tokens.
+
+The letter keys are case-sensitive. `D`, `E`, Backspace, and a key used with
+Control, Alt, Meta, or Shift MUST NOT run a command. A command MUST apply to
+the focused selectable control. The engine MUST select that control before it
+dispatches the command. This rule also applies when arrow-key focus movement
+left another control selected.
+
+The engine MUST ignore a command when the event was prevented, is an input
+method composition event, is an automatic key repeat, or starts in an input,
+textarea, select, content-editable region, editor, inspector, or open dialog.
+It MUST also ignore the command when focus is not on a selectable graph
+control, the command is absent from that control, or the host marks the item
+pending by removing its commands. An ignored command MUST make no selection,
+request, confirmation, state change, or announcement.
+
+The Router MUST set `commandPending` with the applicable operation label and
+remove an item's commands synchronously when it starts a preview or mutation.
+It MUST keep that state until the operation succeeds or fails. Thus, a second
+physical key press while work is pending MUST NOT queue or send another
+request. After success, the Router MUST supply commands from the new state. A
+second `d` after a successful disable and a second `e` after a successful
+enable MUST do nothing because that same command is no longer available. The
+opposite command can become available. One command MUST create at most one
+preview or mutation request.
+
+The Router MUST supply command eligibility as follows:
+
+| Selected control | `Delete` | `d` | `e` |
+| --- | --- | --- | --- |
+| Live provider connection | yes | when its stored enablement is on | when its stored enablement is off |
+| Live canonical model | yes | when its stored enablement is on | when its stored enablement is off |
+| Live provider-route row | yes | when its stored enablement is on | when its stored enablement is off |
+| Direct local assignment header | yes | no | no |
+| Rung stored in a local direct-chain assignment | yes | no | no |
+| Rung resolved through an assignment-name reference or ancestor service | no | no | no |
+| Assignment header from an ancestor service | no | no | no |
+| Empty implicit root `default` | no | no | no |
+| Unresolved, deleted, loading, error, or placeholder item | no | no | no |
+
+An unavailable live provider, canonical model, or provider route MUST keep the
+enablement command that matches its own stored value. A dependency state does
+not change that stored value. Thus, `d` MUST remain available when the live
+record is stored as enabled but is unavailable because of a credential,
+provider, canonical model, cooldown, or other dependency. `e` MUST remain
+available when the live record itself is stored as disabled, even when it will
+be unavailable after enablement. A missing referenced record is not a live
+record and MUST have no command.
+
+`d` and the matching inspector action MUST change only the selected provider,
+canonical-model, or provider-model enablement to off. `e` and the matching
+inspector action MUST change only that stored enablement to on. They MUST use
+the normal direct configuration write, validation, activity, routing, and
+concurrent-write rules in
+[Providers, models, prices, and configuration](02-providers-models-prices-and-configuration.md#direct-configuration-changes).
+They MUST NOT delete a record, change another stored enablement value, or
+silently repair an unavailable dependency. Enable and disable MUST NOT require
+a confirmation.
+
+`Delete` MUST only request a deletion. It MUST NOT apply a change before the
+administrator confirms it. For a provider connection, canonical model,
+provider-model mapping, or direct local assignment header, the Router MUST
+create and show the exact reviewed cascade preview and MUST confirm it through
+the operations in
+[Reviewed configuration deletion](02-providers-models-prices-and-configuration.md#reviewed-configuration-deletion).
+The confirmation MUST show the target, each delete or change effect, each
+retained shared credential, and each routing or inheritance effect that the
+reviewed operation requires.
+
+For a rung stored in a local direct-chain assignment, `Delete` MUST open a
+confirmation that identifies the assignment, provider route, fallback
+position, and effective chain before and after removal. Confirmation MUST
+replace that direct local assignment through its existing administrator
+assignment write with only the selected candidate link removed. It MUST close
+the gap and keep the other links in their prior relative order. Removal of the
+last link MUST keep an empty direct-chain assignment. It MUST NOT delete the
+assignment or the provider-model mapping. A resolved rung MUST NOT become a
+stored local link or permit removal from its source. The normal complete-state
+validation, concurrent-write, and activity rules for a direct configuration
+change MUST apply.
+
+Canceling a reviewed-cascade confirmation MUST NOT send its confirmation
+request. Canceling an assignment-rung confirmation MUST NOT send its
+assignment write. Each cancellation MUST return focus and selection to the
+control that opened it. While a preview or confirmation dialog is open, all
+graph commands MUST remain suppressed.
+
+After a successful enable or disable, the board MUST keep the changed control
+selected and in view and MUST show its new state in visible text. When the
+operation started from a graph key, focus MUST stay on that control. When it
+started from an inspector action, the inspector MUST stay open, focus MUST
+stay at the same action position, and closing the inspector MUST return focus
+to the selected control. The action at that position MAY change from Disable
+to Enable or from Enable to Disable. The board MUST announce
+`{record} enabled.` or `{record} disabled.`. If an enabled record is still
+unavailable, the visible state and announcement MUST also give `Unavailable`
+and the corrective reason.
+
+After successful removal of an assignment rung, the board MUST select and
+focus its assignment card header and announce the removed provider route and
+the new number of candidates. After successful removal of a provider-route
+row, the board MUST select and focus its canonical-model card header when that
+header remains available. After successful deletion of a direct local
+assignment that exposes an inherited definition or the empty implicit root
+`default`, the board MUST select and focus that replacement control and
+announce its source. For another deleted selected record, or when the named
+fallback control is not available, the board MUST select and focus the first
+available control in rendered board order. When no control is available, it
+MUST clear graph selection and focus its empty-state action. The success
+announcement MUST identify the deleted record and MUST state that the shown
+board contains the applied result.
+
+A failed preview, confirmation, enable, disable, or candidate-link removal
+MUST keep the selected board control and current non-secret inspector values.
+It MUST make no success change. A failed preview MUST keep or return focus to
+the opening control and show a corrective error. A failed confirmation or
+mutation MUST keep its dialog or inspector open, move focus to or keep focus
+on the corrective error, and let the administrator retry or cancel. Canceling
+after a failure MUST return focus and selection to the opening control. The
+error MUST use an alert. A polite live announcement MUST report a successful
+state change or removal. It MUST NOT announce success before the server
+confirms the write, announce one operation twice, or put a credential value or
+confirmation token in a live region.
+
+An expired, used, or stale reviewed-cascade preview MUST keep the old
+confirmation content visible with its exact conflict error. Its corrective
+action MUST create and show a new preview. It MUST NOT submit the old token or
+silently replace the old preview. A storage failure with an unused token MAY
+retry the same confirmation after the administrator requests the retry. A
+candidate-link validation failure MUST keep the proposed chain visible so the
+administrator can correct it or cancel.
+
+Selected, focused, pending, enabled, disabled, unavailable, inherited, and
+direct state MUST each have a visible shape, border, icon, text, or state label
+when it applies. Color, an accessible name, `aria-selected`, `aria-pressed`, or
+`aria-keyshortcuts` alone is not sufficient. Each available inspector action
+MUST show its command key. An inherited item MUST show its source. An
+unavailable item MUST show its corrective reason. A pending item MUST show the
+operation in progress and MUST not look enabled for another action.
+
+OpenDLE UI MUST own semantic compound controls, selection, one-tab-stop and
+arrow-key behavior, command-key recognition, event suppression, repeat
+suppression, `aria-keyshortcuts`, generic pending and state presentation,
+generic focus fallbacks, and host-neutral live-region primitives. It MUST keep
+connector strokes presentational. The Router MUST own the control projection,
+resource and relationship identity, current service, direct and inherited
+status, stored enablement, readiness, command eligibility, inspector actions,
+confirmation content, API calls, mutation lock, result refresh, domain error
+text, domain announcements, and activity effects. OpenDLE UI MUST NOT import a
+Router type or call a Router API. The Router MUST NOT copy the shared keyboard
+or focus engine.
+
+Focused OpenDLE UI component tests MUST import
+`RelationshipGraphCommand`, `RelationshipGraphNodeCommandContext`, and the
+extended `RelationshipGraphNode` and `RelationshipGraphProps` from the built
+package root. They MUST cover every command key, exact callback context,
+selection before dispatch, command omission, duplicate-command rejection,
+pending-state validation and presentation, `aria-keyshortcuts`, host status
+messages, internal announcement preservation, case and modifier handling,
+prevented events, input method composition, automatic and physical repeated
+keys, editable controls, inspectors, dialogs, pending items, and unsupported
+items. They MUST also prove that connector strokes have no pointer, focus, or
+accessibility target and that assignment rungs remain complete semantic
+relationship controls.
+
+Router localhost browser tests MUST use `http://127.0.0.1:5174`. They MUST
+cover provider, canonical-model, provider-route, direct assignment, and direct
+assignment-rung selection by keyboard, pointer, and touch. They MUST cover
+each eligible and ineligible `Delete`, `d`, and `e` case; unavailable records;
+inherited assignments; the implicit root `default`; confirmation cancel,
+success, stale-preview conflict, validation failure, and storage failure;
+rapid repeated keys; focus and selection after each result; visible non-color
+state; exact live announcements; and retained non-secret values. Desktop and
+phone tests MUST cover keyboard and touch-equivalent actions, local board
+scrolling, 200% text, no page-level overflow, and Axe results. The tests MUST
+prove that one user command creates no more than one preview or mutation
+request and that a connector stroke is not an action target.
 
 ### Shared relationship-graph toolbar
 
