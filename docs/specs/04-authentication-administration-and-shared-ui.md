@@ -298,10 +298,10 @@ the same shared responsive inset without reducing the viewport's outer width.
 The stage and graph viewport MAY use block-start, block-end, or internal
 separator borders. A border MUST use border-box sizing and MUST NOT reduce the
 edge-to-edge outer width or cause document overflow. At an edge that meets the
-`main` content box, the stage and viewport MUST NOT use an outer inline margin,
-outer inline border radius, or shadow that reserves space. Graph nodes, cards,
-internal panels, overlay inspectors, and bottom sheets MAY keep their shared
-borders, radii, and shadows.
+`main` content box, the stage and viewport MUST NOT use an outer inline border,
+margin, border radius, or shadow. Graph nodes, cards, internal panels, overlay
+inspectors, and bottom sheets MAY keep their shared borders, radii, and
+shadows.
 
 In split mode, the inspector MUST occupy the shared exact `21rem` at the
 stage's inline-end edge. It MUST NOT receive a page gutter or control inset.
@@ -331,9 +331,14 @@ inside `GraphToolbar`, `GraphWorkspace`, and `RelationshipGraph`. The Router
 MUST select the edge-to-edge page composition and supply its domain controls.
 It MUST NOT copy the shared control-row layout or add Router-only toolbar,
 search, filter, action, safe-area, or inspector alignment rules. The shared
-edge behavior MUST apply when these components are inside a `PageSurface` whose
+components MUST coordinate so that each control row receives the inset exactly
+once. Nested shared components MUST NOT add the inset again. The shared edge
+behavior MUST apply when these components are inside a `PageSurface` whose
 `edgeToEdge` value is true. A false or omitted `edgeToEdge` value MUST keep the
-existing shared non-edge geometry.
+existing shared non-edge geometry, including its gutter, borders, radii, and
+maximum-width behavior. OpenDLE UI MUST keep `PageSurface` and
+`PageSurfaceProps` as package-root exports, and `PageSurfaceProps.edgeToEdge`
+MUST remain an optional boolean.
 
 The edge-to-edge width rule and the full-height rule MUST apply together. A
 graph-wide control that wraps MUST use more of the control row's block size and
@@ -355,28 +360,36 @@ prove:
 3. Each graph-wide control content edge equals its graph-region edge plus the
    computed shared responsive inset for that side.
 4. No graph-page wrapper, stage, viewport, or state surface has a second inset,
-   smaller maximum width, negative-margin compensation, or space-reserving
-   outer inline radius.
+   smaller maximum width, negative-margin compensation, outer inline border,
+   or outer inline radius.
 5. The document scrolling element's dimensions do not exceed its client
    dimensions because of the edge-to-edge layout.
 
 Wide tests with a split inspector MUST verify the exact `21rem` inline-end
-inspector border box, its included separator, the remaining edge-to-edge graph
-region, and the control inset inside that region. Narrow tests with an overlay
-inspector MUST verify its exact `21rem` width and `0.875rem` inset from the
-stage edge, with no added control inset and no change to the stage or viewport
-width. Phone tests MUST verify a stage and viewport from inline coordinate zero
-through the dynamic viewport width, control insets with zero and non-zero safe
-areas, the independent `0.75rem` sheet insets, complete backdrop coverage, and
-the reserved bottom-navigation area. Tests MUST repeat width measurements for
-loading, error, retry, allowed empty, oversized, and 200%-text fixtures. They
-MUST verify fixed graph-wide controls, two-axis local graph scrolling, no
-document overflow, Axe results, and reviewed screenshots at all three sizes.
-Focused OpenDLE UI tests MUST cover true, false, and omitted `PageSurface`
-`edgeToEdge` values with `GraphToolbar`, `GraphWorkspace`, and
-`RelationshipGraph`. They MUST prove the shared inset, zero graph-viewport
-page gutter, safe-area maximum, wrapped controls, unchanged non-edge geometry,
-and no local consumer override.
+inspector border box, its included separator, its full inspector-host block
+size, the remaining edge-to-edge graph region, and the control inset inside
+that region. Narrow tests with an overlay inspector MUST verify its exact
+`21rem` width, `0.875rem` inline-end and block-end insets, and `4.75rem`
+block-start inset from the stage edge. They MUST verify that it stays below
+graph-wide controls, receives no added control inset, and does not change the
+stage or viewport width. Phone tests MUST verify a stage and viewport from
+inline coordinate zero through the dynamic viewport width, control insets with
+zero and unequal non-zero physical left and right safe areas, the independent
+`0.75rem` sheet insets, the shared sheet maximum height, complete backdrop
+coverage, and the reserved bottom-navigation area. The unequal safe-area test
+MUST prove that the left and right values are not exchanged. Tests MUST repeat
+width measurements for loading, error, retry, allowed empty, oversized, and
+200%-text fixtures. They MUST verify fixed and uncovered graph-wide controls,
+two-axis local graph scrolling, no document overflow, Axe results, and reviewed
+screenshots at all three sizes.
+
+Focused OpenDLE UI tests MUST import `PageSurface`, `PageSurfaceProps`,
+`GraphToolbar`, `GraphWorkspace`, and `RelationshipGraph` from the built
+package root. They MUST cover true, false, and omitted `PageSurface`
+`edgeToEdge` values. They MUST prove one shared control inset in each standalone
+and nested composition, zero graph-viewport page gutter, the physical safe-area
+maximum on both sides, wrapped controls, unchanged non-edge geometry, and no
+local consumer override.
 
 The application shell and each retained page MUST use the complete available
 width after the sidebar. Retained pages other than the two graph pages MUST use
