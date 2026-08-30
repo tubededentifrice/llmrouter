@@ -1303,6 +1303,13 @@ function CreateServiceInspector({
   readonly services: readonly Service[];
 }) {
   const [parentSelection, setParentSelection] = useState(NO_PARENT_OPTION);
+  const formRef = useRef<HTMLFormElement>(null);
+  useEffect(() => {
+    if (error === null) return;
+    formRef.current
+      ?.querySelector<HTMLButtonElement>('button[type="submit"]')
+      ?.focus();
+  }, [error]);
   return (
     <GraphInspector
       activationKey="create-service"
@@ -1313,7 +1320,7 @@ function CreateServiceInspector({
       title="Create service"
       tone="lime"
     >
-      <form className="service-create-form" onSubmit={onSubmit}>
+      <form className="service-create-form" onSubmit={onSubmit} ref={formRef}>
         <FormSection legend="Service details">
           <FormField label="API name" requirement="required">
             <input

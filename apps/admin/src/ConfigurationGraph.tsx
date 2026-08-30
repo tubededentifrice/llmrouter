@@ -1418,7 +1418,7 @@ function useConfigurationController({
                         trigger: event.currentTarget,
                       });
                     }}
-                    variant="quiet"
+                    variant="secondary"
                   >
                     Add provider route
                   </Button>
@@ -2595,10 +2595,16 @@ function ConfigurationInspector({
 }
 
 function InspectorWriteError({ message }: { readonly message: string | null }) {
+  const errorRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (message !== null) errorRef.current?.focus();
+  }, [message]);
   return message === null ? null : (
-    <GraphInspectorNotice dynamic tone="error">
-      {message}
-    </GraphInspectorNotice>
+    <div ref={errorRef} tabIndex={-1}>
+      <GraphInspectorNotice dynamic tone="error">
+        {message}
+      </GraphInspectorNotice>
+    </div>
   );
 }
 

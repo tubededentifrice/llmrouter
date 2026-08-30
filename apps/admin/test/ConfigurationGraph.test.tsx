@@ -362,6 +362,16 @@ describe("configuration graph composition", () => {
     expect(styles).not.toContain(".configuration-inspector-section");
     expect(styles).not.toContain(".configuration-inspector-actions");
     expect(styles).not.toContain(".configuration-safe-list");
+    const errorFocus = source.slice(
+      source.indexOf("function InspectorWriteError"),
+      source.indexOf("function ProviderInspector"),
+    );
+    expect(errorFocus).toContain("errorRef.current?.focus()");
+    expect(errorFocus).toContain("tabIndex={-1}");
+    expect(errorFocus).not.toContain("preventScroll");
+    expect(source).toMatch(
+      /rowsActions:[\s\S]*?variant="secondary"[\s\S]*?Add provider route/,
+    );
   });
 
   it("keeps the global catalog available without a selected service", () => {

@@ -433,6 +433,18 @@ describe("accepted administration composition", () => {
     expect(serviceSource).toContain("GraphInspectorSection");
     expect(serviceSource).toContain("GraphInspectorNotice");
     expect(serviceSource).toContain("selectedControlRef={selectedControlRef}");
+    const createInspectorSource = serviceSource.slice(
+      serviceSource.indexOf("function CreateServiceInspector"),
+      serviceSource.indexOf("export function ServiceManagement"),
+    );
+    expect(createInspectorSource).toContain("formRef.current");
+    expect(createInspectorSource).toContain(
+      `.querySelector<HTMLButtonElement>('button[type="submit"]')`,
+    );
+    expect(createInspectorSource).toContain("?.focus()");
+    expect(createInspectorSource).toContain(
+      '<GraphInspectorNotice dynamic tone="error">',
+    );
     expect(serviceSource).toContain("<DateTime");
     expect(serviceSource).not.toContain("globalThis.confirm");
     expect(serviceSource).toContain("Copy this key now");
