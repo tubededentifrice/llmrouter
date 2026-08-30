@@ -1,4 +1,4 @@
-import type { Price } from "./api.js";
+import type { Price } from "./api.ts";
 
 function opaqueFormValue(form: FormData, name: string): string {
   const value = form.get(name);

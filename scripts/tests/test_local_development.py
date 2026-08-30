@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
+import re
 from typing import TYPE_CHECKING
 
 import pytest
@@ -16,6 +18,10 @@ CHECK_PATH = REPOSITORY_ROOT / "scripts/check-local-development.py"
 COMPOSE_PATH = REPOSITORY_ROOT / "docker-compose.dev.yml"
 STORAGE_CONFIG_PATH = REPOSITORY_ROOT / "scripts/local-development-object-storage.toml"
 VITE_CONFIG_PATH = REPOSITORY_ROOT / "apps/admin/vite.config.ts"
+ADMIN_PATH = REPOSITORY_ROOT / "apps/admin"
+LOCAL_JAVASCRIPT_IMPORT = re.compile(
+    r'''(?:from\s+|import\s+)["']\.\.?/[^"']+\.js["']'''
+)
 SUBJECTS_INPUT = (
     "LLMROUTER_ADMINISTRATOR_SUBJECTS_FILE: /run/secrets/administrator_subjects"
 )
@@ -32,9 +38,38 @@ def _module() -> ModuleType:
     return module
 
 
+def _local_javascript_imports(admin_path: Path) -> list[str]:
+    offenders: list[str] = []
+    for source_directory in (admin_path / "src", admin_path / "test"):
+        for path in sorted(source_directory.rglob("*.ts*")):
+            for line_number, line in enumerate(
+                path.read_text(encoding="utf-8").splitlines(), start=1
+            ):
+                if LOCAL_JAVASCRIPT_IMPORT.search(line):
+                    offenders.append(f"{path.relative_to(admin_path)}:{line_number}")
+    return offenders
+
+
 def test_local_development_contract_accepts_repository_compose() -> None:
     """Accept the immutable loopback deployment."""
     _module().main()
+
+
+def test_admin_imports_use_typescript_source_paths() -> None:
+    """Keep Vite imports on stable TypeScript source paths."""
+    config = json.loads((ADMIN_PATH / "tsconfig.json").read_text(encoding="utf-8"))
+    assert config["compilerOptions"]["allowImportingTsExtensions"] is True
+    assert _local_javascript_imports(ADMIN_PATH) == []
+
+
+def test_admin_import_check_rejects_javascript_source_path(tmp_path: Path) -> None:
+    """Reject an emitted JavaScript path in a TypeScript source file."""
+    source_directory = tmp_path / "src"
+    source_directory.mkdir()
+    (source_directory / "broken.ts").write_text(
+        'import { value } from "./value.js";\n', encoding="utf-8"
+    )
+    assert _local_javascript_imports(tmp_path) == ["src/broken.ts:1"]
 
 
 @pytest.mark.parametrize(

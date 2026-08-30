@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { ConfigurationGraph } from "../src/ConfigurationGraph.js";
+import { ConfigurationGraph } from "../src/ConfigurationGraph.tsx";
 import {
   adapterFieldPolicy,
   configurationNodeId,
@@ -16,8 +16,8 @@ import {
   retainConfirmedRecord,
   retainDeletedRecord,
   validateAssignmentChain,
-} from "../src/configurationState.js";
-import { createAdministrationClient } from "../src/api.js";
+} from "../src/configurationState.ts";
+import { createAdministrationClient } from "../src/api.ts";
 import type {
   Assignment,
   Credential,
@@ -25,8 +25,8 @@ import type {
   Provider,
   ProviderModel,
   Service,
-} from "../src/api.js";
-import { configuredPriceValue } from "../src/formContracts.js";
+} from "../src/api.ts";
+import { configuredPriceValue } from "../src/formContracts.ts";
 
 const provider: Provider = {
   api_name: "openrouter-main",
@@ -508,9 +508,7 @@ describe("configuration graph composition", () => {
     );
 
     expect(catalogFailureMarkup).not.toContain("Unable to load Providers.");
-    expect(catalogFailureMarkup).toContain(
-      "Unable to load Canonical models.",
-    );
+    expect(catalogFailureMarkup).toContain("Unable to load Canonical models.");
     expect(catalogFailureMarkup).toContain("OpenRouter main");
     expect(catalogFailureMarkup).toContain(">Retry</button>");
   });

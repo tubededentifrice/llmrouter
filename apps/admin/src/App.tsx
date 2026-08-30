@@ -62,22 +62,22 @@ import {
   type Service,
   type StatisticsBucket,
   type StatisticsResult,
-} from "./api.js";
-import { ServiceManagement } from "./ServiceManagement.js";
-import { ConfigurationGraph } from "./ConfigurationGraph.js";
-import { createScopeLoadGuard } from "./accessState.js";
-import type { ConfigurationLoadPhase } from "./configurationState.js";
+} from "./api.ts";
+import { ServiceManagement } from "./ServiceManagement.tsx";
+import { ConfigurationGraph } from "./ConfigurationGraph.tsx";
+import { createScopeLoadGuard } from "./accessState.ts";
+import type { ConfigurationLoadPhase } from "./configurationState.ts";
 import {
   expireAdministratorSessionLoads,
   invalidateRetainedMediaLoad,
   updateRetentionDuration,
-} from "./administrationSafety.js";
-import { scheduleSessionExpiry } from "./sessionExpiry.js";
+} from "./administrationSafety.ts";
+import { scheduleSessionExpiry } from "./sessionExpiry.ts";
 import {
   requestLogActorLabel,
   requestLogRouteLabel,
   requestLogScopeLabel,
-} from "./logPresentation.js";
+} from "./logPresentation.ts";
 
 type Section =
   | "overview"
@@ -108,6 +108,7 @@ function callGlobalSource<T>(source: () => Promise<T>): Promise<T> {
   return Promise.resolve().then(source);
 }
 
+// eslint-disable-next-line react-refresh/only-export-components -- A direct test uses this load helper.
 export async function loadGlobalAdministrationSources(
   client: AdministrationClient,
 ) {
@@ -167,7 +168,7 @@ function globalSourceFailures(
   results: GlobalSourceResults,
 ): readonly unknown[] {
   return Object.values(results).flatMap((result) =>
-    result.status === "rejected" ? [result.reason] : [],
+    result.status === "rejected" ? [result.reason as unknown] : [],
   );
 }
 const routes: readonly {
@@ -2111,6 +2112,7 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
       failure: null,
       providerPhase: "loading",
     });
+    // react-doctor-disable-next-line react-doctor/async-defer-await -- The next guard rejects a stale global load after all sources settle.
     const results = await loadGlobalAdministrationSources(authenticatedClient);
     if (!globalLoadGuard.isCurrent(generation)) return;
     const previous = dataRef.current;

@@ -1,27 +1,27 @@
 import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { App, loadGlobalAdministrationSources } from "../src/App.js";
+import { App, loadGlobalAdministrationSources } from "../src/App.tsx";
 import {
   expireAdministratorSessionLoads,
   invalidateRetainedMediaLoad,
   updateRetentionDuration,
-} from "../src/administrationSafety.js";
+} from "../src/administrationSafety.ts";
 import {
   MissingProtectedKeyInspector,
   ServiceManagement,
-} from "../src/ServiceManagement.js";
+} from "../src/ServiceManagement.tsx";
 import type {
   AdministrationClient,
   RequestLogSummary,
   Service,
-} from "../src/api.js";
+} from "../src/api.ts";
 import {
   administrationListMaximum,
   administrationListPageMaximum,
   continuedPageCursor,
   mergeBoundedRows,
-} from "../src/api.js";
+} from "../src/api.ts";
 import {
   createScopeLoadGuard,
   protectedServiceApiName,
@@ -29,19 +29,19 @@ import {
   serviceInteractionLocked,
   uniqueDraftRowId,
   type KeyCreationLifecycle,
-} from "../src/accessState.js";
+} from "../src/accessState.ts";
 import {
   createInputImageSelectionQueue,
   credentialFormValue,
   parseManualPrice,
   validateInputImageSelection,
-} from "../src/formContracts.js";
-import { scheduleSessionExpiry } from "../src/sessionExpiry.js";
+} from "../src/formContracts.ts";
+import { scheduleSessionExpiry } from "../src/sessionExpiry.ts";
 import {
   requestLogActorLabel,
   requestLogRouteLabel,
   requestLogScopeLabel,
-} from "../src/logPresentation.js";
+} from "../src/logPresentation.ts";
 
 const emptyPage = { items: [], page: { has_more: false, next_cursor: null } };
 

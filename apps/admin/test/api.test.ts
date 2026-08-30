@@ -6,7 +6,7 @@ import {
   createAdministrationClient,
   errorMessage,
   isoRange,
-} from "../src/api.js";
+} from "../src/api.ts";
 
 afterEach(() => {
   vi.useRealTimers();

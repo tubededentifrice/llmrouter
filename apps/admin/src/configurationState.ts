@@ -4,7 +4,7 @@ import type {
   ProviderAdapter,
   ProviderModel,
   Model,
-} from "./api.js";
+} from "./api.ts";
 
 export type ConfigurationRecordKind =
   "provider" | "model" | "mapping" | "assignment";

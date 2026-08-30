@@ -39,7 +39,7 @@ import {
   type ProviderModelWrite,
   type ReasoningLevel,
   type Service,
-} from "./api.js";
+} from "./api.ts";
 import {
   adapterFieldPolicy,
   discardDeletedRecord,
@@ -57,13 +57,13 @@ import {
   validateAssignmentChain,
   type ConfigurationLoadPhase,
   type ConfigurationRecordKind,
-} from "./configurationState.js";
+} from "./configurationState.ts";
 import {
   credentialFormValue,
   configuredPriceValue,
   parseManualPrice,
-} from "./formContracts.js";
-import { PlaygroundModal } from "./PlaygroundModal.js";
+} from "./formContracts.ts";
+import { PlaygroundModal } from "./PlaygroundModal.tsx";
 import {
   assignmentPlaygroundTarget,
   currentPlaygroundTarget,
@@ -71,7 +71,7 @@ import {
   playgroundTargetKey,
   updateMediaRecovery,
   type PlaygroundTargetSnapshot,
-} from "./playgroundState.js";
+} from "./playgroundState.ts";
 
 interface ConfigurationGraphProps {
   readonly assignments: readonly Assignment[];
@@ -3525,6 +3525,7 @@ function MappingAdvancedFields({
   );
 }
 
+// react-doctor-disable-next-line react-doctor/no-giant-component -- This inspector owns one assignment form, ordered rungs, inherited state, and related commands as one boundary.
 function AssignmentInspector({
   context,
 }: {

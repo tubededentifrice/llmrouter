@@ -13,7 +13,7 @@ import {
   type Model,
   type Provider,
   type ProviderModel,
-} from "./api.js";
+} from "./api.ts";
 
 export interface PlaygroundTargetSnapshot {
   readonly kind: "assignment" | "provider-model";

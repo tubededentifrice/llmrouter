@@ -1,4 +1,4 @@
-import type { ScopeLoadGuard } from "./accessState.js";
+import type { ScopeLoadGuard } from "./accessState.ts";
 
 export function expireAdministratorSessionLoads(
   globalLoadGuard: ScopeLoadGuard,

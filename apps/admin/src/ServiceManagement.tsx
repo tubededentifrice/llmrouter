@@ -45,7 +45,7 @@ import {
   type Service,
   type ServiceKey,
   type Workspace,
-} from "./api.js";
+} from "./api.ts";
 import {
   createScopeLoadGuard,
   protectedServiceApiName,
@@ -54,7 +54,7 @@ import {
   uniqueDraftRowId,
   type KeyCreationLifecycle,
   type KeyCreationLifecycleAction,
-} from "./accessState.js";
+} from "./accessState.ts";
 
 function formText(form: FormData, name: string): string {
   const value = form.get(name);

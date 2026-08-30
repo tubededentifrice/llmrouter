@@ -1,4 +1,4 @@
-import type { RequestLogSummary } from "./api.js";
+import type { RequestLogSummary } from "./api.ts";
 
 export function requestLogActorLabel(item: RequestLogSummary): string {
   return item.call_actor === "service" ? "Service" : "Administrator";

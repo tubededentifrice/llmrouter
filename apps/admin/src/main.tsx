@@ -1,7 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "@opendle/ui/styles.css";
-import { App } from "./App.js";
+import { App } from "./App.tsx";
 import "./styles.css";
 
 const root = document.querySelector<HTMLElement>("#root");

@@ -17,7 +17,7 @@ import {
   type AdministratorPlaygroundModelRequest,
   type RuntimeInputImage,
   type Usage,
-} from "./api.js";
+} from "./api.ts";
 import {
   parseTags,
   parseToolDefinitions,
@@ -25,8 +25,8 @@ import {
   pollMediaJob,
   targetUnavailableMessage,
   type PlaygroundTargetSnapshot,
-} from "./playgroundState.js";
-import { createInputImageSelectionQueue } from "./formContracts.js";
+} from "./playgroundState.ts";
+import { createInputImageSelectionQueue } from "./formContracts.ts";
 
 interface PlaygroundModalProps {
   readonly client: AdministrationClient;

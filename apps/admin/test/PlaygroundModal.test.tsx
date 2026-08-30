@@ -1,17 +1,17 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { PlaygroundModal } from "../src/PlaygroundModal.js";
+import { PlaygroundModal } from "../src/PlaygroundModal.tsx";
 import {
   clientDeadlineMilliseconds,
   createAdministrationClient,
-} from "../src/api.js";
+} from "../src/api.ts";
 import type {
   AdministratorPlaygroundMediaJob,
   Assignment,
   Model,
   Provider,
   ProviderModel,
-} from "../src/api.js";
+} from "../src/api.ts";
 import {
   assignmentPlaygroundTarget,
   mappingPlaygroundTarget,
@@ -22,7 +22,7 @@ import {
   playgroundTargetKey,
   targetUnavailableMessage,
   updateMediaRecovery,
-} from "../src/playgroundState.js";
+} from "../src/playgroundState.ts";
 
 afterEach(() => {
   vi.useRealTimers();
