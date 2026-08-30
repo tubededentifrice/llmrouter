@@ -3,7 +3,7 @@
 Status: Accepted on 2026-08-23. The graph-first UI amendment was accepted on
 2026-08-24. The service-details and compact-inspector amendment was accepted on
 2026-08-29. The empty-chain and assignment-deletion amendment was accepted on
-2026-08-29.
+2026-08-29. The permanent-root-service amendment was accepted on 2026-08-30.
 
 ## Names and identity
 
@@ -19,20 +19,139 @@ disabled, retired, restored, deleting, cleanup, revision, or version state.
 
 ## Service tree
 
-A service MAY have one parent service. It MUST NOT have more than one parent.
-A parent change MUST reject a cycle and MUST leave the existing tree unchanged
-after any validation or storage failure.
+The Router MUST store exactly one permanent root service. Its `apiName` MUST be
+`root`, its initial display name MUST be `Root`, and its parent MUST be null.
+The root service MUST be a normal stored service for assignment ownership and
+inheritance. It MUST NOT be a virtual client-only node. Its opaque internal
+identity and creation time MUST stay unchanged after bootstrap.
+
+Every other service MUST have exactly one parent service. A non-root service
+MUST NOT have a null parent or more than one parent. Each service parent chain
+MUST end at `root`. A create or parent change MUST reject the target service as
+its own parent and MUST reject any descendant as its parent. The complete
+validation and write MUST use one transaction. A cycle, missing parent,
+concurrent parent change, validation failure, or storage failure MUST leave the
+existing tree unchanged.
+
+Before it serves an administration or calling request, the Router MUST run one
+idempotent root bootstrap and migration transaction while service-tree writes
+are locked. The transaction MUST apply these rules:
+
+1. An empty service collection MUST receive the stored `root` service.
+2. If no service has `apiName` `root`, the Router MUST insert it and set the
+   parent of each existing parentless service to `root`.
+3. If a service already has `apiName` `root`, that record MUST become the
+   permanent root. The Router MUST clear its existing parent, if any, and set
+   the parent of each other parentless service to `root`. Detaching a nested
+   `root` first makes its former top-level ancestor parentless before that
+   ancestor is attached below `root`.
+4. The Router MUST validate the complete resulting service tree and assignment
+   inheritance before commit. If the non-empty stored graph has no parentless
+   service and has no service named `root`, or if the result contains another
+   cycle, a missing parent, a missing inherited assignment, or an assignment
+   cycle, bootstrap MUST fail without changing any service. The Router MUST
+   stay unavailable for administration and calling requests until an operator
+   repairs the stored configuration and bootstrap succeeds.
+
+Thus, zero existing services creates `root`; one existing parentless service is
+attached to a new `root` unless it is already `root`; and multiple existing
+parentless services are all attached to one new or existing `root`. A newly
+inserted root MUST receive one generated opaque internal identity and one
+creation time in the bootstrap transaction. Migration MUST keep the opaque
+identity, display name, creation time, and descendants of an existing service
+named `root`.
+
+The bootstrap MUST make the implicit empty `default` assignment available for
+a new `root` service in the same transaction. It MUST keep all existing
+services, assignments, workspaces, keys, accounting, logs, jobs, media, and
+activity. It MUST NOT create an administrator activity event because bootstrap
+is a system migration and not an administrator configuration change. A
+repeated bootstrap MUST make no data change.
 
 Only a global administrator MAY create a service, change its parent, or delete
-it. A service API key MUST NOT perform these operations. A service delete MUST
-fail while one or more child services name it as their parent. The
-administrator MUST first move or delete each child.
+it. A service API key MUST NOT perform these operations. An administrator MUST
+NOT create another service with `apiName` `root`. A create request MUST name an
+existing parent. The root display name MAY change. Its `apiName`, root status,
+and null parent MUST NOT change. A request to give the root a parent or to give
+a non-root service a null parent MUST fail and MUST NOT change the service.
+
+A service delete MUST fail while one or more child services name it as their
+parent. The administrator MUST first move or delete each child. Deletion of
+`root` MUST always fail, including when it has no child. The Router MUST NOT
+offer a root delete action or describe root deletion as available.
 
 Deleting a service MUST delete its API keys, workspaces, local assignment
 definitions, request logs, raw accounting, daily aggregates, media jobs, and
 retained media. It MUST NOT delete a parent service or a child service. The
 delete MUST make the service unavailable to new calls before dependent
 records are removed.
+
+Each authenticated administrator service create, display-name change, parent
+change, and delete operation that reaches service validation MUST create the
+basic activity event defined in
+[Accounting, logs, retention, and operations](05-accounting-logs-retention-and-operations.md#basic-activity-log).
+The action MUST be `service.create`, `service.update`, or `service.delete`, the
+resource type MUST be `service`, and the resource API name MUST identify the
+target service. A rejected protected-root, parent, or cycle operation MUST
+record `failed`. A successful operation MUST record `succeeded`. An activity
+event MUST NOT contain an old or new display name, parent value, or other
+service-tree snapshot.
+
+### Administration service wire rules
+
+An administrator service response MUST contain `api_name`, `display_name`,
+`parent_service_api_name`, `is_root`, and `created_at`. The
+`parent_service_api_name` value MUST be null and `is_root` MUST be true only for
+`root`. Every other response MUST contain a non-null parent API name and
+`is_root` MUST be false.
+
+An administrator create request MUST contain `api_name`, `display_name`, and a
+non-null `parent_service_api_name`. An administrator replace request MUST
+contain `display_name` and `parent_service_api_name`. The replace value MUST be
+null for `root` and MUST be non-null for every other service. These requests
+MUST NOT contain `is_root` or another root flag that the caller can set.
+
+The service operations MUST use these exact relationship errors. Contract
+shape validation MAY use the normal `invalid_request` message before the
+operation runs.
+
+| Trigger | HTTP status | Error code | Message |
+| ------- | ----------- | ---------- | ------- |
+| A create request uses `api_name` `root` | 409 | `conflict` | `The root service already exists.` |
+| A create request uses another existing service API name | 409 | `conflict` | `Service API name already exists.` |
+| A named parent does not exist | 404 | `not_found` | `Parent service was not found.` |
+| A replace request gives `root` a non-null parent | 400 | `invalid_request` | `The root service must not have a parent.` |
+| A replace request gives a non-root service a null parent | 400 | `invalid_request` | `A non-root service must have a parent.` |
+| A parent is the target service or one of its descendants | 409 | `conflict` | `The service parent would create a cycle.` |
+| Concurrent tree state no longer matches the validated parent graph | 409 | `conflict` | `The service tree changed. Refresh and try again.` |
+| A delete target is `root` | 409 | `conflict` | `The root service cannot be deleted.` |
+| A delete target has one or more direct children | 409 | `conflict` | `Move or delete the child services first.` |
+
+After contract-shape validation, a create operation MUST check the reserved
+root name before another API-name conflict, parent existence, and concurrent
+tree state, in that order. A replace operation MUST check target existence,
+the root or non-root null-parent rule, parent existence, a cycle, and concurrent
+tree state, in that order. A delete operation MUST check target existence, root
+protection, and direct children, in that order. This order MUST select one exact
+error when a request would otherwise match more than one error.
+
+A rejected request MUST use the same activity result rules as any other
+administrator configuration attempt. It MUST NOT make a partial service-tree
+or dependent-record change.
+
+Focused contract and service tests MUST cover an empty bootstrap, one legacy
+root, multiple legacy roots, an existing top-level `root`, an existing nested
+`root`, repeated bootstrap, and atomic bootstrap failure for a service or
+assignment cycle, missing parent, or missing inherited assignment. They MUST
+cover required create and replace parent fields, response
+root fields, a missing parent, a self-parent, a descendant parent, a concurrent
+parent change, a duplicate API name, a null non-root parent, a root parent,
+root creation, root deletion, child-blocked deletion, validation precedence,
+and successful display-name and parent changes. Each operation failure test
+MUST verify the exact HTTP status, error code, message, unchanged tree, and
+failed activity event. Each operation success test MUST verify the stored tree
+and succeeded activity event. Bootstrap tests MUST verify that no administrator
+activity event is created.
 
 The global administration application MUST use the service tree as the main
 service-management entry. One primary-button click or one tap on a service node
@@ -55,11 +174,11 @@ long press, or pointer-only gesture.
 
 The compact selected-service inspector MUST use `GraphInspector` and the
 shared inspector primitives. Its header MUST use the service display name as
-the title. Its eyebrow MUST be `Root service` when the service has no parent and
-`Child service` otherwise. It MUST show these facts in this order:
+the title. Its eyebrow MUST be `Root service` for `root` and `Child service`
+otherwise. It MUST show these facts in this order:
 
 1. `API name`: the service `apiName`.
-2. `Parent`: `None` for a root service, or the parent display name and
+2. `Parent`: `None` for `root`, or the parent display name and
    `apiName` for a child service.
 3. `Created`: the service creation date and time.
 
@@ -111,14 +230,16 @@ The service-details page MUST contain these regions in this order:
    and its `apiName`.
 2. A service fact summary with the `apiName`, parent, creation date and time,
    and direct-child count.
-3. A service form that can change the display name and parent. The parent list
-   MUST exclude the service and all its descendants.
+3. A service form that can change the display name and, for a non-root service,
+   its parent. The parent list MUST exclude the service and all its descendants.
+   For `root`, the form MUST show the fixed parent value `None` and MUST NOT
+   provide a parent control.
 4. A `Workspaces` section with the current workspaces and create and delete
    actions.
 5. A `Service API keys` section with active key metadata and create and revoke
    actions.
-6. A `Delete service` section with a delete action, the child-service blocker,
-   and the complete destructive effect.
+6. A `Delete service` section with protected-root status or a delete action,
+   the child-service blocker, and the complete destructive effect.
 
 The details page MUST use the route service as context. A form or action MUST
 NOT ask the administrator to select that service again. The service tree MUST
@@ -137,15 +258,17 @@ submit. A failed save MUST keep the entered non-secret values and the last
 confirmed service facts, show a corrective error, and MUST NOT change the tree.
 The tree MUST change only after the server confirms the save.
 
-The page MUST NOT enable `Save changes` until it has confirmed the parent
-options for the route service. If those options fail to load or refresh, the
-service form MUST show a corrective error and a retry action. It MUST keep the
-confirmed service facts and MUST NOT remove or disable confirmed workspace or
-key data.
+For a non-root service, the page MUST NOT enable `Save changes` until it has
+confirmed the parent options for the route service. If those options fail to
+load or refresh, the service form MUST show a corrective error and a retry
+action. It MUST keep the confirmed service facts and MUST NOT remove or disable
+confirmed workspace or key data. The root form MUST NOT load parent options.
 
-The `Delete service` action MUST be unavailable while the service has a direct
-child and the section MUST identify the blocker. Otherwise, the action MUST
-open a confirmation that identifies the service and all effects of deletion.
+For `root`, the `Delete service` section MUST identify the permanent-root
+protection and MUST NOT contain a delete action. For another service, the
+delete action MUST be unavailable while the service has a direct child, and
+the section MUST identify the blocker. Otherwise, the action MUST open a
+confirmation that identifies the service and all effects of deletion.
 Cancellation MUST keep the page and return focus to the delete action. A failed
 delete MUST keep the page and confirmed service data and show a corrective
 error. Only a confirmed successful delete MAY change the route and tree.
@@ -352,7 +475,7 @@ A workspace MUST NOT take part in assignment resolution.
 
 ## Default and automatic assignments
 
-Each root service MUST have an implicit assignment named `default`. It MUST
+The root service MUST have an implicit assignment named `default`. It MUST
 exist even when it has no configured chain. Any service in the parent chain
 MAY define its own `default` chain. The nearest definition MUST replace the
 complete parent definition. A child with no local definition MUST inherit the

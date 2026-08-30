@@ -10,7 +10,7 @@
     },
     {
       "path": "docs/api/openapi.yaml",
-      "sha256": "10c65e477876deca9aaf6cd38317d52f708e48a0da29b74e4407db3ee5d22474"
+      "sha256": "c2e2fef52395afc88e9adacf43b01f627913b488d408e1526b1d86f170a6de7a"
     },
     {
       "path": "docs/api/stream-protocol.md",
@@ -143,14 +143,14 @@
     "RequestLog": "f368c9d6404e6fd712d960b6ec2d159f6ae8ae2ea7d629ee5030c4ae104e1f47",
     "RequestLogPage": "39444b1ca63390f6c67321868d590b96cbf49a0a2357df98729cf03042794507",
     "RequestLogSummary": "2af4dbb7170bc39ddbc23a96fb25b68170618405c1a054571ca176afd7111e04",
-    "Service": "080e42ee301669f447358abe8f27760be74279628505a52d84deb86faef66d7d",
-    "ServiceCreate": "226ca2fb0f513176404c28fd4beab37469b83b0c383f542f7f5116a01fefe88f",
+    "Service": "9d0ed3fc0bfbe0a8dffe0586f778d504626b328a12ab5ef5255c66fde57697a2",
+    "ServiceCreate": "10011756919f6f8c9837cb1ab859948fcce96bca4c11f2b8016193817ef0fea1",
     "ServiceKey": "9c54bc325a80585a6e3bead26c9f79dec61abd65f6c404df5c71010839a06ee1",
     "ServiceKeyCreate": "fe87bc98621fa9038bb37312cd092ad8b38c7612b6b80d3be7b0e870f6e0ad01",
     "ServiceKeyCreated": "66439b5de10abc9dff42f1287b84c7112aa34ded1ee9982597a8abdc1bcf5d19",
     "ServiceKeyPage": "7bac6204604beed49f5a8f625e743622ae633c8cfef52d83c5bac5dcfec0cdba",
     "ServicePage": "2e6e2e5b21042a1a4aa15c764a0e143db54faec0b042a5021e6b7ed917c2a7f9",
-    "ServiceUpdate": "b56a577917e5f9997ec75d2ba264ec90c0b8c6f7833033d6bd33bf148117390f",
+    "ServiceUpdate": "5058b76270d4a664facc3d47470b60e83b8549ba20483886534cd7a99ebd00d4",
     "StandardModelCallResult": "be0d434efee50db3b1d0301231a6c16d18f1ab372fb38b412eccdf44e4f49952",
     "StatisticsBucket": "750fed950859911242c056e825ca83c684349fa517856c0151a47ad94cb560c6",
     "StatisticsDimension": "9b79e48e3a569afbd9edadea68ca932480e9f2eb07573b83ab96b7f251fa55a0",
@@ -184,6 +184,6 @@
   },
   "contract_set": "llmrouter-v1",
   "generator_version": 3,
-  "source_sha256": "10c65e477876deca9aaf6cd38317d52f708e48a0da29b74e4407db3ee5d22474",
+  "source_sha256": "c2e2fef52395afc88e9adacf43b01f627913b488d408e1526b1d86f170a6de7a",
   "version": "1.0.0"
 }

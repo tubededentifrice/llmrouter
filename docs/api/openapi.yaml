@@ -686,6 +686,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Service"
+        "400":
+          $ref: "#/components/responses/ServiceTreeInvalidRequestError"
+        "404":
+          $ref: "#/components/responses/ServiceParentNotFoundError"
+        "409":
+          $ref: "#/components/responses/ServiceCreateConflictError"
         default:
           $ref: "#/components/responses/ErrorResponse"
   /v1/admin/services/{service_api_name}:
@@ -707,7 +713,7 @@ paths:
           $ref: "#/components/responses/ErrorResponse"
     put:
       operationId: adminPutService
-      summary: Replace one service name and parent relationship.
+      summary: Replace one service display name and parent relationship.
       security:
         - administratorSession: []
       parameters:
@@ -726,6 +732,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Service"
+        "400":
+          $ref: "#/components/responses/ServiceTreeInvalidRequestError"
+        "404":
+          $ref: "#/components/responses/ServiceOrParentNotFoundError"
+        "409":
+          $ref: "#/components/responses/ServiceUpdateConflictError"
         default:
           $ref: "#/components/responses/ErrorResponse"
     delete:
@@ -739,6 +751,8 @@ paths:
       responses:
         "204":
           description: Service deleted.
+        "409":
+          $ref: "#/components/responses/ServiceDeleteConflictError"
         default:
           $ref: "#/components/responses/ErrorResponse"
   /v1/admin/services/{service_api_name}/workspaces:
@@ -1823,6 +1837,117 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ErrorEnvelope"
+    ServiceTreeInvalidRequestError:
+      description: The requested root or parent relationship is invalid.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          examples:
+            root_parent:
+              summary: A request tried to give the root service a parent.
+              value:
+                error:
+                  code: invalid_request
+                  message: The root service must not have a parent.
+            missing_non_root_parent:
+              summary: A request tried to make a non-root service parentless.
+              value:
+                error:
+                  code: invalid_request
+                  message: A non-root service must have a parent.
+    ServiceParentNotFoundError:
+      description: The named parent service does not exist.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            error:
+              code: not_found
+              message: Parent service was not found.
+    ServiceOrParentNotFoundError:
+      description: The target service or named parent service does not exist.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          examples:
+            target:
+              summary: The target service does not exist.
+              value:
+                error:
+                  code: not_found
+                  message: Service was not found.
+            parent:
+              summary: The named parent service does not exist.
+              value:
+                error:
+                  code: not_found
+                  message: Parent service was not found.
+    ServiceCreateConflictError:
+      description: The service API name or current service tree prevents creation.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          examples:
+            root_exists:
+              summary: A request tried to create the reserved root service.
+              value:
+                error:
+                  code: conflict
+                  message: The root service already exists.
+            api_name_exists:
+              summary: Another service already uses the API name.
+              value:
+                error:
+                  code: conflict
+                  message: Service API name already exists.
+            concurrent_change:
+              summary: The service tree changed after relationship validation.
+              value:
+                error:
+                  code: conflict
+                  message: The service tree changed. Refresh and try again.
+    ServiceUpdateConflictError:
+      description: The requested parent change conflicts with the current service tree.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          examples:
+            cycle:
+              summary: A parent change would create a service cycle.
+              value:
+                error:
+                  code: conflict
+                  message: The service parent would create a cycle.
+            concurrent_change:
+              summary: The service tree changed after relationship validation.
+              value:
+                error:
+                  code: conflict
+                  message: The service tree changed. Refresh and try again.
+    ServiceDeleteConflictError:
+      description: The protected root or a direct child prevents deletion.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          examples:
+            protected_root:
+              summary: A request tried to delete the root service.
+              value:
+                error:
+                  code: conflict
+                  message: The root service cannot be deleted.
+            child_services:
+              summary: A delete target still has direct children.
+              value:
+                error:
+                  code: conflict
+                  message: Move or delete the child services first.
     ConfigurationDeletionValidationError:
       description: The configuration deletion request or resulting configuration is invalid.
       content:
@@ -3399,7 +3524,7 @@ components:
     ServiceCreate:
       type: object
       additionalProperties: false
-      required: [api_name, display_name]
+      required: [api_name, display_name, parent_service_api_name]
       properties:
         api_name:
           $ref: "#/components/schemas/ApiName"
@@ -3409,21 +3534,25 @@ components:
           maxLength: 200
         parent_service_api_name:
           $ref: "#/components/schemas/ApiName"
+          description: Required parent for the new non-root service.
     ServiceUpdate:
       type: object
       additionalProperties: false
-      required: [display_name]
+      required: [display_name, parent_service_api_name]
       properties:
         display_name:
           type: string
           minLength: 1
           maxLength: 200
         parent_service_api_name:
-          $ref: "#/components/schemas/ApiName"
+          oneOf:
+            - $ref: "#/components/schemas/ApiName"
+            - type: "null"
+          description: Null only when the target service is the protected root.
     Service:
       type: object
       additionalProperties: false
-      required: [api_name, display_name, created_at]
+      required: [api_name, display_name, parent_service_api_name, is_root, created_at]
       properties:
         api_name:
           $ref: "#/components/schemas/ApiName"
@@ -3432,9 +3561,32 @@ components:
           minLength: 1
           maxLength: 200
         parent_service_api_name:
-          $ref: "#/components/schemas/ApiName"
+          oneOf:
+            - $ref: "#/components/schemas/ApiName"
+            - type: "null"
+        is_root:
+          type: boolean
+          readOnly: true
         created_at:
           $ref: "#/components/schemas/Timestamp"
+      allOf:
+        - if:
+            properties:
+              api_name:
+                const: root
+            required: [api_name]
+          then:
+            properties:
+              parent_service_api_name:
+                type: "null"
+              is_root:
+                const: true
+          else:
+            properties:
+              parent_service_api_name:
+                $ref: "#/components/schemas/ApiName"
+              is_root:
+                const: false
     ServicePage:
       type: object
       additionalProperties: false
