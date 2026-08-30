@@ -156,7 +156,9 @@ MUST NOT set a smaller maximum width. On a phone, the shell MUST use the
 complete viewport width with the phone gutter and MUST prevent page-level
 horizontal overflow. A graph or dense data region MAY scroll in its own
 labelled viewport when its content cannot reflow. Its heading, filters, and
-primary actions MUST remain outside that scrolling region.
+graph-wide primary actions MUST remain outside that scrolling region. A
+contextual action in a graph's roving focus group MUST stay with its selected
+control and MAY be inside the labelled graph viewport.
 
 The service tree MUST use nodes and inspectors as its graph interaction
 surface. Service management outside the graph MUST follow

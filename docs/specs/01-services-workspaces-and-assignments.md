@@ -181,7 +181,8 @@ show one visible button labelled `+ New service` directly below that selected
 service node. It MUST NOT show the button below another node. The button's
 accessible name MUST identify the selected service as the parent. Selecting a
 different service MUST move the button below the newly selected node without
-moving focus away from that node.
+moving graph focus to the button. The applicable selected-service inspector
+focus rule MUST still apply.
 
 A primary-button click, pointer tap, or touch tap on `+ New service` MUST open
 the create-service inspector. Enter or Space on the focused button MUST open
@@ -190,10 +191,11 @@ focus group and MUST NOT add a second graph Tab stop. Down from the selected
 service node MUST move focus to its `+ New service` button. Up or Left from the
 button MUST return focus to that selected node. Down from the button MUST move
 focus to the next visible service node when one exists and otherwise MUST keep
-focus on the button. Right from the button MUST keep focus on it. Home and End
-from the button MUST move focus to the first and last visible service node.
-These rules replace the general service-tree arrow rule only for movement to
-or from this contextual button.
+focus on the button. Up from that next service node MUST return focus to the
+button. Right from the button MUST keep focus on it. Home and End from the
+button MUST move focus to the first and last visible service node. These rules
+replace the general service-tree arrow rule only for movement to or from this
+contextual button.
 
 Tab MUST still enter the graph at the selected service node, or at the first
 service node when there is no selection. The next Tab from either a service
@@ -202,6 +204,11 @@ returns focus to `+ New service`, that button MAY temporarily be the graph's
 one active roving Tab stop. When focus next leaves the graph, the selected
 service node MUST again become the graph's active Tab stop. Pointer, touch, and
 keyboard use MUST produce the same parent and create form.
+
+Activating the same contextual button while its create inspector is open MUST
+NOT clear values, open another inspector, or send a create request. When no
+request is pending, it MUST move focus to the existing inspector heading. When
+a request is pending, the repeated activation MUST do nothing.
 
 Opening the create-service inspector MUST capture the selected service as the
 required parent for that create attempt. The inspector MUST use
@@ -213,48 +220,66 @@ another way to change the captured parent. The create request MUST send the
 captured service `apiName` as `parent_service_api_name`.
 
 Opening the inspector MUST move focus to its heading, and the next Tab MUST
-move to `Display name`. Escape, the inspector close action, or an explicit
-cancel action MUST cancel creation, discard the unsaved non-secret values,
-keep the parent service selected, and return focus to its `+ New service`
-button. Cancellation MUST NOT send a create request. While the create request
-is pending, the inspector MUST show `Creating service`, prevent a duplicate
-submit, disable its fields and actions, and block inspector closure and graph
-selection changes until the request finishes.
+move to `Display name`. Escape or the inspector close action MUST cancel
+creation, discard the unsaved non-secret values, keep the parent service
+selected, and return focus to its `+ New service` button. Cancellation MUST
+NOT send a create request. While the create request is pending, the inspector
+MUST show and announce `Creating service`, expose its busy state to assistive
+technology, prevent a duplicate submit, disable its fields and actions, and
+block inspector closure and graph selection changes until the request finishes.
+This pending rule overrides the shared Escape and close behavior only while the
+request is pending.
 
 In split or overlay mode, if the administrator tries to select another service
 while a create inspector is open and no request is pending, the application
 MUST treat that action as a request to cancel creation. When both fields are
 empty, it MUST close the create inspector, select the requested service, open
 that service's compact inspector, and focus its heading. When either field has
-a value, it MUST first ask the administrator to discard the values. Confirming
-MUST complete the same selection change. Declining MUST keep the original
-parent selected, keep the entered values, and keep the create inspector open.
+a value, it MUST first ask the administrator to discard the values. The discard
+confirmation MUST move focus to its `Keep editing` action. Confirming MUST
+contain `Discard values` and `Keep editing` actions. `Discard values` MUST
+complete the same selection change. `Keep editing` or closing the confirmation
+MUST keep the original parent selected, keep the entered values, keep the
+create inspector open, and return focus to the first field that has a value.
 In bottom-sheet mode, the shared modal background MUST prevent a graph
 selection change until the inspector closes.
 
 A create failure MUST keep the captured parent and entered values, show a
-corrective error through `GraphInspectorNotice`, and permit retry.
-Field-validation failure MUST focus the first invalid field. Another failure
-MUST keep focus on the create action after it announces the error. If the
-captured parent becomes unavailable, the application MUST close the create
-inspector, select the first available service, return focus to that node, and
-announce that the parent is unavailable. It MUST NOT retry with a different
-parent. A successful create MUST add the confirmed child below the captured
-parent, select the new child, replace the create inspector with its compact
-selected-service inspector, and move focus to that inspector's heading. It
-MUST NOT navigate to the service-details route.
+corrective error through `GraphInspectorNotice`, re-enable its fields and
+actions, and permit retry. Field-validation failure MUST focus the first
+invalid field. Another failure MUST keep focus on the create action after it
+announces the error. If the captured parent becomes unavailable, the
+application MUST close the create inspector, select the first available
+service, return focus to that node, and announce that the parent is
+unavailable. It MUST NOT retry with a different parent. A successful create
+MUST add the confirmed child below the captured parent, select the new child,
+replace the create inspector with its compact selected-service inspector, and
+move focus to that inspector's heading. It MUST NOT navigate to the
+service-details route.
+
+Only a current confirmed service refresh or the create response MAY establish
+that the captured parent is unavailable. A service-load result that started
+before the create inspector opened MUST NOT close or retarget that inspector or
+replace a later confirmed graph. If a current refresh reports the parent as
+unavailable while the create request is pending, the application MUST keep the
+pending inspector until that request finishes. If creation succeeds, the
+application MUST use the create response and discard that refresh result. If
+creation fails, the application MUST then apply the current refresh and the
+applicable create-failure or unavailable-parent rule. This rule overrides the
+shared unavailable-record closure while the create request is pending.
 
 The graph MUST show a labelled loading state and MUST NOT show a create action
 until it has loaded at least one confirmed service. After a successful root
-bootstrap, an initial graph load with no restorable selection MUST select
-`root` and show `+ New service` below it. A bootstrap failure, service-load
-failure, or successful response with no stored root MUST show a corrective
-error and retry action. It MUST NOT show a graph-wide create action or permit a
-service with no parent. A refresh that removes the selected service MUST use
-the shared unavailable-record focus rule, select the first remaining service,
-and move `+ New service` below that service. Because successful bootstrap
-always stores `root`, the normal service graph MUST NOT have an empty state
-after loading.
+bootstrap, a confirmed graph load or return with no restorable selection MUST
+select `root` and show `+ New service` below it. A history or URL selection that
+does not identify a confirmed service is not restorable. A bootstrap failure,
+service-load failure, or successful response with no stored root MUST show a
+corrective error and retry action. It MUST NOT show a graph-wide create action
+or permit a service with no parent. A refresh that removes the selected
+service MUST use the shared unavailable-record focus rule, select the first
+remaining service, and move `+ New service` below that service. Because
+successful bootstrap always stores `root`, the normal service graph MUST NOT
+have an empty state after loading.
 
 ### Compact selected-service inspector
 
@@ -411,8 +436,8 @@ MUST clear that service from the global selected-service context. It MUST NOT
 silently open another service. In this state, `Back to services` MUST return to
 `/services` without a selected-service query. If the administrator deletes the
 service from its details page, a successful delete MUST replace the details
-history entry with `/services`, select no service, and focus the first remaining
-service node. Browser Back MUST NOT reopen the deleted details entry.
+history entry with `/services`, select the first remaining service, and focus
+that service node. Browser Back MUST NOT reopen the deleted details entry.
 
 If a service becomes unavailable while one of its API keys is being created or
 its one-time secret is visible, the page MUST keep the protected key state. It
@@ -490,15 +515,18 @@ action; the exact selected-node placement, label, and accessible parent name of
 `+ New service`; pointer, touch, Enter, Space, and arrow access; one graph Tab
 stop; create-inspector focus entry and return; and cancel with empty and entered
 values. Split and overlay tests MUST cover selection changes with empty and
-entered values. Phone bottom-sheet tests MUST prove that the modal background
-prevents selection changes. The tests MUST verify that the inspector has only
-the display-name and API-name fields, shows the captured parent without a
-parent picker, and sends that parent in the create request. They MUST cover
-pending state, duplicate-submit prevention, field and non-field failures,
-retry, parent
-unavailability, confirmed success, root selection after bootstrap, bootstrap
-and load failure, an invalid empty response, and refresh selection fallback.
-They MUST cover the direct route, route encoding, page regions, history push,
+entered values through pointer and keyboard use. Phone bottom-sheet tests MUST
+prove that the modal background prevents pointer and keyboard selection
+changes. The tests MUST verify that the inspector has only the display-name and
+API-name fields, shows the captured parent without a parent picker, and sends
+that parent in the create request. They MUST cover pending state, blocked
+closure, duplicate-submit prevention, repeated opener activation, discard-
+confirmation focus, field and non-field failures, retry, parent unavailability,
+confirmed success, root selection after bootstrap, a missing history or URL
+selection, bootstrap and load failure, an invalid empty response, stale
+service-load rejection, pending refresh removal, and refresh selection
+fallback. These tests MUST cover the direct route, route encoding, page
+regions, history push,
 Back, Forward, the direct-link fallback, graph-scroll restoration and
 reachability, mode-specific history focus, and deleted-node focus fallback.
 
@@ -517,15 +545,15 @@ stale-data snapshots, and logs. Long-content tests MUST prove that graph and
 table viewports keep their local scrolling and do not cause page-level
 overflow.
 
-The compact inspector, details page, workspace table, key table, loading,
-empty, stale, error, unavailable, one-time-secret, and confirmation states MUST
-pass Axe in desktop, narrow, and phone tests. Each width MUST have a reviewed
-screenshot of the normal service flow. Focused screenshots MUST also cover the
-phone sheet above the bottom navigation and each conditional state that is not
-visible in a normal screenshot. A one-time-secret screenshot MUST use a fixed
-synthetic value that cannot authenticate. A screenshot, snapshot, or test
-report MUST NOT contain a secret from a create response. Each React change MUST
-keep React Doctor at score 100 with zero diagnostics.
+The compact and create inspectors, details page, workspace table, key table,
+loading, empty, stale, error, unavailable, one-time-secret, and confirmation
+states MUST pass Axe in desktop, narrow, and phone tests. Each width MUST have
+a reviewed screenshot of the normal service flow. Focused screenshots MUST
+also cover the phone sheet above the bottom navigation and each conditional
+state that is not visible in a normal screenshot. A one-time-secret screenshot
+MUST use a fixed synthetic value that cannot authenticate. A screenshot,
+snapshot, or test report MUST NOT contain a secret from a create response. Each
+React change MUST keep React Doctor at score 100 with zero diagnostics.
 
 Deleting a workspace MUST delete its detailed logs, raw accounting, daily
 aggregates, media jobs, uploaded images, and retained generated media. It MUST
