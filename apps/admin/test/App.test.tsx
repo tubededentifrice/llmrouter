@@ -428,6 +428,11 @@ describe("accepted administration composition", () => {
     expect(serviceSource).toContain("FormActions");
     expect(serviceSource).toContain("FormSection");
     expect(serviceSource).toContain("InlineAlert");
+    expect(serviceSource).toContain("GraphInspectorFacts");
+    expect(serviceSource).toContain("GraphInspectorFact");
+    expect(serviceSource).toContain("GraphInspectorSection");
+    expect(serviceSource).toContain("GraphInspectorNotice");
+    expect(serviceSource).toContain("selectedControlRef={selectedControlRef}");
     expect(serviceSource).toContain("<DateTime");
     expect(serviceSource).not.toContain("globalThis.confirm");
     expect(serviceSource).toContain("Copy this key now");
@@ -445,6 +450,17 @@ describe("accepted administration composition", () => {
     expect(serviceSource).not.toContain("sessionStorage");
     expect(serviceSource).not.toContain("Use in playground");
     expect(applicationSource).toContain("<DateTime");
+    const styles = readFileSync(
+      new URL("../src/styles.css", import.meta.url),
+      "utf8",
+    );
+    expect(styles).not.toMatch(
+      /\.service-management\s+\.od-graph-inspector\s*\{/,
+    );
+    expect(styles).not.toContain(".od-graph-inspector");
+    expect(styles).not.toContain(".service-access-section");
+    expect(styles).not.toContain(".service-access-heading");
+    expect(styles).not.toContain(".service-delete-section");
   });
 
   it("uses a create-row identity that no workspace API name can use", () => {

@@ -1,4 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { ConfigurationGraph } from "../src/ConfigurationGraph.tsx";
 import {
@@ -335,6 +336,34 @@ describe("configuration policy", () => {
 });
 
 describe("configuration graph composition", () => {
+  it("uses the shared compact inspector primitives without local layout", () => {
+    const source = readFileSync(
+      new URL("../src/ConfigurationGraph.tsx", import.meta.url),
+      "utf8",
+    );
+    const styles = readFileSync(
+      new URL("../src/styles.css", import.meta.url),
+      "utf8",
+    );
+
+    for (const primitive of [
+      "GraphInspectorFacts",
+      "GraphInspectorFact",
+      "GraphInspectorSection",
+      "GraphInspectorRows",
+      "GraphInspectorRow",
+      "GraphInspectorNotice",
+    ])
+      expect(source).toContain(primitive);
+    expect(styles).not.toMatch(
+      /\.configuration-graph-page\s+\.od-graph-inspector\s*\{/,
+    );
+    expect(styles).not.toContain(".configuration-facts");
+    expect(styles).not.toContain(".configuration-inspector-section");
+    expect(styles).not.toContain(".configuration-inspector-actions");
+    expect(styles).not.toContain(".configuration-safe-list");
+  });
+
   it("keeps the global catalog available without a selected service", () => {
     const client = createAdministrationClient(vi.fn());
     const markup = renderToStaticMarkup(

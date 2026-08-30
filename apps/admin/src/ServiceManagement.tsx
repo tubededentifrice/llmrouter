@@ -22,6 +22,10 @@ import {
   GraphEdges,
   GraphEmptyState,
   GraphInspector,
+  GraphInspectorFact,
+  GraphInspectorFacts,
+  GraphInspectorNotice,
+  GraphInspectorSection,
   GraphNode,
   GraphToolbar,
   GraphViewport,
@@ -355,31 +359,23 @@ function WorkspaceAccessSection({
   readonly workspaceDraft: WorkspaceDraft | null;
 }) {
   return (
-    <section
-      aria-labelledby="service-workspaces-title"
-      className="service-access-section"
-    >
-      <div className="service-access-heading">
-        <div>
-          <h3 id="service-workspaces-title">Workspaces</h3>
-          <p>Accounting labels for this service.</p>
-        </div>
-        <Button
-          disabled={workspaceDraft !== null || phase === "loading"}
-          onClick={() => {
-            update({
-              workspaceDraft: {
-                apiName: "",
-                displayName: "",
-                createdAt: "",
-              },
-            });
-          }}
-          variant="secondary"
-        >
-          Create workspace
-        </Button>
-      </div>
+    <GraphInspectorSection count={workspaces.length} title="Workspaces">
+      <p>Accounting labels for this service.</p>
+      <Button
+        disabled={workspaceDraft !== null || phase === "loading"}
+        onClick={() => {
+          update({
+            workspaceDraft: {
+              apiName: "",
+              displayName: "",
+              createdAt: "",
+            },
+          });
+        }}
+        variant="secondary"
+      >
+        Create workspace
+      </Button>
       <EditableTable
         ariaLabel={`Workspaces for ${service.display_name}`}
         columns={workspaceColumns}
@@ -475,7 +471,7 @@ function WorkspaceAccessSection({
           return undefined;
         }}
       />
-    </section>
+    </GraphInspectorSection>
   );
 }
 
@@ -515,29 +511,21 @@ function KeyAccessSection({
   readonly update: Dispatch<ServiceAccessPatch>;
 }) {
   return (
-    <section
-      aria-labelledby="service-keys-title"
-      className="service-access-section"
-    >
-      <div className="service-access-heading">
-        <div>
-          <h3 id="service-keys-title">Service API keys</h3>
-          <p>Backend-only bearer credentials with full service authority.</p>
-        </div>
-        <Button
-          disabled={
-            keyDraft !== null || phase === "loading" || keyLifecycleActive
-          }
-          onClick={() => {
-            update({
-              keyDraft: { name: "", createdAt: "", lastUsedAt: "" },
-            });
-          }}
-          variant="secondary"
-        >
-          Create key
-        </Button>
-      </div>
+    <GraphInspectorSection count={keys.length} title="Service API keys">
+      <p>Backend-only bearer credentials with full service authority.</p>
+      <Button
+        disabled={
+          keyDraft !== null || phase === "loading" || keyLifecycleActive
+        }
+        onClick={() => {
+          update({
+            keyDraft: { name: "", createdAt: "", lastUsedAt: "" },
+          });
+        }}
+        variant="secondary"
+      >
+        Create key
+      </Button>
       <EditableTable
         ariaLabel={`Service API keys for ${service.display_name}`}
         columns={keyColumns}
@@ -632,7 +620,7 @@ function KeyAccessSection({
             : undefined
         }
       />
-    </section>
+    </GraphInspectorSection>
   );
 }
 
@@ -794,7 +782,7 @@ function ServiceAccessSections({
   }, [keyDraft, keys]);
 
   return (
-    <div className="service-access-sections">
+    <>
       {keyLifecycle?.phase === "pending" ? (
         <StatePanel kind="loading" title="Creating the service API key">
           Keep this service open. The one-time key will appear here.
@@ -839,7 +827,7 @@ function ServiceAccessSections({
         service={service}
         update={updateAccess}
       />
-    </div>
+    </>
   );
 }
 
@@ -916,22 +904,17 @@ function ServiceInspector({
       title={selected.display_name}
       tone="lime"
     >
-      <dl className="record-facts">
-        <div>
-          <dt>API name</dt>
-          <dd>{selected.api_name}</dd>
-        </div>
-        <div>
-          <dt>Parent</dt>
-          <dd>{selected.parent_service_api_name ?? "None"}</dd>
-        </div>
-        <div>
-          <dt>Created</dt>
-          <dd>
-            <ServiceDateTime value={selected.created_at} />
-          </dd>
-        </div>
-      </dl>
+      <GraphInspectorFacts>
+        <GraphInspectorFact label="API name" value={selected.api_name} />
+        <GraphInspectorFact
+          label="Parent"
+          value={selected.parent_service_api_name ?? "None"}
+        />
+        <GraphInspectorFact
+          label="Created"
+          value={<ServiceDateTime value={selected.created_at} />}
+        />
+      </GraphInspectorFacts>
       <form
         className="service-inspector-form"
         onSubmit={(event) => {
@@ -993,9 +976,10 @@ function ServiceInspector({
         </FormActions>
       </form>
       {mutationError === null ? null : (
-        <InlineAlert title="The service change failed" tone="error">
-          {mutationError} Correct the values and try again.
-        </InlineAlert>
+        <GraphInspectorNotice dynamic tone="error">
+          <strong>The service change failed.</strong> {mutationError} Correct
+          the values and try again.
+        </GraphInspectorNotice>
       )}
       <ServiceAccessSections
         client={client}
@@ -1010,11 +994,7 @@ function ServiceInspector({
         onNotice={onNotice}
         service={selected}
       />
-      <section
-        aria-labelledby="delete-service-title"
-        className="service-delete-section"
-      >
-        <h3 id="delete-service-title">Delete service</h3>
+      <GraphInspectorSection title="Delete service">
         <Button
           disabled={busy || accessPending || hasChildren || keyLifecycleActive}
           onClick={() => {
@@ -1026,11 +1006,11 @@ function ServiceInspector({
           Delete service
         </Button>
         {hasChildren ? (
-          <p className="field-note">
+          <GraphInspectorNotice tone="warning">
             Move or delete each child before you delete this service.
-          </p>
+          </GraphInspectorNotice>
         ) : null}
-      </section>
+      </GraphInspectorSection>
       <ConfirmationDialog
         confirmLabel="Delete service"
         description={
@@ -1115,6 +1095,7 @@ function ServiceGraph({
   layout,
   onCreate,
   onSelect,
+  selectedControlRef,
   selectionLocked,
   selectedService,
   services,
@@ -1123,6 +1104,7 @@ function ServiceGraph({
   readonly layout: TreeLayoutResult;
   readonly onCreate: (trigger: HTMLButtonElement) => void;
   readonly onSelect: (name: string, trigger: HTMLButtonElement) => void;
+  readonly selectedControlRef: RefObject<HTMLElement | null>;
   readonly selectionLocked: boolean;
   readonly selectedService: string;
   readonly services: readonly Service[];
@@ -1149,6 +1131,14 @@ function ServiceGraph({
   const activeNode = resetActiveNode ? initialActive : rovingState.activeNode;
   if (resetActiveNode)
     setRovingState({ selection: selectedService, activeNode: initialActive });
+  useEffect(() => {
+    selectedControlRef.current =
+      [
+        ...globalThis.document.querySelectorAll<HTMLElement>(
+          ".service-management [data-service-api-name]",
+        ),
+      ].find((node) => node.dataset.serviceApiName === selectedService) ?? null;
+  }, [selectedControlRef, selectedService, services]);
   const height = Math.max(layout.height, 220);
   const width = Math.max(layout.width, 260);
 
@@ -1204,6 +1194,7 @@ function ServiceGraph({
     <GraphWorkspace
       aria-label="Services and parent relationships"
       inspector={inspector}
+      selectedControlRef={selectedControlRef}
       toolbar={
         <GraphToolbar
           actions={
@@ -1317,7 +1308,6 @@ function CreateServiceInspector({
       activationKey="create-service"
       closeLabel="Close create service"
       eyebrow="Service tree"
-      initialFocusRef={inputRef}
       {...(busy ? {} : { onClose })}
       returnFocusRef={returnFocusRef}
       title="Create service"
@@ -1366,9 +1356,10 @@ function CreateServiceInspector({
         </FormActions>
       </form>
       {error === null ? null : (
-        <InlineAlert title="The service was not created" tone="error">
-          {error} Correct the values and try again.
-        </InlineAlert>
+        <GraphInspectorNotice dynamic tone="error">
+          <strong>The service was not created.</strong> {error} Correct the
+          values and try again.
+        </GraphInspectorNotice>
       )}
     </GraphInspector>
   );
@@ -1405,6 +1396,7 @@ export function ServiceManagement({
   const accessPendingCountRef = useRef(0);
   const keyLifecycleRef = useRef<KeyCreationLifecycle | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
+  const selectedControlRef = useRef<HTMLElement | null>(null);
   const createInputRef = useRef<HTMLInputElement | null>(null);
   const protectedService = protectedServiceApiName(
     selectedService,
@@ -1638,6 +1630,7 @@ export function ServiceManagement({
           )
             return;
           returnFocusRef.current = trigger;
+          selectedControlRef.current = trigger;
           setShowCreate(false);
           setCreateError(null);
           onSelect(name);
@@ -1647,6 +1640,7 @@ export function ServiceManagement({
           accessPendingCount,
           keyLifecycle,
         )}
+        selectedControlRef={selectedControlRef}
         selectedService={protectedService}
         services={services}
       />

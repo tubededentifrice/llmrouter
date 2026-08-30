@@ -14,7 +14,14 @@ import {
   Button,
   ConfirmationDialog,
   EditableTable,
+  FormActions,
   GraphInspector,
+  GraphInspectorFact,
+  GraphInspectorFacts,
+  GraphInspectorNotice,
+  GraphInspectorRow,
+  GraphInspectorRows,
+  GraphInspectorSection,
   RelationshipGraph,
   StatePanel,
   type EditableTableColumn,
@@ -182,6 +189,7 @@ interface ConfigurationInspectorContext {
   readonly importInput: string;
   readonly importPreview: OpenRouterModelImportPreview | null;
   readonly inspector: Inspector;
+  readonly inspectorError: string | null;
   readonly markAssignmentDirty: () => void;
   readonly mappingByName: ReadonlyMap<string, ProviderModel>;
   readonly modelByName: ReadonlyMap<string, Model>;
@@ -226,6 +234,7 @@ interface ConfigurationInspectorContext {
     value: OpenRouterModelImportPreview | null,
   ) => void;
   readonly setInspector: (value: Inspector | null) => void;
+  readonly setInspectorError: Dispatch<SetStateAction<string | null>>;
   readonly setSelectedNodeId: (value: string | null) => void;
   readonly setSelectedImportProviders: (value: ReadonlySet<string>) => void;
 }
@@ -708,14 +717,11 @@ function providerValue(form: FormData): ProviderModelWrite {
 
 function recordFacts(entries: readonly (readonly [string, string])[]) {
   return (
-    <dl className="configuration-facts">
+    <GraphInspectorFacts>
       {entries.map(([label, value]) => (
-        <div key={label}>
-          <dt>{label}</dt>
-          <dd>{value}</dd>
-        </div>
+        <GraphInspectorFact key={label} label={label} value={value} />
       ))}
-    </dl>
+    </GraphInspectorFacts>
   );
 }
 
@@ -834,6 +840,7 @@ function useConfigurationController({
     setSelectedNodeId,
     resetAssignmentInspector,
   } = useConfigurationViewState();
+  const [inspectorError, setInspectorError] = useState<string | null>(null);
   const [confirmedGlobal, setConfirmedGlobal] =
     useState<ConfirmedGlobalRecords>({
       providers: [],
@@ -1080,8 +1087,13 @@ function useConfigurationController({
     setAssignmentDirty(true);
     onAssignmentDirtyChange(true);
   }
+  function reportInspectorError(message: string) {
+    setInspectorError(message);
+    onNotice("error", message);
+  }
 
   function applyInspectorTransition(transition: InspectorTransition) {
+    setInspectorError(null);
     pendingInspectorTransitionRef.current = null;
     if (transition.trigger !== null)
       returnFocusRef.current = transition.trigger;
@@ -1767,21 +1779,20 @@ function useConfigurationController({
 
   async function saveProvider(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
+    setInspectorError(null);
     const form = new FormData(event.currentTarget);
     const adapter = formValue(form, "adapter") as ProviderAdapter;
     const policy = adapterFieldPolicy[adapter];
     const endpoint = formValue(form, "endpoint");
     const credential = formValue(form, "credential_api_name");
     if (policy.endpoint === "required" && endpoint === "") {
-      onNotice(
-        "error",
+      reportInspectorError(
         "Enter the required custom endpoint in Advanced settings.",
       );
       return;
     }
     if (policy.credential === "required" && credential === "") {
-      onNotice(
-        "error",
+      reportInspectorError(
         "Select an applicable credential before you enable this connection.",
       );
       return;
@@ -1813,7 +1824,7 @@ function useConfigurationController({
       setSelectedNodeId(`provider:${value.api_name}`);
       setInspector({ kind: "provider", apiName: value.api_name });
     } catch (error) {
-      onNotice("error", errorMessage(error));
+      reportInspectorError(errorMessage(error));
     } finally {
       finishPending();
     }
@@ -1821,6 +1832,7 @@ function useConfigurationController({
 
   async function saveCredential(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
+    setInspectorError(null);
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
     const { apiName: name, secret } = credentialFormValue(form);
@@ -1852,7 +1864,7 @@ function useConfigurationController({
     } catch (error) {
       const secretInput = formElement.elements.namedItem("secret");
       if (secretInput instanceof HTMLInputElement) secretInput.value = "";
-      onNotice("error", errorMessage(error));
+      reportInspectorError(errorMessage(error));
     } finally {
       finishPending();
     }
@@ -1860,12 +1872,12 @@ function useConfigurationController({
 
   async function saveModel(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
+    setInspectorError(null);
     let value: ModelWrite;
     try {
       value = modelValue(new FormData(event.currentTarget));
     } catch (error) {
-      onNotice(
-        "error",
+      reportInspectorError(
         error instanceof Error ? error.message : "The model is invalid.",
       );
       return;
@@ -1889,7 +1901,7 @@ function useConfigurationController({
       setSelectedNodeId(`model:${value.api_name}`);
       setInspector({ kind: "model", apiName: value.api_name });
     } catch (error) {
-      onNotice("error", errorMessage(error));
+      reportInspectorError(errorMessage(error));
     } finally {
       finishPending();
     }
@@ -1897,12 +1909,12 @@ function useConfigurationController({
 
   async function saveMapping(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
+    setInspectorError(null);
     let value: ProviderModelWrite;
     try {
       value = providerValue(new FormData(event.currentTarget));
     } catch (error) {
-      onNotice(
-        "error",
+      reportInspectorError(
         error instanceof Error ? error.message : "The mapping is invalid.",
       );
       return;
@@ -1926,7 +1938,7 @@ function useConfigurationController({
       setSelectedNodeId(`mapping:${value.api_name}`);
       setInspector({ kind: "mapping", apiName: value.api_name });
     } catch (error) {
-      onNotice("error", errorMessage(error));
+      reportInspectorError(errorMessage(error));
     } finally {
       finishPending();
     }
@@ -1934,6 +1946,7 @@ function useConfigurationController({
 
   async function saveAssignment(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
+    setInspectorError(null);
     if (selectedService === "") return;
     const form = new FormData(event.currentTarget);
     const name = formValue(form, "api_name");
@@ -1942,7 +1955,7 @@ function useConfigurationController({
     const validation =
       mode === "direct" ? validateAssignmentChain(chain) : null;
     if (validation !== null) {
-      onNotice("error", validation);
+      reportInspectorError(validation);
       return;
     }
     const reasoning = formValue(form, "reasoning_level");
@@ -1997,7 +2010,7 @@ function useConfigurationController({
         serviceApiName: selectedService,
       });
     } catch (error) {
-      onNotice("error", errorMessage(error));
+      reportInspectorError(errorMessage(error));
     } finally {
       finishPending();
     }
@@ -2005,6 +2018,7 @@ function useConfigurationController({
 
   async function previewOpenRouter(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
+    setInspectorError(null);
     if (!beginPending()) return;
     setImportPreview(null);
     setSelectedImportProviders(new Set());
@@ -2019,7 +2033,7 @@ function useConfigurationController({
         ),
       );
     } catch (error) {
-      onNotice("error", errorMessage(error));
+      reportInspectorError(errorMessage(error));
     } finally {
       finishPending();
     }
@@ -2027,6 +2041,7 @@ function useConfigurationController({
 
   async function confirmOpenRouter() {
     if (importPreview === null) return;
+    setInspectorError(null);
     const provider_models = importPreview.provider_options.flatMap((option) =>
       selectedImportProviders.has(option.provider_api_name) && option.selectable
         ? [option.provider_model]
@@ -2069,7 +2084,7 @@ function useConfigurationController({
         "The reviewed model and mappings were created atomically.",
       );
     } catch (error) {
-      onNotice("error", errorMessage(error));
+      reportInspectorError(errorMessage(error));
     } finally {
       finishPending();
     }
@@ -2242,6 +2257,7 @@ function useConfigurationController({
           importInput,
           importPreview,
           inspector,
+          inspectorError,
           finishPending,
           markAssignmentDirty,
           mappingByName,
@@ -2276,6 +2292,7 @@ function useConfigurationController({
           setImportInput,
           setImportPreview,
           setInspector,
+          setInspectorError,
           setSelectedNodeId,
           setSelectedImportProviders,
         } satisfies ConfigurationInspectorContext);
@@ -2577,6 +2594,14 @@ function ConfigurationInspector({
   );
 }
 
+function InspectorWriteError({ message }: { readonly message: string | null }) {
+  return message === null ? null : (
+    <GraphInspectorNotice dynamic tone="error">
+      {message}
+    </GraphInspectorNotice>
+  );
+}
+
 function ProviderInspector({
   context,
 }: {
@@ -2585,6 +2610,7 @@ function ProviderInspector({
   const {
     credentials,
     inspector,
+    inspectorError,
     closeInspector,
     returnFocusRef,
     saveProvider,
@@ -2592,6 +2618,7 @@ function ProviderInspector({
     saveCredential,
     setDeleteTarget,
     setInspector,
+    setInspectorError,
     providerByName,
   } = context;
   const provider =
@@ -2617,14 +2644,48 @@ function ProviderInspector({
           provider,
           new Set(credentials.map((item) => item.api_name)),
         );
+  const actions =
+    provider === undefined ? undefined : (
+      <>
+        <Button
+          disabled={pending}
+          onClick={() => {
+            setInspectorError(null);
+            setInspector({
+              kind: "mapping",
+              apiName: null,
+              providerApiName: provider.api_name,
+            });
+          }}
+          variant="secondary"
+        >
+          Add provider route for this provider
+        </Button>
+        <Button
+          disabled={pending}
+          onClick={() => {
+            setDeleteTarget({
+              kind: "provider",
+              apiName: provider.api_name,
+              impact: `delete provider ${provider.api_name}`,
+            });
+          }}
+          variant="quiet"
+        >
+          Delete provider
+        </Button>
+      </>
+    );
   return (
     <GraphInspector
       activationKey={`${inspector.kind}:${inspector.apiName ?? "new"}`}
+      actions={actions}
       eyebrow="Global provider connection"
       {...(pending ? {} : { onClose: closeInspector })}
       returnFocusRef={returnFocusRef}
       title={provider?.display_name ?? "Add provider"}
     >
+      <InspectorWriteError message={inspectorError} />
       {provider === undefined
         ? null
         : recordFacts([
@@ -2763,8 +2824,7 @@ function ProviderInspector({
           {pending ? "Saving…" : "Review and save provider"}
         </Button>
       </form>
-      <section className="configuration-inspector-section">
-        <h3>Write-only credential</h3>
+      <GraphInspectorSection title="Write-only credential">
         <p>
           Create or replace one encrypted credential. The Router never returns
           its secret.
@@ -2790,60 +2850,31 @@ function ProviderInspector({
             Save credential
           </Button>
         </form>
-        <ul className="configuration-safe-list">
+        <GraphInspectorRows>
           {credentials.map((credential) => (
-            <li key={credential.api_name}>
-              <span>
-                <strong>{credential.api_name}</strong>
-                <small>Fingerprint {credential.fingerprint}</small>
-              </span>
-              <Button
-                disabled={pending}
-                onClick={() => {
-                  setDeleteTarget({
-                    kind: "credential",
-                    apiName: credential.api_name,
-                    impact: `delete credential ${credential.api_name}`,
-                  });
-                }}
-                variant="quiet"
-              >
-                Delete
-              </Button>
-            </li>
+            <GraphInspectorRow
+              actions={
+                <Button
+                  disabled={pending}
+                  onClick={() => {
+                    setDeleteTarget({
+                      kind: "credential",
+                      apiName: credential.api_name,
+                      impact: `delete credential ${credential.api_name}`,
+                    });
+                  }}
+                  variant="quiet"
+                >
+                  Delete
+                </Button>
+              }
+              key={credential.api_name}
+              label={credential.api_name}
+              value={`Fingerprint ${credential.fingerprint}`}
+            />
           ))}
-        </ul>
-      </section>
-      {provider === undefined ? null : (
-        <div className="configuration-inspector-actions">
-          <Button
-            disabled={pending}
-            onClick={() => {
-              setInspector({
-                kind: "mapping",
-                apiName: null,
-                providerApiName: provider.api_name,
-              });
-            }}
-            variant="secondary"
-          >
-            Add provider route for this provider
-          </Button>
-          <Button
-            disabled={pending}
-            onClick={() => {
-              setDeleteTarget({
-                kind: "provider",
-                apiName: provider.api_name,
-                impact: `delete provider ${provider.api_name}`,
-              });
-            }}
-            variant="quiet"
-          >
-            Delete provider
-          </Button>
-        </div>
-      )}
+        </GraphInspectorRows>
+      </GraphInspectorSection>
     </GraphInspector>
   );
 }
@@ -2855,6 +2886,7 @@ function ModelInspector({
 }) {
   const {
     inspector,
+    inspectorError,
     closeInspector,
     returnFocusRef,
     saveModel,
@@ -2877,6 +2909,7 @@ function ModelInspector({
     setInspector,
     beginPending,
     finishPending,
+    setInspectorError,
     setSelectedNodeId,
   } = context;
   const model =
@@ -2884,14 +2917,83 @@ function ModelInspector({
   const applicableMappings = providerModels.filter(
     (item) => item.model_api_name === model?.api_name,
   );
+  const actions =
+    model === undefined ? undefined : (
+      <>
+        <Button
+          disabled={pending}
+          onClick={() => {
+            setInspectorError(null);
+            setInspector({
+              kind: "mapping",
+              apiName: null,
+              modelApiName: model.api_name,
+            });
+          }}
+          variant="secondary"
+        >
+          Add provider route for this model
+        </Button>
+        <Button
+          disabled={pending || applicableMappings.length === 0}
+          onClick={() => {
+            setInspectorError(null);
+            if (!beginPending()) return;
+            void client
+              .synchronizePrices(
+                applicableMappings.map((item) => item.api_name),
+                csrf,
+              )
+              .then(async (result) => {
+                await onRefreshGlobal();
+                const failures = result.items.filter(
+                  (item) => item.outcome === "failed",
+                ).length;
+                const message =
+                  failures === 0
+                    ? "Applicable mapping prices were synchronized."
+                    : `${String(failures)} applicable mapping price synchronizations failed.`;
+                if (failures !== 0) setInspectorError(message);
+                onNotice(failures === 0 ? "success" : "error", message);
+              })
+              .catch((error: unknown) => {
+                const message = errorMessage(error);
+                setInspectorError(message);
+                onNotice("error", message);
+              })
+              .finally(() => {
+                finishPending();
+              });
+          }}
+          variant="secondary"
+        >
+          Synchronize applicable prices
+        </Button>
+        <Button
+          disabled={pending}
+          onClick={() => {
+            setDeleteTarget({
+              kind: "model",
+              apiName: model.api_name,
+              impact: `delete canonical model ${model.api_name}`,
+            });
+          }}
+          variant="quiet"
+        >
+          Delete model
+        </Button>
+      </>
+    );
   return (
     <GraphInspector
       activationKey={`${inspector.kind}:${inspector.apiName ?? "new"}`}
+      actions={actions}
       eyebrow="Global canonical model"
       {...(pending ? {} : { onClose: closeInspector })}
       returnFocusRef={returnFocusRef}
       title={model?.display_name ?? "Add canonical model"}
     >
+      <InspectorWriteError message={inspectorError} />
       {model === undefined
         ? null
         : recordFacts([
@@ -2948,70 +3050,8 @@ function ModelInspector({
           Save canonical model
         </Button>
       </form>
-      {model !== undefined ? (
-        <div className="configuration-inspector-actions">
-          <Button
-            disabled={pending}
-            onClick={() => {
-              setInspector({
-                kind: "mapping",
-                apiName: null,
-                modelApiName: model.api_name,
-              });
-            }}
-            variant="secondary"
-          >
-            Add provider route for this model
-          </Button>
-          <Button
-            disabled={pending || applicableMappings.length === 0}
-            onClick={() => {
-              if (!beginPending()) return;
-              void client
-                .synchronizePrices(
-                  applicableMappings.map((item) => item.api_name),
-                  csrf,
-                )
-                .then(async (result) => {
-                  await onRefreshGlobal();
-                  const failures = result.items.filter(
-                    (item) => item.outcome === "failed",
-                  ).length;
-                  onNotice(
-                    failures === 0 ? "success" : "error",
-                    failures === 0
-                      ? "Applicable mapping prices were synchronized."
-                      : `${String(failures)} applicable mapping price synchronizations failed.`,
-                  );
-                })
-                .catch((error: unknown) => {
-                  onNotice("error", errorMessage(error));
-                })
-                .finally(() => {
-                  finishPending();
-                });
-            }}
-            variant="secondary"
-          >
-            Synchronize applicable prices
-          </Button>
-          <Button
-            disabled={pending}
-            onClick={() => {
-              setDeleteTarget({
-                kind: "model",
-                apiName: model.api_name,
-                impact: `delete canonical model ${model.api_name}`,
-              });
-            }}
-            variant="quiet"
-          >
-            Delete model
-          </Button>
-        </div>
-      ) : (
-        <section className="configuration-inspector-section">
-          <h3>Create from OpenRouter</h3>
+      {model !== undefined ? null : (
+        <GraphInspectorSection title="Create from OpenRouter">
           <form
             className="configuration-form"
             onSubmit={(event) => void previewOpenRouter(event)}
@@ -3047,7 +3087,7 @@ function ModelInspector({
               setSelectedProviders={setSelectedImportProviders}
             />
           )}
-        </section>
+        </GraphInspectorSection>
       )}
     </GraphInspector>
   );
@@ -3162,6 +3202,7 @@ function MappingInspector({
 }) {
   const {
     inspector,
+    inspectorError,
     closeInspector,
     credentials,
     returnFocusRef,
@@ -3175,6 +3216,7 @@ function MappingInspector({
     csrf,
     onRefreshGlobal,
     onNotice,
+    setInspectorError,
     setDeleteTarget,
     mappingByName,
     openPlayground,
@@ -3212,9 +3254,71 @@ function MappingInspector({
           providers,
           models,
         );
+  const actions =
+    mapping === undefined ? undefined : (
+      <>
+        <Button
+          disabled={pending}
+          onClick={() => {
+            setInspectorError(null);
+            if (!beginPending()) return;
+            void client
+              .synchronizePrices([mapping.api_name], csrf)
+              .then(async (result) => {
+                await onRefreshGlobal();
+                const item = result.items[0];
+                const message =
+                  item?.message ??
+                  `Price synchronization: ${item?.outcome ?? "no result"}.`;
+                if (item?.outcome === "failed") setInspectorError(message);
+                onNotice(
+                  item?.outcome === "failed" ? "error" : "success",
+                  message,
+                );
+              })
+              .catch((error: unknown) => {
+                const message = errorMessage(error);
+                setInspectorError(message);
+                onNotice("error", message);
+              })
+              .finally(() => {
+                finishPending();
+              });
+          }}
+          variant="secondary"
+        >
+          Synchronize price
+        </Button>
+        <Button
+          disabled={pending}
+          onClick={() => {
+            setDeleteTarget({
+              kind: "mapping",
+              apiName: mapping.api_name,
+              impact: `delete provider-model mapping ${mapping.api_name}`,
+            });
+          }}
+          variant="quiet"
+        >
+          Delete provider route
+        </Button>
+        {playgroundTarget === null ? null : (
+          <Button
+            disabled={pending}
+            onClick={(event) => {
+              openPlayground(playgroundTarget, event.currentTarget);
+            }}
+            variant="quiet"
+          >
+            Play exact route
+          </Button>
+        )}
+      </>
+    );
   return (
     <GraphInspector
       activationKey={`${inspector.kind}:${inspector.apiName ?? "new"}`}
+      actions={actions}
       eyebrow="Global provider route"
       {...(pending ? {} : { onClose: closeInspector })}
       returnFocusRef={returnFocusRef}
@@ -3225,6 +3329,7 @@ function MappingInspector({
             `Unavailable provider: ${mapping.provider_api_name}`)
       }
     >
+      <InspectorWriteError message={inspectorError} />
       {mapping === undefined
         ? null
         : recordFacts([
@@ -3337,60 +3442,6 @@ function MappingInspector({
           Save provider route
         </Button>
       </form>
-      {mapping === undefined ? null : (
-        <div className="configuration-inspector-actions">
-          <Button
-            disabled={pending}
-            onClick={() => {
-              if (!beginPending()) return;
-              void client
-                .synchronizePrices([mapping.api_name], csrf)
-                .then(async (result) => {
-                  await onRefreshGlobal();
-                  const item = result.items[0];
-                  onNotice(
-                    item?.outcome === "failed" ? "error" : "success",
-                    item?.message ??
-                      `Price synchronization: ${item?.outcome ?? "no result"}.`,
-                  );
-                })
-                .catch((error: unknown) => {
-                  onNotice("error", errorMessage(error));
-                })
-                .finally(() => {
-                  finishPending();
-                });
-            }}
-            variant="secondary"
-          >
-            Synchronize price
-          </Button>
-          <Button
-            disabled={pending}
-            onClick={() => {
-              setDeleteTarget({
-                kind: "mapping",
-                apiName: mapping.api_name,
-                impact: `delete provider-model mapping ${mapping.api_name}`,
-              });
-            }}
-            variant="quiet"
-          >
-            Delete provider route
-          </Button>
-          {playgroundTarget === null ? null : (
-            <Button
-              disabled={pending}
-              onClick={(event) => {
-                openPlayground(playgroundTarget, event.currentTarget);
-              }}
-              variant="quiet"
-            >
-              Play exact route
-            </Button>
-          )}
-        </div>
-      )}
     </GraphInspector>
   );
 }
@@ -3533,6 +3584,7 @@ function AssignmentInspector({
 }) {
   const {
     inspector,
+    inspectorError,
     assignmentByName,
     selectedService,
     services,
@@ -3626,9 +3678,43 @@ function AssignmentInspector({
       ? "inherit"
       : "direct",
   );
+  const hasActions =
+    assignment !== undefined && (isLocal || playgroundTarget !== null);
+  const actions =
+    selectedService === "" || !hasActions ? undefined : (
+      <>
+        {isLocal ? (
+          <Button
+            disabled={pending}
+            onClick={() => {
+              setDeleteTarget({
+                kind: "assignment",
+                apiName: assignment.api_name,
+                impact: `delete local assignment ${assignment.api_name} from ${selectedService}`,
+              });
+            }}
+            variant="quiet"
+          >
+            Delete local definition
+          </Button>
+        ) : null}
+        {playgroundTarget === null ? null : (
+          <Button
+            disabled={pending}
+            onClick={(event) => {
+              openPlayground(playgroundTarget, event.currentTarget);
+            }}
+            variant="quiet"
+          >
+            Play assignment
+          </Button>
+        )}
+      </>
+    );
   return (
     <GraphInspector
       activationKey={`${inspector.kind}:${inspector.apiName ?? "new"}:${String(inspector.rungPosition ?? "header")}`}
+      actions={actions}
       eyebrow={
         selectedService === ""
           ? "Select a service"
@@ -3638,6 +3724,7 @@ function AssignmentInspector({
       returnFocusRef={returnFocusRef}
       title={assignment?.display_name ?? "Add assignment"}
     >
+      <InspectorWriteError message={inspectorError} />
       {selectedService === "" ? (
         <StatePanel kind="empty" title="Service required">
           Select one service. Providers, models, mappings, credentials, and
@@ -3746,34 +3833,39 @@ function AssignmentInspector({
                 </details>
               )}
               {assignment.observed_requirements.length === 0 ? null : (
-                <section className="configuration-inspector-section">
-                  <h3>Observed requirements</h3>
+                <GraphInspectorSection
+                  count={assignment.observed_requirements.length}
+                  title="Observed requirements"
+                >
                   <p>
                     Remove a stale observation only after you confirm its exact
                     assignment impact.
                   </p>
-                  <ul className="configuration-safe-list">
+                  <GraphInspectorRows>
                     {assignment.observed_requirements.map((requirement) => (
-                      <li key={requirement}>
-                        <span>{requirementLabels[requirement]}</span>
-                        <Button
-                          disabled={pending}
-                          onClick={() => {
-                            setDeleteTarget({
-                              kind: "requirement",
-                              apiName: assignment.api_name,
-                              requirement,
-                              impact: `remove observed requirement ${requirement} from assignment ${assignment.api_name} for service ${selectedService}`,
-                            });
-                          }}
-                          variant="quiet"
-                        >
-                          Remove
-                        </Button>
-                      </li>
+                      <GraphInspectorRow
+                        actions={
+                          <Button
+                            disabled={pending}
+                            onClick={() => {
+                              setDeleteTarget({
+                                kind: "requirement",
+                                apiName: assignment.api_name,
+                                requirement,
+                                impact: `remove observed requirement ${requirement} from assignment ${assignment.api_name} for service ${selectedService}`,
+                              });
+                            }}
+                            variant="quiet"
+                          >
+                            Remove
+                          </Button>
+                        }
+                        key={requirement}
+                        label={requirementLabels[requirement]}
+                      />
                     ))}
-                  </ul>
-                </section>
+                  </GraphInspectorRows>
+                </GraphInspectorSection>
               )}
             </>
           )}
@@ -3845,7 +3937,7 @@ function AssignmentInspector({
                 setRows={setChainRows}
               />
             ) : null}
-            <div className="configuration-inspector-actions">
+            <FormActions alignment="start">
               <Button disabled={pending} type="submit">
                 Save selected service assignment
               </Button>
@@ -3865,34 +3957,8 @@ function AssignmentInspector({
                   Discard changes
                 </Button>
               ) : null}
-            </div>
+            </FormActions>
           </form>
-          {assignment !== undefined && isLocal ? (
-            <Button
-              disabled={pending}
-              onClick={() => {
-                setDeleteTarget({
-                  kind: "assignment",
-                  apiName: assignment.api_name,
-                  impact: `delete local assignment ${assignment.api_name} from ${selectedService}`,
-                });
-              }}
-              variant="quiet"
-            >
-              Delete local definition
-            </Button>
-          ) : null}
-          {playgroundTarget === null ? null : (
-            <Button
-              disabled={pending}
-              onClick={(event) => {
-                openPlayground(playgroundTarget, event.currentTarget);
-              }}
-              variant="quiet"
-            >
-              Play assignment
-            </Button>
-          )}
         </>
       )}
     </GraphInspector>
