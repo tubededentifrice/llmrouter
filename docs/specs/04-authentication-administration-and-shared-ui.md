@@ -6,6 +6,7 @@ administration-content, optional relationship-graph toolbar, compact shared
 graph-inspector, shared table-alignment, and selectable configuration-command
 amendments were accepted on 2026-08-29. The contextual child-creation amendment
 and the full-height and edge-to-edge graph-page amendments were accepted on
+2026-08-30. The Overview and no-top-bar shell amendment was accepted on
 2026-08-30.
 
 ## Service API keys
@@ -91,6 +92,132 @@ assignment, and contextual playground administration. Direct application paths
 for removed destinations MAY redirect to the applicable retained board, but
 MUST NOT keep a second configuration page.
 
+### Application shell, Overview, and local controls
+
+The authenticated administration shell MUST keep the persistent left sidebar
+on desktop and narrow desktop layouts. It MUST NOT render a persistent top bar
+on any route. It MUST omit the top-bar region, wrapper, border, shadow, and
+reserved block size in normal, loading, empty, error, and unavailable states.
+The shell MUST NOT contain a global service selector, global refresh action, or
+an empty replacement for either control.
+
+The sidebar MUST contain these destinations in this order: `Overview`,
+`Services`, `LLM configuration`, `Logs`, `Usage & cost`, and `Activity &
+health`. It MUST keep the application identity, administrator identity, and
+account actions. It MAY show non-interactive global-administrator context, but
+it MUST NOT contain a service selection control. The link for the current
+destination MUST use `aria-current="page"` and the shared active state without
+color alone. A service-details route MUST select the `Services` destination.
+
+`/overview` MUST remain the `Overview` dashboard destination and the default
+authenticated landing destination. Its visible `h1` and sidebar label MUST be
+`Overview`, and its document title MUST start with `Overview`. The authenticated
+root path `/` MUST replace its history entry with `/overview` before it renders
+route content. It MUST NOT render a duplicate landing page or add a second Back
+step. A successful sign-in with no explicit valid return target MUST open
+`/overview`. A direct `/overview` request MUST render the same dashboard without
+another redirect.
+
+Overview MUST keep global resource totals, the small health summary, and the
+current provider-model cooldown summary. It MUST NOT require a selected service
+or a primary workflow action. It MUST remain the dashboard composition point
+for later accepted statistics and operational summaries. A later accepted
+dashboard summary MUST extend Overview and MUST NOT require a second overview
+destination.
+
+Each route MUST own the service context and refresh behavior that it uses. A
+route-local control MUST load or change only that route's context and data. The
+shell MUST NOT own, change, or expose a shared selected-service state. Each
+route MUST determine applicable service context from its own location and
+control. Sidebar and phone-navigation links MUST NOT copy a service query to a
+route that does not use it. Browser Back and Forward MAY restore context that
+belongs to the restored route. The routes MUST use this ownership:
+
+| Route | Service context | Refresh ownership |
+| --- | --- | --- |
+| `/overview` | None | `Refresh overview` in the page-heading action region reloads only dashboard summaries. |
+| `/services` | The selected graph node and its route-local `service` query | `Refresh services` in the graph-wide action region reloads the service tree. |
+| `/services/{serviceApiName}` | The route service; no selector | The page and its sections own their existing load, retry, and refresh actions. |
+| `/configuration` | `Service context` in the graph toolbar; its empty value is `All services` | `Refresh configuration` in the graph-wide action region reloads the global catalog and the selected service's assignments. |
+| `/logs` | Its local Logs filters only; no general service context | `Refresh Logs` and the existing Logs retry actions remain in the Logs view. |
+| `/statistics` | Its local statistics service filter; no general service context | Submitting its local statistics filters reruns the report; no separate shell refresh exists. |
+| `/operations` | None | `Refresh operations` in the page-heading action region reloads the health, retention, cooldown, and activity data; section retry and activity actions remain local. |
+
+The configuration `Service context` value MUST use the route-local
+`/configuration?service={serviceApiName}` location state. `All services` MUST
+remove that query value and show the no-selected-service assignment state. The
+Services selection MUST use the same query through its Services route location
+rules. Navigation between Services and configuration MAY carry one valid
+`service` query. The destination's own graph selection or `Service context`
+control MUST show and own that value. This carried location value MUST NOT
+create a shell control or apply to Overview, Logs, statistics, or operations.
+
+A local refresh action MUST preserve applicable confirmed route context,
+filters, graph search, selection, and focus. While pending, it MUST identify
+its busy state, prevent a duplicate request, and keep focus on the action. A
+failed refresh MUST keep confirmed data, identify it as stale when applicable,
+show a corrective route-local error, and permit retry. A successful refresh
+MUST update only current route data. A response for a route or service context
+that is no longer active MUST NOT change visible state or focus.
+
+Application navigation MUST move focus to the destination `h1`. The two graph
+pages MUST use their programmatic heading and focus rule. Other routes MUST use
+their visible `h1`. The heading MUST be a programmatic focus target and MUST NOT
+be a normal Tab stop. On desktop, normal Tab order MUST pass through the skip
+link, sidebar destinations and account actions, and the current route's local
+controls in rendered order. It MUST NOT include a removed top-bar tab stop.
+After route-entry focus moves to the heading, the next Tab MUST move to the
+first route-local control or to the next application control when the route has
+none. Activating a sidebar destination MUST push one history entry and move
+focus to the destination heading after the route is ready to identify itself.
+
+On a phone, the left sidebar MUST use the shared responsive replacement by the
+persistent bottom navigation. That navigation MUST keep `Overview` as its first
+destination and use the same current-page state. The shell MUST NOT add a phone
+top bar. The route content MUST start at the dynamic viewport block-start edge
+and end before the bottom navigation and its safe-area inset. Activating a
+phone destination MUST close any open navigation surface, change the route,
+and move focus to the destination heading. At 200% text size, local context and
+refresh controls MUST wrap in their route-owned region without document-level
+horizontal overflow.
+
+Once the administrator session is known, route loading and failure MUST keep
+the navigation shell and current-route heading available. The route MUST show
+its labelled loading, partial, stale, or corrective failure state in its own
+content region. Overview initial loading MUST say `Loading Overview.` An
+initial Overview failure MUST say `Overview is unavailable.` and provide
+`Retry Overview`. A partial Overview failure MUST keep confirmed summary
+regions, identify each failed summary, and provide a local retry. The shell and
+another route MUST NOT show the missing global refresh action as recovery.
+
+Focused authenticated browser tests MUST cover `/` and `/overview` at `1440 ×
+1000` desktop, `1100 × 800` narrow desktop, and `390 × 844` phone sizes with
+device scale factor 1. They MUST prove the replace redirect, no extra Back
+entry, default post-sign-in landing, exact heading and document title, active
+Overview navigation state, retained totals, health and cooldown summaries, and
+normal, loading, partial, stale, initial-failure, retry, and refresh states.
+
+At each size, tests MUST visit every retained route and a service-details route
+and prove that no top-bar element, content, border, shadow, tab stop, or reserved
+block size exists. They MUST prove that no global service selector or refresh
+action exists; each named local control is in its required route region; route
+context follows the exact carry and removal rules through sidebar, phone, Back,
+and Forward navigation; and stale responses do not change the active route.
+Keyboard tests MUST verify the
+exact desktop and phone navigation order, current-page state, route-heading
+focus, local-control order, pending duplicate prevention, focus retention, and
+corrective retry. Desktop and narrow measurements MUST prove that the sidebar
+starts at the dynamic viewport block-start edge, reaches its block-end edge,
+and ends at the `main` inline-start edge. Phone measurements MUST prove that the
+left sidebar is absent, the `main` region starts at both viewport start edges,
+and the bottom navigation reserves its exact block size and safe area.
+Graph-page measurement tests MUST prove that removal of the top bar makes each
+desktop and narrow graph page start at the dynamic viewport block-start edge
+and adds no replacement row, while all accepted full-height, edge-to-edge,
+inspector, local-scroll, safe-area, and no-document-overflow rules still pass.
+Each normal and conditional surface MUST pass Axe and have a reviewed
+screenshot at desktop, narrow, and phone size.
+
 ### Administration content
 
 Visible static helper text includes page and section descriptions, field
@@ -125,7 +252,7 @@ The content inventory MUST cover these retained routes:
 
 | Path                         | View                           | Content that the inventory MUST check                                    |
 | ---------------------------- | ------------------------------ | ------------------------------------------------------------------------ |
-| `/overview`                  | overview                       | totals, health, and cooldown summaries                                   |
+| `/overview`                  | overview dashboard             | totals, health, cooldown summaries, and local refresh states              |
 | `/services`                  | service administration         | the service tree and compact and create inspectors                       |
 | `/services/{serviceApiName}` | service-details administration | the heading, facts, form, workspace, key, delete, and conditional states |
 | `/configuration`             | configuration administration   | all three board columns, inspectors, forms, and playground entry points  |
@@ -183,12 +310,13 @@ page heading, `main` label, and route focus entry.
 Each graph page MUST fill the dynamic viewport block size that remains after
 persistent shell navigation. It MUST use a definite block size, not only a
 minimum block size. An inline sidebar MUST reduce the available inline size
-but MUST NOT reduce the available block size. A persistent block-start shell
-control MUST reduce the available block size by its rendered block size. On a
-phone, the persistent bottom navigation and its reserved safe-area inset MUST
-reduce the available block size. The page MUST use the dynamic viewport so a
-change to mobile browser chrome recalculates the available size. It MUST NOT
-use a fixed `100vh` substitute.
+but MUST NOT reduce the available block size. Because the shell has no top bar
+or other persistent block-start control, the graph page MUST start at the
+dynamic viewport block-start edge on desktop, narrow desktop, and phone
+layouts. On a phone, the persistent bottom navigation and its reserved
+safe-area inset MUST reduce the available block size. The page MUST use the
+dynamic viewport so a change to mobile browser chrome recalculates the
+available size. It MUST NOT use a fixed `100vh` substitute.
 
 The graph-page layout MUST use rows for programmatic context, graph-wide
 controls, and the graph workspace. The programmatic context row MUST occupy no
@@ -235,8 +363,8 @@ Focused authenticated browser tests MUST run at `1440 × 1000` desktop, `1100
 factor 1. For each route and size, a measurement test MUST verify all of these
 results within one CSS pixel:
 
-1. The graph page's block-start edge equals the available `main` content edge
-   after any block-start shell navigation.
+1. The graph page's block-start edge equals the dynamic viewport block-start
+   edge and has no shell control or reserved space above it.
 2. Its block-end edge equals the dynamic viewport edge on desktop and narrow
    layouts, or the block-start edge of the bottom navigation on a phone.
 3. Its measured block size equals the difference between those two edges.
