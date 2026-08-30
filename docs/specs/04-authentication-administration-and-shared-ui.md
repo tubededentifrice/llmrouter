@@ -5,7 +5,8 @@ playground amendments were accepted on 2026-08-24. The fixed compound-board,
 administration-content, optional relationship-graph toolbar, compact shared
 graph-inspector, shared table-alignment, and selectable configuration-command
 amendments were accepted on 2026-08-29. The contextual child-creation amendment
-and the full-height graph-page amendment were accepted on 2026-08-30.
+and the full-height and edge-to-edge graph-page amendments were accepted on
+2026-08-30.
 
 ## Service API keys
 
@@ -229,10 +230,10 @@ successful load. The same labelled local graph viewport MUST remain present in
 each state. State content that does not fit MUST scroll only in that viewport.
 It MUST NOT make the graph workspace or document scroll.
 
-Focused authenticated browser tests MUST run at `1440 × 1000` desktop, `900 ×
-800` narrow, and `390 × 844` phone CSS-pixel viewports with device scale factor
-1. For each route and size, a measurement test MUST verify all of these results
-within one CSS pixel:
+Focused authenticated browser tests MUST run at `1440 × 1000` desktop, `1100
+× 800` narrow, and `390 × 844` phone CSS-pixel viewports with device scale
+factor 1. For each route and size, a measurement test MUST verify all of these
+results within one CSS pixel:
 
 1. The graph page's block-start edge equals the available `main` content edge
    after any block-start shell navigation.
@@ -263,17 +264,132 @@ reachable through local scrolling without document overflow. Each normal and
 conditional surface MUST pass Axe and have a reviewed screenshot at its
 applicable desktop, narrow, and phone size.
 
+### Edge-to-edge graph stages
+
+The `/services` and `/configuration` page surfaces MUST use the edge-to-edge
+mode. Each graph stage and its labelled local scrolling viewport MUST have no
+page gutter. Before a split inspector takes its space, the graph stage's
+inline-start and inline-end border edges MUST equal the `main` content box
+edges. On desktop, this area is all space beside the sidebar. On a phone, it is
+the complete dynamic viewport width.
+
+Graph-wide controls MUST use one shared responsive inset. This rule applies to
+toolbars, searches, filters, service-context controls, graph-wide create
+controls, refresh controls, primary actions, and state actions. The inset MUST
+be `var(--od-page-gutter)` at each inline edge. On a device with a non-zero
+inline safe area, each side MUST instead use the larger of
+`var(--od-page-gutter)` and that physical side's safe-area inset. Thus, the
+left content edge MUST use
+`max(var(--od-page-gutter), env(safe-area-inset-left))`, and the right content
+edge MUST use
+`max(var(--od-page-gutter), env(safe-area-inset-right))`. The Router MUST NOT
+define another graph-page inset, control gutter, maximum width, or
+negative-margin compensation. A control-row background or separator MAY span
+the complete stage width, but its control content MUST use this inset.
+
+The graph viewport MUST start immediately after the graph-wide control rows. It
+MUST extend to the graph-region inline edges and the graph-stage block-end edge.
+It MUST NOT inherit the control inset. Graph layout padding that places nodes
+and connectors inside the scrollable canvas remains part of the graph content.
+It MUST scroll with that content and MUST NOT act as a page gutter. Loading,
+error, retry, and allowed empty-state content inside the graph viewport MUST use
+the same shared responsive inset without reducing the viewport's outer width.
+
+The stage and graph viewport MAY use block-start, block-end, or internal
+separator borders. A border MUST use border-box sizing and MUST NOT reduce the
+edge-to-edge outer width or cause document overflow. At an edge that meets the
+`main` content box, the stage and viewport MUST NOT use an outer inline margin,
+outer inline border radius, or shadow that reserves space. Graph nodes, cards,
+internal panels, overlay inspectors, and bottom sheets MAY keep their shared
+borders, radii, and shadows.
+
+In split mode, the inspector MUST occupy the shared exact `21rem` at the
+stage's inline-end edge. It MUST NOT receive a page gutter or control inset.
+The remaining graph region MUST start at the `main` inline-start edge and end
+at the inspector boundary. Its toolbar content MUST use the shared responsive
+inset within that remaining region, and its local graph viewport MUST use the
+complete remaining region width. The separator between the graph and inspector
+MAY use one border that is included in the inspector's `21rem` border box.
+
+In overlay mode, the graph stage, graph-wide control rows, and local viewport
+MUST keep their complete edge-to-edge width. The inspector MUST keep the shared
+exact `21rem` width and `0.875rem` inline-end inset from the stage edge. The
+control inset MUST NOT be added to that overlay inset. The shared reachability
+rule MUST account for the overlay without changing the stage, viewport, or
+document width.
+
+In phone bottom-sheet mode, the graph stage and local viewport MUST remain the
+complete dynamic viewport width above the reserved bottom navigation and its
+safe area. Graph-wide control content MUST use the responsive safe-area inset
+above. The bottom sheet MUST keep its shared `0.75rem` browser-viewport insets;
+it MUST NOT align to or add the graph control inset. The backdrop MUST cover
+the complete browser viewport. Neither the sheet nor the bottom navigation MAY
+add an inline page gutter or change the graph-page width.
+
+OpenDLE UI MUST own the host-neutral application of the shared control inset
+inside `GraphToolbar`, `GraphWorkspace`, and `RelationshipGraph`. The Router
+MUST select the edge-to-edge page composition and supply its domain controls.
+It MUST NOT copy the shared control-row layout or add Router-only toolbar,
+search, filter, action, safe-area, or inspector alignment rules. The shared
+edge behavior MUST apply when these components are inside a `PageSurface` whose
+`edgeToEdge` value is true. A false or omitted `edgeToEdge` value MUST keep the
+existing shared non-edge geometry.
+
+The edge-to-edge width rule and the full-height rule MUST apply together. A
+graph-wide control that wraps MUST use more of the control row's block size and
+leave less block size for the local graph viewport. It MUST NOT widen the
+document, add document scroll, add a page gutter to the graph viewport, or
+increase the full-height page. At 200% text size, controls and actions MUST wrap
+inside the shared inset, and graph content MUST remain reachable through its
+local scroll.
+
+Focused authenticated measurement tests MUST use the full-height test sizes:
+`1440 × 1000` wide desktop, `1100 × 800` narrow desktop, and `390 × 844`
+phone, with device scale factor 1. Within one CSS pixel, both graph pages MUST
+prove:
+
+1. The stage border box starts at the `main` inline-start edge and ends at the
+   `main` inline-end edge before split-inspector allocation.
+2. The local viewport has zero page-gutter offset from its graph-region inline
+   edges.
+3. Each graph-wide control content edge equals its graph-region edge plus the
+   computed shared responsive inset for that side.
+4. No graph-page wrapper, stage, viewport, or state surface has a second inset,
+   smaller maximum width, negative-margin compensation, or space-reserving
+   outer inline radius.
+5. The document scrolling element's dimensions do not exceed its client
+   dimensions because of the edge-to-edge layout.
+
+Wide tests with a split inspector MUST verify the exact `21rem` inline-end
+inspector border box, its included separator, the remaining edge-to-edge graph
+region, and the control inset inside that region. Narrow tests with an overlay
+inspector MUST verify its exact `21rem` width and `0.875rem` inset from the
+stage edge, with no added control inset and no change to the stage or viewport
+width. Phone tests MUST verify a stage and viewport from inline coordinate zero
+through the dynamic viewport width, control insets with zero and non-zero safe
+areas, the independent `0.75rem` sheet insets, complete backdrop coverage, and
+the reserved bottom-navigation area. Tests MUST repeat width measurements for
+loading, error, retry, allowed empty, oversized, and 200%-text fixtures. They
+MUST verify fixed graph-wide controls, two-axis local graph scrolling, no
+document overflow, Axe results, and reviewed screenshots at all three sizes.
+Focused OpenDLE UI tests MUST cover true, false, and omitted `PageSurface`
+`edgeToEdge` values with `GraphToolbar`, `GraphWorkspace`, and
+`RelationshipGraph`. They MUST prove the shared inset, zero graph-viewport
+page gutter, safe-area maximum, wrapped controls, unchanged non-edge geometry,
+and no local consumer override.
+
 The application shell and each retained page MUST use the complete available
-width after the sidebar. They MUST use one responsive gutter system for page
-headings, filters, panels, graphs, and tables. A page MUST NOT use one maximum
-width for its controls and another width for its result, and the page container
-MUST NOT set a smaller maximum width. On a phone, the shell MUST use the
-complete viewport width with the phone gutter and MUST prevent page-level
-horizontal overflow. A graph or dense data region MAY scroll in its own
-labelled viewport when its content cannot reflow. Its heading, filters, and
-graph-wide primary actions MUST remain outside that scrolling region. A
-contextual action in a graph's roving focus group MUST stay with its selected
-control and MAY be inside the labelled graph viewport.
+width after the sidebar. Retained pages other than the two graph pages MUST use
+one responsive gutter system for page headings, filters, panels, graphs, and
+tables. A page MUST NOT use one maximum width for its controls and another
+width for its result, and the page container MUST NOT set a smaller maximum
+width. The two graph pages MUST use the edge-to-edge stage and shared control
+inset above. On a phone, the shell MUST use the complete viewport width and
+MUST prevent page-level horizontal overflow. A graph or dense data region MAY
+scroll in its own labelled viewport when its content cannot reflow. Its
+heading, filters, and graph-wide primary actions MUST remain outside that
+scrolling region. A contextual action in a graph's roving focus group MUST stay
+with its selected control and MAY be inside the labelled graph viewport.
 
 The service tree MUST use nodes and inspectors as its graph interaction
 surface. Service management outside the graph MUST follow
