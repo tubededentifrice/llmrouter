@@ -159,12 +159,13 @@ state message, corrective error, or accessible name.
 
 Each graph page MUST contain one programmatic `h1` that does not occupy layout
 space. Its exact text MUST be `Services` for `/services` and `LLM
-configuration` for `/configuration`. That heading MUST label the page's `main`
-region. The document title MUST start with the same text. The labelled local
-graph viewport MUST have the exact accessible name `Services and parent
-relationships` on `/services` and `LLM configuration relationships` on
-`/configuration`. A toolbar or graph MUST NOT repeat either page name as a
-visible title.
+configuration` for `/configuration`. It MUST stay in the accessibility tree
+and MUST NOT use `hidden`, `display: none`, `visibility: hidden`, or
+`aria-hidden`. That heading MUST label the page's `main` region. The document
+title MUST start with the same text. The labelled local graph viewport MUST
+have the exact accessible name `Services and parent relationships` on
+`/services` and `LLM configuration relationships` on `/configuration`. A
+toolbar or graph MUST NOT repeat either page name as a visible title.
 
 When application navigation or an initial direct load opens either graph page,
 focus MUST move to its programmatic `h1`. The heading MUST have
@@ -172,10 +173,11 @@ focus MUST move to its programmatic `h1`. The heading MUST have
 to the first applicable graph-page control. This control MUST be the first
 toolbar, retry, or empty-state control in rendered order, or the graph's one
 active roving tab stop when no earlier control exists. A browser-history
-restoration that has a valid saved graph or inspector focus target MUST use the
-applicable graph or inspector restoration rule instead. Loading, error, and
-empty states MUST keep the same page heading, `main` label, and route focus
-entry.
+restoration that has a valid graph or inspector focus target MUST use the
+applicable graph or inspector restoration rule instead. When a loading state
+has no graph-page control, the next Tab MUST move to the next application
+control in document order. Loading, error, and empty states MUST keep the same
+page heading, `main` label, and route focus entry.
 
 Each graph page MUST fill the dynamic viewport block size that remains after
 persistent shell navigation. It MUST use a definite block size, not only a
@@ -223,9 +225,9 @@ keep the retry action in the normal page Tab order. An allowed empty state MUST
 use the same workspace, identify what is empty, and keep each permitted
 empty-state action reachable. The Services page MUST use the permanent-root
 loading and failure rules and MUST NOT show a normal empty state after a
-successful load. State content that does not fit MUST scroll in the graph
-workspace or its labelled local viewport. It MUST NOT increase the document
-block size.
+successful load. The same labelled local graph viewport MUST remain present in
+each state. State content that does not fit MUST scroll only in that viewport.
+It MUST NOT make the graph workspace or document scroll.
 
 Focused authenticated browser tests MUST run at `1440 × 1000` desktop, `900 ×
 800` narrow, and `390 × 844` phone CSS-pixel viewports with device scale factor
@@ -250,12 +252,16 @@ roving tab stop. An oversized fixture MUST increase both local graph overflow
 dimensions, allow both local scroll positions to change, keep graph-wide
 controls fixed, and leave the document dimensions unchanged. Tests MUST repeat
 the measurements for normal, loading, corrective-error, retry, and allowed
-empty states and with split, overlay, and bottom-sheet inspectors open. The
-phone tests MUST also verify dynamic-viewport resize, safe-area reservation,
-bottom-navigation stacking and inactive state, sheet focus containment, and
-no covered active control. Each normal and conditional surface MUST pass Axe
-and have a reviewed screenshot at its applicable desktop, narrow, and phone
-size.
+empty states when applicable. They MUST also repeat the normal-state
+measurements with the applicable split, overlay, or bottom-sheet inspector
+open. The phone tests MUST verify dynamic-viewport resize, safe-area
+reservation, bottom-navigation stacking and inactive state, sheet focus
+containment, and no covered active control. The safe-area test MUST use a
+non-zero reserved inset. At 200% text size, focused tests MUST verify that
+graph-wide controls, state actions, graph content, and inspector controls stay
+reachable through local scrolling without document overflow. Each normal and
+conditional surface MUST pass Axe and have a reviewed screenshot at its
+applicable desktop, narrow, and phone size.
 
 The application shell and each retained page MUST use the complete available
 width after the sidebar. They MUST use one responsive gutter system for page
