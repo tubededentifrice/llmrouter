@@ -5,7 +5,7 @@ playground amendments were accepted on 2026-08-24. The fixed compound-board,
 administration-content, optional relationship-graph toolbar, compact shared
 graph-inspector, shared table-alignment, and selectable configuration-command
 amendments were accepted on 2026-08-29. The contextual child-creation amendment
-was accepted on 2026-08-30.
+and the full-height graph-page amendment were accepted on 2026-08-30.
 
 ## Service API keys
 
@@ -144,9 +144,118 @@ names. Each route MUST pass Axe at both widths and MUST have a reviewed
 snapshot at both widths. Focused snapshots MUST also cover each conditional
 state that is not present in the route's normal snapshot.
 
-This content rule MUST NOT remove or hide a retained page heading. A change to
-the height or visibility of a graph page heading needs its own accepted
-requirement.
+This content rule MUST NOT remove or hide a retained page heading except for
+the two graph-page exceptions below. The other retained pages MUST keep their
+visible page headings.
+
+### Full-height graph pages
+
+The `/services` and `/configuration` pages MUST NOT render a visible page
+heading block. They MUST remove the complete visible eyebrow, title, and
+subtitle or description block. They MUST NOT replace it with another visible
+page title, graph title, introduction, or equivalent vertical spacer. This
+rule does not remove an inspector heading, column heading, control label,
+state message, corrective error, or accessible name.
+
+Each graph page MUST contain one programmatic `h1` that does not occupy layout
+space. Its exact text MUST be `Services` for `/services` and `LLM
+configuration` for `/configuration`. That heading MUST label the page's `main`
+region. The document title MUST start with the same text. The labelled local
+graph viewport MUST have the exact accessible name `Services and parent
+relationships` on `/services` and `LLM configuration relationships` on
+`/configuration`. A toolbar or graph MUST NOT repeat either page name as a
+visible title.
+
+When application navigation or an initial direct load opens either graph page,
+focus MUST move to its programmatic `h1`. The heading MUST have
+`tabindex="-1"` and MUST NOT enter the normal Tab order. The next Tab MUST move
+to the first applicable graph-page control. This control MUST be the first
+toolbar, retry, or empty-state control in rendered order, or the graph's one
+active roving tab stop when no earlier control exists. A browser-history
+restoration that has a valid saved graph or inspector focus target MUST use the
+applicable graph or inspector restoration rule instead. Loading, error, and
+empty states MUST keep the same page heading, `main` label, and route focus
+entry.
+
+Each graph page MUST fill the dynamic viewport block size that remains after
+persistent shell navigation. It MUST use a definite block size, not only a
+minimum block size. An inline sidebar MUST reduce the available inline size
+but MUST NOT reduce the available block size. A persistent block-start shell
+control MUST reduce the available block size by its rendered block size. On a
+phone, the persistent bottom navigation and its reserved safe-area inset MUST
+reduce the available block size. The page MUST use the dynamic viewport so a
+change to mobile browser chrome recalculates the available size. It MUST NOT
+use a fixed `100vh` substitute.
+
+The graph-page layout MUST use rows for programmatic context, graph-wide
+controls, and the graph workspace. The programmatic context row MUST occupy no
+layout space. The control row MUST use only its rendered block size. The graph
+workspace MUST receive all remaining block size and MUST use `min-block-size:
+0` or equivalent overflow containment. The toolbar, search, filters, service
+context controls, create controls, refresh controls, and other graph-wide
+actions MUST remain outside the labelled scrolling graph viewport. A
+contextual action in the graph roving focus group MUST remain in that viewport
+with its selected graph control.
+
+The document MUST NOT gain horizontal or vertical scroll only because of a
+graph page, graph content, graph-wide control, or open graph inspector. Graph
+content that is wider or taller than the remaining stage MUST scroll only in
+the labelled local graph viewport. The viewport MUST use both horizontal and
+vertical local overflow when required. Its complete content MUST remain
+reachable. The toolbar and other graph-wide controls MUST remain visible when
+that viewport scrolls. Opening, closing, or changing the mode of an inspector
+MUST NOT change the graph-page block size or make the document scroll.
+
+On desktop and narrow layouts, split and overlay inspectors MUST stay inside
+the full-height graph workspace and follow the shared inspector rules. On a
+phone, the graph page MUST end at the block-start edge of the persistent bottom
+navigation. It MUST NOT extend behind that navigation or into its reserved
+safe-area inset. A bottom-sheet inspector and its backdrop MUST keep the shared
+viewport insets and stacking rules. They MUST be above the bottom navigation,
+and that navigation MUST be inactive while the sheet is open. The mobile
+navigation, safe-area inset, sheet, or backdrop MUST NOT cover a graph-page
+control that remains active.
+
+A graph loading state MUST use the full remaining graph workspace, identify
+the graph that is loading, and keep its live status available. An error state
+MUST use the same workspace, show its corrective error and retry action, and
+keep the retry action in the normal page Tab order. An allowed empty state MUST
+use the same workspace, identify what is empty, and keep each permitted
+empty-state action reachable. The Services page MUST use the permanent-root
+loading and failure rules and MUST NOT show a normal empty state after a
+successful load. State content that does not fit MUST scroll in the graph
+workspace or its labelled local viewport. It MUST NOT increase the document
+block size.
+
+Focused authenticated browser tests MUST run at `1440 × 1000` desktop, `900 ×
+800` narrow, and `390 × 844` phone CSS-pixel viewports with device scale factor
+1. For each route and size, a measurement test MUST verify all of these results
+within one CSS pixel:
+
+1. The graph page's block-start edge equals the available `main` content edge
+   after any block-start shell navigation.
+2. Its block-end edge equals the dynamic viewport edge on desktop and narrow
+   layouts, or the block-start edge of the bottom navigation on a phone.
+3. Its measured block size equals the difference between those two edges.
+4. The labelled graph viewport receives the space that remains after the
+   rendered graph-wide controls and shared gaps.
+5. The document scrolling element's `scrollWidth` and `scrollHeight` do not
+   exceed its client dimensions because of the graph-page layout.
+
+The tests MUST verify that the complete visible eyebrow, title, and subtitle
+blocks are absent and reserve zero space. They MUST verify the exact
+programmatic headings, document-title prefixes, `main` labels, graph names,
+route-entry focus, Tab entry, toolbar access, action access, and one graph
+roving tab stop. An oversized fixture MUST increase both local graph overflow
+dimensions, allow both local scroll positions to change, keep graph-wide
+controls fixed, and leave the document dimensions unchanged. Tests MUST repeat
+the measurements for normal, loading, corrective-error, retry, and allowed
+empty states and with split, overlay, and bottom-sheet inspectors open. The
+phone tests MUST also verify dynamic-viewport resize, safe-area reservation,
+bottom-navigation stacking and inactive state, sheet focus containment, and
+no covered active control. Each normal and conditional surface MUST pass Axe
+and have a reviewed screenshot at its applicable desktop, narrow, and phone
+size.
 
 The application shell and each retained page MUST use the complete available
 width after the sidebar. They MUST use one responsive gutter system for page
@@ -166,10 +275,11 @@ surface. Service management outside the graph MUST follow
 The three-column configuration board MUST use compound cards, nested rows, and
 inspectors as its complete interaction surface. A graph or board
 toolbar MUST NOT show a visible surface title such as `Service tree` or repeat
-the page title. The page heading and the graph or board accessible name MUST
-provide the necessary context. A tree that is smaller than its viewport MUST
-be centered in the available graph stage. A larger tree MUST keep its layout
-origin and MUST be reachable with bounded graph-viewport scrolling.
+the page title. The programmatic page name and the graph or board accessible
+name MUST provide the necessary context. A tree that is smaller than its
+viewport MUST be centered in the available graph stage. A larger tree MUST
+keep its layout origin and MUST be reachable with bounded graph-viewport
+scrolling.
 
 Each actionable node, compound-card header, nested row, and assignment rung
 MUST be a semantic control in the browser accessibility tree. Its accessible
@@ -556,8 +666,8 @@ The graph MUST render its search control in the center slot. The host MAY put
 context in `leading` and controls in `actions`. Host content MUST NOT replace,
 remove, or add content to the center slot. Neither `RelationshipGraph` nor a
 host slot MAY add a visible title for the graph surface, or a heading that
-repeats the page title. The page heading and the graph accessible name MUST
-continue to give the graph context.
+repeats the page title. The programmatic page name and the graph accessible
+name MUST continue to give the graph context.
 
 The graph MUST own the center search rendering and style. When `searchQuery`
 is defined, that value alone MUST control the rendered input and graph result.
