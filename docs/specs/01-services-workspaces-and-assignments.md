@@ -3,7 +3,8 @@
 Status: Accepted on 2026-08-23. The graph-first UI amendment was accepted on
 2026-08-24. The service-details and compact-inspector amendment was accepted on
 2026-08-29. The empty-chain and assignment-deletion amendment was accepted on
-2026-08-29. The permanent-root-service amendment was accepted on 2026-08-30.
+2026-08-29. The permanent-root-service and contextual child-creation
+amendments were accepted on 2026-08-30.
 
 ## Names and identity
 
@@ -172,6 +173,89 @@ inspector. The administrator MUST be able to tap the inspector's `Open service
 details` action to navigate. The application MUST NOT require a double-tap,
 long press, or pointer-only gesture.
 
+### Contextual child-service creation
+
+The service graph MUST NOT put a create-service action in its toolbar or in
+another graph-wide action area. When one service is selected, the graph MUST
+show one visible button labelled `+ New service` directly below that selected
+service node. It MUST NOT show the button below another node. The button's
+accessible name MUST identify the selected service as the parent. Selecting a
+different service MUST move the button below the newly selected node without
+moving focus away from that node.
+
+A primary-button click, pointer tap, or touch tap on `+ New service` MUST open
+the create-service inspector. Enter or Space on the focused button MUST open
+the same inspector. The button MUST participate in the service graph's roving
+focus group and MUST NOT add a second graph Tab stop. Down from the selected
+service node MUST move focus to its `+ New service` button. Up or Left from the
+button MUST return focus to that selected node. Down from the button MUST move
+focus to the next visible service node when one exists and otherwise MUST keep
+focus on the button. Right from the button MUST keep focus on it. Home and End
+from the button MUST move focus to the first and last visible service node.
+These rules replace the general service-tree arrow rule only for movement to
+or from this contextual button.
+
+Tab MUST still enter the graph at the selected service node, or at the first
+service node when there is no selection. The next Tab from either a service
+node or the contextual button MUST leave the graph. When inspector closure
+returns focus to `+ New service`, that button MAY temporarily be the graph's
+one active roving Tab stop. When focus next leaves the graph, the selected
+service node MUST again become the graph's active Tab stop. Pointer, touch, and
+keyboard use MUST produce the same parent and create form.
+
+Opening the create-service inspector MUST capture the selected service as the
+required parent for that create attempt. The inspector MUST use
+`GraphInspector`. Its heading MUST be `New service`, and it MUST show the
+captured parent's display name and `apiName` as read-only context. Its form
+MUST contain only `Display name` and `API name` fields and one primary `Create
+service` action. It MUST NOT contain a parent picker, a null-parent option, or
+another way to change the captured parent. The create request MUST send the
+captured service `apiName` as `parent_service_api_name`.
+
+Opening the inspector MUST move focus to its heading, and the next Tab MUST
+move to `Display name`. Escape, the inspector close action, or an explicit
+cancel action MUST cancel creation, discard the unsaved non-secret values,
+keep the parent service selected, and return focus to its `+ New service`
+button. Cancellation MUST NOT send a create request. While the create request
+is pending, the inspector MUST show `Creating service`, prevent a duplicate
+submit, disable its fields and actions, and block inspector closure and graph
+selection changes until the request finishes.
+
+In split or overlay mode, if the administrator tries to select another service
+while a create inspector is open and no request is pending, the application
+MUST treat that action as a request to cancel creation. When both fields are
+empty, it MUST close the create inspector, select the requested service, open
+that service's compact inspector, and focus its heading. When either field has
+a value, it MUST first ask the administrator to discard the values. Confirming
+MUST complete the same selection change. Declining MUST keep the original
+parent selected, keep the entered values, and keep the create inspector open.
+In bottom-sheet mode, the shared modal background MUST prevent a graph
+selection change until the inspector closes.
+
+A create failure MUST keep the captured parent and entered values, show a
+corrective error through `GraphInspectorNotice`, and permit retry.
+Field-validation failure MUST focus the first invalid field. Another failure
+MUST keep focus on the create action after it announces the error. If the
+captured parent becomes unavailable, the application MUST close the create
+inspector, select the first available service, return focus to that node, and
+announce that the parent is unavailable. It MUST NOT retry with a different
+parent. A successful create MUST add the confirmed child below the captured
+parent, select the new child, replace the create inspector with its compact
+selected-service inspector, and move focus to that inspector's heading. It
+MUST NOT navigate to the service-details route.
+
+The graph MUST show a labelled loading state and MUST NOT show a create action
+until it has loaded at least one confirmed service. After a successful root
+bootstrap, an initial graph load with no restorable selection MUST select
+`root` and show `+ New service` below it. A bootstrap failure, service-load
+failure, or successful response with no stored root MUST show a corrective
+error and retry action. It MUST NOT show a graph-wide create action or permit a
+service with no parent. A refresh that removes the selected service MUST use
+the shared unavailable-record focus rule, select the first remaining service,
+and move `+ New service` below that service. Because successful bootstrap
+always stores `root`, the normal service graph MUST NOT have an empty state
+after loading.
+
 ### Compact selected-service inspector
 
 The compact selected-service inspector MUST use `GraphInspector` and the
@@ -204,11 +288,8 @@ change the shared sheet insets, width, maximum height, or mode boundary.
 Closing the compact selected-service inspector with Escape or its close action
 MUST keep the service selected and return focus to its graph node. Reopening the
 selected service MUST move focus to the inspector heading as required by the
-shared system. The create-service action MUST continue to open a create
-inspector in the graph workspace. Opening it MUST focus its heading, and the
-next Tab MUST move to the first applicable field. Closing it MUST return focus
-to the create-service action. Service creation MUST NOT navigate to the details
-page.
+shared system. The contextual child-service action and create inspector MUST
+follow the creation, focus, cancellation, and success rules above.
 
 ### Service-details route
 
@@ -299,8 +380,8 @@ key secret, form value, workspace record, or other sensitive data.
 Opening the details route MUST move focus to its page heading. A return that
 opens or restores the compact inspector MUST use the applicable focus rule
 above. A return without an inspector MUST focus the applicable service node. If
-that node no longer exists, focus MUST move to the first available service node
-or the create-service action. An in-progress write MUST block application
+that node no longer exists, focus MUST move to the first available service
+node. An in-progress write MUST block application
 navigation and browser history restoration until it finishes. Unsaved
 non-secret form values MUST require discard confirmation before application
 navigation or browser Back or Forward can leave the page. A browser reload or
@@ -331,8 +412,7 @@ silently open another service. In this state, `Back to services` MUST return to
 `/services` without a selected-service query. If the administrator deletes the
 service from its details page, a successful delete MUST replace the details
 history entry with `/services`, select no service, and focus the first remaining
-service node or the create-service action. Browser Back MUST NOT reopen the
-deleted details entry.
+service node. Browser Back MUST NOT reopen the deleted details entry.
 
 If a service becomes unavailable while one of its API keys is being created or
 its one-time secret is visible, the page MUST keep the protected key state. It
@@ -404,10 +484,23 @@ inactive state, and the absence of Router-only inspector geometry.
 
 Browser tests MUST cover pointer click and double-click, Space, Enter, touch
 tap, the explicit `Open service details` action, close, Escape, initial focus,
-exact focus return, and one service-tree tab stop. They MUST cover the direct
-route, route encoding, page regions, history push, Back, Forward, the direct-
-link fallback, graph-scroll restoration and reachability, mode-specific history
-focus, and deleted-node focus fallback.
+exact focus return, and one service-tree tab stop. At desktop and phone widths,
+focused authenticated tests MUST also cover the absence of a toolbar create
+action; the exact selected-node placement, label, and accessible parent name of
+`+ New service`; pointer, touch, Enter, Space, and arrow access; one graph Tab
+stop; create-inspector focus entry and return; and cancel with empty and entered
+values. Split and overlay tests MUST cover selection changes with empty and
+entered values. Phone bottom-sheet tests MUST prove that the modal background
+prevents selection changes. The tests MUST verify that the inspector has only
+the display-name and API-name fields, shows the captured parent without a
+parent picker, and sends that parent in the create request. They MUST cover
+pending state, duplicate-submit prevention, field and non-field failures,
+retry, parent
+unavailability, confirmed success, root selection after bootstrap, bootstrap
+and load failure, an invalid empty response, and refresh selection fallback.
+They MUST cover the direct route, route encoding, page regions, history push,
+Back, Forward, the direct-link fallback, graph-scroll restoration and
+reachability, mode-specific history focus, and deleted-node focus fallback.
 
 Browser tests MUST also cover initial loading, initial failure and retry,
 refresh failure with stale service data, independent workspace and key refresh

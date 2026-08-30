@@ -4,7 +4,8 @@ Status: Accepted on 2026-08-23. The graph-first UI and administrator
 playground amendments were accepted on 2026-08-24. The fixed compound-board,
 administration-content, optional relationship-graph toolbar, compact shared
 graph-inspector, shared table-alignment, and selectable configuration-command
-amendments were accepted on 2026-08-29.
+amendments were accepted on 2026-08-29. The contextual child-creation amendment
+was accepted on 2026-08-30.
 
 ## Service API keys
 
@@ -186,7 +187,10 @@ In the service tree, Up and Down MUST move through the visible nodes, Right
 MUST move to the first child, Left MUST move to the parent, and Home and End
 MUST move to the first and last visible nodes. If the tree permits branch
 collapse, Right MUST first expand a collapsed node and Left MUST first collapse
-an expanded node.
+an expanded node. The selected-node child-service action MUST join this roving
+focus order only as specified in
+[Services, workspaces, and assignments](01-services-workspaces-and-assignments.md#contextual-child-service-creation).
+That action MUST NOT add a second graph Tab stop.
 
 In the configuration board, Up and Down MUST move through every visible
 actionable control in the current column. The rendered order of a compound
