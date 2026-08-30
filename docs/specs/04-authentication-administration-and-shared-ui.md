@@ -95,11 +95,13 @@ MUST NOT keep a second configuration page.
 ### Application shell, Overview, and local controls
 
 The authenticated administration shell MUST keep the persistent left sidebar
-on desktop and narrow desktop layouts. It MUST NOT render a persistent top bar
-on any route. It MUST omit the top-bar region, wrapper, border, shadow, and
-reserved block size in normal, loading, empty, error, and unavailable states.
-The shell MUST NOT contain a global service selector, global refresh action, or
-an empty replacement for either control.
+on desktop and narrow desktop layouts. It MUST NOT render a top bar or an
+equivalent shell-wide block-start row on any route or in any state. This rule
+applies to persistent and non-persistent rows. The shell MUST omit each such
+region, wrapper, border, shadow, tab stop, and reserved block size in normal,
+loading, empty, error, and unavailable states. It MUST NOT contain a global
+service selector, global refresh action, or an empty replacement for either
+control.
 
 The sidebar MUST contain these destinations in this order: `Overview`,
 `Services`, `LLM configuration`, `Logs`, `Usage & cost`, and `Activity &
@@ -118,20 +120,25 @@ step. A successful sign-in with no explicit valid return target MUST open
 `/overview`. A direct `/overview` request MUST render the same dashboard without
 another redirect.
 
-Overview MUST keep global resource totals, the small health summary, and the
-current provider-model cooldown summary. It MUST NOT require a selected service
-or a primary workflow action. It MUST remain the dashboard composition point
-for later accepted statistics and operational summaries. A later accepted
-dashboard summary MUST extend Overview and MUST NOT require a second overview
-destination.
+Overview MUST keep the four global resource totals labelled `Services`,
+`Provider connections`, `Provider-models`, and `Current cooldowns`, and the
+small health summary. `Current cooldowns` MUST count the provider-models that
+have a current cooldown. This total is the Overview cooldown summary. Overview
+MUST NOT require a selected service or a primary workflow action. It MUST
+remain the dashboard composition point for later accepted statistics and
+operational summaries. A later accepted dashboard summary MUST extend Overview
+and MUST NOT require a second overview destination.
 
 Each route MUST own the service context and refresh behavior that it uses. A
 route-local control MUST load or change only that route's context and data. The
 shell MUST NOT own, change, or expose a shared selected-service state. Each
 route MUST determine applicable service context from its own location and
-control. Sidebar and phone-navigation links MUST NOT copy a service query to a
-route that does not use it. Browser Back and Forward MAY restore context that
-belongs to the restored route. The routes MUST use this ownership:
+control. The term `global administration context` in another specification
+means the valid service that the active route path or route-local query
+identifies. It does not mean shell state. Sidebar and phone-navigation links
+MUST NOT copy a service query to a route that does not use it. Browser Back and
+Forward MAY restore context that belongs to the restored route. The routes MUST
+use this ownership:
 
 | Route | Service context | Refresh ownership |
 | --- | --- | --- |
@@ -147,10 +154,17 @@ The configuration `Service context` value MUST use the route-local
 `/configuration?service={serviceApiName}` location state. `All services` MUST
 remove that query value and show the no-selected-service assignment state. The
 Services selection MUST use the same query through its Services route location
-rules. Navigation between Services and configuration MAY carry one valid
-`service` query. The destination's own graph selection or `Service context`
-control MUST show and own that value. This carried location value MUST NOT
-create a shell control or apply to Overview, Logs, statistics, or operations.
+rules. An in-application navigation action directly between Services and
+configuration MUST carry exactly one valid current `service` value. A
+navigation action from a service-details route to configuration MUST use the
+route service as that value. If the source has no current service, or if the
+value is invalid or unavailable, the destination MUST omit the `service` query
+and show its no-selected-service state. Services and configuration MUST also
+remove a received `service` query if its value is invalid or unavailable. The
+destination's graph selection or `Service context` control MUST show and own a
+carried value. Navigation to Overview, Logs, statistics, or operations MUST
+remove a carried `service` query before route content renders. This carried
+value MUST NOT create a shell control or set a local Logs or statistics filter.
 
 A local refresh action MUST preserve applicable confirmed route context,
 filters, graph search, selection, and focus. While pending, it MUST identify
@@ -172,14 +186,27 @@ none. Activating a sidebar destination MUST push one history entry and move
 focus to the destination heading after the route is ready to identify itself.
 
 On a phone, the left sidebar MUST use the shared responsive replacement by the
-persistent bottom navigation. That navigation MUST keep `Overview` as its first
-destination and use the same current-page state. The shell MUST NOT add a phone
-top bar. The route content MUST start at the dynamic viewport block-start edge
-and end before the bottom navigation and its safe-area inset. Activating a
-phone destination MUST close any open navigation surface, change the route,
-and move focus to the destination heading. At 200% text size, local context and
-refresh controls MUST wrap in their route-owned region without document-level
-horizontal overflow.
+persistent bottom navigation. The shared phone navigation MUST make all six
+destinations available in the same order as the sidebar. It MUST also make the
+application identity, administrator identity, and account actions available.
+It MAY put an item in an opened navigation surface instead of the persistent
+bottom row. `Overview` MUST be the first destination, and the current
+destination MUST use the same active state in each applicable surface. The
+shell MUST NOT add a phone top bar, service selector, or refresh action. The
+route content MUST start at the dynamic viewport block-start edge and end
+before the bottom navigation and its safe-area inset.
+
+Normal phone Tab order MUST pass through the skip link, current route controls
+in rendered order, and persistent bottom-navigation controls from left to
+right. Opening a navigation surface MUST move focus to its first destination.
+Its Tab order MUST then follow the six destination links in their sidebar
+order, followed by account actions in rendered order. The administrator
+identity MUST be available as the surface's labelled context and MUST NOT add a
+Tab stop. Closing the surface without navigation MUST return focus to its
+trigger. Activating a phone destination MUST close the surface, change the
+route, and move focus to the destination heading. At 200% text size, local
+context and refresh controls MUST wrap in their route-owned region without
+document-level horizontal overflow.
 
 Once the administrator session is known, route loading and failure MUST keep
 the navigation shell and current-route heading available. The route MUST show
@@ -198,11 +225,13 @@ Overview navigation state, retained totals, health and cooldown summaries, and
 normal, loading, partial, stale, initial-failure, retry, and refresh states.
 
 At each size, tests MUST visit every retained route and a service-details route
-and prove that no top-bar element, content, border, shadow, tab stop, or reserved
-block size exists. They MUST prove that no global service selector or refresh
-action exists; each named local control is in its required route region; route
-context follows the exact carry and removal rules through sidebar, phone, Back,
-and Forward navigation; and stale responses do not change the active route.
+and prove that no top-bar or equivalent shell-wide block-start row, content,
+border, shadow, tab stop, or reserved block size exists. They MUST prove that no
+global service selector or refresh action exists; each named local control is
+in its required route region; route context follows the exact carry and removal
+rules through sidebar, phone, Back, and Forward navigation; and stale responses
+do not change the active route. Phone tests MUST prove access to all six
+destinations, application and administrator identity, and account actions.
 Keyboard tests MUST verify the
 exact desktop and phone navigation order, current-page state, route-heading
 focus, local-control order, pending duplicate prevention, focus retention, and
