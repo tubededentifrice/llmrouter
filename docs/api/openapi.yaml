@@ -687,7 +687,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Service"
         "400":
-          $ref: "#/components/responses/ServiceTreeInvalidRequestError"
+          $ref: "#/components/responses/ErrorResponse"
         "404":
           $ref: "#/components/responses/ServiceParentNotFoundError"
         "409":
@@ -1904,6 +1904,12 @@ components:
                 error:
                   code: conflict
                   message: Service API name already exists.
+            cycle:
+              summary: A request tried to use the new service as its own parent.
+              value:
+                error:
+                  code: conflict
+                  message: The service parent would create a cycle.
             concurrent_change:
               summary: The service tree changed after relationship validation.
               value:

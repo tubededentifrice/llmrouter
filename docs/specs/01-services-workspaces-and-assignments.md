@@ -43,15 +43,15 @@ are locked. The transaction MUST apply these rules:
 3. If a service already has `apiName` `root`, that record MUST become the
    permanent root. The Router MUST clear its existing parent, if any, and set
    the parent of each other parentless service to `root`. Detaching a nested
-   `root` first makes its former top-level ancestor parentless before that
-   ancestor is attached below `root`.
+   `root` leaves its former top-level ancestor parentless. The Router MUST then
+   attach that ancestor below `root`.
 4. The Router MUST validate the complete resulting service tree and assignment
-   inheritance before commit. If the non-empty stored graph has no parentless
-   service and has no service named `root`, or if the result contains another
-   cycle, a missing parent, a missing inherited assignment, or an assignment
-   cycle, bootstrap MUST fail without changing any service. The Router MUST
-   stay unavailable for administration and calling requests until an operator
-   repairs the stored configuration and bootstrap succeeds.
+   inheritance before commit. If the non-empty pre-migration graph has no
+   parentless service and has no service named `root`, or if the result contains
+   another cycle, a missing parent, a missing inherited assignment, or an
+   assignment cycle, bootstrap MUST fail without changing any service. The
+   Router MUST stay unavailable for administration and calling requests until
+   an operator repairs the stored configuration and bootstrap succeeds.
 
 Thus, zero existing services creates `root`; one existing parentless service is
 attached to a new `root` unless it is already `root`; and multiple existing
@@ -62,7 +62,7 @@ identity, display name, creation time, and descendants of an existing service
 named `root`.
 
 The bootstrap MUST make the implicit empty `default` assignment available for
-a new `root` service in the same transaction. It MUST keep all existing
+the permanent `root` service in the same transaction. It MUST keep all existing
 services, assignments, workspaces, keys, accounting, logs, jobs, media, and
 activity. It MUST NOT create an administrator activity event because bootstrap
 is a system migration and not an administrator configuration change. A
@@ -128,26 +128,28 @@ operation runs.
 | A delete target has one or more direct children | 409 | `conflict` | `Move or delete the child services first.` |
 
 After contract-shape validation, a create operation MUST check the reserved
-root name before another API-name conflict, parent existence, and concurrent
-tree state, in that order. A replace operation MUST check target existence,
-the root or non-root null-parent rule, parent existence, a cycle, and concurrent
-tree state, in that order. A delete operation MUST check target existence, root
-protection, and direct children, in that order. This order MUST select one exact
-error when a request would otherwise match more than one error.
+root name before another API-name conflict, the target as its own parent,
+parent existence, and concurrent tree state, in that order. A replace operation
+MUST check target existence, the root or non-root null-parent rule, parent
+existence, a cycle, and concurrent tree state, in that order. A delete operation
+MUST check target existence, root protection, and direct children, in that
+order. This order MUST select one exact error when a request would otherwise
+match more than one error.
 
 A rejected request MUST use the same activity result rules as any other
 administrator configuration attempt. It MUST NOT make a partial service-tree
 or dependent-record change.
 
 Focused contract and service tests MUST cover an empty bootstrap, one legacy
-root, multiple legacy roots, an existing top-level `root`, an existing nested
-`root`, repeated bootstrap, and atomic bootstrap failure for a service or
-assignment cycle, missing parent, or missing inherited assignment. They MUST
-cover required create and replace parent fields, response
-root fields, a missing parent, a self-parent, a descendant parent, a concurrent
-parent change, a duplicate API name, a null non-root parent, a root parent,
-root creation, root deletion, child-blocked deletion, validation precedence,
-and successful display-name and parent changes. Each operation failure test
+parentless service, multiple legacy parentless services, an existing top-level
+`root`, an existing nested `root`, repeated bootstrap, and atomic bootstrap
+failure for a remaining service cycle, an assignment cycle, a missing parent,
+or a missing inherited assignment. They MUST cover required create and replace
+parent fields, response root fields, a missing parent, the target as its own
+parent, a descendant parent, a concurrent parent change, a duplicate API name,
+a null non-root parent, a root parent, root creation, root deletion,
+child-blocked deletion, validation precedence, and successful display-name and
+parent changes. Each operation failure test
 MUST verify the exact HTTP status, error code, message, unchanged tree, and
 failed activity event. Each operation success test MUST verify the stored tree
 and succeeded activity event. Bootstrap tests MUST verify that no administrator
