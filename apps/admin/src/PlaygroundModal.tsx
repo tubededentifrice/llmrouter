@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useReducer, useRef, type RefObject } from "react";
 import {
   Button,
+  CheckboxControl,
   Dialog,
   OperationPlayground,
+  TextareaControl,
+  TextControl,
   type PlaygroundInputImage,
   type PlaygroundRequestValue,
   type PlaygroundResult,
@@ -894,73 +897,62 @@ export function PlaygroundModal({
           <summary>Advanced native request</summary>
           <div>
             {target.supportsStreaming ? (
-              <label className="checkbox-field">
-                <input
-                  checked={stream}
-                  disabled={running || structured}
-                  onChange={(event) => {
-                    setStream(event.currentTarget.checked);
-                  }}
-                  type="checkbox"
-                />
-                Stream model output
-              </label>
+              <CheckboxControl
+                checked={stream}
+                disabled={running || structured}
+                label="Stream model output"
+                onChange={(event) => {
+                  setStream(event.currentTarget.checked);
+                }}
+              />
             ) : null}
             {target.supportsStructuredOutput ? (
-              <label className="checkbox-field">
-                <input
-                  checked={structured}
-                  disabled={running || target.requiresStructuredOutput}
-                  onChange={(event) => {
-                    setStructured(event.currentTarget.checked);
-                    if (event.currentTarget.checked) setStream(false);
-                  }}
-                  type="checkbox"
-                />
-                Validate structured JSON output
-              </label>
+              <CheckboxControl
+                checked={structured}
+                disabled={running || target.requiresStructuredOutput}
+                label="Validate structured JSON output"
+                onChange={(event) => {
+                  setStructured(event.currentTarget.checked);
+                  if (event.currentTarget.checked) setStream(false);
+                }}
+              />
             ) : null}
             {structured ? (
-              <label>
-                JSON Schema
-                <textarea
-                  disabled={running}
-                  onChange={(event) => {
-                    setSchema(event.currentTarget.value);
-                  }}
-                  rows={6}
-                  value={schema}
-                />
-              </label>
+              <TextareaControl
+                disabled={running}
+                label="JSON Schema"
+                onChange={(event) => {
+                  setSchema(event.currentTarget.value);
+                }}
+                rows={6}
+                value={schema}
+              />
             ) : null}
             {target.supportsTools ? (
-              <label>
-                Tool definitions JSON
-                <textarea
-                  disabled={running}
-                  onChange={(event) => {
-                    setTools(event.currentTarget.value);
-                  }}
-                  placeholder='[{"name":"lookup","description":"Find a value","input_schema_json":"{\\"type\\":\\"object\\"}"}]'
-                  rows={6}
-                  value={tools}
-                />
-              </label>
+              <TextareaControl
+                disabled={running}
+                label="Tool definitions JSON"
+                onChange={(event) => {
+                  setTools(event.currentTarget.value);
+                }}
+                placeholder='[{"name":"lookup","description":"Find a value","input_schema_json":"{\\"type\\":\\"object\\"}"}]'
+                rows={6}
+                value={tools}
+              />
             ) : null}
           </div>
         </details>
       ) : null}
-      <label className="configuration-playground-tags">
-        Tags
-        <input
-          disabled={running}
-          onChange={(event) => {
-            setTags(event.currentTarget.value);
-          }}
-          placeholder="manual, diagnostic"
-          value={tags}
-        />
-      </label>
+      <TextControl
+        className="configuration-playground-tags"
+        disabled={running}
+        label="Tags"
+        onChange={(event) => {
+          setTags(event.currentTarget.value);
+        }}
+        placeholder="manual, diagnostic"
+        value={tags}
+      />
       <OperationPlayground
         fixedTarget={{
           selection: { kind: target.kind, id: target.id },

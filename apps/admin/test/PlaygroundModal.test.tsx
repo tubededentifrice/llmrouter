@@ -540,6 +540,9 @@ describe("administrator playground input", () => {
     expect(markup).toContain("Stream model output");
     expect(markup).toContain("Validate structured JSON output");
     expect(markup).toContain("Tool definitions JSON");
+    expect(markup).toContain("od-checkbox-control-input");
+    expect(markup).toContain("od-textarea-control-input");
+    expect(markup).toContain("od-text-control-input");
     expect(markup).toContain("Refresh target");
     expect(markup).not.toContain("Route selection");
     expect(markup).not.toContain("service key");

@@ -16,7 +16,6 @@ import {
   DateTime,
   EditableTable,
   FormActions,
-  FormField,
   FormSection,
   GraphEdge,
   GraphEdges,
@@ -36,6 +35,7 @@ import {
   SearchableSelect,
   SecretRevealPanel,
   StatePanel,
+  TextControl,
   layoutTree,
   treeEdgePath,
   type DataTableState,
@@ -200,9 +200,12 @@ const workspaceColumns: readonly EditableTableColumn<WorkspaceDraft>[] = [
     width: "42%",
     renderRead: ({ row }) => row.draft.displayName,
     renderEdit: ({ row, update, validationId, errorId }) => (
-      <input
+      <TextControl
         aria-describedby={`${validationId} ${errorId}`}
-        aria-label="Workspace display name"
+        className="editable-table-form-control"
+        label={
+          <span className="od-visually-hidden">Workspace display name</span>
+        }
         maxLength={200}
         onChange={(event) => {
           update({ displayName: event.currentTarget.value });
@@ -218,9 +221,10 @@ const workspaceColumns: readonly EditableTableColumn<WorkspaceDraft>[] = [
     width: "34%",
     renderRead: ({ row }) => <code>{row.draft.apiName}</code>,
     renderEdit: ({ row, update, validationId, errorId }) => (
-      <input
+      <TextControl
         aria-describedby={`${validationId} ${errorId}`}
-        aria-label="Workspace API name"
+        className="editable-table-form-control"
+        label={<span className="od-visually-hidden">Workspace API name</span>}
         maxLength={63}
         onChange={(event) => {
           update({ apiName: event.currentTarget.value });
@@ -247,9 +251,10 @@ const keyColumns: readonly EditableTableColumn<KeyDraft>[] = [
     width: "48%",
     renderRead: ({ row }) => row.draft.name,
     renderEdit: ({ row, update, validationId, errorId }) => (
-      <input
+      <TextControl
         aria-describedby={`${validationId} ${errorId}`}
-        aria-label="Key name"
+        className="editable-table-form-control"
+        label={<span className="od-visually-hidden">Key name</span>}
         maxLength={200}
         onChange={(event) => {
           update({ name: event.currentTarget.value });
@@ -878,9 +883,18 @@ function ServiceInspector({
     (_current: string, next: string) => next,
     selected.parent_service_api_name ?? NO_PARENT_OPTION,
   );
+  const [displayName, setDisplayName] = useReducer(
+    (_current: string, next: string) => next,
+    selected.display_name,
+  );
   useEffect(() => {
     setParentSelection(selected.parent_service_api_name ?? NO_PARENT_OPTION);
-  }, [selected.api_name, selected.parent_service_api_name]);
+    setDisplayName(selected.display_name);
+  }, [
+    selected.api_name,
+    selected.display_name,
+    selected.parent_service_api_name,
+  ]);
   const keyLifecycleActive = keyLifecycle !== null;
   const blockedParents = descendants(services, selected.api_name);
   const hasChildren = services.some(
@@ -936,14 +950,16 @@ function ServiceInspector({
         }}
       >
         <FormSection legend="Service details">
-          <FormField label="Display name" requirement="required">
-            <input
-              defaultValue={selected.display_name}
-              maxLength={200}
-              name="display_name"
-              required
-            />
-          </FormField>
+          <TextControl
+            label="Display name"
+            maxLength={200}
+            name="display_name"
+            onChange={(event) => {
+              setDisplayName(event.currentTarget.value);
+            }}
+            requirement="required"
+            value={displayName}
+          />
           <SearchableSelect
             label="Parent service"
             onChange={(value) => {
@@ -1288,7 +1304,6 @@ function ServiceGraph({
 function CreateServiceInspector({
   busy,
   error,
-  inputRef,
   onClose,
   onSubmit,
   returnFocusRef,
@@ -1296,13 +1311,14 @@ function CreateServiceInspector({
 }: {
   readonly busy: boolean;
   readonly error: string | null;
-  readonly inputRef: RefObject<HTMLInputElement | null>;
   readonly onClose: () => void;
   readonly onSubmit: (event: SubmitEvent<HTMLFormElement>) => void;
   readonly returnFocusRef: RefObject<HTMLElement | null>;
   readonly services: readonly Service[];
 }) {
   const [parentSelection, setParentSelection] = useState(NO_PARENT_OPTION);
+  const [apiName, setApiName] = useState("");
+  const [displayName, setDisplayName] = useState("");
   const formRef = useRef<HTMLFormElement>(null);
   useEffect(() => {
     if (error === null) return;
@@ -1322,18 +1338,27 @@ function CreateServiceInspector({
     >
       <form className="service-create-form" onSubmit={onSubmit} ref={formRef}>
         <FormSection legend="Service details">
-          <FormField label="API name" requirement="required">
-            <input
-              maxLength={63}
-              name="api_name"
-              pattern="[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?"
-              ref={inputRef}
-              required
-            />
-          </FormField>
-          <FormField label="Display name" requirement="required">
-            <input maxLength={200} name="display_name" required />
-          </FormField>
+          <TextControl
+            label="API name"
+            maxLength={63}
+            name="api_name"
+            onChange={(event) => {
+              setApiName(event.currentTarget.value);
+            }}
+            pattern="[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?"
+            requirement="required"
+            value={apiName}
+          />
+          <TextControl
+            label="Display name"
+            maxLength={200}
+            name="display_name"
+            onChange={(event) => {
+              setDisplayName(event.currentTarget.value);
+            }}
+            requirement="required"
+            value={displayName}
+          />
           <SearchableSelect
             label="Parent service"
             onChange={(value) => {
@@ -1404,7 +1429,6 @@ export function ServiceManagement({
   const keyLifecycleRef = useRef<KeyCreationLifecycle | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const selectedControlRef = useRef<HTMLElement | null>(null);
-  const createInputRef = useRef<HTMLInputElement | null>(null);
   const protectedService = protectedServiceApiName(
     selectedService,
     keyLifecycle,
@@ -1545,7 +1569,6 @@ export function ServiceManagement({
       <CreateServiceInspector
         busy={busy}
         error={createError}
-        inputRef={createInputRef}
         onClose={closeCreate}
         onSubmit={(event) => {
           void create(event);

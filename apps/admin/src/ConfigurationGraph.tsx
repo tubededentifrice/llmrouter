@@ -12,6 +12,7 @@ import {
 } from "react";
 import {
   Button,
+  CheckboxControl,
   ConfirmationDialog,
   EditableTable,
   FormActions,
@@ -23,7 +24,12 @@ import {
   GraphInspectorRows,
   GraphInspectorSection,
   RelationshipGraph,
+  NumberControl,
+  SelectControl,
   StatePanel,
+  SwitchControl,
+  TextareaControl,
+  TextControl,
   type EditableTableColumn,
   type EditableTableRow,
   type RelationshipGraphColumn,
@@ -2608,6 +2614,7 @@ function InspectorWriteError({ message }: { readonly message: string | null }) {
   );
 }
 
+// react-doctor-disable-next-line react-doctor/no-giant-component -- This inspector keeps one provider form, its write-only credential form, and the shared pending boundary together.
 function ProviderInspector({
   context,
 }: {
@@ -2632,16 +2639,38 @@ function ProviderInspector({
       ? undefined
       : providerByName.get(inspector.apiName);
   const adapter = provider?.adapter ?? "openai";
-  const [selectedAdapter, setSelectedAdapter] = useState(adapter);
-  const [selectedCredential, setSelectedCredential] = useState(
-    provider?.credential_api_name ?? "",
+  const [fields, updateFields] = useReducer(
+    (
+      current: {
+        readonly selectedAdapter: ProviderAdapter;
+        readonly selectedCredential: string;
+        readonly selectedEndpoint: string;
+        readonly selectedEnabled: boolean;
+        readonly apiName: string;
+        readonly displayName: string;
+        readonly credentialApiName: string;
+      },
+      patch: Partial<typeof current>,
+    ) => ({ ...current, ...patch }),
+    {
+      selectedAdapter: adapter,
+      selectedCredential: provider?.credential_api_name ?? "",
+      selectedEndpoint: provider?.endpoint ?? "",
+      selectedEnabled: provider?.enabled ?? true,
+      apiName: provider?.api_name ?? "",
+      displayName: provider?.display_name ?? "",
+      credentialApiName: "",
+    },
   );
-  const [selectedEndpoint, setSelectedEndpoint] = useState(
-    provider?.endpoint ?? "",
-  );
-  const [selectedEnabled, setSelectedEnabled] = useState(
-    provider?.enabled ?? true,
-  );
+  const {
+    selectedAdapter,
+    selectedCredential,
+    selectedEndpoint,
+    selectedEnabled,
+    apiName,
+    displayName,
+    credentialApiName,
+  } = fields;
   const fieldPolicy = adapterFieldPolicy[selectedAdapter];
   const boardState =
     provider === undefined
@@ -2708,65 +2737,65 @@ function ProviderInspector({
         className="configuration-form"
         onSubmit={(event) => void saveProvider(event)}
       >
-        <label>
-          API name
-          <input
-            defaultValue={provider?.api_name}
-            readOnly={provider !== undefined}
-            name="api_name"
-            required
-          />
-        </label>
-        <label>
-          Display name
-          <input
-            defaultValue={provider?.display_name}
-            name="display_name"
-            required
-          />
-        </label>
-        <label>
-          Adapter
-          <select
-            name="adapter"
-            onChange={(event) => {
-              const next = event.currentTarget.value as ProviderAdapter;
-              setSelectedAdapter(next);
-              setSelectedCredential("");
-              setSelectedEndpoint("");
-            }}
-            value={selectedAdapter}
-          >
-            {providerAdapters.map((item) => (
-              <option key={item} value={item}>
-                {adapterLabels[item]}
-              </option>
-            ))}
-          </select>
-        </label>
+        <TextControl
+          label="API name"
+          name="api_name"
+          onChange={(event) => {
+            updateFields({ apiName: event.currentTarget.value });
+          }}
+          readOnly={provider !== undefined}
+          requirement="required"
+          value={apiName}
+        />
+        <TextControl
+          label="Display name"
+          name="display_name"
+          onChange={(event) => {
+            updateFields({ displayName: event.currentTarget.value });
+          }}
+          requirement="required"
+          value={displayName}
+        />
+        <SelectControl
+          label="Adapter"
+          name="adapter"
+          onChange={(event) => {
+            const next = event.currentTarget.value as ProviderAdapter;
+            updateFields({
+              selectedAdapter: next,
+              selectedCredential: "",
+              selectedEndpoint: "",
+            });
+          }}
+          value={selectedAdapter}
+        >
+          {providerAdapters.map((item) => (
+            <option key={item} value={item}>
+              {adapterLabels[item]}
+            </option>
+          ))}
+        </SelectControl>
         {fieldPolicy.credential === "none" ? (
           <p className="field-note">This adapter does not use a credential.</p>
         ) : (
-          <label>
-            Applicable credential
-            <select
-              name="credential_api_name"
-              onChange={(event) => {
-                setSelectedCredential(event.currentTarget.value);
-              }}
-              required={fieldPolicy.credential === "required"}
-              value={selectedCredential}
-            >
-              <option value="">
-                {fieldPolicy.credential === "required"
-                  ? "Select credential"
-                  : "No credential"}
-              </option>
-              {credentials.map((item) => (
-                <option key={item.api_name}>{item.api_name}</option>
-              ))}
-            </select>
-          </label>
+          <SelectControl
+            label="Applicable credential"
+            name="credential_api_name"
+            onChange={(event) => {
+              updateFields({ selectedCredential: event.currentTarget.value });
+            }}
+            required={fieldPolicy.credential === "required"}
+            value={selectedCredential}
+          >
+            <option value="">
+              {fieldPolicy.credential === "required"
+                ? "Select credential"
+                : "No credential"}
+            </option>
+            {credentials.map((item) => (
+              <option key={item.api_name}>{item.api_name}</option>
+            ))}
+          </SelectControl>
         )}
         <details className="configuration-advanced">
           <summary>Advanced settings and review</summary>
@@ -2781,7 +2810,7 @@ function ProviderInspector({
               <input
                 name="endpoint"
                 onChange={(event) => {
-                  setSelectedEndpoint(event.currentTarget.value);
+                  updateFields({ selectedEndpoint: event.currentTarget.value });
                 }}
                 placeholder="https://provider.example/v1"
                 required
@@ -2790,17 +2819,14 @@ function ProviderInspector({
               />
             </label>
           ) : null}
-          <label className="checkbox-field">
-            <input
-              checked={selectedEnabled}
-              name="enabled"
-              onChange={(event) => {
-                setSelectedEnabled(event.currentTarget.checked);
-              }}
-              type="checkbox"
-            />
-            Enabled after validation
-          </label>
+          <SwitchControl
+            checked={selectedEnabled}
+            label="Enabled after validation"
+            name="enabled"
+            onChange={(event) => {
+              updateFields({ selectedEnabled: event.currentTarget.checked });
+            }}
+          />
           {recordFacts([
             [
               "Adapter",
@@ -2837,12 +2863,21 @@ function ProviderInspector({
         </p>
         <form
           className="configuration-form"
+          onReset={() => {
+            updateFields({ credentialApiName: "" });
+          }}
           onSubmit={(event) => void saveCredential(event)}
         >
-          <label>
-            Credential API name
-            <input autoComplete="off" name="credential_api_name" required />
-          </label>
+          <TextControl
+            autoComplete="off"
+            label="Credential API name"
+            name="credential_api_name"
+            onChange={(event) => {
+              updateFields({ credentialApiName: event.currentTarget.value });
+            }}
+            requirement="required"
+            value={credentialApiName}
+          />
           <label>
             New secret
             <input
@@ -2920,6 +2955,32 @@ function ModelInspector({
   } = context;
   const model =
     inspector.apiName === null ? undefined : modelByName.get(inspector.apiName);
+  const [modelFields, updateModelFields] = useReducer(
+    (
+      current: {
+        readonly apiName: string;
+        readonly displayName: string;
+        readonly inputModalities: string;
+        readonly outputModalities: string;
+        readonly capabilities: string;
+      },
+      patch: Partial<typeof current>,
+    ) => ({ ...current, ...patch }),
+    {
+      apiName: model?.api_name ?? "",
+      displayName: model?.display_name ?? "",
+      inputModalities: model?.input_modalities.join(", ") ?? "text",
+      outputModalities: model?.output_modalities.join(", ") ?? "text",
+      capabilities: model?.capabilities.join(", ") ?? "",
+    },
+  );
+  const {
+    apiName,
+    displayName,
+    inputModalities,
+    outputModalities,
+    capabilities,
+  } = modelFields;
   const applicableMappings = providerModels.filter(
     (item) => item.model_api_name === model?.api_name,
   );
@@ -3011,46 +3072,51 @@ function ModelInspector({
         className="configuration-form"
         onSubmit={(event) => void saveModel(event)}
       >
-        <label>
-          API name
-          <input
-            defaultValue={model?.api_name}
-            readOnly={model !== undefined}
-            name="api_name"
-            required
-          />
-        </label>
-        <label>
-          Display name
-          <input
-            defaultValue={model?.display_name}
-            name="display_name"
-            required
-          />
-        </label>
-        <label>
-          Input modalities
-          <input
-            defaultValue={model?.input_modalities.join(", ") ?? "text"}
-            name="input_modalities"
-            required
-          />
-        </label>
-        <label>
-          Output modalities
-          <input
-            defaultValue={model?.output_modalities.join(", ") ?? "text"}
-            name="output_modalities"
-            required
-          />
-        </label>
-        <label>
-          Capabilities
-          <input
-            defaultValue={model?.capabilities.join(", ")}
-            name="capabilities"
-          />
-        </label>
+        <TextControl
+          label="API name"
+          name="api_name"
+          onChange={(event) => {
+            updateModelFields({ apiName: event.currentTarget.value });
+          }}
+          readOnly={model !== undefined}
+          requirement="required"
+          value={apiName}
+        />
+        <TextControl
+          label="Display name"
+          name="display_name"
+          onChange={(event) => {
+            updateModelFields({ displayName: event.currentTarget.value });
+          }}
+          requirement="required"
+          value={displayName}
+        />
+        <TextControl
+          label="Input modalities"
+          name="input_modalities"
+          onChange={(event) => {
+            updateModelFields({ inputModalities: event.currentTarget.value });
+          }}
+          requirement="required"
+          value={inputModalities}
+        />
+        <TextControl
+          label="Output modalities"
+          name="output_modalities"
+          onChange={(event) => {
+            updateModelFields({ outputModalities: event.currentTarget.value });
+          }}
+          requirement="required"
+          value={outputModalities}
+        />
+        <TextControl
+          label="Capabilities"
+          name="capabilities"
+          onChange={(event) => {
+            updateModelFields({ capabilities: event.currentTarget.value });
+          }}
+          value={capabilities}
+        />
         <ModelAdvancedFields model={model} />
         <Button disabled={pending} type="submit">
           Save canonical model
@@ -3062,19 +3128,17 @@ function ModelInspector({
             className="configuration-form"
             onSubmit={(event) => void previewOpenRouter(event)}
           >
-            <label>
-              Exact model ID or supported OpenRouter URL
-              <input
-                maxLength={512}
-                onChange={(event) => {
-                  setImportInput(event.currentTarget.value);
-                  setImportPreview(null);
-                  setSelectedImportProviders(new Set());
-                }}
-                required
-                value={importInput}
-              />
-            </label>
+            <TextControl
+              label="Exact model ID or supported OpenRouter URL"
+              maxLength={512}
+              onChange={(event) => {
+                setImportInput(event.currentTarget.value);
+                setImportPreview(null);
+                setSelectedImportProviders(new Set());
+              }}
+              requirement="required"
+              value={importInput}
+            />
             <Button disabled={pending} type="submit">
               Preview OpenRouter model
             </Button>
@@ -3099,104 +3163,166 @@ function ModelInspector({
   );
 }
 
+interface ModelAdvancedValues {
+  readonly maxContextTokens: number | "";
+  readonly maxOutputTokens: number | "";
+  readonly embeddingDimensions: string;
+  readonly maxInputImages: number | "";
+  readonly maxInputImageBytes: number | "";
+  readonly maxOutputDurationSeconds: number | "";
+  readonly priceSource: string;
+  readonly priceLookupKey: string;
+  readonly currency: string;
+  readonly unitPrices: string;
+}
+
 function ModelAdvancedFields({ model }: { readonly model: Model | undefined }) {
+  const [values, setValues] = useState<ModelAdvancedValues>({
+    maxContextTokens: model?.constraints?.max_context_tokens ?? "",
+    maxOutputTokens: model?.constraints?.max_output_tokens ?? "",
+    embeddingDimensions:
+      model?.constraints?.embedding_dimensions?.join(", ") ?? "",
+    maxInputImages: model?.constraints?.max_input_images ?? "",
+    maxInputImageBytes: model?.constraints?.max_input_image_bytes ?? "",
+    maxOutputDurationSeconds:
+      model?.constraints?.max_output_duration_seconds ?? "",
+    priceSource: model?.price_source ?? "",
+    priceLookupKey: model?.price_lookup_key ?? "",
+    currency:
+      model?.current_price?.source == null
+        ? (model?.current_price?.currency ?? "")
+        : "",
+    unitPrices:
+      model?.current_price?.source == null
+        ? (model?.current_price?.unit_prices
+            .map((item) => `${item.unit}=${item.amount}`)
+            .join(", ") ?? "")
+        : "",
+  });
+  const setTextValue = (
+    key: keyof ModelAdvancedValues,
+    value: string | number,
+  ) => {
+    setValues((current) => ({ ...current, [key]: value }));
+  };
   return (
     <details className="configuration-advanced">
       <summary>Constraints and price source</summary>
-      <label>
-        Maximum context tokens
-        <input
-          defaultValue={model?.constraints?.max_context_tokens ?? ""}
-          min="1"
-          name="max_context_tokens"
-          type="number"
-        />
-      </label>
-      <label>
-        Maximum output tokens
-        <input
-          defaultValue={model?.constraints?.max_output_tokens ?? ""}
-          min="1"
-          name="max_output_tokens"
-          type="number"
-        />
-      </label>
-      <label>
-        Embedding dimensions
-        <input
-          defaultValue={
-            model?.constraints?.embedding_dimensions?.join(", ") ?? ""
-          }
-          name="embedding_dimensions"
-          placeholder="768, 1536"
-        />
-      </label>
-      <label>
-        Maximum input images
-        <input
-          defaultValue={model?.constraints?.max_input_images ?? ""}
-          min="1"
-          name="max_input_images"
-          type="number"
-        />
-      </label>
-      <label>
-        Maximum input image bytes
-        <input
-          defaultValue={model?.constraints?.max_input_image_bytes ?? ""}
-          min="1"
-          name="max_input_image_bytes"
-          type="number"
-        />
-      </label>
-      <label>
-        Maximum output duration seconds
-        <input
-          defaultValue={model?.constraints?.max_output_duration_seconds ?? ""}
-          min="1"
-          name="max_output_duration_seconds"
-          type="number"
-        />
-      </label>
-      <label>
-        Price source
-        <input defaultValue={model?.price_source ?? ""} name="price_source" />
-      </label>
-      <label>
-        Source model identifier
-        <input
-          defaultValue={model?.price_lookup_key ?? ""}
-          name="price_lookup_key"
-        />
-      </label>
-      <label>
-        Manual price currency
-        <input
-          defaultValue={
-            model?.current_price?.source == null
-              ? model?.current_price?.currency
-              : ""
-          }
-          maxLength={3}
-          name="currency"
-          placeholder="USD"
-        />
-      </label>
-      <label>
-        Manual typed unit prices
-        <textarea
-          defaultValue={
-            model?.current_price?.source == null
-              ? model?.current_price?.unit_prices
-                  .map((item) => `${item.unit}=${item.amount}`)
-                  .join(", ")
-              : ""
-          }
-          name="unit_prices"
-          placeholder="input_token=0.001, output_token=0.002"
-          rows={3}
-        />
-      </label>
+      <NumberControl
+        label="Maximum context tokens"
+        min={1}
+        name="max_context_tokens"
+        onChange={(event) => {
+          setTextValue(
+            "maxContextTokens",
+            event.currentTarget.value === ""
+              ? ""
+              : event.currentTarget.valueAsNumber,
+          );
+        }}
+        value={values.maxContextTokens}
+      />
+      <NumberControl
+        label="Maximum output tokens"
+        min={1}
+        name="max_output_tokens"
+        onChange={(event) => {
+          setTextValue(
+            "maxOutputTokens",
+            event.currentTarget.value === ""
+              ? ""
+              : event.currentTarget.valueAsNumber,
+          );
+        }}
+        value={values.maxOutputTokens}
+      />
+      <TextControl
+        label="Embedding dimensions"
+        name="embedding_dimensions"
+        onChange={(event) => {
+          setTextValue("embeddingDimensions", event.currentTarget.value);
+        }}
+        placeholder="768, 1536"
+        value={values.embeddingDimensions}
+      />
+      <NumberControl
+        label="Maximum input images"
+        min={1}
+        name="max_input_images"
+        onChange={(event) => {
+          setTextValue(
+            "maxInputImages",
+            event.currentTarget.value === ""
+              ? ""
+              : event.currentTarget.valueAsNumber,
+          );
+        }}
+        value={values.maxInputImages}
+      />
+      <NumberControl
+        label="Maximum input image bytes"
+        min={1}
+        name="max_input_image_bytes"
+        onChange={(event) => {
+          setTextValue(
+            "maxInputImageBytes",
+            event.currentTarget.value === ""
+              ? ""
+              : event.currentTarget.valueAsNumber,
+          );
+        }}
+        value={values.maxInputImageBytes}
+      />
+      <NumberControl
+        label="Maximum output duration seconds"
+        min={1}
+        name="max_output_duration_seconds"
+        onChange={(event) => {
+          setTextValue(
+            "maxOutputDurationSeconds",
+            event.currentTarget.value === ""
+              ? ""
+              : event.currentTarget.valueAsNumber,
+          );
+        }}
+        value={values.maxOutputDurationSeconds}
+      />
+      <TextControl
+        label="Price source"
+        name="price_source"
+        onChange={(event) => {
+          setTextValue("priceSource", event.currentTarget.value);
+        }}
+        value={values.priceSource}
+      />
+      <TextControl
+        label="Source model identifier"
+        name="price_lookup_key"
+        onChange={(event) => {
+          setTextValue("priceLookupKey", event.currentTarget.value);
+        }}
+        value={values.priceLookupKey}
+      />
+      <TextControl
+        label="Manual price currency"
+        maxLength={3}
+        name="currency"
+        onChange={(event) => {
+          setTextValue("currency", event.currentTarget.value);
+        }}
+        placeholder="USD"
+        value={values.currency}
+      />
+      <TextareaControl
+        label="Manual typed unit prices"
+        name="unit_prices"
+        onChange={(event) => {
+          setTextValue("unitPrices", event.currentTarget.value);
+        }}
+        placeholder="input_token=0.001, output_token=0.002"
+        rows={3}
+        value={values.unitPrices}
+      />
     </details>
   );
 }
@@ -3232,6 +3358,27 @@ function MappingInspector({
     inspector.apiName === null
       ? undefined
       : mappingByName.get(inspector.apiName);
+  const [mappingFields, updateMappingFields] = useReducer(
+    (
+      current: {
+        readonly apiName: string;
+        readonly providerApiName: string;
+        readonly modelApiName: string;
+        readonly providerModelName: string;
+        readonly enabled: boolean;
+      },
+      patch: Partial<typeof current>,
+    ) => ({ ...current, ...patch }),
+    {
+      apiName: mapping?.api_name ?? "",
+      providerApiName: mapping?.provider_api_name ?? "",
+      modelApiName: mapping?.model_api_name ?? "",
+      providerModelName: mapping?.provider_model_name ?? "",
+      enabled: mapping?.enabled ?? true,
+    },
+  );
+  const { apiName, providerApiName, modelApiName, providerModelName, enabled } =
+    mappingFields;
   const mappingProvider = providers.find(
     (item) => item.api_name === mapping?.provider_api_name,
   );
@@ -3368,15 +3515,16 @@ function MappingInspector({
         className="configuration-form"
         onSubmit={(event) => void saveMapping(event)}
       >
-        <label>
-          Route API name
-          <input
-            defaultValue={mapping?.api_name}
-            readOnly={mapping !== undefined}
-            name="api_name"
-            required
-          />
-        </label>
+        <TextControl
+          label="Route API name"
+          name="api_name"
+          onChange={(event) => {
+            updateMappingFields({ apiName: event.currentTarget.value });
+          }}
+          readOnly={mapping !== undefined}
+          requirement="required"
+          value={apiName}
+        />
         {mapping === undefined && inspector.providerApiName !== undefined ? (
           <>
             <input
@@ -3388,19 +3536,22 @@ function MappingInspector({
             {recordFacts([["Provider", inspector.providerApiName]])}
           </>
         ) : (
-          <label>
-            Provider
-            <select
-              defaultValue={mapping?.provider_api_name ?? ""}
-              name="provider_api_name"
-              required
-            >
-              <option value="">Select provider</option>
-              {providers.map((item) => (
-                <option key={item.api_name}>{item.api_name}</option>
-              ))}
-            </select>
-          </label>
+          <SelectControl
+            label="Provider"
+            name="provider_api_name"
+            onChange={(event) => {
+              updateMappingFields({
+                providerApiName: event.currentTarget.value,
+              });
+            }}
+            requirement="required"
+            value={providerApiName}
+          >
+            <option value="">Select provider</option>
+            {providers.map((item) => (
+              <option key={item.api_name}>{item.api_name}</option>
+            ))}
+          </SelectControl>
         )}
         {mapping === undefined && inspector.modelApiName !== undefined ? (
           <>
@@ -3413,36 +3564,40 @@ function MappingInspector({
             {recordFacts([["Canonical model", inspector.modelApiName]])}
           </>
         ) : (
-          <label>
-            Canonical model
-            <select
-              defaultValue={mapping?.model_api_name ?? ""}
-              name="model_api_name"
-              required
-            >
-              <option value="">Select model</option>
-              {models.map((item) => (
-                <option key={item.api_name}>{item.api_name}</option>
-              ))}
-            </select>
-          </label>
+          <SelectControl
+            label="Canonical model"
+            name="model_api_name"
+            onChange={(event) => {
+              updateMappingFields({ modelApiName: event.currentTarget.value });
+            }}
+            requirement="required"
+            value={modelApiName}
+          >
+            <option value="">Select model</option>
+            {models.map((item) => (
+              <option key={item.api_name}>{item.api_name}</option>
+            ))}
+          </SelectControl>
         )}
-        <label>
-          Provider wire model
-          <input
-            defaultValue={mapping?.provider_model_name}
-            name="provider_model_name"
-            required
-          />
-        </label>
-        <label className="checkbox-field">
-          <input
-            defaultChecked={mapping?.enabled ?? true}
-            name="enabled"
-            type="checkbox"
-          />
-          Enabled
-        </label>
+        <TextControl
+          label="Provider wire model"
+          name="provider_model_name"
+          onChange={(event) => {
+            updateMappingFields({
+              providerModelName: event.currentTarget.value,
+            });
+          }}
+          requirement="required"
+          value={providerModelName}
+        />
+        <SwitchControl
+          checked={enabled}
+          label="Enabled"
+          name="enabled"
+          onChange={(event) => {
+            updateMappingFields({ enabled: event.currentTarget.checked });
+          }}
+        />
         <MappingAdvancedFields mapping={mapping} />
         <Button disabled={pending} type="submit">
           Save provider route
@@ -3458,6 +3613,37 @@ function MappingAdvancedFields({
   readonly mapping: ProviderModel | undefined;
 }) {
   const priceDefaults = providerModelPriceFormDefaults(mapping);
+  const [values, setValues] = useState<
+    ModelAdvancedValues & {
+      readonly inputModalities: string;
+      readonly outputModalities: string;
+      readonly capabilities: string;
+      readonly reasoningMappings: string;
+    }
+  >({
+    inputModalities: mapping?.input_modalities.join(", ") ?? "",
+    outputModalities: mapping?.output_modalities.join(", ") ?? "",
+    capabilities: mapping?.capabilities.join(", ") ?? "",
+    reasoningMappings:
+      mapping?.reasoning_mappings
+        .map((item) => `${item.level}=${item.provider_value}`)
+        .join(", ") ?? "",
+    maxContextTokens: mapping?.constraints?.max_context_tokens ?? "",
+    maxOutputTokens: mapping?.constraints?.max_output_tokens ?? "",
+    embeddingDimensions:
+      mapping?.constraints?.embedding_dimensions?.join(", ") ?? "",
+    maxInputImages: mapping?.constraints?.max_input_images ?? "",
+    maxInputImageBytes: mapping?.constraints?.max_input_image_bytes ?? "",
+    maxOutputDurationSeconds:
+      mapping?.constraints?.max_output_duration_seconds ?? "",
+    priceSource: priceDefaults.source,
+    priceLookupKey: priceDefaults.lookupKey,
+    currency: priceDefaults.currency,
+    unitPrices: priceDefaults.unitPrices,
+  });
+  const setValue = (key: keyof typeof values, value: string | number) => {
+    setValues((current) => ({ ...current, [key]: value }));
+  };
   return (
     <details className="configuration-advanced">
       <summary>Capabilities, reasoning, and price</summary>
@@ -3465,119 +3651,153 @@ function MappingAdvancedFields({
         Empty capability fields use the canonical model. Enter values only to
         narrow this provider route.
       </p>
-      <label>
-        Input modalities
-        <input
-          defaultValue={mapping?.input_modalities.join(", ") ?? ""}
-          name="input_modalities"
-        />
-      </label>
-      <label>
-        Output modalities
-        <input
-          defaultValue={mapping?.output_modalities.join(", ") ?? ""}
-          name="output_modalities"
-        />
-      </label>
-      <label>
-        Capabilities
-        <input
-          defaultValue={mapping?.capabilities.join(", ") ?? ""}
-          name="capabilities"
-        />
-      </label>
-      <label>
-        Reasoning mappings
-        <input
-          defaultValue={
-            mapping?.reasoning_mappings
-              .map((item) => `${item.level}=${item.provider_value}`)
-              .join(", ") ?? ""
-          }
-          name="reasoning_mappings"
-          placeholder="none=disabled, high=high"
-        />
-      </label>
-      <label>
-        Maximum context tokens
-        <input
-          defaultValue={mapping?.constraints?.max_context_tokens ?? ""}
-          min="1"
-          name="max_context_tokens"
-          type="number"
-        />
-      </label>
-      <label>
-        Maximum output tokens
-        <input
-          defaultValue={mapping?.constraints?.max_output_tokens ?? ""}
-          min="1"
-          name="max_output_tokens"
-          type="number"
-        />
-      </label>
-      <label>
-        Embedding dimensions
-        <input
-          defaultValue={
-            mapping?.constraints?.embedding_dimensions?.join(", ") ?? ""
-          }
-          name="embedding_dimensions"
-        />
-      </label>
-      <label>
-        Maximum input images
-        <input
-          defaultValue={mapping?.constraints?.max_input_images ?? ""}
-          min="1"
-          name="max_input_images"
-          type="number"
-        />
-      </label>
-      <label>
-        Maximum input image bytes
-        <input
-          defaultValue={mapping?.constraints?.max_input_image_bytes ?? ""}
-          min="1"
-          name="max_input_image_bytes"
-          type="number"
-        />
-      </label>
-      <label>
-        Maximum output duration seconds
-        <input
-          defaultValue={mapping?.constraints?.max_output_duration_seconds ?? ""}
-          min="1"
-          name="max_output_duration_seconds"
-          type="number"
-        />
-      </label>
-      <label>
-        Price source
-        <input defaultValue={priceDefaults.source} name="price_source" />
-      </label>
-      <label>
-        Source model identifier
-        <input defaultValue={priceDefaults.lookupKey} name="price_lookup_key" />
-      </label>
-      <label>
-        Manual price currency
-        <input
-          defaultValue={priceDefaults.currency}
-          maxLength={3}
-          name="currency"
-          placeholder="USD"
-        />
-      </label>
-      <label>
-        Manual typed unit prices
-        <textarea
-          defaultValue={priceDefaults.unitPrices}
-          name="unit_prices"
-          placeholder="input_token=0.001, output_token=0.002"
-          rows={3}
-        />
-      </label>
+      <TextControl
+        label="Input modalities"
+        name="input_modalities"
+        onChange={(event) => {
+          setValue("inputModalities", event.currentTarget.value);
+        }}
+        value={values.inputModalities}
+      />
+      <TextControl
+        label="Output modalities"
+        name="output_modalities"
+        onChange={(event) => {
+          setValue("outputModalities", event.currentTarget.value);
+        }}
+        value={values.outputModalities}
+      />
+      <TextControl
+        label="Capabilities"
+        name="capabilities"
+        onChange={(event) => {
+          setValue("capabilities", event.currentTarget.value);
+        }}
+        value={values.capabilities}
+      />
+      <TextControl
+        label="Reasoning mappings"
+        name="reasoning_mappings"
+        onChange={(event) => {
+          setValue("reasoningMappings", event.currentTarget.value);
+        }}
+        placeholder="none=disabled, high=high"
+        value={values.reasoningMappings}
+      />
+      <NumberControl
+        label="Maximum context tokens"
+        min={1}
+        name="max_context_tokens"
+        onChange={(event) => {
+          setValue(
+            "maxContextTokens",
+            event.currentTarget.value === ""
+              ? ""
+              : event.currentTarget.valueAsNumber,
+          );
+        }}
+        value={values.maxContextTokens}
+      />
+      <NumberControl
+        label="Maximum output tokens"
+        min={1}
+        name="max_output_tokens"
+        onChange={(event) => {
+          setValue(
+            "maxOutputTokens",
+            event.currentTarget.value === ""
+              ? ""
+              : event.currentTarget.valueAsNumber,
+          );
+        }}
+        value={values.maxOutputTokens}
+      />
+      <TextControl
+        label="Embedding dimensions"
+        name="embedding_dimensions"
+        onChange={(event) => {
+          setValue("embeddingDimensions", event.currentTarget.value);
+        }}
+        value={values.embeddingDimensions}
+      />
+      <NumberControl
+        label="Maximum input images"
+        min={1}
+        name="max_input_images"
+        onChange={(event) => {
+          setValue(
+            "maxInputImages",
+            event.currentTarget.value === ""
+              ? ""
+              : event.currentTarget.valueAsNumber,
+          );
+        }}
+        value={values.maxInputImages}
+      />
+      <NumberControl
+        label="Maximum input image bytes"
+        min={1}
+        name="max_input_image_bytes"
+        onChange={(event) => {
+          setValue(
+            "maxInputImageBytes",
+            event.currentTarget.value === ""
+              ? ""
+              : event.currentTarget.valueAsNumber,
+          );
+        }}
+        value={values.maxInputImageBytes}
+      />
+      <NumberControl
+        label="Maximum output duration seconds"
+        min={1}
+        name="max_output_duration_seconds"
+        onChange={(event) => {
+          setValue(
+            "maxOutputDurationSeconds",
+            event.currentTarget.value === ""
+              ? ""
+              : event.currentTarget.valueAsNumber,
+          );
+        }}
+        value={values.maxOutputDurationSeconds}
+      />
+      <TextControl
+        label="Price source"
+        name="price_source"
+        onChange={(event) => {
+          setValue("priceSource", event.currentTarget.value);
+        }}
+        value={values.priceSource}
+      />
+      <TextControl
+        label="Source model identifier"
+        name="price_lookup_key"
+        onChange={(event) => {
+          setValue("priceLookupKey", event.currentTarget.value);
+        }}
+        value={values.priceLookupKey}
+      />
+      <TextControl
+        label="Manual price currency"
+        maxLength={3}
+        name="currency"
+        onChange={(event) => {
+          setValue("currency", event.currentTarget.value);
+        }}
+        placeholder="USD"
+        value={values.currency}
+      />
+      <TextareaControl
+        label="Manual typed unit prices"
+        name="unit_prices"
+        onChange={(event) => {
+          setValue("unitPrices", event.currentTarget.value);
+        }}
+        placeholder="input_token=0.001, output_token=0.002"
+        rows={3}
+        value={values.unitPrices}
+      />
     </details>
   );
 }
@@ -3679,11 +3899,36 @@ function AssignmentInspector({
           providerModels,
           providers,
         );
-  const [definitionMode, setDefinitionMode] = useState(
-    assignment?.definition_kind === "inherited_assignment"
-      ? "inherit"
-      : "direct",
+  const [assignmentFields, updateAssignmentFields] = useReducer(
+    (
+      current: {
+        readonly definitionMode: string;
+        readonly apiName: string;
+        readonly displayName: string;
+        readonly inheritedAssignmentName: string;
+        readonly reasoningLevel: string;
+      },
+      patch: Partial<typeof current>,
+    ) => ({ ...current, ...patch }),
+    {
+      definitionMode:
+        assignment?.definition_kind === "inherited_assignment"
+          ? "inherit"
+          : "direct",
+      apiName: assignment?.api_name ?? "",
+      displayName: assignment?.display_name ?? "",
+      inheritedAssignmentName:
+        assignment?.inherits_assignment_api_name ?? "default",
+      reasoningLevel: assignment?.reasoning_level ?? "",
+    },
   );
+  const {
+    definitionMode,
+    apiName,
+    displayName,
+    inheritedAssignmentName,
+    reasoningLevel,
+  } = assignmentFields;
   const hasActions =
     assignment !== undefined && (isLocal || playgroundTarget !== null);
   const actions =
@@ -3880,61 +4125,69 @@ function AssignmentInspector({
             onChange={markAssignmentDirty}
             onSubmit={(event) => void saveAssignment(event)}
           >
-            <label>
-              Assignment API name
-              <input
-                defaultValue={assignment?.api_name}
-                readOnly={assignment !== undefined}
-                name="api_name"
-                required
-              />
-            </label>
-            <label>
-              Display name
-              <input
-                defaultValue={assignment?.display_name}
-                name="display_name"
-              />
-            </label>
-            <label>
-              Definition
-              <select
-                name="definition_kind"
-                onChange={(event) => {
-                  setDefinitionMode(event.currentTarget.value);
-                  markAssignmentDirty();
-                }}
-                value={definitionMode}
-              >
-                <option value="direct">Ordered direct chain</option>
-                <option value="inherit">Inherit another assignment</option>
-              </select>
-            </label>
+            <TextControl
+              label="Assignment API name"
+              name="api_name"
+              onChange={(event) => {
+                updateAssignmentFields({ apiName: event.currentTarget.value });
+              }}
+              readOnly={assignment !== undefined}
+              requirement="required"
+              value={apiName}
+            />
+            <TextControl
+              label="Display name"
+              name="display_name"
+              onChange={(event) => {
+                updateAssignmentFields({
+                  displayName: event.currentTarget.value,
+                });
+              }}
+              value={displayName}
+            />
+            <SelectControl
+              label="Definition"
+              name="definition_kind"
+              onChange={(event) => {
+                updateAssignmentFields({
+                  definitionMode: event.currentTarget.value,
+                });
+                markAssignmentDirty();
+              }}
+              value={definitionMode}
+            >
+              <option value="direct">Ordered direct chain</option>
+              <option value="inherit">Inherit another assignment</option>
+            </SelectControl>
             {definitionMode === "inherit" ? (
-              <label>
-                Inherited assignment
-                <input
-                  defaultValue={
-                    assignment?.inherits_assignment_api_name ?? "default"
-                  }
-                  name="inherits_assignment_api_name"
-                  required
-                />
-              </label>
+              <TextControl
+                label="Inherited assignment"
+                name="inherits_assignment_api_name"
+                onChange={(event) => {
+                  updateAssignmentFields({
+                    inheritedAssignmentName: event.currentTarget.value,
+                  });
+                }}
+                requirement="required"
+                value={inheritedAssignmentName}
+              />
             ) : null}
-            <label>
-              Reasoning level
-              <select
-                defaultValue={assignment?.reasoning_level ?? ""}
-                name="reasoning_level"
-              >
-                <option value="">Model default</option>
-                <option>none</option>
-                <option>low</option>
-                <option>medium</option>
-                <option>high</option>
-              </select>
-            </label>
+            <SelectControl
+              label="Reasoning level"
+              name="reasoning_level"
+              onChange={(event) => {
+                updateAssignmentFields({
+                  reasoningLevel: event.currentTarget.value,
+                });
+              }}
+              value={reasoningLevel}
+            >
+              <option value="">Model default</option>
+              <option>none</option>
+              <option>low</option>
+              <option>medium</option>
+              <option>high</option>
+            </SelectControl>
             {definitionMode === "direct" ? (
               <AssignmentChainEditor
                 onDirty={markAssignmentDirty}
@@ -3990,8 +4243,13 @@ function AssignmentChainEditor({
       key: "mapping",
       header: "Provider route",
       renderRead: ({ row, update }) => (
-        <select
-          aria-label={`${row.label} provider route`}
+        <SelectControl
+          className="editable-table-form-control"
+          label={
+            <span className="od-visually-hidden">
+              {row.label} provider route
+            </span>
+          }
           onChange={(event) => {
             update({ providerModel: event.currentTarget.value });
             onDirty();
@@ -4004,7 +4262,7 @@ function AssignmentChainEditor({
               {item.api_name}
             </option>
           ))}
-        </select>
+        </SelectControl>
       ),
       renderEdit: ({ row }) => row.draft.providerModel,
     },
@@ -4173,13 +4431,23 @@ function OpenRouterPreview({
       <fieldset>
         <legend>Select global OpenRouter provider connections</legend>
         {preview.provider_options.map((option) => (
-          <label
+          <div
             className="openrouter-provider-option"
             key={option.provider_api_name}
           >
-            <input
+            <CheckboxControl
               checked={selectedProviders.has(option.provider_api_name)}
               disabled={pending || !option.selectable}
+              label={
+                <span>
+                  <strong>{option.provider_display_name}</strong>
+                  <small>
+                    {option.selectable
+                      ? option.provider_model.api_name
+                      : option.unavailable_reason}
+                  </small>
+                </span>
+              }
               onChange={(event) => {
                 const next = new Set(selectedProviders);
                 if (event.currentTarget.checked)
@@ -4187,17 +4455,8 @@ function OpenRouterPreview({
                 else next.delete(option.provider_api_name);
                 setSelectedProviders(next);
               }}
-              type="checkbox"
-            />{" "}
-            <span>
-              <strong>{option.provider_display_name}</strong>
-              <small>
-                {option.selectable
-                  ? option.provider_model.api_name
-                  : option.unavailable_reason}
-              </small>
-            </span>
-          </label>
+            />
+          </div>
         ))}
       </fieldset>
       <Button

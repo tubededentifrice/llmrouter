@@ -100,7 +100,8 @@ textarea,
   gap: 10px;
 }
 
-.administration-topbar-actions label {
+.administration-topbar-actions > label,
+.administration-topbar-actions > .od-select-control {
   display: grid;
   min-width: 0;
   flex: 1;
@@ -182,8 +183,8 @@ textarea,
   border: 0;
 }
 
-.administration-form label,
-.service-inspector-form label,
+.administration-form > label,
+.service-inspector-form > label,
 .statistics-form fieldset {
   display: grid;
   min-width: 0;
@@ -205,9 +206,7 @@ textarea,
   padding: 0 5px;
 }
 
-input,
-select,
-textarea {
+input:not(.od-form-control) {
   width: 100%;
   min-height: 42px;
   padding: 9px 11px;
@@ -217,23 +216,8 @@ textarea {
   background: var(--od-color-surface);
 }
 
-input:focus,
-select:focus,
-textarea:focus {
+input:not(.od-form-control):focus {
   border-color: var(--od-color-focus);
-}
-
-.checkbox-field {
-  display: flex !important;
-  min-height: 42px;
-  flex-direction: row !important;
-  align-items: center;
-  gap: 8px !important;
-}
-
-.checkbox-field input {
-  width: 18px;
-  min-height: 18px;
 }
 
 .administration-data-table,
@@ -322,17 +306,6 @@ textarea:focus {
   display: grid;
   gap: 16px;
   padding-bottom: 20px;
-}
-
-.catalog-preview label {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.catalog-preview input {
-  width: 18px;
-  min-height: 18px;
 }
 
 .catalog-preview > button {
@@ -469,18 +442,8 @@ textarea:focus {
   margin-top: 12px;
 }
 
-.configuration-playground-options label,
 .configuration-playground-tags {
-  display: grid;
-  gap: 6px;
   min-width: 0;
-  color: var(--od-color-muted-strong);
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.configuration-playground-options .checkbox-field {
-  display: flex;
 }
 
 .playground-diagnostics {
@@ -536,7 +499,7 @@ textarea:focus {
 }
 
 .configuration-form > label,
-.configuration-advanced label {
+.configuration-advanced > label {
   display: grid;
   gap: 6px;
   color: var(--od-color-muted-strong);
@@ -612,28 +575,12 @@ textarea:focus {
 }
 
 .openrouter-provider-option {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: start;
-  gap: 8px;
-}
-
-.openrouter-provider-option input {
-  width: 18px;
-  min-height: 18px;
+  min-width: 0;
 }
 
 .service-create-form {
   display: grid;
   gap: 16px;
-}
-
-.service-create-form label {
-  display: grid;
-  gap: 6px;
-  color: var(--od-color-muted-strong);
-  font-size: 11px;
-  font-weight: 700;
 }
 
 .service-create-form .od-button,
@@ -644,6 +591,10 @@ textarea:focus {
 .service-management .od-editable-table,
 .service-management .od-data-table {
   min-width: 0;
+}
+
+.editable-table-form-control {
+  gap: 0;
 }
 
 .service-management .od-data-table-table code,
@@ -684,7 +635,8 @@ textarea:focus {
     align-items: stretch;
   }
 
-  .administration-topbar-actions label {
+  .administration-topbar-actions > label,
+  .administration-topbar-actions > .od-select-control {
     min-width: 0;
     flex: 1;
   }

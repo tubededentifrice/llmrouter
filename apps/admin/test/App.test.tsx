@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { SelectControl, TextControl } from "@opendle/ui";
 import { App, loadGlobalAdministrationSources } from "../src/App.tsx";
 import {
   expireAdministratorSessionLoads,
@@ -420,11 +421,15 @@ describe("accepted administration composition", () => {
     );
     expect(applicationSource).not.toContain('label: "Workspaces & keys"');
     expect(applicationSource).not.toContain("function AccessPage");
+    expect(applicationSource).not.toMatch(/<(?:select|textarea)\b/);
+    expect(applicationSource.match(/<input\b/g)).toHaveLength(4);
+    expect(applicationSource.match(/type="datetime-local"/g)).toHaveLength(4);
+    expect(applicationSource).toContain('aria-label="Selected service"');
     expect(serviceSource).toContain("EditableTable");
     expect(serviceSource).toContain("ConfirmationDialog");
     expect(serviceSource).toContain("SecretRevealPanel");
     expect(serviceSource).toContain("SearchableSelect");
-    expect(serviceSource).toContain("FormField");
+    expect(serviceSource).toContain("TextControl");
     expect(serviceSource).toContain("FormActions");
     expect(serviceSource).toContain("FormSection");
     expect(serviceSource).toContain("InlineAlert");
@@ -432,6 +437,15 @@ describe("accepted administration composition", () => {
     expect(serviceSource).toContain("GraphInspectorFact");
     expect(serviceSource).toContain("GraphInspectorSection");
     expect(serviceSource).toContain("GraphInspectorNotice");
+    expect(serviceSource).not.toMatch(/<(?:select|textarea)\b/);
+    expect(serviceSource.match(/<input\b/g)).toHaveLength(2);
+    expect(serviceSource.match(/type="hidden"/g)).toHaveLength(2);
+    expect(serviceSource.match(/className="od-visually-hidden"/g)).toHaveLength(
+      3,
+    );
+    expect(
+      serviceSource.match(/className="editable-table-form-control"/g),
+    ).toHaveLength(3);
     expect(serviceSource).toContain("selectedControlRef={selectedControlRef}");
     const createInspectorSource = serviceSource.slice(
       serviceSource.indexOf("function CreateServiceInspector"),
@@ -473,6 +487,35 @@ describe("accepted administration composition", () => {
     expect(styles).not.toContain(".service-access-section");
     expect(styles).not.toContain(".service-access-heading");
     expect(styles).not.toContain(".service-delete-section");
+  });
+
+  it("keeps compact control names without visible field headings", () => {
+    const markup = renderToStaticMarkup(
+      <>
+        <SelectControl
+          aria-label="Selected service"
+          label="Service"
+          onChange={() => undefined}
+          value=""
+        >
+          <option value="">All services</option>
+        </SelectControl>
+        <TextControl
+          className="editable-table-form-control"
+          label={
+            <span className="od-visually-hidden">Workspace display name</span>
+          }
+          onChange={() => undefined}
+          value="Workspace"
+        />
+      </>,
+    );
+
+    expect(markup).toContain('aria-label="Selected service"');
+    expect(markup).toContain(
+      '<span class="od-visually-hidden">Workspace display name</span>',
+    );
+    expect(markup).toContain("editable-table-form-control");
   });
 
   it("uses a create-row identity that no workspace API name can use", () => {

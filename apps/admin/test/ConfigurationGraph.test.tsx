@@ -374,6 +374,40 @@ describe("configuration graph composition", () => {
     );
   });
 
+  it("uses shared controls for each supported configuration field type", () => {
+    const source = readFileSync(
+      new URL("../src/ConfigurationGraph.tsx", import.meta.url),
+      "utf8",
+    );
+    const styles = readFileSync(
+      new URL("../src/styles.css", import.meta.url),
+      "utf8",
+    );
+
+    for (const control of [
+      "TextControl",
+      "NumberControl",
+      "SelectControl",
+      "TextareaControl",
+      "CheckboxControl",
+      "SwitchControl",
+    ])
+      expect(source).toContain(control);
+    expect(source).not.toMatch(/<(?:select|textarea)\b/);
+    expect(source.match(/<input\b/g)).toHaveLength(4);
+    expect(source.match(/type="hidden"/g)).toHaveLength(2);
+    expect(source.match(/type="url"/g)).toHaveLength(1);
+    expect(source.match(/type="password"/g)).toHaveLength(1);
+    expect(source).toMatch(
+      /editable-table-form-control[\s\S]*?od-visually-hidden[\s\S]*?provider route/,
+    );
+    expect(source).toMatch(
+      /Write-only credential[\s\S]*?onReset[\s\S]*?credentialApiName: ""/,
+    );
+    expect(styles).not.toMatch(/input,\nselect,\ntextarea\s*\{\n\s*width:/);
+    expect(styles).not.toContain(".checkbox-field");
+  });
+
   it("keeps the global catalog available without a selected service", () => {
     const client = createAdministrationClient(vi.fn());
     const markup = renderToStaticMarkup(

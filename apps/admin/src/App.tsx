@@ -17,23 +17,27 @@ import {
   ApplicationSidebar,
   ApplicationTopbar,
   Button,
+  CheckboxControl,
   ConfirmationDialog,
   DataTable,
   DateTime,
   Icon,
   MobileNavigation,
   NavigationItem,
+  NumberControl,
   PageHeading,
   PageSurface,
   Panel,
   PanelHeader,
   SessionCard,
   SessionPage,
+  SelectControl,
   ShellErrorBoundary,
   StatCard,
   StatePanel,
   StatusPill,
   Toast,
+  TextControl,
   WorkspaceSelector,
   type DataTableAction,
   type DataTableColumn,
@@ -1176,6 +1180,15 @@ function StatisticsPage({
   readonly services: readonly Service[];
 }) {
   const initial = useMemo(() => isoRange(30), []);
+  const [filters, setFilters] = useState({
+    service: "",
+    workspace: "",
+    assignment: "",
+    providerModel: "",
+    outcome: "",
+    tag: "",
+    groupBy: new Set<string>(),
+  });
   const [result, setResult] = useState<StatisticsResult | null>(null);
   const [phase, setPhase] = useState<
     "unqueried" | "loading" | "ready" | "error"
@@ -1257,39 +1270,82 @@ function StatisticsPage({
                 type="datetime-local"
               />
             </label>
-            <label>
-              Service
-              <select name="service">
-                <option value="">All services</option>
-                {services.map((item) => (
-                  <option key={item.api_name}>{item.api_name}</option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Workspace
-              <input name="workspace" />
-            </label>
-            <label>
-              Assignment
-              <input name="assignment" placeholder="Name or (exact)" />
-            </label>
-            <label>
-              Provider-model
-              <input name="provider_model" />
-            </label>
-            <label>
-              Outcome
-              <select name="outcome">
-                <option value="">All outcomes</option>
-                <option>succeeded</option>
-                <option>failed</option>
-              </select>
-            </label>
-            <label>
-              Tag
-              <input name="tag" />
-            </label>
+            <SelectControl
+              label="Service"
+              name="service"
+              onChange={(event) => {
+                setFilters((current) => ({
+                  ...current,
+                  service: event.currentTarget.value,
+                }));
+              }}
+              value={filters.service}
+            >
+              <option value="">All services</option>
+              {services.map((item) => (
+                <option key={item.api_name}>{item.api_name}</option>
+              ))}
+            </SelectControl>
+            <TextControl
+              label="Workspace"
+              name="workspace"
+              onChange={(event) => {
+                setFilters((current) => ({
+                  ...current,
+                  workspace: event.currentTarget.value,
+                }));
+              }}
+              value={filters.workspace}
+            />
+            <TextControl
+              label="Assignment"
+              name="assignment"
+              onChange={(event) => {
+                setFilters((current) => ({
+                  ...current,
+                  assignment: event.currentTarget.value,
+                }));
+              }}
+              placeholder="Name or (exact)"
+              value={filters.assignment}
+            />
+            <TextControl
+              label="Provider-model"
+              name="provider_model"
+              onChange={(event) => {
+                setFilters((current) => ({
+                  ...current,
+                  providerModel: event.currentTarget.value,
+                }));
+              }}
+              value={filters.providerModel}
+            />
+            <SelectControl
+              label="Outcome"
+              name="outcome"
+              onChange={(event) => {
+                setFilters((current) => ({
+                  ...current,
+                  outcome: event.currentTarget.value,
+                }));
+              }}
+              value={filters.outcome}
+            >
+              <option value="">All outcomes</option>
+              <option>succeeded</option>
+              <option>failed</option>
+            </SelectControl>
+            <TextControl
+              label="Tag"
+              name="tag"
+              onChange={(event) => {
+                setFilters((current) => ({
+                  ...current,
+                  tag: event.currentTarget.value,
+                }));
+              }}
+              value={filters.tag}
+            />
             <fieldset>
               <legend>Group by</legend>
               {[
@@ -1301,9 +1357,21 @@ function StatisticsPage({
                 "outcome",
                 "tag",
               ].map((item) => (
-                <label className="checkbox-field" key={item}>
-                  <input name="group_by" type="checkbox" value={item} /> {item}
-                </label>
+                <CheckboxControl
+                  checked={filters.groupBy.has(item)}
+                  key={item}
+                  label={item}
+                  name="group_by"
+                  onChange={(event) => {
+                    setFilters((current) => {
+                      const groupBy = new Set(current.groupBy);
+                      if (event.currentTarget.checked) groupBy.add(item);
+                      else groupBy.delete(item);
+                      return { ...current, groupBy };
+                    });
+                  }}
+                  value={item}
+                />
               ))}
             </fieldset>
             <Button type="submit">Run statistics</Button>
@@ -1354,6 +1422,29 @@ function StatisticsPage({
         toolbarLabel="Usage and cost filters"
       />
     </PageSurface>
+  );
+}
+
+function RetentionDaysControl({ value }: { readonly value: number }) {
+  const [input, setInput] = useReducer(
+    (_current: number | "", next: number | "") => next,
+    value,
+  );
+  return (
+    <NumberControl
+      label="Duration in whole days"
+      max={30}
+      min={1}
+      name="days"
+      onChange={(event) => {
+        setInput(
+          event.currentTarget.value === ""
+            ? ""
+            : event.currentTarget.valueAsNumber,
+        );
+      }}
+      value={input}
+    />
   );
 }
 
@@ -1573,16 +1664,7 @@ function OperationsPage({
                 void saveRetention(event);
               }}
             >
-              <label>
-                Duration in whole days
-                <input
-                  defaultValue={retentionDays}
-                  max={30}
-                  min={1}
-                  name="days"
-                  type="number"
-                />
-              </label>
+              <RetentionDaysControl key={retentionDays} value={retentionDays} />
               <Button type="submit">Save retention</Button>
             </form>
           </Panel>
@@ -1850,24 +1932,23 @@ function AuthenticatedAdministration({
     <ApplicationTopbar
       actions={
         <div className="administration-topbar-actions">
-          <label>
-            Service
-            <select
-              aria-label="Selected service"
-              disabled={assignmentPending}
-              onChange={(event) => {
-                selectService(event.currentTarget.value);
-              }}
-              value={selectedService}
-            >
-              <option value="">All services</option>
-              {data?.services.map((item) => (
-                <option key={item.api_name} value={item.api_name}>
-                  {item.display_name}
-                </option>
-              ))}
-            </select>
-          </label>
+          <SelectControl
+            aria-label="Selected service"
+            controlClassName="administration-service-selector"
+            disabled={assignmentPending}
+            label="Service"
+            onChange={(event) => {
+              selectService(event.currentTarget.value);
+            }}
+            value={selectedService}
+          >
+            <option value="">All services</option>
+            {data?.services.map((item) => (
+              <option key={item.api_name} value={item.api_name}>
+                {item.display_name}
+              </option>
+            ))}
+          </SelectControl>
           <Button
             disabled={assignmentPending}
             onClick={() => {
