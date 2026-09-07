@@ -7,6 +7,7 @@ import asyncio
 import hmac
 import json
 import os
+import threading
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager, suppress
@@ -48,6 +49,7 @@ from llmrouter_backend.config import Settings
 from llmrouter_backend.database import (
     DatabaseConnectionLimitError,
     DatabaseConnections,
+    migrate,
     migration_plan,
 )
 from llmrouter_backend.diagnostics import (
@@ -291,8 +293,28 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
         else ObjectStore.from_settings(settings_value)
     )
 
+    bootstrap_lock = threading.Lock()
+    bootstrapped = False
+
+    def ensure_bootstrap() -> None:
+        nonlocal bootstrapped
+        with bootstrap_lock:
+            if bootstrapped:
+                return
+            configured_url = database_url or os.environ.get("LLMROUTER_DATABASE_URL")
+            if configured_url is None:
+                return
+            with database_connections.connect(
+                configured_url,
+                connect_timeout=_DATABASE_CONNECT_TIMEOUT_SECONDS,
+                options=_database_timeout_options(),
+            ) as database:
+                migrate(database)
+            bootstrapped = True
+
     @asynccontextmanager
     async def lifespan(_application: FastAPI) -> AsyncIterator[None]:
+        await asyncio.to_thread(ensure_bootstrap)
         cleanup_task = asyncio.create_task(
             _retention_cleanup_loop(
                 database_url, object_store_value, database_connections.waiting_connect
@@ -439,6 +461,7 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
         return response
 
     def connection(request: Request) -> Iterator[psycopg.Connection[Any]]:
+        ensure_bootstrap()
         configured_url = request.app.state.database_url or os.environ.get(
             "LLMROUTER_DATABASE_URL"
         )
@@ -590,6 +613,7 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
         if configured_url is None:
             return _not_ready()
         try:
+            ensure_bootstrap()
             expected_history = tuple(
                 (migration.version, migration.name, migration.checksum)
                 for migration in migration_plan()
@@ -609,7 +633,7 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
                            ORDER BY version"""
                     ).fetchall()
                 )
-        except OSError, UnicodeError, psycopg.Error, RuntimeError:
+        except OSError, UnicodeError, psycopg.Error, RuntimeError, ApiError:
             return _not_ready()
         if schema_row != (True,) or history != expected_history:
             return _not_ready()
@@ -1456,7 +1480,7 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
     @application.get(
         "/v1/admin/services",
         response_model=ServicePage,
-        response_model_exclude_none=True,
+        response_model_exclude_unset=True,
     )
     def admin_list_services(
         limit: Annotated[int, Query(ge=1, le=200)] = 50,
@@ -1467,13 +1491,16 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
         items, next_cursor = list_services(database, limit=limit, cursor=cursor)
         return ServicePage(
             items=[Service.model_validate(item) for item in items],
-            page=PageInfo(has_more=next_cursor is not None, next_cursor=next_cursor),
+            page=(
+                PageInfo(has_more=True, next_cursor=next_cursor)
+                if next_cursor is not None
+                else PageInfo(has_more=False)
+            ),
         )
 
     @application.post(
         "/v1/admin/services",
         response_model=Service,
-        response_model_exclude_none=True,
         status_code=HTTPStatus.CREATED,
     )
     def admin_create_service(
@@ -1495,7 +1522,6 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
     @application.get(
         "/v1/admin/services/{service_api_name}",
         response_model=Service,
-        response_model_exclude_none=True,
     )
     def admin_get_service(
         service_api_name: ApiNamePath,
@@ -1510,7 +1536,6 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
     @application.put(
         "/v1/admin/services/{service_api_name}",
         response_model=Service,
-        response_model_exclude_none=True,
     )
     def admin_update_service(
         service_api_name: ApiNamePath,

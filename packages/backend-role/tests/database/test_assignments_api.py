@@ -46,12 +46,16 @@ class AssignmentContext:
     def seed(self) -> None:
         """Create the service tree, workspaces, actors, and provider catalog."""
         with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
-            service_ids: dict[str, Any] = {}
+            root = connection.execute(
+                "SELECT id FROM router.services WHERE api_name = 'root'"
+            ).fetchone()
+            assert root is not None
+            service_ids: dict[str, Any] = {"root": root["id"]}
             for name, parent in (
-                ("root", None),
-                ("child", "root"),
+                ("branch", "root"),
+                ("child", "branch"),
                 ("leaf", "child"),
-                ("other", None),
+                ("other", "root"),
             ):
                 parent_id = service_ids[parent] if parent is not None else None
                 row = connection.execute(
@@ -140,7 +144,7 @@ def test_native_assignment_inheritance_replacement_cycles_and_isolation(
     """Enforce nearest replacement, graph validation, and actor separation."""
     context = assignment_context
     client = context.client
-    root = context.service_headers("root")
+    root = context.service_headers("branch")
     child = context.service_headers("child")
     other = context.service_headers("other")
 
@@ -174,7 +178,7 @@ def test_native_assignment_inheritance_replacement_cycles_and_isolation(
         for item in root_default.json()["effective_chain"]
     ] == ["text-one", "text-two"]
     inherited = client.get("/v1/assignments/default", headers=child).json()
-    assert inherited["defined_by_service_api_name"] == "root"
+    assert inherited["defined_by_service_api_name"] == "branch"
 
     replaced = client.put(
         "/v1/assignments/default",
@@ -281,7 +285,7 @@ def test_native_assignment_inheritance_replacement_cycles_and_isolation(
     current_child = client.get(
         "/v1/admin/services/child", headers=context.admin_read_headers
     ).json()
-    assert current_child["parent_service_api_name"] == "root"
+    assert current_child["parent_service_api_name"] == "branch"
 
     activity = client.get(
         "/v1/admin/activity",
@@ -303,7 +307,7 @@ def test_assignment_validation_bounds_reasoning_and_atomic_rollback(
     """Reject invalid exact writes without changing the current definition."""
     context = assignment_context
     client = context.client
-    headers = context.service_headers("root")
+    headers = context.service_headers("branch")
     path = "/v1/assignments/strict"
     valid = {"direct_chain": [{"provider_model_api_name": "text-one"}]}
     assert client.put(path, json=valid, headers=headers).status_code == 200
@@ -383,7 +387,7 @@ def test_runtime_uses_actual_requirements_and_persists_use_evidence(
     """Filter with the current call and keep an explicit removable use union."""
     context = assignment_context
     client = context.client
-    headers = context.service_headers("root")
+    headers = context.service_headers("branch")
     assert (
         client.put(
             "/v1/assignments/mixed",
@@ -399,7 +403,7 @@ def test_runtime_uses_actual_requirements_and_persists_use_evidence(
     )
     with psycopg.connect(context.database_url, row_factory=dict_row) as connection:
         service = connection.execute(
-            "SELECT id FROM router.services WHERE api_name = 'root'"
+            "SELECT id FROM router.services WHERE api_name = 'branch'"
         ).fetchone()
         assert service is not None
         resolved, routes = resolve_assignment_for_call(
@@ -410,7 +414,7 @@ def test_runtime_uses_actual_requirements_and_persists_use_evidence(
             required_inputs=frozenset({"text"}),
             required_output="text",
             required_capabilities=frozenset({"streaming"}),
-            actor_subject=context.actor_subjects["root"],
+            actor_subject=context.actor_subjects["branch"],
         )
         assert resolved.api_name == "mixed"
         assert [route.provider_model_api_name for route in routes] == ["text-one"]
@@ -436,7 +440,7 @@ def test_runtime_uses_actual_requirements_and_persists_use_evidence(
 
     with psycopg.connect(context.database_url, row_factory=dict_row) as connection:
         service = connection.execute(
-            "SELECT id FROM router.services WHERE api_name = 'root'"
+            "SELECT id FROM router.services WHERE api_name = 'branch'"
         ).fetchone()
         assert service is not None
         with pytest.raises(ApiError) as unavailable:
@@ -448,7 +452,7 @@ def test_runtime_uses_actual_requirements_and_persists_use_evidence(
                 required_inputs=frozenset({"text"}),
                 required_output="video",
                 required_capabilities=frozenset(),
-                actor_subject=context.actor_subjects["root"],
+                actor_subject=context.actor_subjects["branch"],
             )
         assert unavailable.value.code == "provider_unavailable"
     automatic = client.get("/v1/assignments/automatic", headers=headers)
@@ -498,7 +502,7 @@ def test_used_assignment_deletion_keeps_only_effective_evidence(
     """Keep evidence for inherited state and remove evidence for absent state."""
     context = assignment_context
     client = context.client
-    root = context.service_headers("root")
+    root = context.service_headers("branch")
     child = context.service_headers("child")
     for headers, candidate in ((root, "text-one"), (child, "text-two")):
         assert (
@@ -532,7 +536,7 @@ def test_used_assignment_deletion_keeps_only_effective_evidence(
         == HTTPStatus.NO_CONTENT
     )
     inherited = client.get("/v1/assignments/shared", headers=child).json()
-    assert inherited["defined_by_service_api_name"] == "root"
+    assert inherited["defined_by_service_api_name"] == "branch"
     assert inherited["observed_requirements"] == ["text_input", "text_output"]
     assert "shared" in {
         item["api_name"]
@@ -625,7 +629,7 @@ def test_actual_candidate_constraints_control_fallback(
     """Filter ordered candidates with actual embedding, image, and media bounds."""
     context = assignment_context
     client = context.client
-    headers = context.service_headers("root")
+    headers = context.service_headers("branch")
     definitions = {
         "embed-bounds": ["embedding", "embedding-four"],
         "image-bounds": ["image-small", "image-large"],
@@ -647,7 +651,7 @@ def test_actual_candidate_constraints_control_fallback(
         )
     with psycopg.connect(context.database_url, row_factory=dict_row) as connection:
         root_service = connection.execute(
-            "SELECT id FROM router.services WHERE api_name = 'root'"
+            "SELECT id FROM router.services WHERE api_name = 'branch'"
         ).fetchone()
         assert root_service is not None
         common = {
@@ -655,7 +659,7 @@ def test_actual_candidate_constraints_control_fallback(
             "service_id": root_service["id"],
             "workspace_api_name": "main",
             "required_capabilities": frozenset(),
-            "actor_subject": context.actor_subjects["root"],
+            "actor_subject": context.actor_subjects["branch"],
         }
         _resolved, embedding_routes = resolve_assignment_for_call(
             **common,
@@ -764,7 +768,7 @@ def test_concurrent_first_use_creates_one_local_assignment(
         context.client.put(
             "/v1/assignments/default",
             json={"direct_chain": [{"provider_model_api_name": "text-one"}]},
-            headers=context.service_headers("root"),
+            headers=context.service_headers("branch"),
         ).status_code
         == HTTPStatus.OK
     )
@@ -853,7 +857,7 @@ def test_call_admission_serializes_assignment_and_catalog_writes(
     """Keep one call snapshot while later configuration writes wait."""
     context = assignment_context
     client = context.client
-    headers = context.service_headers("root")
+    headers = context.service_headers("branch")
     assert (
         client.put(
             "/v1/assignments/race",
@@ -896,7 +900,7 @@ def test_call_admission_serializes_assignment_and_catalog_writes(
     def call_once() -> tuple[str, str]:
         with psycopg.connect(context.database_url, row_factory=dict_row) as connection:
             service = connection.execute(
-                "SELECT id FROM router.services WHERE api_name = 'root'"
+                "SELECT id FROM router.services WHERE api_name = 'branch'"
             ).fetchone()
             assert service is not None
             resolved, routes = resolve_assignment_for_call(
@@ -907,7 +911,7 @@ def test_call_admission_serializes_assignment_and_catalog_writes(
                 required_inputs=frozenset({"text"}),
                 required_output="text",
                 required_capabilities=frozenset(),
-                actor_subject=context.actor_subjects["root"],
+                actor_subject=context.actor_subjects["branch"],
             )
             return resolved.effective_chain[0], routes[0].provider_model_name
 
@@ -993,7 +997,7 @@ def test_call_admission_locks_the_live_workspace(
     """Do not admit a call through a workspace that a delete removes."""
     context = assignment_context
     client = context.client
-    headers = context.service_headers("root")
+    headers = context.service_headers("branch")
     assert (
         client.put(
             "/v1/assignments/workspace-race",
@@ -1033,7 +1037,7 @@ def test_call_admission_locks_the_live_workspace(
     def call_once() -> tuple[str, ...]:
         with psycopg.connect(context.database_url, row_factory=dict_row) as connection:
             service = connection.execute(
-                "SELECT id FROM router.services WHERE api_name = 'root'"
+                "SELECT id FROM router.services WHERE api_name = 'branch'"
             ).fetchone()
             assert service is not None
             _resolved, routes = resolve_assignment_for_call(
@@ -1044,7 +1048,7 @@ def test_call_admission_locks_the_live_workspace(
                 required_inputs=frozenset({"text"}),
                 required_output="text",
                 required_capabilities=frozenset(),
-                actor_subject=context.actor_subjects["root"],
+                actor_subject=context.actor_subjects["branch"],
             )
             return tuple(route.provider_model_api_name for route in routes)
 
@@ -1066,7 +1070,7 @@ def test_catalog_change_validates_inherited_reasoning(
     """Keep a mapping that an inherited assignment still needs."""
     context = assignment_context
     client = context.client
-    headers = context.service_headers("root")
+    headers = context.service_headers("branch")
     assert (
         client.put(
             "/v1/assignments/reasoning-base",

@@ -85,9 +85,7 @@ class WorkspaceCreate(ClosedModel):
 class ServiceCreate(WorkspaceCreate):
     """One global service input."""
 
-    parent_service_api_name: str | None = Field(
-        default=None, pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$"
-    )
+    parent_service_api_name: str = Field(pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 
 
 class ServiceUpdate(ClosedModel):
@@ -95,7 +93,7 @@ class ServiceUpdate(ClosedModel):
 
     display_name: str = Field(min_length=1, max_length=200)
     parent_service_api_name: str | None = Field(
-        default=None, pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+        pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$"
     )
 
 
@@ -116,7 +114,8 @@ class Service(BaseModel):
 
     api_name: str
     display_name: str
-    parent_service_api_name: str | None = None
+    parent_service_api_name: str | None
+    is_root: bool
     created_at: datetime
 
 

@@ -8,6 +8,10 @@ from dataclasses import dataclass
 from importlib.resources import files
 from typing import TYPE_CHECKING
 
+from psycopg.rows import dict_row, tuple_row
+
+from llmrouter_backend.assignments import validate_all_assignments
+
 if TYPE_CHECKING:
     from collections.abc import Iterable
     from typing import Any
@@ -15,6 +19,7 @@ if TYPE_CHECKING:
     from psycopg import Connection
 
 _MIGRATION_NAME = re.compile(r"^(?P<version>\d{4})_(?P<name>[a-z0-9_]+)\.up\.sql$")
+_PERMANENT_ROOT_VERSION = 2
 _MIGRATION_LOCK = 4_993_044_345_821
 
 
@@ -89,11 +94,12 @@ def applied_versions(connection: Connection[Any]) -> tuple[int, ...]:
     """Return applied versions after checksum validation."""
     plan = {migration.version: migration for migration in migration_plan()}
     _ensure_history(connection)
-    rows = connection.execute(
-        """SELECT version, name, checksum
-           FROM public.router_schema_migrations
-           ORDER BY version"""
-    ).fetchall()
+    with connection.cursor(row_factory=tuple_row) as cursor:
+        rows = cursor.execute(
+            """SELECT version, name, checksum
+               FROM public.router_schema_migrations
+               ORDER BY version"""
+        ).fetchall()
     versions: list[int] = []
     for version, name, checksum in rows:
         migration = plan.get(version)
@@ -157,3 +163,21 @@ def migrate(connection: Connection[Any], target: int | None = None) -> None:
                    ) VALUES (%s, %s, %s)""",
                 (migration.version, migration.name, migration.checksum),
             )
+
+        if selected_target >= _PERMANENT_ROOT_VERSION:
+            connection.execute("SELECT pg_advisory_xact_lock(4993044345823)")
+            connection.execute(
+                "LOCK TABLE router.services, router.assignment_definitions, "
+                "router.assignment_candidates IN SHARE ROW EXCLUSIVE MODE"
+            )
+            connection.execute("SELECT router.validate_service_tree()")
+            # A managed connection can proxy attribute reads without proxying
+            # writes. Use the cursor's public connection for the row factory.
+            with connection.cursor() as cursor:
+                validation_connection = cursor.connection
+                previous_factory = validation_connection.row_factory
+                try:
+                    validation_connection.row_factory = dict_row
+                    validate_all_assignments(validation_connection, prune_usage=False)
+                finally:
+                    validation_connection.row_factory = previous_factory

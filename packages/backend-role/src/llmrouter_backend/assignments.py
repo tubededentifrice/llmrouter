@@ -422,7 +422,9 @@ def resolve_assignment_snapshot_for_administrator(
     return resolved, tuple(routes)
 
 
-def validate_all_assignments(connection: Connection[Any]) -> None:
+def validate_all_assignments(
+    connection: Connection[Any], *, prune_usage: bool = True
+) -> None:
     """Reject cycles, missing parents, and invalid effective reasoning."""
     _lock_writes(connection)
     rows = connection.execute(
@@ -462,7 +464,8 @@ def validate_all_assignments(connection: Connection[Any]) -> None:
                     resolved.effective_chain,
                     resolved.reasoning_level,
                 )
-    _prune_absent_usage(connection)
+    if prune_usage:
+        _prune_absent_usage(connection)
 
 
 def configuration_change(

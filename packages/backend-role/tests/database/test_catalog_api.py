@@ -812,7 +812,11 @@ def test_global_models_mappings_reasoning_and_service_visibility(
         assert (
             client.post(
                 "/v1/admin/services",
-                json={"api_name": service, "display_name": service.title()},
+                json={
+                    "api_name": service,
+                    "display_name": service.title(),
+                    "parent_service_api_name": "root",
+                },
                 headers=context.write_headers,
             ).status_code
             == HTTPStatus.CREATED
@@ -1416,8 +1420,10 @@ def test_catalog_preview_import_atomicity_dependencies_and_failed_activity(  # n
 
     with psycopg.connect(catalog_database) as connection:
         connection.execute(
-            """INSERT INTO router.services (api_name, display_name)
-               VALUES ('assigned-service', 'Assigned service')"""
+            """INSERT INTO router.services
+                   (api_name, display_name, parent_service_id)
+               VALUES ('assigned-service', 'Assigned service',
+                       (SELECT id FROM router.services WHERE api_name = 'root'))"""
         )
         connection.execute(
             """INSERT INTO router.assignment_definitions (service_id, api_name)

@@ -55,8 +55,11 @@ def embedding_api_context(database_url: str, tmp_path: Path) -> EmbeddingApiCont
         service_ids: dict[str, uuid.UUID] = {}
         for service in ("alpha", "beta"):
             row = connection.execute(
-                """INSERT INTO router.services (api_name, display_name)
-                   VALUES (%s, %s) RETURNING id""",
+                """INSERT INTO router.services
+                   (api_name, display_name, parent_service_id)
+                   VALUES (%s, %s,
+                       (SELECT id FROM router.services WHERE api_name = 'root'))
+                   RETURNING id""",
                 (service, service.title()),
             ).fetchone()
             assert row is not None

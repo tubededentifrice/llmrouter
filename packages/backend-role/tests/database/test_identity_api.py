@@ -143,20 +143,32 @@ def test_services_workspaces_keys_and_activity_are_isolated(
 
     denied_origin = client.post(
         "/v1/admin/services",
-        json={"api_name": "alpha", "display_name": "Alpha"},
+        json={
+            "api_name": "alpha",
+            "display_name": "Alpha",
+            "parent_service_api_name": "root",
+        },
         headers={**context.admin_headers, "Origin": "https://attacker.example"},
     )
     assert denied_origin.status_code == HTTPStatus.FORBIDDEN
     assert denied_origin.json()["error"]["code"] == "permission_denied"
     denied_csrf = client.post(
         "/v1/admin/services",
-        json={"api_name": "alpha", "display_name": "Alpha"},
+        json={
+            "api_name": "alpha",
+            "display_name": "Alpha",
+            "parent_service_api_name": "root",
+        },
         headers={**context.admin_headers, "X-CSRF-Token": new_token()},
     )
     assert denied_csrf.status_code == HTTPStatus.FORBIDDEN
     duplicate_origin = client.post(
         "/v1/admin/services",
-        json={"api_name": "alpha", "display_name": "Alpha"},
+        json={
+            "api_name": "alpha",
+            "display_name": "Alpha",
+            "parent_service_api_name": "root",
+        },
         headers=[
             ("Cookie", f"llmrouter_admin_session={context.session_token}"),
             ("Origin", ADMIN_ORIGIN),
@@ -169,7 +181,11 @@ def test_services_workspaces_keys_and_activity_are_isolated(
     for api_name in ("alpha", "beta"):
         response = client.post(
             "/v1/admin/services",
-            json={"api_name": api_name, "display_name": api_name.title()},
+            json={
+                "api_name": api_name,
+                "display_name": api_name.title(),
+                "parent_service_api_name": "root",
+            },
             headers=context.admin_headers,
         )
         assert response.status_code == HTTPStatus.CREATED
@@ -178,11 +194,17 @@ def test_services_workspaces_keys_and_activity_are_isolated(
             "api_name",
             "display_name",
             "created_at",
+            "parent_service_api_name",
+            "is_root",
         }
 
     duplicate = client.post(
         "/v1/admin/services",
-        json={"api_name": "alpha", "display_name": "Other"},
+        json={
+            "api_name": "alpha",
+            "display_name": "Other",
+            "parent_service_api_name": "root",
+        },
         headers=context.admin_headers,
     )
     assert duplicate.status_code == HTTPStatus.CONFLICT
@@ -373,11 +395,15 @@ def test_parent_cycles_are_atomic_and_child_deletion_is_blocked(
     context.seed_administrator()
     client = context.client
     for document in (
-        {"api_name": "root", "display_name": "Root"},
+        {
+            "api_name": "branch",
+            "display_name": "Branch",
+            "parent_service_api_name": "root",
+        },
         {
             "api_name": "child",
             "display_name": "Child",
-            "parent_service_api_name": "root",
+            "parent_service_api_name": "branch",
         },
     ):
         assert (
@@ -388,26 +414,30 @@ def test_parent_cycles_are_atomic_and_child_deletion_is_blocked(
         )
 
     blocked_delete = client.delete(
-        "/v1/admin/services/root", headers=context.admin_headers
+        "/v1/admin/services/branch", headers=context.admin_headers
     )
     assert blocked_delete.status_code == HTTPStatus.CONFLICT
     cycle = client.put(
-        "/v1/admin/services/root",
+        "/v1/admin/services/branch",
         json={"display_name": "Changed", "parent_service_api_name": "child"},
         headers=context.admin_headers,
     )
     assert cycle.status_code == HTTPStatus.CONFLICT
     current = client.get(
-        "/v1/admin/services/root", headers=context.admin_read_headers
+        "/v1/admin/services/branch", headers=context.admin_read_headers
     ).json()
-    assert current["display_name"] == "Root"
-    assert "parent_service_api_name" not in current
+    assert current["display_name"] == "Branch"
+    assert current["parent_service_api_name"] == "root"
 
     invalid_names = ("A", "1starts", "ends-", "a" * 64)
     for api_name in invalid_names:
         response = client.post(
             "/v1/admin/services",
-            json={"api_name": api_name, "display_name": "Invalid"},
+            json={
+                "api_name": api_name,
+                "display_name": "Invalid",
+                "parent_service_api_name": "root",
+            },
             headers=context.admin_headers,
         )
         assert response.status_code == HTTPStatus.BAD_REQUEST
@@ -423,7 +453,11 @@ def test_activity_targets_stay_unambiguous_after_api_name_reuse(
     for _ in range(2):
         created = context.client.post(
             "/v1/admin/services",
-            json={"api_name": "reused", "display_name": "Reused"},
+            json={
+                "api_name": "reused",
+                "display_name": "Reused",
+                "parent_service_api_name": "root",
+            },
             headers=context.admin_headers,
         )
         assert created.status_code == HTTPStatus.CREATED
@@ -455,12 +489,18 @@ def test_concurrent_opposite_parent_moves_create_no_cycle(
     """Serialize concurrent parent changes at the database boundary."""
     with psycopg.connect(migrated_database) as connection:
         first_row = connection.execute(
-            """INSERT INTO router.services (api_name, display_name)
-               VALUES ('one', 'One') RETURNING id"""
+            """INSERT INTO router.services
+                   (api_name, display_name, parent_service_id)
+               VALUES ('one', 'One',
+                       (SELECT id FROM router.services WHERE api_name = 'root'))
+                   RETURNING id"""
         ).fetchone()
         second_row = connection.execute(
-            """INSERT INTO router.services (api_name, display_name)
-               VALUES ('two', 'Two') RETURNING id"""
+            """INSERT INTO router.services
+                   (api_name, display_name, parent_service_id)
+               VALUES ('two', 'Two',
+                       (SELECT id FROM router.services WHERE api_name = 'root'))
+                   RETURNING id"""
         ).fetchone()
         assert first_row is not None
         assert second_row is not None
@@ -499,8 +539,11 @@ def test_workspace_delete_cascades_and_blocks_late_media_results(
     """Delete all dependent roots and reject a result after public deletion."""
     with psycopg.connect(migrated_database) as connection:
         service_row = connection.execute(
-            """INSERT INTO router.services (api_name, display_name)
-               VALUES ('media', 'Media') RETURNING id"""
+            """INSERT INTO router.services
+                   (api_name, display_name, parent_service_id)
+               VALUES ('media', 'Media',
+                       (SELECT id FROM router.services WHERE api_name = 'root'))
+                   RETURNING id"""
         ).fetchone()
         assert service_row is not None
         service = service_row[0]
@@ -915,7 +958,11 @@ def test_oidc_pkce_callback_session_csrf_logout_and_expiry(
     assert (
         client.post(
             "/v1/admin/services",
-            json={"api_name": "signed-in", "display_name": "Signed in"},
+            json={
+                "api_name": "signed-in",
+                "display_name": "Signed in",
+                "parent_service_api_name": "root",
+            },
             headers=write_headers,
         ).status_code
         == HTTPStatus.CREATED
@@ -995,10 +1042,11 @@ def test_live_logout_commits_before_no_content_response(
         while not server.started and thread.is_alive() and time.monotonic() < deadline:
             time.sleep(0.01)
         assert server.started
-        delay_next_exit.set()
         with httpx.Client(
             base_url=f"http://127.0.0.1:{port}", timeout=5, trust_env=False
         ) as client:
+            assert client.get("/ready").status_code == HTTPStatus.OK
+            delay_next_exit.set()
             logged_out = client.delete(
                 "/v1/admin/session", headers=context.admin_headers
             )

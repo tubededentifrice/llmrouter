@@ -80,7 +80,7 @@ def test_readiness_requires_the_clean_foundation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Do not accept a reachable database without the migration base."""
-    expected = migration_plan()[0]
+    expected = migration_plan()
 
     class SchemaResult:
         def fetchone(self) -> tuple[bool]:
@@ -88,7 +88,7 @@ def test_readiness_requires_the_clean_foundation(
 
     class HistoryResult:
         def fetchall(self) -> list[tuple[int, str, str]]:
-            return [(expected.version, expected.name, expected.checksum)]
+            return [(item.version, item.name, item.checksum) for item in expected]
 
     class Connection:
         def __enter__(self) -> Self:
@@ -106,6 +106,7 @@ def test_readiness_requires_the_clean_foundation(
     monkeypatch.setattr(
         application_module.psycopg, "connect", lambda *_args, **_kwargs: Connection()
     )
+    monkeypatch.setattr(application_module, "migrate", lambda _connection: None)
     response = TestClient(create_app(database_url="postgresql://test")).get("/ready")
     assert response.status_code == HTTPStatus.SERVICE_UNAVAILABLE
     assert response.json() == {"status": "not_ready"}
@@ -114,8 +115,8 @@ def test_readiness_requires_the_clean_foundation(
 def test_readiness_accepts_the_clean_foundation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Report readiness after migration 0001 is present."""
-    expected = migration_plan()[0]
+    """Report readiness after every required migration is present."""
+    expected = migration_plan()
 
     class SchemaResult:
         def fetchone(self) -> tuple[bool]:
@@ -123,7 +124,7 @@ def test_readiness_accepts_the_clean_foundation(
 
     class HistoryResult:
         def fetchall(self) -> list[tuple[int, str, str]]:
-            return [(expected.version, expected.name, expected.checksum)]
+            return [(item.version, item.name, item.checksum) for item in expected]
 
     class Connection:
         def __enter__(self) -> Self:
@@ -142,6 +143,7 @@ def test_readiness_accepts_the_clean_foundation(
     monkeypatch.setattr(
         application_module.psycopg, "connect", lambda *_args, **_kwargs: Connection()
     )
+    monkeypatch.setattr(application_module, "migrate", lambda _connection: None)
     response = TestClient(create_app(database_url="postgresql://test")).get("/ready")
     assert response.status_code == HTTPStatus.OK
     assert response.json() == {"status": "ready"}

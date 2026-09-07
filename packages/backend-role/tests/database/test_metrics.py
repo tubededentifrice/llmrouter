@@ -69,8 +69,11 @@ def test_metrics_query_global_media_counts_and_health_stays_small(
     with psycopg.connect(database_url, row_factory=dict_row) as connection:
         migrate(connection)
         service = connection.execute(
-            """INSERT INTO router.services (api_name, display_name)
-               VALUES ('metrics', 'Metrics') RETURNING id"""
+            """INSERT INTO router.services
+                   (api_name, display_name, parent_service_id)
+               VALUES ('metrics', 'Metrics',
+                       (SELECT id FROM router.services WHERE api_name = 'root'))
+                   RETURNING id"""
         ).fetchone()
         assert service is not None
         workspace = connection.execute(

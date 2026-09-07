@@ -187,8 +187,11 @@ def model_api_context(database_url: str, tmp_path: Path) -> ModelApiContext:
         service_ids: dict[str, uuid.UUID] = {}
         for service in ("alpha", "beta"):
             row = connection.execute(
-                """INSERT INTO router.services (api_name, display_name)
-                   VALUES (%s, %s) RETURNING id""",
+                """INSERT INTO router.services
+                   (api_name, display_name, parent_service_id)
+                   VALUES (%s, %s,
+                       (SELECT id FROM router.services WHERE api_name = 'root'))
+                   RETURNING id""",
                 (service, service.title()),
             ).fetchone()
             assert row is not None
@@ -458,6 +461,7 @@ def test_administrator_playground_model_calls_are_global_and_isolated(
 ) -> None:
     """Use one unrestricted administrator session without a workspace or key."""
     context = model_api_context
+    request_started_at = datetime.now(tz=UTC) - timedelta(seconds=1)
     response = context.client.post(
         "/v1/admin/playground/model-calls",
         json=_administrator_request(),
@@ -465,6 +469,7 @@ def test_administrator_playground_model_calls_are_global_and_isolated(
     )
     assert response.status_code == HTTPStatus.OK
     assert response.headers["cache-control"] == "no-store"
+    request_finished_at = datetime.now(tz=UTC) + timedelta(seconds=1)
     document = response.json()
     assert document["selector"] == {
         "assignment_api_name": "workflow",
@@ -529,8 +534,8 @@ def test_administrator_playground_model_calls_are_global_and_isolated(
     service_stats = context.client.get(
         "/v1/statistics",
         params={
-            "from": "2026-01-01T00:00:00Z",
-            "to": "2027-01-01T00:00:00Z",
+            "from": request_started_at.isoformat(),
+            "to": request_finished_at.isoformat(),
         },
         headers=context.headers("alpha"),
     )
@@ -539,8 +544,8 @@ def test_administrator_playground_model_calls_are_global_and_isolated(
     administrator_stats = context.client.get(
         "/v1/admin/statistics",
         params=[
-            ("from", "2026-01-01T00:00:00Z"),
-            ("to", "2027-01-01T00:00:00Z"),
+            ("from", request_started_at.isoformat()),
+            ("to", request_finished_at.isoformat()),
             ("call_actor", "administrator"),
             ("group_by", "call_actor"),
             ("group_by", "configuration_service"),
@@ -557,8 +562,8 @@ def test_administrator_playground_model_calls_are_global_and_isolated(
     logs = context.client.get(
         "/v1/admin/request-logs",
         params={
-            "from": "2026-08-01T00:00:00Z",
-            "to": "2026-09-01T00:00:00Z",
+            "from": request_started_at.isoformat(),
+            "to": request_finished_at.isoformat(),
             "call_actor": "administrator",
         },
         headers=context.administrator_read_headers,

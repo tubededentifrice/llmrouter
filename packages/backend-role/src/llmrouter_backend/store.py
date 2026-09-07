@@ -6,15 +6,24 @@ from __future__ import annotations
 import hashlib
 import hmac
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
-from llmrouter_backend.errors import authentication_required, invalid_request, not_found
+import psycopg
+
+from llmrouter_backend.errors import (
+    ApiError,
+    authentication_required,
+    conflict,
+    invalid_request,
+    not_found,
+)
 from llmrouter_backend.security import ControlKeys, create_service_key, service_key_id
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
 
     from psycopg import Connection
 
@@ -58,7 +67,8 @@ def service_by_api_name(
     """Read one current service with its readable parent identity."""
     return connection.execute(
         """SELECT service.id, service.api_name, service.display_name,
-                  parent.api_name AS parent_service_api_name, service.created_at
+                  parent.api_name AS parent_service_api_name,
+                  service.api_name = 'root' AS is_root, service.created_at
            FROM router.services AS service
            LEFT JOIN router.services AS parent ON parent.id = service.parent_service_id
            WHERE service.api_name = %s""",
@@ -66,33 +76,102 @@ def service_by_api_name(
     ).fetchone()
 
 
+_TREE_CHANGED = "The service tree changed. Refresh and try again."
+_SERVICE_CYCLE = "The service parent would create a cycle."
+
+
+def _service_tree(connection: Connection[Any]) -> list[dict[str, Any]]:
+    return connection.execute(
+        "SELECT id, api_name, parent_service_id FROM router.services ORDER BY id"
+    ).fetchall()
+
+
+def _check_service_tree(
+    connection: Connection[Any], previous: list[dict[str, Any]]
+) -> None:
+    if _service_tree(connection) != previous:
+        raise conflict(_TREE_CHANGED)
+
+
+@contextmanager
+def _service_change(
+    connection: Connection[Any], actor: AdministratorActor, action: str, api_name: str
+) -> Iterator[list[dict[str, Any]]]:
+    """Lock configuration and record a failed attempt after a complete rollback."""
+    try:
+        previous = _service_tree(connection)
+        # Use the assignment/catalog lock before the service-table lock. Acquire
+        # the table lock before the legacy row trigger can take its tree lock.
+        connection.execute("SELECT pg_advisory_xact_lock(4993044345823)")
+        connection.execute("LOCK TABLE router.services IN SHARE ROW EXCLUSIVE MODE")
+        yield previous
+        connection.commit()
+    except Exception as error:
+        connection.rollback()
+        current = service_by_api_name(connection, api_name)
+        record_activity(
+            connection,
+            actor.activity_subject,
+            action,
+            "service",
+            resource_api_name=api_name,
+            resource_id=current["id"] if current is not None else None,
+            result="failed",
+        )
+        connection.commit()
+        if isinstance(
+            error,
+            (psycopg.errors.SerializationFailure, psycopg.errors.DeadlockDetected),
+        ):
+            raise conflict(_TREE_CHANGED) from error
+        raise
+
+
+def _parent_id(connection: Connection[Any], api_name: str | None) -> uuid.UUID | None:
+    if api_name is None:
+        return None
+    parent = service_by_api_name(connection, api_name)
+    if parent is None:
+        raise ApiError(404, "not_found", "Parent service was not found.")
+    return cast("uuid.UUID", parent["id"])
+
+
 def create_service(
     connection: Connection[Any],
     *,
     api_name: str,
     display_name: str,
-    parent_api_name: str | None,
+    parent_api_name: str,
     actor: AdministratorActor,
 ) -> dict[str, Any]:
-    """Create one service and record the configuration result atomically."""
-    parent_id = _service_id(connection, parent_api_name) if parent_api_name else None
-    row = connection.execute(
-        """INSERT INTO router.services (api_name, display_name, parent_service_id)
-           VALUES (%s, %s, %s)
-           RETURNING id, api_name, display_name, created_at""",
-        (api_name, display_name, parent_id),
-    ).fetchone()
-    if row is None:
-        raise RuntimeError("The service insert did not return its row.")
-    row["parent_service_api_name"] = parent_api_name
-    record_activity(
-        connection,
-        actor.activity_subject,
-        "service.create",
-        "service",
-        resource_api_name=api_name,
-        resource_id=row["id"],
-    )
+    """Create one child service with ordered validation and activity."""
+    with _service_change(connection, actor, "service.create", api_name) as previous:
+        if api_name == "root":
+            raise conflict("The root service already exists.")
+        if service_by_api_name(connection, api_name) is not None:
+            raise conflict("Service API name already exists.")
+        if parent_api_name == api_name:
+            raise conflict(_SERVICE_CYCLE)
+        parent_id = _parent_id(connection, parent_api_name)
+        _check_service_tree(connection, previous)
+        row = connection.execute(
+            """INSERT INTO router.services (api_name, display_name, parent_service_id)
+               VALUES (%s, %s, %s)
+               RETURNING id, api_name, display_name, created_at""",
+            (api_name, display_name, parent_id),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("The service insert did not return its row.")
+        row["parent_service_api_name"] = parent_api_name
+        row["is_root"] = False
+        record_activity(
+            connection,
+            actor.activity_subject,
+            "service.create",
+            "service",
+            resource_api_name=api_name,
+            resource_id=row["id"],
+        )
     return cast("dict[str, Any]", row)
 
 
@@ -106,10 +185,30 @@ def update_service(
     validate_dependents: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     """Replace service fields and validate dependent assignment graphs."""
-    try:
-        parent_id = (
-            _service_id(connection, parent_api_name) if parent_api_name else None
-        )
+    with _service_change(connection, actor, "service.update", api_name) as previous:
+        current = service_by_api_name(connection, api_name)
+        if current is None:
+            raise not_found("service")
+        if api_name == "root" and parent_api_name is not None:
+            raise ApiError(
+                400, "invalid_request", "The root service must not have a parent."
+            )
+        if api_name != "root" and parent_api_name is None:
+            raise ApiError(
+                400, "invalid_request", "A non-root service must have a parent."
+            )
+        parent_id = _parent_id(connection, parent_api_name)
+        ancestors = {
+            row["id"]: row["parent_service_id"] for row in _service_tree(connection)
+        }
+        cursor = parent_id
+        seen = {current["id"]}
+        while cursor is not None:
+            if cursor in seen:
+                raise conflict(_SERVICE_CYCLE)
+            seen.add(cursor)
+            cursor = ancestors[cursor]
+        _check_service_tree(connection, previous)
         row = connection.execute(
             """UPDATE router.services
                SET display_name = %s, parent_service_id = %s
@@ -118,10 +217,11 @@ def update_service(
             (display_name, parent_id, api_name),
         ).fetchone()
         if row is None:
-            raise not_found("service")  # noqa: TRY301
+            raise not_found("service")
         if validate_dependents is not None:
             validate_dependents()
         row["parent_service_api_name"] = parent_api_name
+        row["is_root"] = api_name == "root"
         record_activity(
             connection,
             actor.activity_subject,
@@ -130,42 +230,39 @@ def update_service(
             resource_api_name=api_name,
             resource_id=row["id"],
         )
-    except Exception:
-        connection.rollback()
-        current = connection.execute(
-            "SELECT id FROM router.services WHERE api_name = %s", (api_name,)
-        ).fetchone()
-        record_activity(
-            connection,
-            actor.activity_subject,
-            "service.update",
-            "service",
-            resource_api_name=api_name,
-            resource_id=current["id"] if current is not None else None,
-            result="failed",
-        )
-        connection.commit()
-        raise
     return cast("dict[str, Any]", row)
 
 
 def delete_service(
     connection: Connection[Any], *, api_name: str, actor: AdministratorActor
 ) -> None:
-    """Delete one childless service and all of its owned records."""
-    deleted = connection.execute(
-        "DELETE FROM router.services WHERE api_name = %s RETURNING id", (api_name,)
-    ).fetchone()
-    if deleted is None:
-        raise not_found("service")
-    record_activity(
-        connection,
-        actor.activity_subject,
-        "service.delete",
-        "service",
-        resource_api_name=api_name,
-        resource_id=deleted["id"],
-    )
+    """Delete one childless non-root service and all of its owned records."""
+    with _service_change(connection, actor, "service.delete", api_name) as previous:
+        current = service_by_api_name(connection, api_name)
+        if current is None:
+            raise not_found("service")
+        if api_name == "root":
+            raise conflict("The root service cannot be deleted.")
+        if (
+            connection.execute(
+                "SELECT 1 FROM router.services WHERE parent_service_id = %s LIMIT 1",
+                (current["id"],),
+            ).fetchone()
+            is not None
+        ):
+            raise conflict("Move or delete the child services first.")
+        _check_service_tree(connection, previous)
+        connection.execute(
+            "DELETE FROM router.services WHERE id = %s", (current["id"],)
+        )
+        record_activity(
+            connection,
+            actor.activity_subject,
+            "service.delete",
+            "service",
+            resource_api_name=api_name,
+            resource_id=current["id"],
+        )
 
 
 def list_services(
@@ -174,7 +271,8 @@ def list_services(
     """Read one stable api-name-ordered service page."""
     rows = connection.execute(
         """SELECT service.api_name, service.display_name,
-                  parent.api_name AS parent_service_api_name, service.created_at
+                  parent.api_name AS parent_service_api_name,
+                  service.api_name = 'root' AS is_root, service.created_at
            FROM router.services AS service
            LEFT JOIN router.services AS parent ON parent.id = service.parent_service_id
            WHERE (%s::text IS NULL OR service.api_name > %s)

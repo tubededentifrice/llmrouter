@@ -81,8 +81,11 @@ class AccountingContext:
             identities: dict[str, tuple[uuid.UUID, uuid.UUID, str]] = {}
             for name in ("alpha", "beta"):
                 service = connection.execute(
-                    """INSERT INTO router.services (api_name, display_name)
-                       VALUES (%s, %s) RETURNING id""",
+                    """INSERT INTO router.services
+                   (api_name, display_name, parent_service_id)
+                       VALUES (%s, %s,
+                       (SELECT id FROM router.services WHERE api_name = 'root'))
+                   RETURNING id""",
                     (name, name.title()),
                 ).fetchone()
                 assert service is not None

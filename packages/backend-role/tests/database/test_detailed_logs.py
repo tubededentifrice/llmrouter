@@ -123,8 +123,11 @@ class LogContext:
         with psycopg.connect(database_url, row_factory=dict_row) as connection:
             migrate(connection)
             service = connection.execute(
-                """INSERT INTO router.services (api_name, display_name)
-                   VALUES ('alpha', 'Alpha') RETURNING id"""
+                """INSERT INTO router.services
+                   (api_name, display_name, parent_service_id)
+                   VALUES ('alpha', 'Alpha',
+                       (SELECT id FROM router.services WHERE api_name = 'root'))
+                   RETURNING id"""
             ).fetchone()
             assert service is not None
             workspace = connection.execute(
@@ -1019,8 +1022,11 @@ def test_concurrent_retention_and_scope_isolation_are_safe(
     assert first_log_id is not None
     with psycopg.connect(database_url, row_factory=dict_row) as connection:
         second_service = connection.execute(
-            """INSERT INTO router.services (api_name, display_name)
-               VALUES ('beta', 'Beta') RETURNING id"""
+            """INSERT INTO router.services
+                   (api_name, display_name, parent_service_id)
+               VALUES ('beta', 'Beta',
+                       (SELECT id FROM router.services WHERE api_name = 'root'))
+                   RETURNING id"""
         ).fetchone()
         assert second_service is not None
         second_workspace = connection.execute(

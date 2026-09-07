@@ -19,10 +19,13 @@ if TYPE_CHECKING:
 migrations_module = importlib.import_module("llmrouter_backend.database.migrations")
 
 
-def test_plan_has_one_reversible_clean_foundation() -> None:
+def test_plan_has_reversible_foundation_and_permanent_root() -> None:
     """Keep the reset migration chain small and explicit."""
     plan = migration_plan()
-    assert [(item.version, item.name) for item in plan] == [(1, "foundation")]
+    assert [(item.version, item.name) for item in plan] == [
+        (1, "foundation"),
+        (2, "permanent_root"),
+    ]
     assert all(item.up_sql and item.down_sql for item in plan)
 
 
@@ -47,7 +50,7 @@ def test_foundation_migrates_up_down_and_up(database_url: str) -> None:
     """Apply, remove, and reapply the clean schema base."""
     with psycopg.connect(database_url, autocommit=True) as connection:
         migrate(connection)
-        assert applied_versions(connection) == (1,)
+        assert applied_versions(connection) == (1, 2)
         assert connection.execute("SELECT to_regnamespace('router')").fetchone() == (
             "router",
         )
@@ -59,7 +62,7 @@ def test_foundation_migrates_up_down_and_up(database_url: str) -> None:
         )
 
         migrate(connection)
-        assert applied_versions(connection) == (1,)
+        assert applied_versions(connection) == (1, 2)
 
 
 def test_migration_rejects_a_stale_pre_reset_history(database_url: str) -> None:
@@ -98,7 +101,7 @@ def test_readiness_rejects_stale_or_extra_migration_history(database_url: str) -
         )
         connection.execute(
             """INSERT INTO public.router_schema_migrations (version, name, checksum)
-               VALUES (2, 'stale_history', repeat('0', 64))"""
+               VALUES (3, 'stale_history', repeat('0', 64))"""
         )
         assert client.get("/ready").status_code == HTTPStatus.SERVICE_UNAVAILABLE
 
@@ -112,7 +115,7 @@ def test_foundation_down_refuses_unexpected_objects(database_url: str) -> None:
         with pytest.raises(psycopg.errors.DependentObjectsStillExist):
             migrate(connection, target=0)
 
-        assert applied_versions(connection) == (1,)
+        assert applied_versions(connection) == (1, 2)
         assert connection.execute(
             "SELECT to_regclass('router.unexpected_data')"
         ).fetchone() == ("router.unexpected_data",)
@@ -128,4 +131,4 @@ def test_concurrent_migration_is_serialized(database_url: str) -> None:
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         results = tuple(executor.map(lambda _index: migrate_once(), range(2)))
-    assert results == ((1,), (1,))
+    assert results == ((1, 2), (1, 2))

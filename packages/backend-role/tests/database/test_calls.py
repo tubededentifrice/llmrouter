@@ -103,8 +103,11 @@ class CallContext:
         with psycopg.connect(database_url, row_factory=dict_row) as connection:
             migrate(connection)
             alpha = connection.execute(
-                """INSERT INTO router.services (api_name, display_name)
-                   VALUES ('alpha', 'Alpha') RETURNING id"""
+                """INSERT INTO router.services
+                   (api_name, display_name, parent_service_id)
+                   VALUES ('alpha', 'Alpha',
+                       (SELECT id FROM router.services WHERE api_name = 'root'))
+                   RETURNING id"""
             ).fetchone()
             assert alpha is not None
             child = connection.execute(
@@ -114,8 +117,11 @@ class CallContext:
                 (alpha["id"],),
             ).fetchone()
             beta = connection.execute(
-                """INSERT INTO router.services (api_name, display_name)
-                   VALUES ('beta', 'Beta') RETURNING id"""
+                """INSERT INTO router.services
+                   (api_name, display_name, parent_service_id)
+                   VALUES ('beta', 'Beta',
+                       (SELECT id FROM router.services WHERE api_name = 'root'))
+                   RETURNING id"""
             ).fetchone()
             assert child is not None
             assert beta is not None
