@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import importlib
 import threading
 from typing import TYPE_CHECKING, Any
 
@@ -797,3 +798,56 @@ def test_service_create_records_confirmed_parent_and_activity(
         assert events[0]["resource_api_name"] == "new"
         assert events[0]["resource_id"] == rows[0]["id"]
         assert "New display value" not in str(events)
+
+
+@pytest.mark.parametrize("actor", ["service", "administrator"])
+def test_detached_calls_cannot_bypass_failed_bootstrap(
+    database_url: str,
+    root_settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+    actor: str,
+) -> None:
+    """Stop detached call authentication while legacy inheritance is invalid."""
+    application_module = importlib.import_module("llmrouter_backend.app")
+
+    def unexpected_authentication(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("A call reached authentication before bootstrap succeeded.")
+
+    with psycopg.connect(
+        database_url, autocommit=True, row_factory=dict_row
+    ) as connection:
+        _legacy(connection, [("legacy", None)])
+        connection.execute(
+            """INSERT INTO router.assignment_definitions
+                   (service_id, api_name, inherits_assignment_api_name)
+               SELECT id, 'alias', 'missing' FROM router.services"""
+        )
+        before = _services(connection)
+        context = IdentityTestContext(database_url, root_settings)
+        context.seed_administrator()
+        assert context.client.get("/ready").status_code == 503
+        monkeypatch.setattr(
+            application_module,
+            "_authenticate_service_request"
+            if actor == "service"
+            else "authenticate_administrator_session",
+            unexpected_authentication,
+        )
+        path = (
+            "/v1/model-calls"
+            if actor == "service"
+            else "/v1/admin/playground/model-calls"
+        )
+        response = context.client.post(path, json={}, headers=context.admin_headers)
+        assert response.status_code == 400
+        assert response.json()["error"] == {
+            "code": "invalid_request",
+            "message": "The request is invalid.",
+            "details": {
+                "field": "inherits_assignment_api_name",
+                "reason": "An inherited assignment does not resolve.",
+            },
+        }
+        assert _services(connection) == before
+        assert applied_versions(connection) == (1,)
+        assert _activity(connection) == []

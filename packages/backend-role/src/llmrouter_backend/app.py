@@ -507,6 +507,7 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
         controls: ControlKeys = Depends(control_keys),
     ) -> ServiceActor:
         """Authenticate without an idle database connection during provider work."""
+        ensure_bootstrap()
         configured_url = request.app.state.database_url or os.environ.get(
             "LLMROUTER_DATABASE_URL"
         )
@@ -542,6 +543,7 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
         controls: ControlKeys = Depends(control_keys),
     ) -> AdministratorActor:
         """Authenticate an administrator without holding a later-work connection."""
+        ensure_bootstrap()
         session_token = _control_cookie(request, _ADMINISTRATOR_COOKIE)
         if session_token is None:
             raise authentication_required()
