@@ -202,6 +202,13 @@ services:
 
   admin-dev:
     <<: *node-service
+    volumes:
+      - .:/workspace:ro
+      - ../opendle-ui:/opendle-ui
+      - llmrouter-node-modules:/workspace/node_modules
+      - llmrouter-admin-node-modules:/workspace/apps/admin/node_modules
+      - ../opendle-ui/dist:/workspace/node_modules/@opendle/ui/dist:ro
+      - ../opendle-ui/styles:/workspace/node_modules/@opendle/ui/styles:ro
     restart: unless-stopped
     depends_on:
       backend:

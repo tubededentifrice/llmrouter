@@ -126,6 +126,14 @@ The proof checks the Pocket ID discovery, redirect, PKCE, session, and denial
 code through the automated identity suite. It does not complete the human
 passkey callback.
 
+Development and preview use `developmentFreshness` from the separate
+`@opendle/dev-tools` package in OpenDLE Lib. This direct Git `main` dependency
+follows the shared library policy. It disables browser caching, changes the
+dependency cache key on server restart, and reloads shared UI build changes.
+The development container mounts the current shared UI build. Production
+builds keep content-hashed assets. See the
+[shared decision](https://github.com/opendle/opendle-lib/blob/main/docs/decisions/0002-share-development-cache-control.md).
+
 ## Work process
 
 Use the repository `director` skill for autonomous Beads delivery. Keep

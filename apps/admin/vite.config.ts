@@ -1,9 +1,21 @@
+import { developmentFreshness } from "@opendle/dev-tools/vite";
 import react from "@vitejs/plugin-react";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import { defineConfig } from "vite";
 
+const sharedUi = dirname(
+  createRequire(import.meta.url).resolve("@opendle/ui/package.json"),
+);
+
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    developmentFreshness({
+      watchDirectories: [join(sharedUi, "dist"), join(sharedUi, "styles")],
+    }),
+  ],
   optimizeDeps: { exclude: ["@opendle/ui"] },
   server: {
     allowedHosts: ["llmrouter.opendle.dev", "llmrouter.opendle.com"],

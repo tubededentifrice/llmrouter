@@ -22,6 +22,10 @@ SHARED_BACKEND_SPEC = (
 )
 SHARED_UI_PACKAGE = "@opendle/ui"
 SHARED_UI_SPEC = "git+https://github.com/tubededentifrice/opendle-ui.git#main"
+SHARED_NODE_DEPENDENCIES = {
+    SHARED_UI_PACKAGE: SHARED_UI_SPEC,
+    "@opendle/dev-tools": "git+https://github.com/opendle/opendle-lib.git#main",
+}
 CUTOFF = "2026-07-30T06:00:00Z"
 MINIMUM_RELEASE_AGE = timedelta(days=14)
 APPROVED_PYTHON_OVERRIDES = {
@@ -74,7 +78,7 @@ def check_package_json(path: Path) -> list[str]:
     errors: list[str] = []
     for field in ("dependencies", "devDependencies", "optionalDependencies"):
         for name, version in document.get(field, {}).items():
-            if name == SHARED_UI_PACKAGE and version == SHARED_UI_SPEC:
+            if (name, version) in SHARED_NODE_DEPENDENCIES.items():
                 continue
             if not EXACT_NPM.fullmatch(version):
                 errors.append(f"{path}: Node dependency is not exact: {name}@{version}")
