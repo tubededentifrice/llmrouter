@@ -1162,8 +1162,11 @@ host-neutral and MUST NOT contain a Router, Ontology, or Xbot data type.
 extension:
 
 ```tsx
-readonly selectedControlRef?: RefObject<HTMLElement | null>;
+readonly selectedControlRef?: RefObject<GraphControlElement | null>;
 ```
+
+The shared `GraphControlElement` type is `HTMLElement | SVGElement`. It covers
+HTML graph nodes and SVG graph edges for selection reachability and focus.
 
 When the reference contains a connected selected graph control, the shared
 workspace MUST use it for overlay reachability. A host that changes graph
