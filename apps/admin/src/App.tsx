@@ -1463,6 +1463,7 @@ function OperationsPage({
   const [activityState, updateActivity] = useReducer(
     (
       current: {
+        readonly confirmed: boolean;
         readonly items: readonly ActivityEvent[];
         readonly loadMoreFailure: string | null;
         readonly loadMorePending: boolean;
@@ -1472,6 +1473,7 @@ function OperationsPage({
       patch: Partial<typeof current>,
     ) => ({ ...current, ...patch }),
     {
+      confirmed: false,
       items: [],
       loadMoreFailure: null,
       loadMorePending: false,
@@ -1510,6 +1512,7 @@ function OperationsPage({
           "The activity list",
         );
         updateActivity({
+          confirmed: true,
           items,
           nextCursor: continuedPageCursor(
             page,
@@ -1751,7 +1754,9 @@ function OperationsPage({
               : activityPhase === "error"
                 ? {
                     kind: "error",
-                    message: "Retained activity is unavailable.",
+                    message: activityState.confirmed
+                      ? "Retained activity is stale. Refresh activity to try again."
+                      : "Retained activity is unavailable.",
                     onRetry: loadActivity,
                     retryLabel: "Try loading activity again",
                   }

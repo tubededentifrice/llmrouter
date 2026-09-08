@@ -1085,6 +1085,59 @@ describe("authenticated shell in a real browser", () => {
       await close(context, errors);
     }
   }, 60_000);
+  for (const { width, height } of [
+    { width: 1440, height: 1000 },
+    { width: 1100, height: 800 },
+    { width: 390, height: 844 },
+  ]) {
+    it(`retains confirmed activity on failed refresh at ${String(width)}`, async () => {
+      const { context, page, errors } = await open(width, height);
+      try {
+        await visit(page, "/operations");
+        await settle(page);
+        await page.evaluate(() => {
+          window.shellFixture.values.activityPage = {
+            items: [
+              {
+                id: "review-activity",
+                actor_subject: "fixture-administrator",
+                action: "review_action",
+                resource_type: "service",
+                resource_api_name: "root",
+                result: "succeeded",
+                occurred_at: "2026-08-25T00:00:00Z",
+              },
+            ],
+            page: { has_more: false },
+          };
+        });
+        const operations = page.getByRole("button", {
+          name: "Refresh operations",
+          exact: true,
+        });
+        await operations.click();
+        await settle(page);
+        await changeFixture(page, { fail: ["activityPage"] });
+        await operations.click();
+        await settle(page);
+        await browserExpect(
+          page
+            .getByText("review_action", { exact: true })
+            .filter({ visible: true }),
+        ).toBeVisible();
+        await browserExpect(
+          page.getByText(
+            "Retained activity is stale. Refresh activity to try again.",
+            { exact: true },
+          ),
+        ).toBeVisible();
+        await browserExpect(operations).toBeFocused();
+        await screenshot(page, `${width}-activity-stale-records`);
+      } finally {
+        await close(context, errors);
+      }
+    }, 30_000);
+  }
   it("lands at Overview after default sign-in", async () => {
     const { context, page, errors } = await open(1440, 1000, {
       signedOut: true,
