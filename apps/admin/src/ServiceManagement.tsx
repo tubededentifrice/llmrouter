@@ -913,7 +913,7 @@ function ServiceInspector({
           ? "Root service"
           : "Child service"
       }
-      {...(keyLifecycleActive || accessPending || busy ? {} : { onClose })}
+      onClose={onClose}
       returnFocusRef={returnFocusRef}
       title={selected.display_name}
       tone="lime"
@@ -1074,16 +1074,19 @@ function ServiceInspector({
 export function MissingProtectedKeyInspector({
   keyLifecycle,
   onClearKey,
+  onClose,
   onNotice,
 }: {
   readonly keyLifecycle: KeyCreationLifecycle;
   readonly onClearKey: () => void;
+  readonly onClose: () => void;
   readonly onNotice: NoticeHandler;
 }) {
   return (
     <GraphInspector
       activationKey={`protected-key-${keyLifecycle.serviceApiName}`}
       eyebrow="Service API key"
+      onClose={onClose}
       title={keyLifecycle.serviceApiName}
       tone="lime"
     >
@@ -1331,7 +1334,7 @@ function CreateServiceInspector({
       activationKey="create-service"
       closeLabel="Close create service"
       eyebrow="Service tree"
-      {...(busy ? {} : { onClose })}
+      onClose={onClose}
       returnFocusRef={returnFocusRef}
       title="Create service"
       tone="lime"
@@ -1559,6 +1562,7 @@ export function ServiceManagement({
     keyLifecycle !== null && selected === null ? (
       <MissingProtectedKeyInspector
         keyLifecycle={keyLifecycle}
+        onClose={closeInspector}
         onClearKey={() => {
           changeKeyLifecycle({ type: "clear" });
           globalThis.requestAnimationFrame(focusFirstServiceControl);

@@ -2716,7 +2716,7 @@ function ProviderInspector({
       activationKey={`${inspector.kind}:${inspector.apiName ?? "new"}`}
       actions={actions}
       eyebrow="Global provider connection"
-      {...(pending ? {} : { onClose: closeInspector })}
+      onClose={closeInspector}
       returnFocusRef={returnFocusRef}
       title={provider?.display_name ?? "Add provider"}
     >
@@ -3056,7 +3056,7 @@ function ModelInspector({
       activationKey={`${inspector.kind}:${inspector.apiName ?? "new"}`}
       actions={actions}
       eyebrow="Global canonical model"
-      {...(pending ? {} : { onClose: closeInspector })}
+      onClose={closeInspector}
       returnFocusRef={returnFocusRef}
       title={model?.display_name ?? "Add canonical model"}
     >
@@ -3473,7 +3473,7 @@ function MappingInspector({
       activationKey={`${inspector.kind}:${inspector.apiName ?? "new"}`}
       actions={actions}
       eyebrow="Global provider route"
-      {...(pending ? {} : { onClose: closeInspector })}
+      onClose={closeInspector}
       returnFocusRef={returnFocusRef}
       title={
         mapping === undefined
@@ -3971,7 +3971,7 @@ function AssignmentInspector({
           ? "Select a service"
           : `${serviceByName.get(selectedService)?.display_name ?? selectedService} configuration context`
       }
-      {...(pending ? {} : { onClose: closeInspector })}
+      onClose={closeInspector}
       returnFocusRef={returnFocusRef}
       title={assignment?.display_name ?? "Add assignment"}
     >

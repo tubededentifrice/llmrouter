@@ -462,7 +462,7 @@ describe("accepted administration composition", () => {
     expect(serviceSource).toContain("<DateTime");
     expect(serviceSource).not.toContain("globalThis.confirm");
     expect(serviceSource).toContain("Copy this key now");
-    expect(serviceSource).toContain(
+    expect(serviceSource).not.toContain(
       "keyLifecycleActive || accessPending || busy ? {} : { onClose }",
     );
     expect(serviceSource).toContain("serviceInteractionLocked");
@@ -617,6 +617,7 @@ describe("accepted administration composition", () => {
       <MissingProtectedKeyInspector
         keyLifecycle={pending}
         onClearKey={vi.fn()}
+        onClose={vi.fn()}
         onNotice={vi.fn()}
       />,
     );
@@ -631,6 +632,7 @@ describe("accepted administration composition", () => {
           serviceApiName: "removed-service",
         }}
         onClearKey={vi.fn()}
+        onClose={vi.fn()}
         onNotice={vi.fn()}
       />,
     );
