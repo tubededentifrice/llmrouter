@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useReducer,
   useRef,
@@ -1110,6 +1111,9 @@ export function MissingProtectedKeyInspector({
 }
 
 function ServiceGraph({
+  available,
+  initialState,
+  graphActions,
   inspector,
   layout,
   onCreate,
@@ -1119,6 +1123,9 @@ function ServiceGraph({
   selectedService,
   services,
 }: {
+  readonly available: boolean;
+  readonly initialState?: ReactNode;
+  readonly graphActions?: ReactNode;
   readonly inspector: ReactNode;
   readonly layout: TreeLayoutResult;
   readonly onCreate: (trigger: HTMLButtonElement) => void;
@@ -1217,14 +1224,19 @@ function ServiceGraph({
       toolbar={
         <GraphToolbar
           actions={
-            <Button
-              disabled={selectionLocked}
-              onClick={(event) => {
-                onCreate(event.currentTarget);
-              }}
-            >
-              <Icon name="plus" size={16} /> Create service
-            </Button>
+            <>
+              {graphActions}
+              {available ? (
+                <Button
+                  disabled={selectionLocked}
+                  onClick={(event) => {
+                    onCreate(event.currentTarget);
+                  }}
+                >
+                  <Icon name="plus" size={16} /> Create service
+                </Button>
+              ) : null}
+            </>
           }
         />
       }
@@ -1238,13 +1250,14 @@ function ServiceGraph({
         }}
         canvasWidth={width}
       >
-        {services.length === 0 ? (
-          <GraphEmptyState
-            description="Create a root service to start the service tree."
-            icon={<Icon name="layers" />}
-            title="No services"
-          />
-        ) : null}
+        {initialState ??
+          (services.length === 0 ? (
+            <GraphEmptyState
+              description="Create a root service to start the service tree."
+              icon={<Icon name="layers" />}
+              title="No services"
+            />
+          ) : null)}
         <GraphEdges height={height} width={width}>
           {layout.edges.map((edge) => {
             const source = layout.nodes.find(
@@ -1400,7 +1413,47 @@ function CreateServiceInspector({
   );
 }
 
+function useServiceNavigationGuard(
+  registerNavigationGuard: ((guard: () => boolean) => () => void) | undefined,
+  onNotice: (tone: "success" | "error", message: string) => void,
+  busyRef: RefObject<boolean>,
+  accessPendingCountRef: RefObject<number>,
+  keyLifecycleRef: RefObject<KeyCreationLifecycle | null>,
+) {
+  useLayoutEffect(
+    () =>
+      registerNavigationGuard?.(() => {
+        if (
+          !serviceInteractionLocked(
+            busyRef.current,
+            accessPendingCountRef.current,
+            keyLifecycleRef.current,
+          )
+        )
+          return true;
+        onNotice(
+          "error",
+          keyLifecycleRef.current?.phase === "shown"
+            ? "Copy and clear the one-time key before you leave this service."
+            : "Wait for each service, workspace, or key request to finish before you leave this service.",
+        );
+        return false;
+      }),
+    [
+      onNotice,
+      registerNavigationGuard,
+      busyRef,
+      accessPendingCountRef,
+      keyLifecycleRef,
+    ],
+  );
+}
+
 export function ServiceManagement({
+  available = true,
+  initialState,
+  registerNavigationGuard,
+  graphActions,
   client,
   csrf,
   onNotice,
@@ -1409,9 +1462,13 @@ export function ServiceManagement({
   selectedService,
   services,
 }: {
+  readonly available?: boolean;
+  readonly initialState?: ReactNode;
+  readonly registerNavigationGuard?: (guard: () => boolean) => () => void;
   readonly client: AdministrationClient;
   readonly csrf: string;
   readonly onNotice: (tone: "success" | "error", message: string) => void;
+  readonly graphActions?: ReactNode;
   readonly onRefresh: () => Promise<void>;
   readonly onSelect: (name: string) => void;
   readonly selectedService: string;
@@ -1430,6 +1487,13 @@ export function ServiceManagement({
   const busyRef = useRef(false);
   const accessPendingCountRef = useRef(0);
   const keyLifecycleRef = useRef<KeyCreationLifecycle | null>(null);
+  useServiceNavigationGuard(
+    registerNavigationGuard,
+    onNotice,
+    busyRef,
+    accessPendingCountRef,
+    keyLifecycleRef,
+  );
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const selectedControlRef = useRef<HTMLElement | null>(null);
   const protectedService = protectedServiceApiName(
@@ -1639,6 +1703,9 @@ export function ServiceManagement({
   return (
     <PageSurface className="service-management" edgeToEdge>
       <ServiceGraph
+        available={available}
+        initialState={available ? undefined : initialState}
+        graphActions={graphActions}
         inspector={inspector}
         layout={layout}
         onCreate={(trigger) => {
@@ -1669,11 +1736,10 @@ export function ServiceManagement({
           setCreateError(null);
           onSelect(name);
         }}
-        selectionLocked={serviceInteractionLocked(
-          busy,
-          accessPendingCount,
-          keyLifecycle,
-        )}
+        selectionLocked={
+          !available ||
+          serviceInteractionLocked(busy, accessPendingCount, keyLifecycle)
+        }
         selectedControlRef={selectedControlRef}
         selectedService={protectedService}
         services={services}

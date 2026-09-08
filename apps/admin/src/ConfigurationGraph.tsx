@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type Dispatch,
+  type ReactNode,
   type RefObject,
   type SetStateAction,
   type SubmitEvent,
@@ -87,6 +88,10 @@ import {
 } from "./playgroundState.ts";
 
 interface ConfigurationGraphProps {
+  readonly toolbar?: {
+    readonly leading?: ReactNode;
+    readonly actions?: ReactNode;
+  };
   readonly assignments: readonly Assignment[];
   readonly assignmentPhase?: ConfigurationLoadPhase;
   readonly catalogPhase?: ConfigurationLoadPhase;
@@ -2504,32 +2509,38 @@ export function ConfigurationGraph(props: ConfigurationGraphProps) {
           available. This graph does not claim to be complete.
         </StatePanel>
       ) : null}
-      {globalPhase === "loading" && !hasSafeRecords ? (
-        graphState
-      ) : (
-        <>
-          {globalPhase === "loading" ||
-          (globalPhase === "error" && !hasSafeRecords)
-            ? graphState
-            : null}
-          <RelationshipGraph
-            aria-label="LLM configuration relationships"
-            auxiliaryInspector={auxiliaryInspector}
-            columns={columns}
-            emptyState={emptyCatalogState}
-            inspector={selectedNodeInspector}
-            noResultsDescription="Change the search or restore the complete configuration board."
-            noResultsTitle="No configuration matches this search."
-            onNodeActivate={activate}
-            onSelectionChange={onSelectionChange}
-            relationships={relationships}
-            partialNoResultsDescription="Load more records or change the search to continue."
-            partialNoResultsTitle="No matches in loaded records."
-            searchLabel="Search configuration"
-            selectedNodeId={selectedNodeId}
-          />
-        </>
-      )}
+      {globalPhase === "loading" || (globalPhase === "error" && !hasSafeRecords)
+        ? graphState
+        : null}
+      <RelationshipGraph
+        aria-label="LLM configuration relationships"
+        auxiliaryInspector={auxiliaryInspector}
+        columns={
+          globalPhase === "loading" && !hasSafeRecords
+            ? [
+                { ...columns[0], nodes: [] },
+                { ...columns[1], nodes: [] },
+                { ...columns[2], nodes: [] },
+              ]
+            : columns
+        }
+        emptyState={
+          globalPhase === "loading" && !hasSafeRecords
+            ? "Loading configuration."
+            : emptyCatalogState
+        }
+        inspector={selectedNodeInspector}
+        noResultsDescription="Change the search or restore the complete configuration board."
+        noResultsTitle="No configuration matches this search."
+        onNodeActivate={activate}
+        onSelectionChange={onSelectionChange}
+        relationships={relationships}
+        partialNoResultsDescription="Load more records or change the search to continue."
+        partialNoResultsTitle="No matches in loaded records."
+        {...(props.toolbar === undefined ? {} : { toolbar: props.toolbar })}
+        searchLabel="Search configuration"
+        selectedNodeId={selectedNodeId}
+      />
       <ConfirmationDialog
         confirmLabel={
           deleteTarget?.kind === "draft"

@@ -238,7 +238,7 @@ describe("accepted administration composition", () => {
 
     expect(
       application.match(/<PageSurface className="administration-page">/g),
-    ).toHaveLength(7);
+    ).toHaveLength(4);
     expect(application.match(/<DataTable/g)).toHaveLength(3);
     expect(application).not.toContain("<table");
     expect(application).not.toContain("EmptyTable");
@@ -253,7 +253,7 @@ describe("accepted administration composition", () => {
     expect(application.match(/loadMore: \{/g)).toHaveLength(2);
     expect(styles).not.toContain(".administration-table-region");
     expect(styles).toContain(".administration-data-table");
-    expect(styles).toContain("padding-block: 32px 76px");
+    expect(styles).not.toContain("padding-block: 32px 76px");
   });
 
   it("keeps an unavailable selected log explicit and recoverable", () => {
@@ -424,7 +424,7 @@ describe("accepted administration composition", () => {
     expect(applicationSource).not.toMatch(/<(?:select|textarea)\b/);
     expect(applicationSource.match(/<input\b/g)).toHaveLength(4);
     expect(applicationSource.match(/type="datetime-local"/g)).toHaveLength(4);
-    expect(applicationSource).toContain('aria-label="Selected service"');
+    expect(applicationSource).toContain('aria-label="Service context"');
     expect(serviceSource).toContain("EditableTable");
     expect(serviceSource).toContain("ConfirmationDialog");
     expect(serviceSource).toContain("SecretRevealPanel");

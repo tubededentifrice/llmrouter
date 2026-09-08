@@ -1,7 +1,7 @@
 import {
   useCallback,
   useEffect,
-  useEffectEvent,
+  useLayoutEffect,
   useMemo,
   useReducer,
   useRef,
@@ -15,7 +15,6 @@ import {
   ApplicationNavigationGroup,
   ApplicationShell,
   ApplicationSidebar,
-  ApplicationTopbar,
   Button,
   CheckboxControl,
   ConfirmationDialog,
@@ -23,7 +22,7 @@ import {
   DateTime,
   Icon,
   MobileNavigation,
-  NavigationItem,
+  NavigationLink,
   NumberControl,
   PageHeading,
   PageSurface,
@@ -33,12 +32,12 @@ import {
   SessionPage,
   SelectControl,
   ShellErrorBoundary,
+  SkipLink,
   StatCard,
   StatePanel,
   StatusPill,
   Toast,
   TextControl,
-  WorkspaceSelector,
   type DataTableAction,
   type DataTableColumn,
   type IconName,
@@ -72,7 +71,6 @@ import { ConfigurationGraph } from "./ConfigurationGraph.tsx";
 import { createScopeLoadGuard } from "./accessState.ts";
 import type { ConfigurationLoadPhase } from "./configurationState.ts";
 import {
-  expireAdministratorSessionLoads,
   invalidateRetainedMediaLoad,
   updateRetentionDuration,
 } from "./administrationSafety.ts";
@@ -103,10 +101,6 @@ interface AppData {
   readonly health: AdministratorHealth | null;
   readonly retentionDays: number | null;
 }
-
-type GlobalSourceResults = Awaited<
-  ReturnType<typeof loadGlobalAdministrationSources>
->;
 
 function callGlobalSource<T>(source: () => Promise<T>): Promise<T> {
   return Promise.resolve().then(source);
@@ -144,37 +138,6 @@ export async function loadGlobalAdministrationSources(
   };
 }
 
-function settledItems<T>(
-  result: PromiseSettledResult<{ readonly items: readonly T[] }>,
-  previous: readonly T[],
-): readonly T[] {
-  return result.status === "fulfilled" ? result.value.items : previous;
-}
-
-function settledPagePhase(
-  results: readonly PromiseSettledResult<{
-    readonly page: { readonly has_more: boolean };
-    readonly retrieval?: { readonly complete: boolean };
-  }>[],
-): ConfigurationLoadPhase {
-  if (results.some((result) => result.status === "rejected")) return "error";
-  return results.some(
-    (result) =>
-      result.status === "fulfilled" &&
-      (result.value.page.has_more ||
-        result.value.retrieval?.complete === false),
-  )
-    ? "partial"
-    : "ready";
-}
-
-function globalSourceFailures(
-  results: GlobalSourceResults,
-): readonly unknown[] {
-  return Object.values(results).flatMap((result) =>
-    result.status === "rejected" ? [result.reason as unknown] : [],
-  );
-}
 const routes: readonly {
   readonly id: Section;
   readonly label: string;
@@ -189,7 +152,7 @@ const routes: readonly {
     icon: "spark",
     group: "Manage",
   },
-  { id: "logs", label: "Detailed logs", icon: "list", group: "Observe" },
+  { id: "logs", label: "Logs", icon: "list", group: "Observe" },
   {
     id: "statistics",
     label: "Usage & cost",
@@ -439,32 +402,6 @@ function LoadingPage({
     </StatePanel>
   );
 }
-function FailurePage({
-  message,
-  onRetry,
-}: {
-  readonly message: string;
-  readonly onRetry: () => void;
-}) {
-  return (
-    <StatePanel
-      kind="error"
-      onRetry={onRetry}
-      title="The administration data is not available"
-    >
-      {message}
-    </StatePanel>
-  );
-}
-
-function AdministrationStatePage({
-  children,
-}: {
-  readonly children: ReactNode;
-}) {
-  return <PageSurface className="administration-page">{children}</PageSurface>;
-}
-
 function SignIn({
   client,
   expired,
@@ -507,42 +444,84 @@ function SignIn({
   );
 }
 
-function Overview({ data }: { readonly data: AppData }) {
-  const cooldowns = data.providerModels.filter((item) => item.cooldown != null);
+function Overview({ resource }: { readonly resource: RouteSources }) {
+  const { data, confirmed, failures, pending } = resource;
+  const cooldowns = data.providerModels.filter(
+    (item) =>
+      item.cooldown != null &&
+      Date.parse(item.cooldown.until) > resource.checkedAt,
+  );
+  const anyConfirmed = Object.values(confirmed).some(Boolean);
   return (
     <PageSurface className="administration-page">
       <PageHeading
-        description="Inspect the current global calling service."
         eyebrow="Global administration"
-        title="Router overview"
+        title="Overview"
+        actions={
+          <RefreshAction
+            label="Refresh overview"
+            pending={pending}
+            onRefresh={resource.load}
+          />
+        }
       />
-      <section className="resource-totals" aria-label="Resource totals">
-        <StatCard
-          icon={<Icon name="server" />}
-          label="Services"
-          value={String(data.services.length)}
-        />
-        <StatCard
-          icon={<Icon name="cloud" />}
-          label="Provider connections"
-          value={String(data.providers.length)}
-        />
-        <StatCard
-          icon={<Icon name="spark" />}
-          label="Provider-models"
-          value={String(data.providerModels.length)}
-        />
-        <StatCard
-          icon={<Icon name="warning" />}
-          label="Current cooldowns"
-          value={String(cooldowns.length)}
-        />
-      </section>
-      {data.health === null ? (
-        <StatePanel kind="error" title="Health unavailable">
-          Refresh the administration data to try the health read again.
+      {pending && !anyConfirmed ? (
+        <LoadingPage title="Loading Overview." />
+      ) : null}
+      {!pending && !anyConfirmed ? (
+        <StatePanel kind="error" title="Overview is unavailable.">
+          <RefreshAction
+            label="Retry Overview"
+            pending={pending}
+            onRefresh={resource.load}
+          />
         </StatePanel>
-      ) : (
+      ) : null}
+      <SourceFailures resource={resource} retryLabel="Retry Overview" />
+      {Object.values(resource.phases).includes("partial") ? (
+        <StatePanel kind="empty" title="Overview is partial.">
+          Some resource lists are incomplete. Refresh overview to try again.
+        </StatePanel>
+      ) : null}
+      {anyConfirmed ? (
+        <section className="resource-totals" aria-label="Resource totals">
+          <StatCard
+            icon={<Icon name="server" />}
+            label="Services"
+            value={
+              confirmed.services ? String(data.services.length) : "Unavailable"
+            }
+          />
+          <StatCard
+            icon={<Icon name="cloud" />}
+            label="Provider connections"
+            value={
+              confirmed.providers
+                ? String(data.providers.length)
+                : "Unavailable"
+            }
+          />
+          <StatCard
+            icon={<Icon name="spark" />}
+            label="Provider-models"
+            value={
+              confirmed.providerModels
+                ? String(data.providerModels.length)
+                : "Unavailable"
+            }
+          />
+          <StatCard
+            icon={<Icon name="warning" />}
+            label="Current cooldowns"
+            value={
+              confirmed.providerModels
+                ? String(cooldowns.length)
+                : "Unavailable"
+            }
+          />
+        </section>
+      ) : null}
+      {data.health === null ? null : (
         <Panel>
           <PanelHeader
             description={
@@ -565,6 +544,11 @@ function Overview({ data }: { readonly data: AppData }) {
           </ul>
         </Panel>
       )}
+      {Object.keys(failures).length > 0 && anyConfirmed ? (
+        <p role="status">
+          Overview is partial or stale. Retry the failed summaries.
+        </p>
+      ) : null}
     </PageSurface>
   );
 }
@@ -1457,6 +1441,8 @@ function OperationsPage({
   onRefresh,
   providerModels,
   retentionDays,
+  refreshPending,
+  initialPhases,
 }: {
   readonly client: AdministrationClient;
   readonly csrf: string;
@@ -1465,6 +1451,13 @@ function OperationsPage({
   readonly onRefresh: () => Promise<void>;
   readonly providerModels: readonly ProviderModel[];
   readonly retentionDays: number | null;
+  readonly refreshPending: boolean;
+  readonly initialPhases: Readonly<
+    Record<
+      "health" | "retentionDays" | "providerModels",
+      ConfigurationLoadPhase
+    >
+  >;
 }) {
   const range = useMemo(() => isoRange(7), []);
   const [activityState, updateActivity] = useReducer(
@@ -1530,7 +1523,7 @@ function OperationsPage({
       })
       .catch((error: unknown) => {
         if (!activityLoadGuard.current.isCurrent(generation)) return;
-        updateActivity({ items: [], phase: "error" });
+        updateActivity({ phase: "error" });
         onNotice(
           "error",
           error instanceof AdministrationApiError
@@ -1620,10 +1613,21 @@ function OperationsPage({
       <PageHeading
         description="Inspect current health, best-effort cooldowns, retention, and basic configuration activity."
         eyebrow="Operations"
-        title="Activity and health"
+        title="Activity & health"
+        actions={
+          <RefreshAction
+            label="Refresh operations"
+            pending={refreshPending || activityPhase === "loading"}
+            onRefresh={() =>
+              Promise.all([onRefresh(), loadActivity()]).then(() => undefined)
+            }
+          />
+        }
       />
       <div className="administration-sections">
-        {health === null ? (
+        {health === null && initialPhases.health === "loading" ? (
+          <LoadingPage title="Loading health." />
+        ) : health === null ? (
           <StatePanel kind="error" title="Health unavailable">
             Refresh the administration data to try the health read again.
           </StatePanel>
@@ -1648,7 +1652,9 @@ function OperationsPage({
             </ul>
           </Panel>
         )}
-        {retentionDays === null ? (
+        {retentionDays === null && initialPhases.retentionDays === "loading" ? (
+          <LoadingPage title="Loading retention." />
+        ) : retentionDays === null ? (
           <StatePanel kind="error" title="Retention unavailable">
             Refresh the administration data to try the retention read again.
           </StatePanel>
@@ -1676,7 +1682,11 @@ function OperationsPage({
           title="Current provider-model cooldowns"
         />
         <ul className="record-list">
-          {cooldowns.length === 0 ? (
+          {initialPhases.providerModels === "loading" ? (
+            <li>Loading current cooldowns.</li>
+          ) : initialPhases.providerModels === "error" ? (
+            <li>Current cooldowns are unavailable.</li>
+          ) : cooldowns.length === 0 ? (
             <li>No current cooldowns</li>
           ) : (
             cooldowns.map((item) => (
@@ -1769,520 +1779,923 @@ export interface AppProps {
 }
 const defaultAdministrationClient = createAdministrationClient();
 
-interface MainState {
-  readonly assignments: readonly Assignment[];
-  readonly assignmentPhase: ConfigurationLoadPhase;
-  readonly assignmentPending: boolean;
-  readonly catalogPhase: ConfigurationLoadPhase;
-  readonly configurationPhase: ConfigurationLoadPhase;
-  readonly data: AppData | null;
-  readonly failure: string | null;
-  readonly notice: Notice | null;
-  readonly providerPhase: ConfigurationLoadPhase;
-  readonly assignmentDirty: boolean;
-  readonly pendingService: string | null;
-  readonly section: Section;
-  readonly selectedService: string;
-  readonly sessionState: {
-    readonly status:
-      "loading" | "active" | "signed-out" | "expired" | "denied" | "failed";
-    readonly session?: AdministratorSession;
-    readonly message?: string;
-  };
+type Source = keyof AppData;
+const overviewSources: readonly Source[] = [
+  "services",
+  "providers",
+  "providerModels",
+  "health",
+];
+const configurationSources: readonly Source[] = [
+  "services",
+  "providers",
+  "models",
+  "providerModels",
+  "credentials",
+];
+const serviceSources: readonly Source[] = ["services"];
+const operationSources: readonly Source[] = [
+  "health",
+  "retentionDays",
+  "providerModels",
+];
+const sourceLabels: Record<Source, string> = {
+  services: "Services",
+  providers: "Provider connections",
+  models: "Canonical models",
+  providerModels: "Provider-models and current cooldowns",
+  credentials: "Credentials",
+  health: "Small health summary",
+  retentionDays: "Retention",
+};
+const emptyData: AppData = {
+  services: [],
+  providers: [],
+  models: [],
+  providerModels: [],
+  credentials: [],
+  health: null,
+  retentionDays: null,
+};
+interface RouteSourceState {
+  readonly checkedAt: number;
+  readonly data: AppData;
+  readonly confirmed: Partial<Record<Source, boolean>>;
+  readonly phases: Partial<Record<Source, ConfigurationLoadPhase>>;
+  readonly failures: Partial<Record<Source, string>>;
+  readonly pending: boolean;
 }
 
-function initialMainState(): MainState {
-  return {
-    assignments: [],
-    assignmentPhase: "ready",
-    assignmentPending: false,
-    catalogPhase: "loading",
-    configurationPhase: "loading",
-    data: null,
-    failure: null,
-    notice: null,
-    providerPhase: "loading",
-    assignmentDirty: false,
-    pendingService: null,
-    section: currentSection(),
-    selectedService: selectedServiceFromLocation(),
-    sessionState: { status: "loading" },
-  };
-}
-
-function AuthenticatedAdministration({
-  assignments,
-  assignmentPhase,
-  assignmentPending,
-  catalogPhase,
-  client,
-  configurationPhase,
-  data,
-  failure,
-  loadGlobal,
-  loadScope,
-  navigate,
-  notice,
-  notify,
-  onDismissNotice,
-  onAssignmentDirtyChange,
-  onAssignmentPendingChange,
-  providerPhase,
-  section,
-  selectService,
-  selectedService,
-  session,
-}: {
-  readonly assignments: readonly Assignment[];
-  readonly assignmentPhase: ConfigurationLoadPhase;
-  readonly assignmentPending: boolean;
-  readonly catalogPhase: ConfigurationLoadPhase;
-  readonly client: AdministrationClient;
-  readonly configurationPhase: ConfigurationLoadPhase;
-  readonly data: AppData | null;
-  readonly failure: string | null;
-  readonly loadGlobal: () => Promise<void>;
-  readonly loadScope: () => Promise<void>;
-  readonly navigate: (id: string) => void;
-  readonly notice: Notice | null;
-  readonly notify: (tone: "success" | "error", message: string) => void;
-  readonly onDismissNotice: () => void;
-  readonly onAssignmentDirtyChange: (dirty: boolean) => void;
-  readonly onAssignmentPendingChange: (pending: boolean) => void;
-  readonly providerPhase: ConfigurationLoadPhase;
-  readonly section: Section;
-  readonly selectService: (value: string) => void;
-  readonly selectedService: string;
-  readonly session: AdministratorSession;
-}) {
-  const sidebar = (
-    <ApplicationSidebar
-      brand={
-        <div className="application-brand">
-          <span>
-            <Icon name="spark" size={19} />
-          </span>
-          <strong>LLM Router</strong>
-        </div>
-      }
-      context={
-        <WorkspaceSelector
-          avatar={<Icon name="server" />}
-          detail="Global administrator"
-          name={
-            data?.services.find((item) => item.api_name === selectedService)
-              ?.display_name ?? "All services"
+/** Each mounted route owns its reads, confirmed values, and response generation. */
+function useRouteSources(
+  client: AdministrationClient,
+  sources: readonly Source[],
+) {
+  const [state, update] = useReducer(
+    (
+      current: RouteSourceState,
+      patch: Partial<RouteSourceState>,
+    ): RouteSourceState => ({ ...current, ...patch }),
+    {
+      checkedAt: 0,
+      data: emptyData,
+      confirmed: {},
+      phases: {},
+      failures: {},
+      pending: true,
+    },
+  );
+  const stateRef = useRef(state);
+  useLayoutEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+  const guard = useRef(createScopeLoadGuard());
+  const pending = useRef<Promise<void> | null>(null);
+  const load = useCallback((): Promise<void> => {
+    if (pending.current !== null) return pending.current;
+    const generation = guard.current.begin();
+    update({ pending: true });
+    async function read(source: Source) {
+      if (source === "health")
+        return { value: await client.health(), partial: false };
+      if (source === "retentionDays")
+        return {
+          value: (await client.retention()).duration_days,
+          partial: false,
+        };
+      const page = await client[source]();
+      return {
+        value: page.items,
+        partial: page.page.has_more || page.retrieval?.complete === false,
+      };
+    }
+    const request = Promise.allSettled(sources.map(read))
+      .then((results) => {
+        if (!guard.current.isCurrent(generation)) return;
+        const previous = stateRef.current;
+        const values = Object.fromEntries(
+          results.flatMap((result, index) =>
+            result.status === "fulfilled"
+              ? [[sources[index], result.value.value]]
+              : [],
+          ),
+        ) as Partial<AppData>;
+        const confirmed = { ...previous.confirmed };
+        const phases = { ...previous.phases };
+        const failures: Partial<Record<Source, string>> = {};
+        results.forEach((result, index) => {
+          const source = sources[index];
+          if (source === undefined) return;
+          if (result.status === "fulfilled") {
+            confirmed[source] = true;
+            phases[source] = result.value.partial ? "partial" : "ready";
+          } else {
+            phases[source] = "error";
+            const reason: unknown = result.reason;
+            failures[source] = errorMessage(reason);
           }
-        />
-      }
-      footer={
-        <>
-          <AccountMenu
-            avatar={session.display_name.slice(0, 2).toUpperCase()}
-            detail={
-              <>
-                Expires <RouterDateTime value={session.expires_at} />
-              </>
-            }
-            name={session.display_name}
-          />
-          <Button
-            onClick={() => {
-              void client
-                .logout(session.csrf_token)
-                .then(() => {
-                  globalThis.location.reload();
-                })
-                .catch((error: unknown) => {
-                  notify("error", errorMessage(error));
-                });
-            }}
-            variant="quiet"
-          >
-            <Icon name="logout" size={16} /> Sign out
-          </Button>
-        </>
-      }
-      navigation={
-        <ApplicationNavigation aria-label="Administration navigation">
-          {(["Manage", "Observe"] as const).map((group) => (
-            <ApplicationNavigationGroup key={group} label={group}>
-              {routes.flatMap((route) =>
-                route.group === group
-                  ? [
-                      <NavigationItem
-                        active={route.id === section}
-                        icon={<Icon name={route.icon} size={17} />}
-                        key={route.id}
-                        label={route.label}
-                        onClick={() => {
-                          navigate(route.id);
-                        }}
-                      />,
-                    ]
-                  : [],
-              )}
-            </ApplicationNavigationGroup>
-          ))}
-        </ApplicationNavigation>
-      }
-    />
-  );
-  const topbar = (
-    <ApplicationTopbar
-      actions={
-        <div className="administration-topbar-actions">
-          <SelectControl
-            aria-label="Selected service"
-            controlClassName="administration-service-selector"
-            disabled={assignmentPending}
-            label="Service"
-            onChange={(event) => {
-              selectService(event.currentTarget.value);
-            }}
-            value={selectedService}
-          >
-            <option value="">All services</option>
-            {data?.services.map((item) => (
-              <option key={item.api_name} value={item.api_name}>
-                {item.display_name}
-              </option>
-            ))}
-          </SelectControl>
-          <Button
-            disabled={assignmentPending}
-            onClick={() => {
-              void Promise.all([loadGlobal(), loadScope()]);
-            }}
-            variant="secondary"
-          >
-            <Icon name="refresh" size={16} /> Refresh
-          </Button>
-        </div>
-      }
-      title={routes.find((item) => item.id === section)?.label}
-    />
-  );
-  let content: ReactNode =
-    data === null ? (
-      <AdministrationStatePage>
-        {failure === null ? (
-          <LoadingPage />
-        ) : (
-          <FailurePage
-            message={failure}
-            onRetry={() => {
-              void loadGlobal();
-            }}
-          />
-        )}
-      </AdministrationStatePage>
-    ) : (
-      <Overview data={data} />
-    );
-  if (data !== null && section === "services")
-    content = (
-      <PageSurface className="administration-page">
-        <PageHeading
-          description="Create, move, inspect, and delete services in the one-parent tree."
-          eyebrow="Global administration"
-          title="Services and parent relationships"
-        />
-        <ServiceManagement
-          client={client}
-          csrf={session.csrf_token}
-          onNotice={notify}
-          onRefresh={loadGlobal}
-          onSelect={selectService}
-          selectedService={selectedService}
-          services={data.services}
-        />
-      </PageSurface>
-    );
-  if (data !== null && section === "configuration")
-    content = (
-      <PageSurface className="administration-page">
-        <PageHeading
-          description="Manage global providers, canonical models, provider-model mappings, prices, credentials, and the selected service assignments in one graph."
-          eyebrow="Global catalog and selected service context"
-          title="LLM configuration"
-        />
-        <ConfigurationGraph
-          assignmentPhase={assignmentPhase}
-          assignments={assignments}
-          catalogPhase={catalogPhase}
-          client={client}
-          credentials={data.credentials}
-          csrf={session.csrf_token}
-          globalPhase={configurationPhase}
-          models={data.models}
-          onAssignmentDirtyChange={onAssignmentDirtyChange}
-          onAssignmentPendingChange={onAssignmentPendingChange}
-          onNotice={notify}
-          onRefreshAssignments={loadScope}
-          onRefreshGlobal={loadGlobal}
-          providerModels={data.providerModels}
-          providerPhase={providerPhase}
-          providers={data.providers}
-          selectedService={selectedService}
-          services={data.services}
-        />
-      </PageSurface>
-    );
-  if (data !== null && section === "logs")
-    content = <LogsPage client={client} onNotice={notify} />;
-  if (data !== null && section === "statistics")
-    content = (
-      <StatisticsPage
-        client={client}
-        onNotice={notify}
-        services={data.services}
-      />
-    );
-  if (data !== null && section === "operations")
-    content = (
-      <OperationsPage
-        client={client}
-        csrf={session.csrf_token}
-        health={data.health}
-        onNotice={notify}
-        onRefresh={loadGlobal}
-        providerModels={data.providerModels}
-        retentionDays={data.retentionDays}
-      />
-    );
+        });
+        const next = {
+          checkedAt: Date.now(),
+          data: { ...previous.data, ...values },
+          confirmed,
+          phases,
+          failures,
+          pending: false,
+        };
+        stateRef.current = next;
+        update(next);
+      })
+      .finally(() => {
+        if (guard.current.isCurrent(generation)) pending.current = null;
+      });
+    pending.current = request;
+    return request;
+  }, [client, sources]);
+  useEffect(() => {
+    const loadGuard = guard.current;
+    const timer = globalThis.setTimeout(() => {
+      void load();
+    }, 0);
+    return () => {
+      globalThis.clearTimeout(timer);
+      loadGuard.invalidate();
+      pending.current = null;
+    };
+  }, [load]);
+  return { ...state, load };
+}
+
+type RouteSources = ReturnType<typeof useRouteSources>;
+function RefreshAction({
+  label,
+  pending,
+  onRefresh,
+}: {
+  readonly label: string;
+  readonly pending: boolean;
+  readonly onRefresh: () => Promise<void>;
+}) {
   return (
-    <ShellErrorBoundary
-      fallbackMessage="Reload the page. No automatic write was attempted."
-      fallbackTitle="The administration interface stopped"
-      resetKey={section}
+    <Button
+      aria-busy={pending}
+      aria-disabled={pending}
+      onClick={() => {
+        if (!pending) void onRefresh();
+      }}
+      variant="secondary"
     >
+      <Icon name="refresh" size={16} />
+      {label}
+    </Button>
+  );
+}
+function SourceFailures({
+  resource,
+  retryLabel,
+}: {
+  readonly resource: RouteSources;
+  readonly retryLabel: string;
+}) {
+  return (
+    <>
+      {Object.entries(resource.failures).map(([name, message]) => {
+        const source = name as Source;
+        return (
+          <StatePanel
+            key={source}
+            kind="error"
+            title={`${sourceLabels[source]} ${resource.confirmed[source] ? "is stale." : "is unavailable."}`}
+          >
+            {message}{" "}
+            <RefreshAction
+              label={retryLabel}
+              pending={resource.pending}
+              onRefresh={resource.load}
+            />
+          </StatePanel>
+        );
+      })}
+    </>
+  );
+}
+function resourcePhase(
+  resource: RouteSources,
+  sources: readonly Source[],
+): ConfigurationLoadPhase {
+  if (sources.some((source) => resource.phases[source] === "error"))
+    return "error";
+  if (sources.some((source) => !resource.confirmed[source])) return "loading";
+  if (sources.some((source) => resource.phases[source] === "partial"))
+    return "partial";
+  return "ready";
+}
+
+interface RouteLocation {
+  readonly entry?: number;
+  readonly pathname: string;
+  readonly search: string;
+}
+function readLocation(): RouteLocation {
+  return typeof location === "undefined"
+    ? { pathname: "/overview", search: "" }
+    : { pathname: location.pathname, search: location.search };
+}
+function normalizedLocation(): RouteLocation {
+  const current = readLocation();
+  const pathname =
+    current.pathname === "/"
+      ? "/overview"
+      : current.pathname === "/access"
+        ? "/services"
+        : legacyConfigurationPaths.has(current.pathname.slice(1))
+          ? "/configuration"
+          : current.pathname;
+  const query = new URLSearchParams(current.search);
+  if (pathname !== "/services" && pathname !== "/configuration")
+    query.delete("service");
+  const search = query.size === 0 ? "" : `?${query.toString()}`;
+  if (
+    typeof location !== "undefined" &&
+    (pathname !== current.pathname || search !== current.search)
+  )
+    globalThis.history.replaceState(
+      globalThis.history.state,
+      "",
+      `${pathname}${search}`,
+    );
+  return { pathname, search };
+}
+function sectionForPath(pathname: string): Section {
+  const value = pathname.slice(1);
+  return routes.find((route) => route.id === value)?.id ?? "overview";
+}
+function destinationPath(id: Section, service: string): string {
+  return `/${id}${service !== "" && (id === "services" || id === "configuration") ? `?service=${encodeURIComponent(service)}` : ""}`;
+}
+interface RouteProps {
+  readonly client: AdministrationClient;
+  readonly session: AdministratorSession;
+  readonly location: RouteLocation;
+  readonly navigate: (path: string, replace?: boolean) => void;
+  readonly canNavigate: () => boolean;
+  readonly registerNavigationGuard: (guard: () => boolean) => () => void;
+}
+function useRouteNotice() {
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const notify = useCallback((tone: "success" | "error", message: string) => {
+    setNotice({ tone, message });
+  }, []);
+  return {
+    notice,
+    notify,
+    dismiss: () => {
+      setNotice(null);
+    },
+  };
+}
+function AuthenticatedAdministration({
+  children,
+  location: routeLocation,
+  session,
+  client,
+  navigate,
+  canNavigate,
+  destinations = routes.map((route) => ({ ...route, href: `/${route.id}` })),
+  notice,
+  onDismissNotice,
+  notify,
+}: {
+  readonly children: ReactNode;
+  readonly location: RouteLocation;
+  readonly session: AdministratorSession;
+  readonly client: AdministrationClient;
+  readonly navigate: (path: string) => void;
+  readonly canNavigate: () => boolean;
+  readonly destinations?: readonly ((typeof routes)[number] & {
+    readonly href: string;
+  })[];
+  readonly notice?: Notice | null;
+  readonly onDismissNotice?: () => void;
+  readonly notify: (tone: "success" | "error", message: string) => void;
+}) {
+  const section = sectionForPath(routeLocation.pathname);
+  useLayoutEffect(() => {
+    const heading = document.querySelector<HTMLElement>("#main-content h1");
+    if (heading) {
+      heading.tabIndex = -1;
+      document.title = `${heading.textContent} · LLM Router`;
+      heading.focus({ preventScroll: true });
+    }
+  }, [routeLocation.pathname, routeLocation.entry]);
+  const accountActions = (
+    <Button
+      onClick={() => {
+        if (!canNavigate()) return;
+        void client
+          .logout(session.csrf_token)
+          .then(() => {
+            globalThis.location.reload();
+          })
+          .catch((error: unknown) => {
+            notify("error", errorMessage(error));
+          });
+      }}
+      variant="quiet"
+    >
+      <Icon name="logout" size={16} /> Sign out
+    </Button>
+  );
+  const items = destinations.map((route) => ({
+    ...route,
+    icon: <Icon name={route.icon} />,
+    active: route.id === section,
+  }));
+  return (
+    <>
+      <SkipLink
+        href="#main-content"
+        label="Skip to content"
+        onClick={(event) => {
+          if (
+            event.button !== 0 ||
+            event.metaKey ||
+            event.ctrlKey ||
+            event.shiftKey ||
+            event.altKey
+          )
+            return;
+          event.preventDefault();
+          document.querySelector<HTMLElement>("#main-content h1")?.focus();
+        }}
+      />
       <ApplicationShell
         mainProps={{ id: "main-content", tabIndex: -1 }}
+        sidebar={
+          <ApplicationSidebar
+            brand={
+              <div className="application-brand">
+                <span>
+                  <Icon name="spark" size={19} />
+                </span>
+                <strong>LLM Router</strong>
+              </div>
+            }
+            context={<p>Global administrator</p>}
+            footer={
+              <>
+                <AccountMenu
+                  avatar={session.display_name.slice(0, 2).toUpperCase()}
+                  name={session.display_name}
+                  detail={
+                    <>
+                      Expires <RouterDateTime value={session.expires_at} />
+                    </>
+                  }
+                />
+                {accountActions}
+              </>
+            }
+            navigation={
+              <ApplicationNavigation aria-label="Administration navigation">
+                {(["Manage", "Observe"] as const).map((group) => (
+                  <ApplicationNavigationGroup key={group} label={group}>
+                    {destinations.map((route) =>
+                      route.group === group ? (
+                        <NavigationLink
+                          active={route.id === section}
+                          href={route.href}
+                          icon={<Icon name={route.icon} size={17} />}
+                          key={route.id}
+                          label={route.label}
+                          onClick={(event) => {
+                            if (
+                              event.button !== 0 ||
+                              event.metaKey ||
+                              event.ctrlKey ||
+                              event.shiftKey ||
+                              event.altKey
+                            )
+                              return;
+                            event.preventDefault();
+                            navigate(route.href);
+                          }}
+                        />
+                      ) : null,
+                    )}
+                  </ApplicationNavigationGroup>
+                ))}
+              </ApplicationNavigation>
+            }
+          />
+        }
         mobileNavigation={
           <MobileNavigation
             aria-label="Mobile administration navigation"
-            items={routes.map((route) => ({
-              id: route.id,
-              label: route.label,
-              icon: <Icon name={route.icon} />,
-              active: route.id === section,
-            }))}
-            onSelect={navigate}
+            items={items.slice(0, 1)}
+            onNavigate={(item, event) => {
+              event.preventDefault();
+              navigate(item.href);
+            }}
+            surface={{
+              label: "Navigation",
+              icon: <Icon name="menu" />,
+              applicationName: "LLM Router",
+              context: { label: "Administrator", value: session.display_name },
+              accountActions,
+              closeLabel: "Close navigation",
+              items,
+            }}
           />
         }
-        sidebar={sidebar}
-        topbar={topbar}
       >
-        <div className="administration-content">{content}</div>
-        {notice === null ? null : (
+        <div className="administration-content">
+          <ShellErrorBoundary
+            fallbackMessage="Reload this route to try again."
+            fallbackTitle="The administration interface stopped"
+            resetKey={routeLocation.pathname}
+          >
+            {children}
+          </ShellErrorBoundary>
+        </div>
+        {notice == null ? null : (
           <Toast
             className={`notice-${notice.tone}`}
             role={notice.tone === "error" ? "alert" : "status"}
-            onDismiss={onDismissNotice}
+            {...(onDismissNotice === undefined
+              ? {}
+              : { onDismiss: onDismissNotice })}
           >
             {notice.message}
           </Toast>
         )}
       </ApplicationShell>
-    </ShellErrorBoundary>
+    </>
+  );
+}
+function OverviewRoute(props: RouteProps) {
+  const resource = useRouteSources(props.client, overviewSources);
+  const notices = useRouteNotice();
+  return (
+    <AuthenticatedAdministration
+      {...props}
+      {...notices}
+      onDismissNotice={notices.dismiss}
+    >
+      <Overview resource={resource} />
+    </AuthenticatedAdministration>
+  );
+}
+function useServiceContext(props: RouteProps, resource: RouteSources) {
+  const { location, navigate } = props;
+  const query = new URLSearchParams(location.search);
+  const serviceCount = query.getAll("service").length;
+  const received = query.get("service") ?? "";
+  const selectedService = resource.data.services.some(
+    (service) => service.api_name === received,
+  )
+    ? received
+    : "";
+  const replaceService = useCallback(
+    (value: string) => {
+      const next = new URLSearchParams(location.search);
+      next.delete("service");
+      if (value !== "") next.set("service", value);
+      navigate(
+        `${location.pathname}${next.size === 0 ? "" : `?${next.toString()}`}`,
+        true,
+      );
+    },
+    [location.pathname, location.search, navigate],
+  );
+  useEffect(() => {
+    if (
+      resource.confirmed.services &&
+      (received !== selectedService || serviceCount > 1)
+    )
+      replaceService(selectedService);
+  }, [
+    received,
+    replaceService,
+    resource.confirmed.services,
+    selectedService,
+    serviceCount,
+  ]);
+  return {
+    selectedService,
+    replaceService,
+    destinations: routes.map((route) => ({
+      ...route,
+      href: destinationPath(route.id, selectedService),
+    })),
+  };
+}
+function ServicesRoute(props: RouteProps) {
+  const resource = useRouteSources(props.client, serviceSources);
+  const context = useServiceContext(props, resource);
+  const notices = useRouteNotice();
+  return (
+    <AuthenticatedAdministration
+      {...props}
+      {...notices}
+      destinations={context.destinations}
+      onDismissNotice={notices.dismiss}
+    >
+      <h1 className="od-visually-hidden" tabIndex={-1}>
+        Services
+      </h1>
+      <SourceFailures resource={resource} retryLabel="Retry services" />
+      <ServiceManagement
+        available={resource.confirmed.services === true}
+        initialState={
+          resource.pending ? (
+            <LoadingPage title="Loading Services." />
+          ) : (
+            <StatePanel kind="error" title="Services are unavailable.">
+              Retry services to continue.
+            </StatePanel>
+          )
+        }
+        registerNavigationGuard={props.registerNavigationGuard}
+        client={props.client}
+        csrf={props.session.csrf_token}
+        onNotice={notices.notify}
+        onRefresh={resource.load}
+        onSelect={context.replaceService}
+        selectedService={context.selectedService}
+        services={resource.data.services}
+        graphActions={
+          <RefreshAction
+            label="Refresh services"
+            pending={resource.pending}
+            onRefresh={resource.load}
+          />
+        }
+      />
+    </AuthenticatedAdministration>
+  );
+}
+function useAssignments(client: AdministrationClient, service: string) {
+  const [state, update] = useReducer(
+    (
+      current: {
+        readonly service: string;
+        readonly items: readonly Assignment[];
+        readonly phase: ConfigurationLoadPhase;
+        readonly pending: boolean;
+        readonly failure: string | null;
+      },
+      patch: Partial<typeof current>,
+    ) => ({
+      ...current,
+      ...(patch.service !== undefined && patch.service !== current.service
+        ? { items: [], phase: "loading" as const }
+        : {}),
+      ...patch,
+    }),
+    {
+      service,
+      items: [],
+      phase: service === "" ? "ready" : "loading",
+      pending: false,
+      failure: null,
+    },
+  );
+  const guard = useRef(createScopeLoadGuard());
+  const pending = useRef<Promise<void> | null>(null);
+  const load = useCallback((): Promise<void> => {
+    if (pending.current) return pending.current;
+    const generation = guard.current.begin();
+    if (service === "") {
+      update({
+        service,
+        items: [],
+        phase: "ready",
+        pending: false,
+        failure: null,
+      });
+      return Promise.resolve();
+    }
+    update({ service, pending: true, failure: null });
+    const request = client
+      .assignments(service)
+      .then((page) => {
+        if (guard.current.isCurrent(generation))
+          update({
+            service,
+            items: page.items,
+            phase:
+              page.page.has_more || page.retrieval?.complete === false
+                ? "partial"
+                : "ready",
+            pending: false,
+          });
+      })
+      .catch((error: unknown) => {
+        if (guard.current.isCurrent(generation))
+          update({
+            service,
+            phase: "error",
+            pending: false,
+            failure: errorMessage(error),
+          });
+      })
+      .finally(() => {
+        if (guard.current.isCurrent(generation)) pending.current = null;
+      });
+    pending.current = request;
+    return request;
+  }, [client, service]);
+  useLayoutEffect(() => {
+    const loadGuard = guard.current;
+    const timer = globalThis.setTimeout(() => {
+      void load();
+    }, 0);
+    return () => {
+      globalThis.clearTimeout(timer);
+      loadGuard.invalidate();
+      pending.current = null;
+    };
+  }, [load]);
+  return {
+    items: state.service === service ? state.items : [],
+    phase:
+      state.service === service
+        ? state.phase
+        : service === ""
+          ? ("ready" as const)
+          : ("loading" as const),
+    pending: state.service !== service || state.pending,
+    failure: state.service === service ? state.failure : null,
+    load,
+  };
+}
+function ConfigurationRoute(props: RouteProps) {
+  const resource = useRouteSources(props.client, configurationSources);
+  const { selectedService, replaceService, destinations } = useServiceContext(
+    props,
+    resource,
+  );
+  const assignments = useAssignments(props.client, selectedService);
+  const notices = useRouteNotice();
+  const assignmentDirty = useRef(false);
+  const [assignmentPending, setAssignmentPending] = useState(false);
+  const [pendingService, setPendingService] = useState<string | null>(null);
+  const serviceChangeReturnFocusRef = useRef<HTMLElement | null>(null);
+  function selectService(value: string, trigger: HTMLElement) {
+    if (value === selectedService) return;
+    if (assignmentPending) {
+      notices.notify(
+        "error",
+        "Wait for the selected service assignment write to finish.",
+      );
+      return;
+    }
+    if (assignmentDirty.current) {
+      serviceChangeReturnFocusRef.current = trigger;
+      setPendingService(value);
+      return;
+    }
+    replaceService(value);
+  }
+  const { registerNavigationGuard } = props;
+  const { notify } = notices;
+  useLayoutEffect(
+    () =>
+      registerNavigationGuard(() => {
+        if (!assignmentPending && !assignmentDirty.current) return true;
+        notify(
+          "error",
+          assignmentPending
+            ? "Wait for the selected service assignment write to finish."
+            : "Close the assignment form and confirm that you want to discard its changes before you leave this page.",
+        );
+        return false;
+      }),
+    [assignmentPending, notify, registerNavigationGuard],
+  );
+  const refresh = () =>
+    Promise.all([resource.load(), assignments.load()]).then(() => undefined);
+  return (
+    <AuthenticatedAdministration
+      {...props}
+      {...notices}
+      destinations={destinations}
+      onDismissNotice={notices.dismiss}
+    >
+      <h1 className="od-visually-hidden" tabIndex={-1}>
+        LLM configuration
+      </h1>
+      <SourceFailures resource={resource} retryLabel="Retry configuration" />
+      {assignments.failure === null ? null : (
+        <StatePanel kind="error" title="Assignments are stale or unavailable.">
+          {assignments.failure}
+        </StatePanel>
+      )}
+      <PageSurface edgeToEdge>
+        <ConfigurationGraph
+          assignmentPhase={assignments.phase}
+          assignments={assignments.items}
+          catalogPhase={resourcePhase(resource, ["models", "providerModels"])}
+          client={props.client}
+          credentials={resource.data.credentials}
+          csrf={props.session.csrf_token}
+          globalPhase={resourcePhase(resource, configurationSources)}
+          models={resource.data.models}
+          onAssignmentDirtyChange={(dirty) => {
+            assignmentDirty.current = dirty;
+          }}
+          onAssignmentPendingChange={setAssignmentPending}
+          onNotice={notices.notify}
+          onRefreshAssignments={assignments.load}
+          onRefreshGlobal={resource.load}
+          providerModels={resource.data.providerModels}
+          providerPhase={resourcePhase(resource, ["providers", "credentials"])}
+          providers={resource.data.providers}
+          selectedService={selectedService}
+          services={resource.data.services}
+          toolbar={{
+            leading: (
+              <SelectControl
+                aria-label="Service context"
+                label="Service context"
+                disabled={assignmentPending}
+                onChange={(event) => {
+                  selectService(event.currentTarget.value, event.currentTarget);
+                }}
+                value={selectedService}
+              >
+                <option value="">All services</option>
+                {resource.data.services.map((service) => (
+                  <option key={service.api_name} value={service.api_name}>
+                    {service.display_name}
+                  </option>
+                ))}
+              </SelectControl>
+            ),
+            actions: (
+              <RefreshAction
+                label="Refresh configuration"
+                pending={
+                  resource.pending || assignments.pending || assignmentPending
+                }
+                onRefresh={refresh}
+              />
+            ),
+          }}
+        />
+      </PageSurface>
+      <ConfirmationDialog
+        confirmLabel="Discard and change service"
+        description="The open assignment form has unsaved values. The service change closes that form and replaces only the assignment column."
+        impactStatement={`discard assignment changes for ${selectedService || "the selected service"}`}
+        onCancel={() => {
+          setPendingService(null);
+        }}
+        onConfirm={() => {
+          if (pendingService !== null) replaceService(pendingService);
+          setPendingService(null);
+          assignmentDirty.current = false;
+        }}
+        open={pendingService !== null}
+        pending={assignmentPending}
+        returnFocusRef={serviceChangeReturnFocusRef}
+        title="Discard assignment changes?"
+      />
+    </AuthenticatedAdministration>
+  );
+}
+function LogsRoute(props: RouteProps) {
+  const notices = useRouteNotice();
+  return (
+    <AuthenticatedAdministration
+      {...props}
+      {...notices}
+      onDismissNotice={notices.dismiss}
+    >
+      <LogsPage client={props.client} onNotice={notices.notify} />
+    </AuthenticatedAdministration>
+  );
+}
+function StatisticsRoute(props: RouteProps) {
+  const resource = useRouteSources(props.client, serviceSources);
+  const notices = useRouteNotice();
+  return (
+    <AuthenticatedAdministration
+      {...props}
+      {...notices}
+      onDismissNotice={notices.dismiss}
+    >
+      <StatisticsPage
+        client={props.client}
+        onNotice={notices.notify}
+        services={resource.data.services}
+      />
+      <SourceFailures resource={resource} retryLabel="Retry service filters" />
+    </AuthenticatedAdministration>
+  );
+}
+function OperationsRoute(props: RouteProps) {
+  const resource = useRouteSources(props.client, operationSources);
+  const notices = useRouteNotice();
+  return (
+    <AuthenticatedAdministration
+      {...props}
+      {...notices}
+      onDismissNotice={notices.dismiss}
+    >
+      <OperationsPage
+        client={props.client}
+        csrf={props.session.csrf_token}
+        health={resource.data.health}
+        onNotice={notices.notify}
+        onRefresh={resource.load}
+        providerModels={resource.data.providerModels}
+        retentionDays={resource.data.retentionDays}
+        refreshPending={resource.pending}
+        initialPhases={{
+          health: resource.confirmed.health
+            ? "ready"
+            : resourcePhase(resource, ["health"]),
+          retentionDays: resource.confirmed.retentionDays
+            ? "ready"
+            : resourcePhase(resource, ["retentionDays"]),
+          providerModels: resource.confirmed.providerModels
+            ? "ready"
+            : resourcePhase(resource, ["providerModels"]),
+        }}
+      />
+      <SourceFailures resource={resource} retryLabel="Retry operations" />
+    </AuthenticatedAdministration>
   );
 }
 
-// react-doctor-disable-next-line react-doctor/no-giant-component -- This session coordinator owns authentication, fenced global and selected-service loads, history, and the dirty-service transition as one boundary.
+interface SessionState {
+  readonly status:
+    "loading" | "active" | "signed-out" | "expired" | "denied" | "failed";
+  readonly session?: AdministratorSession;
+  readonly message?: string;
+}
 export function App({ client = defaultAdministrationClient }: AppProps) {
-  const [main, update] = useReducer(
-    (state: MainState, patch: Partial<MainState>) => ({ ...state, ...patch }),
-    undefined,
-    initialMainState,
-  );
-  const {
-    assignments,
-    assignmentPhase,
-    assignmentPending,
-    assignmentDirty,
-    catalogPhase,
-    configurationPhase,
-    data,
-    failure,
-    notice,
-    pendingService,
-    providerPhase,
-    section,
-    selectedService,
-    sessionState,
-  } = main;
-  const notify = useCallback(
-    (nextTone: "success" | "error", message: string) => {
-      update({ notice: { tone: nextTone, message } });
-    },
-    [],
-  );
-  const [scopeLoadGuard] = useState(createScopeLoadGuard);
-  const [globalLoadGuard] = useState(createScopeLoadGuard);
-  const selectedServiceRef = useRef(selectedService);
-  const dataRef = useRef(data);
-  useEffect(() => {
-    dataRef.current = data;
-  }, [data]);
-  const replaceLegacyConfigurationPath = useCallback(() => {
-    if (!legacyConfigurationPaths.has(globalThis.location.pathname.slice(1)))
-      return;
-    globalThis.history.replaceState(
-      {},
-      "",
-      `/configuration${globalThis.location.search}`,
-    );
-  }, []);
-  const preventUnsafeLocationRestore = useEffectEvent((): boolean => {
-    if (!assignmentDirty && !assignmentPending) return false;
-    const service = selectedServiceRef.current;
-    const query =
-      service === "" ? "" : `?service=${encodeURIComponent(service)}`;
-    globalThis.history.replaceState({}, "", `/${section}${query}`);
-    notify(
-      "error",
-      assignmentPending
-        ? "Wait for the selected service assignment write to finish."
-        : "Close the assignment form and confirm that you want to discard its changes before you change pages or services.",
-    );
-    return true;
+  const [sessionState, setSessionState] = useState<SessionState>({
+    status: "loading",
   });
+  const [location, setLocation] = useState(readLocation);
+  const navigationGuard = useRef<(() => boolean) | null>(null);
+  const historyIndex = useRef(0);
+  const restoringHistory = useRef(false);
+  const registerNavigationGuard = useCallback((guard: () => boolean) => {
+    navigationGuard.current = guard;
+    return () => {
+      if (navigationGuard.current === guard) navigationGuard.current = null;
+    };
+  }, []);
+  const canNavigate = useCallback(() => {
+    if (restoringHistory.current) return false;
+    if (navigationGuard.current?.() !== false) return true;
+    document
+      .querySelector<HTMLElement>("#main-content h1")
+      ?.focus({ preventScroll: true });
+    return false;
+  }, []);
   const expireAdministratorSession = useCallback(() => {
-    expireAdministratorSessionLoads(globalLoadGuard, scopeLoadGuard, () => {
-      update({
-        assignments: [],
-        assignmentPhase: "ready",
-        assignmentPending: false,
-        catalogPhase: "loading",
-        configurationPhase: "loading",
-        data: null,
-        providerPhase: "loading",
-        sessionState: { status: "expired" },
-      });
-    });
-  }, [globalLoadGuard, scopeLoadGuard]);
+    setSessionState({ status: "expired" });
+  }, []);
   const authenticatedClient = useMemo(
     () => withUnauthorizedSessionHandler(client, expireAdministratorSession),
     [client, expireAdministratorSession],
   );
   const inspectSession = useCallback(async () => {
     try {
-      update({
-        sessionState: { status: "active", session: await client.session() },
-      });
+      const session = await client.session();
+      const current = normalizedLocation();
+      const state: unknown = globalThis.history.state;
+      historyIndex.current =
+        state !== null &&
+        typeof state === "object" &&
+        "routerIndex" in state &&
+        typeof state.routerIndex === "number"
+          ? state.routerIndex
+          : 0;
+      globalThis.history.replaceState(
+        { routerIndex: historyIndex.current },
+        "",
+        `${current.pathname}${current.search}`,
+      );
+      setLocation(current);
+      setSessionState({ status: "active", session });
     } catch (error) {
-      if (error instanceof AdministrationApiError && error.status === 403)
-        update({ sessionState: { status: "denied", message: error.message } });
-      else if (error instanceof AdministrationApiError && error.status === 401)
-        update({ sessionState: { status: "signed-out" } });
-      else
-        update({
-          sessionState: {
-            status: "failed",
-            message: errorMessage(error),
-          },
-        });
+      setSessionState({
+        status:
+          error instanceof AdministrationApiError && error.status === 403
+            ? "denied"
+            : error instanceof AdministrationApiError && error.status === 401
+              ? "signed-out"
+              : "failed",
+        message: errorMessage(error),
+      });
     }
   }, [client]);
-  const loadGlobal = useCallback(async () => {
-    const generation = globalLoadGuard.begin();
-    update({
-      catalogPhase: "loading",
-      configurationPhase: "loading",
-      failure: null,
-      providerPhase: "loading",
-    });
-    // react-doctor-disable-next-line react-doctor/async-defer-await -- The next guard rejects a stale global load after all sources settle.
-    const results = await loadGlobalAdministrationSources(authenticatedClient);
-    if (!globalLoadGuard.isCurrent(generation)) return;
-    const previous = dataRef.current;
-    const providerPhase = settledPagePhase([
-      results.providers,
-      results.credentials,
-    ]);
-    const catalogPhase = settledPagePhase([
-      results.models,
-      results.providerModels,
-    ]);
-    const configurationPhase = settledPagePhase([
-      results.providers,
-      results.models,
-      results.providerModels,
-      results.credentials,
-    ]);
-    update({
-      catalogPhase,
-      configurationPhase,
-      data: {
-        services: settledItems(results.services, previous?.services ?? []),
-        providers: settledItems(results.providers, previous?.providers ?? []),
-        models: settledItems(results.models, previous?.models ?? []),
-        providerModels: settledItems(
-          results.providerModels,
-          previous?.providerModels ?? [],
-        ),
-        credentials: settledItems(
-          results.credentials,
-          previous?.credentials ?? [],
-        ),
-        health:
-          results.health.status === "fulfilled"
-            ? results.health.value
-            : (previous?.health ?? null),
-        retentionDays:
-          results.retention.status === "fulfilled"
-            ? results.retention.value.duration_days
-            : (previous?.retentionDays ?? null),
-      },
-      providerPhase,
-    });
-    const failures = globalSourceFailures(results);
-    if (failures.length > 0)
-      notify("error", failures.map(errorMessage).join(" "));
-    if (results.services.status === "fulfilled") {
-      const currentService = selectedServiceRef.current;
-      if (
-        currentService !== "" &&
-        !results.services.value.items.some(
-          (item) => item.api_name === currentService,
-        )
-      ) {
-        selectedServiceRef.current = "";
-        update({ selectedService: "" });
-        const url = new URL(globalThis.location.href);
-        url.searchParams.delete("service");
-        globalThis.history.replaceState({}, "", `${url.pathname}${url.search}`);
-      }
-    }
-  }, [authenticatedClient, globalLoadGuard, notify]);
-  const loadScope = useCallback((): Promise<void> => {
-    const generation = scopeLoadGuard.begin();
-    if (selectedService === "") {
-      update({ assignmentPhase: "ready", assignments: [] });
-      return Promise.resolve();
-    }
-    update({ assignmentPhase: "loading" });
-    return authenticatedClient
-      .assignments(selectedService)
-      .then((assignmentPage) => {
-        if (!scopeLoadGuard.isCurrent(generation)) return;
-        update({
-          assignmentPhase:
-            assignmentPage.page.has_more ||
-            assignmentPage.retrieval?.complete === false
-              ? "partial"
-              : "ready",
-          assignments: assignmentPage.items,
-        });
-      })
-      .catch((error: unknown) => {
-        if (!scopeLoadGuard.isCurrent(generation)) return;
-        update({ assignmentPhase: "error" });
-        notify("error", errorMessage(error));
-      });
-  }, [authenticatedClient, notify, scopeLoadGuard, selectedService]);
-  const sessionExpiresAt = sessionState.session?.expires_at;
   useEffect(() => {
     const timer = globalThis.setTimeout(() => {
       void inspectSession();
@@ -2291,106 +2704,66 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
       globalThis.clearTimeout(timer);
     };
   }, [inspectSession]);
+  const expiry = sessionState.session?.expires_at;
   useEffect(() => {
-    const timer = globalThis.setTimeout(() => {
-      if (sessionState.status === "active") void loadGlobal();
-    }, 0);
+    if (sessionState.status === "active" && expiry !== undefined)
+      return scheduleSessionExpiry(expiry, expireAdministratorSession);
+    return undefined;
+  }, [expiry, expireAdministratorSession, sessionState.status]);
+  useEffect(() => {
+    const restore = (event: PopStateEvent) => {
+      const state: unknown = event.state;
+      const targetIndex =
+        state !== null &&
+        typeof state === "object" &&
+        "routerIndex" in state &&
+        typeof state.routerIndex === "number"
+          ? state.routerIndex
+          : null;
+      if (restoringHistory.current) {
+        restoringHistory.current = false;
+        return;
+      }
+      if (!canNavigate() && targetIndex !== null) {
+        const delta = historyIndex.current - targetIndex;
+        if (delta !== 0) {
+          restoringHistory.current = true;
+          globalThis.history.go(delta);
+        }
+        return;
+      }
+      historyIndex.current = targetIndex ?? 0;
+      const next = normalizedLocation();
+      setLocation((current) => ({ ...next, entry: (current.entry ?? 0) + 1 }));
+    };
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      if (navigationGuard.current?.() === false) event.preventDefault();
+    };
+    globalThis.addEventListener("popstate", restore);
+    globalThis.addEventListener("beforeunload", beforeUnload);
     return () => {
-      globalThis.clearTimeout(timer);
+      globalThis.removeEventListener("popstate", restore);
+      globalThis.removeEventListener("beforeunload", beforeUnload);
     };
-  }, [loadGlobal, sessionState.status]);
-  useEffect(() => {
-    const timer = globalThis.setTimeout(() => {
-      if (sessionState.status === "active") void loadScope();
-    }, 0);
-    return () => {
-      globalThis.clearTimeout(timer);
-    };
-  }, [loadScope, sessionState.status]);
-  useEffect(() => {
-    if (sessionState.status !== "active" || sessionExpiresAt === undefined)
-      return;
-    return scheduleSessionExpiry(sessionExpiresAt, expireAdministratorSession);
-  }, [expireAdministratorSession, sessionExpiresAt, sessionState.status]);
-  useEffect(() => {
-    replaceLegacyConfigurationPath();
-    const restoreLocation = () => {
-      if (preventUnsafeLocationRestore()) return;
-      replaceLegacyConfigurationPath();
-      scopeLoadGuard.invalidate();
-      selectedServiceRef.current = selectedServiceFromLocation();
-      update({
-        assignments: [],
-        assignmentPhase:
-          selectedServiceFromLocation() === "" ? "ready" : "loading",
-        section: currentSection(),
-        selectedService: selectedServiceFromLocation(),
-      });
-    };
-    globalThis.addEventListener("popstate", restoreLocation);
-    return () => {
-      globalThis.removeEventListener("popstate", restoreLocation);
-    };
-  }, [replaceLegacyConfigurationPath, scopeLoadGuard]);
-  function applyServiceSelection(value: string) {
-    scopeLoadGuard.invalidate();
-    selectedServiceRef.current = value;
-    update({
-      assignments: [],
-      assignmentPhase: value === "" ? "ready" : "loading",
-      assignmentPending: false,
-      assignmentDirty: false,
-      pendingService: null,
-      selectedService: value,
-    });
-    const url = new URL(globalThis.location.href);
-    if (value === "") url.searchParams.delete("service");
-    else url.searchParams.set("service", value);
-    globalThis.history.replaceState({}, "", `${url.pathname}${url.search}`);
-  }
-  function selectService(value: string) {
-    if (value === selectedService) return;
-    if (assignmentPending) {
-      notify(
-        "error",
-        "Wait for the selected service assignment write to finish.",
+  }, [canNavigate]);
+  const navigate = useCallback(
+    (path: string, replace = false) => {
+      if (!replace && !canNavigate()) return;
+      if (!replace) historyIndex.current += 1;
+      globalThis.history[replace ? "replaceState" : "pushState"](
+        { routerIndex: historyIndex.current },
+        "",
+        path,
       );
-      return;
-    }
-    if (assignmentDirty) {
-      update({ pendingService: value });
-      return;
-    }
-    applyServiceSelection(value);
-  }
-  function navigate(id: string) {
-    const next = routes.find((item) => item.id === id)?.id;
-    if (next === undefined) return;
-    if (assignmentPending) {
-      notify(
-        "error",
-        "Wait for the selected service assignment write to finish.",
-      );
-      return;
-    }
-    if (assignmentDirty && next !== section) {
-      notify(
-        "error",
-        "Close the assignment form and confirm that you want to discard its changes before you leave this page.",
-      );
-      return;
-    }
-    update({ section: next });
-    const query =
-      selectedService === ""
-        ? ""
-        : `?service=${encodeURIComponent(selectedService)}`;
-    globalThis.history.pushState({}, "", `/${next}${query}`);
-    globalThis.scrollTo({ behavior: "auto", left: 0, top: 0 });
-    globalThis.document
-      .getElementById("main-content")
-      ?.focus({ preventScroll: true });
-  }
+      const next = normalizedLocation();
+      setLocation((current) => ({
+        ...next,
+        entry: (current.entry ?? 0) + (replace ? 0 : 1),
+      }));
+      if (!replace) globalThis.scrollTo({ behavior: "auto", left: 0, top: 0 });
+    },
+    [canNavigate],
+  );
   if (sessionState.status === "loading")
     return (
       <SessionPage>
@@ -2408,7 +2781,7 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
           actions={
             <Button
               onClick={() => {
-                update({ sessionState: { status: "loading" } });
+                setSessionState({ status: "loading" });
                 void inspectSession();
               }}
             >
@@ -2432,7 +2805,7 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
           actions={
             <Button
               onClick={() => {
-                update({ sessionState: { status: "signed-out" } });
+                setSessionState({ status: "signed-out" });
               }}
             >
               Return to sign-in
@@ -2448,54 +2821,20 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
         />
       </SessionPage>
     );
-  const session = sessionState.session;
-  if (session === undefined) return null;
-  const discardImpact = `discard assignment changes for ${selectedService || "the selected service"}`;
-  return (
-    <>
-      <AuthenticatedAdministration
-        assignments={assignments}
-        assignmentPhase={assignmentPhase}
-        assignmentPending={assignmentPending}
-        catalogPhase={catalogPhase}
-        client={authenticatedClient}
-        configurationPhase={configurationPhase}
-        data={data}
-        failure={failure}
-        loadGlobal={loadGlobal}
-        loadScope={loadScope}
-        navigate={navigate}
-        notice={notice}
-        notify={notify}
-        onAssignmentDirtyChange={(dirty) => {
-          update({ assignmentDirty: dirty });
-        }}
-        onAssignmentPendingChange={(pending) => {
-          update({ assignmentPending: pending });
-        }}
-        providerPhase={providerPhase}
-        onDismissNotice={() => {
-          update({ notice: null });
-        }}
-        section={section}
-        selectService={selectService}
-        selectedService={selectedService}
-        session={session}
-      />
-      <ConfirmationDialog
-        confirmLabel="Discard and change service"
-        description="The open assignment form has unsaved values. The service change closes that form and replaces only the assignment column."
-        impactStatement={discardImpact}
-        onCancel={() => {
-          update({ pendingService: null });
-        }}
-        onConfirm={() => {
-          if (pendingService !== null) applyServiceSelection(pendingService);
-        }}
-        open={pendingService !== null}
-        pending={assignmentPending}
-        title="Discard assignment changes?"
-      />
-    </>
-  );
+  if (sessionState.session === undefined) return null;
+  const props: RouteProps = {
+    client: authenticatedClient,
+    session: sessionState.session,
+    location,
+    navigate,
+    canNavigate,
+    registerNavigationGuard,
+  };
+  const section = sectionForPath(location.pathname);
+  if (section === "services") return <ServicesRoute {...props} />;
+  if (section === "configuration") return <ConfigurationRoute {...props} />;
+  if (section === "logs") return <LogsRoute {...props} />;
+  if (section === "statistics") return <StatisticsRoute {...props} />;
+  if (section === "operations") return <OperationsRoute {...props} />;
+  return <OverviewRoute {...props} />;
 }

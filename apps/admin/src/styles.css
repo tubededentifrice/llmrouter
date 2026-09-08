@@ -92,29 +92,10 @@ textarea,
   color: var(--od-color-surface-raised);
 }
 
-.administration-topbar-actions {
-  display: flex;
-  width: min(42rem, 62vw);
-  max-width: 100%;
-  align-items: end;
-  gap: 10px;
-}
-
-.administration-topbar-actions > label,
-.administration-topbar-actions > .od-select-control {
-  display: grid;
-  min-width: 0;
-  flex: 1;
-  gap: 4px;
-  color: var(--od-color-muted-strong);
-  font-size: 11px;
-  font-weight: 700;
-}
-
 .administration-content {
   width: 100%;
   min-width: 0;
-  padding-block: 32px 76px;
+  padding-block: 0;
 }
 
 .administration-page {
@@ -619,28 +600,7 @@ input:not(.od-form-control):focus {
   }
 }
 
-@media (max-width: 70rem) {
-  .od-application-topbar-title {
-    display: none;
-  }
-}
-
 @media (max-width: 48rem) {
-  .administration-content {
-    padding-block: 20px 92px;
-  }
-
-  .administration-topbar-actions {
-    width: 100%;
-    align-items: stretch;
-  }
-
-  .administration-topbar-actions > label,
-  .administration-topbar-actions > .od-select-control {
-    min-width: 0;
-    flex: 1;
-  }
-
   .resource-totals,
   .administration-sections,
   .administration-form,
@@ -681,11 +641,6 @@ input:not(.od-form-control):focus {
 }
 
 @media (max-width: 420px) {
-  .administration-topbar-actions {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-
   .statistics-form fieldset {
     grid-template-columns: 1fr;
   }
