@@ -8,10 +8,7 @@ import {
   invalidateRetainedMediaLoad,
   updateRetentionDuration,
 } from "../src/administrationSafety.ts";
-import {
-  MissingProtectedKeyInspector,
-  ServiceManagement,
-} from "../src/ServiceManagement.tsx";
+import { ServiceManagement } from "../src/ServiceManagement.tsx";
 import type {
   AdministrationClient,
   RequestLogSummary,
@@ -57,6 +54,7 @@ function client(): AdministrationClient {
     startSession: vi.fn(),
     logout: vi.fn(),
     services: vi.fn().mockResolvedValue(emptyPage),
+    service: vi.fn(),
     createService: vi.fn(),
     updateService: vi.fn(),
     deleteService: vi.fn(),
@@ -338,6 +336,7 @@ describe("accepted administration composition", () => {
   it("uses the service graph as the only service record surface", () => {
     const markup = renderToStaticMarkup(
       <ServiceManagement
+        onOpenDetails={vi.fn()}
         client={client()}
         csrf="csrf"
         onNotice={vi.fn()}
@@ -356,21 +355,16 @@ describe("accepted administration composition", () => {
     expect(markup).toContain("Child");
     expect(markup).toContain("tree level 1");
     expect(markup).toContain("tree level 2");
-    expect(markup).toContain("Workspaces");
-    expect(markup).toContain("Service API keys");
-    expect(markup).toContain("Loading workspaces");
-    expect(markup).toContain("Loading service API keys");
-    expect(markup).toContain("Move or delete each child");
-    expect(markup).toContain('aria-expanded="false"');
-    expect(markup).toContain("od-form-section");
-    expect(markup).toContain("od-form-actions");
-    expect(markup).toContain('name="parent"');
+    expect(markup).not.toContain("Workspaces");
+    expect(markup).not.toContain("Service API keys");
+    expect(markup).toContain("Open service details");
     expect(markup).toContain('dateTime="2026-08-24T00:00:00.000Z"');
   });
 
   it("keeps the exact service timestamp fallback without an invalid attribute", () => {
     const markup = renderToStaticMarkup(
       <ServiceManagement
+        onOpenDetails={vi.fn()}
         client={client()}
         csrf="csrf"
         onNotice={vi.fn()}
@@ -396,6 +390,7 @@ describe("accepted administration composition", () => {
   it("renders the empty service tree without resetting an empty focus target", () => {
     const markup = renderToStaticMarkup(
       <ServiceManagement
+        onOpenDetails={vi.fn()}
         client={client()}
         csrf="csrf"
         onNotice={vi.fn()}
@@ -410,83 +405,26 @@ describe("accepted administration composition", () => {
     expect(markup).toContain("Create a root service");
   });
 
-  it("keeps workspaces and keys in the service inspector", () => {
-    const applicationSource = readFileSync(
-      new URL("../src/App.tsx", import.meta.url),
-      "utf8",
-    );
-    const serviceSource = readFileSync(
+  it("keeps service access only on the service-details route", () => {
+    const graph = readFileSync(
       new URL("../src/ServiceManagement.tsx", import.meta.url),
       "utf8",
     );
-    expect(applicationSource).not.toContain('label: "Workspaces & keys"');
-    expect(applicationSource).not.toContain("function AccessPage");
-    expect(applicationSource).not.toMatch(/<(?:select|textarea)\b/);
-    expect(applicationSource.match(/<input\b/g)).toHaveLength(4);
-    expect(applicationSource.match(/type="datetime-local"/g)).toHaveLength(4);
-    expect(applicationSource).toContain('aria-label="Service context"');
-    expect(serviceSource).toContain("EditableTable");
-    expect(serviceSource).toContain("ConfirmationDialog");
-    expect(serviceSource).toContain("SecretRevealPanel");
-    expect(serviceSource).toContain("SearchableSelect");
-    expect(serviceSource).toContain("TextControl");
-    expect(serviceSource).toContain("FormActions");
-    expect(serviceSource).toContain("FormSection");
-    expect(serviceSource).toContain("InlineAlert");
-    expect(serviceSource).toContain("GraphInspectorFacts");
-    expect(serviceSource).toContain("GraphInspectorFact");
-    expect(serviceSource).toContain("GraphInspectorSection");
-    expect(serviceSource).toContain("GraphInspectorNotice");
-    expect(serviceSource).not.toMatch(/<(?:select|textarea)\b/);
-    expect(serviceSource.match(/<input\b/g)).toHaveLength(2);
-    expect(serviceSource.match(/type="hidden"/g)).toHaveLength(2);
-    expect(serviceSource.match(/className="od-visually-hidden"/g)).toHaveLength(
-      3,
-    );
-    expect(
-      serviceSource.match(/className="editable-table-form-control"/g),
-    ).toHaveLength(3);
-    expect(serviceSource).toContain("selectedControlRef={selectedControlRef}");
-    const createInspectorSource = serviceSource.slice(
-      serviceSource.indexOf("function CreateServiceInspector"),
-      serviceSource.indexOf("export function ServiceManagement"),
-    );
-    expect(createInspectorSource).toContain("formRef.current");
-    expect(createInspectorSource).toContain(
-      `.querySelector<HTMLButtonElement>('button[type="submit"]')`,
-    );
-    expect(createInspectorSource).toContain("?.focus()");
-    expect(createInspectorSource).toContain(
-      '<GraphInspectorNotice dynamic tone="error">',
-    );
-    expect(serviceSource).toContain("<DateTime");
-    expect(serviceSource).not.toContain("globalThis.confirm");
-    expect(serviceSource).toContain("Copy this key now");
-    expect(serviceSource).not.toContain(
-      "keyLifecycleActive || accessPending || busy ? {} : { onClose }",
-    );
-    expect(serviceSource).toContain("serviceInteractionLocked");
-    expect(serviceSource).toContain("MissingProtectedKeyInspector");
-    expect(serviceSource).toContain("busyRef.current");
-    expect(serviceSource).toContain(
-      'phase === "loading" || keyLifecycleActive',
-    );
-    expect(serviceSource).not.toContain('target.closest("dialog:modal")');
-    expect(serviceSource).not.toContain("localStorage");
-    expect(serviceSource).not.toContain("sessionStorage");
-    expect(serviceSource).not.toContain("Use in playground");
-    expect(applicationSource).toContain("<DateTime");
-    const styles = readFileSync(
-      new URL("../src/styles.css", import.meta.url),
+    const details = readFileSync(
+      new URL("../src/ServiceDetails.tsx", import.meta.url),
       "utf8",
     );
-    expect(styles).not.toMatch(
-      /\.service-management\s+\.od-graph-inspector\s*\{/,
+    const access = readFileSync(
+      new URL("../src/ServiceAccess.tsx", import.meta.url),
+      "utf8",
     );
-    expect(styles).not.toContain(".od-graph-inspector");
-    expect(styles).not.toContain(".service-access-section");
-    expect(styles).not.toContain(".service-access-heading");
-    expect(styles).not.toContain(".service-delete-section");
+    expect(graph).not.toContain("client.workspaces");
+    expect(graph).not.toContain("client.keys");
+    expect(graph).not.toContain("SecretRevealPanel");
+    expect(details).toContain("<ServiceAccess");
+    expect(access).toContain("SecretRevealPanel");
+    expect(access).not.toContain("localStorage");
+    expect(access).not.toContain("sessionStorage");
   });
 
   it("keeps compact control names without visible field headings", () => {
@@ -520,7 +458,7 @@ describe("accepted administration composition", () => {
 
   it("uses a create-row identity that no workspace API name can use", () => {
     const serviceSource = readFileSync(
-      new URL("../src/ServiceManagement.tsx", import.meta.url),
+      new URL("../src/ServiceAccess.tsx", import.meta.url),
       "utf8",
     );
     expect(serviceSource).toContain(
@@ -613,33 +551,6 @@ describe("accepted administration composition", () => {
           service.api_name === protectedServiceApiName("child", pending),
       ),
     ).toBeUndefined();
-    const pendingMarkup = renderToStaticMarkup(
-      <MissingProtectedKeyInspector
-        keyLifecycle={pending}
-        onClearKey={vi.fn()}
-        onClose={vi.fn()}
-        onNotice={vi.fn()}
-      />,
-    );
-    expect(pendingMarkup).toContain("Creating the service API key");
-    expect(pendingMarkup).toContain("The service record is unavailable");
-
-    const shownMarkup = renderToStaticMarkup(
-      <MissingProtectedKeyInspector
-        keyLifecycle={{
-          phase: "shown",
-          secret: "one-time-secret",
-          serviceApiName: "removed-service",
-        }}
-        onClearKey={vi.fn()}
-        onClose={vi.fn()}
-        onNotice={vi.fn()}
-      />,
-    );
-    expect(shownMarkup).toContain("one-time-secret");
-    expect(shownMarkup).toContain("Clear key");
-    expect(shownMarkup).toContain("od-secret-reveal-panel");
-    expect(shownMarkup).toContain("Service API key");
   });
 
   it("starts in a session loading state", () => {

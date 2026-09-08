@@ -1862,6 +1862,7 @@ export interface AdministrationClient {
   startSession(returnTo: string): Promise<string>;
   logout(csrf: string): Promise<void>;
   services(): Promise<Page<Service>>;
+  service(name: string): Promise<Service>;
   createService(
     value: {
       api_name: string;
@@ -2647,6 +2648,7 @@ export function createAdministrationClient(
     },
     logout: (csrf) => write("/v1/admin/session", "DELETE", csrf),
     services: () => allPages("/v1/admin/services"),
+    service: (name) => request(`/v1/admin/services/${encode(name)}`),
     createService: (value, csrf) =>
       write("/v1/admin/services", "POST", csrf, value),
     updateService: (name, value, csrf) =>

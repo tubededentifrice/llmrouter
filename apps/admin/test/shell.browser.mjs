@@ -289,7 +289,7 @@ describe("authenticated shell in a real browser", () => {
     });
     try {
       await page.clock.install();
-      await visit(page, "/services?service=root");
+      await visit(page, "/services/root");
       await settle(page);
       await startKey(page);
       await page.clock.fastForward(3_600_001);
@@ -308,7 +308,7 @@ describe("authenticated shell in a real browser", () => {
         }),
       ).toBeVisible();
       await browserExpect(
-        page.getByRole("button", { name: "Clear key", exact: true }),
+        page.getByRole("button", { name: "Clear secret", exact: true }),
       ).toHaveCount(0);
     } finally {
       await close(context, errors);
@@ -593,7 +593,7 @@ describe("authenticated shell in a real browser", () => {
       hold: ["createKey"],
     });
     try {
-      await visit(page, "/services?service=root");
+      await visit(page, "/services/root");
       await settle(page);
       await startKey(page);
       await page
@@ -601,18 +601,18 @@ describe("authenticated shell in a real browser", () => {
         .getByRole("link", { name: "Overview", exact: true })
         .click();
       await browserExpect(page).toHaveURL(
-        "http://127.0.0.1:5174/services?service=root",
+        "http://127.0.0.1:5174/services/root",
       );
       await finish(page, "createKey");
       await browserExpect(
-        page.getByRole("button", { name: "Clear key", exact: true }),
+        page.getByRole("button", { name: "Clear secret", exact: true }),
       ).toBeVisible();
       await page
         .locator(".od-application-sidebar")
         .getByRole("link", { name: "Overview", exact: true })
         .click();
       await browserExpect(page).toHaveURL(
-        "http://127.0.0.1:5174/services?service=root",
+        "http://127.0.0.1:5174/services/root",
       );
       await page
         .locator(".od-application-sidebar")
@@ -621,7 +621,7 @@ describe("authenticated shell in a real browser", () => {
       expect(await calls(page)).not.toContain("logout");
       await screenshot(page, "services-protected-key");
       await page
-        .getByRole("button", { name: "Clear key", exact: true })
+        .getByRole("button", { name: "Clear secret", exact: true })
         .click();
       await navigate(page, "Overview", false);
     } finally {
@@ -910,11 +910,12 @@ describe("authenticated shell in a real browser", () => {
           await browserExpect(page.getByRole("dialog")).toBeVisible();
           await page.keyboard.press("Escape");
           await browserExpect(page.getByRole("dialog")).toHaveCount(0);
-          await browserExpect(page).toHaveURL("http://127.0.0.1:5174/services");
+          await browserExpect(page).toHaveURL(
+            "http://127.0.0.1:5174/services?service=root",
+          );
         }
         await navigate(page, "LLM configuration", phone);
-        await browserExpect(service).toHaveValue(phone ? "" : "root");
-        if (phone) await service.selectOption("root");
+        await browserExpect(service).toHaveValue("root");
         await navigate(page, "Logs", phone);
         await browserExpect(page).toHaveURL("http://127.0.0.1:5174/logs");
         await page.goBack();

@@ -66,6 +66,7 @@ import {
   type StatisticsBucket,
   type StatisticsResult,
 } from "./api.ts";
+import { ServiceDetails } from "./ServiceDetails.tsx";
 import { ServiceManagement } from "./ServiceManagement.tsx";
 import { ConfigurationGraph } from "./ConfigurationGraph.tsx";
 import { createScopeLoadGuard } from "./accessState.ts";
@@ -176,7 +177,7 @@ const legacyConfigurationPaths = new Set([
 function currentSection(): Section {
   const value =
     typeof location === "undefined" ? "" : location.pathname.slice(1);
-  if (value === "access") return "services";
+  if (value === "access" || value.startsWith("services/")) return "services";
   if (legacyConfigurationPaths.has(value)) return "configuration";
   return routes.some((route) => route.id === value)
     ? (value as Section)
@@ -188,6 +189,10 @@ function selectedServiceFromLocation(): string {
 }
 function safeReturnPath(): string {
   const section = currentSection();
+  const detailName = detailServiceName(
+    typeof location === "undefined" ? "" : location.pathname,
+  );
+  if (detailName !== null) return `/services/${encodeURIComponent(detailName)}`;
   const candidate = selectedServiceFromLocation();
   const service = /^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(candidate)
     ? candidate
@@ -1996,7 +2001,25 @@ function resourcePhase(
   return "ready";
 }
 
-interface RouteLocation {
+interface TreeRestore {
+  readonly mode: "history" | "fallback" | "deleted";
+  readonly left: number;
+  readonly top: number;
+}
+interface NavigationState {
+  readonly treeRestore?: TreeRestore;
+  readonly sourceTree?: string;
+}
+function detailServiceName(path: string): string | null {
+  const match = /^\/services\/([^/]+)$/.exec(path);
+  if (!match) return null;
+  try {
+    return decodeURIComponent(match[1] ?? "");
+  } catch {
+    return match[1] ?? "";
+  }
+}
+interface RouteLocation extends NavigationState {
   readonly entry?: number;
   readonly pathname: string;
   readonly search: string;
@@ -2004,7 +2027,47 @@ interface RouteLocation {
 function readLocation(): RouteLocation {
   return typeof location === "undefined"
     ? { pathname: "/overview", search: "" }
-    : { pathname: location.pathname, search: location.search };
+    : {
+        pathname: location.pathname,
+        search: location.search,
+        ...readNavigationState(),
+      };
+}
+function readNavigationState(): NavigationState {
+  const value: unknown = globalThis.history.state;
+  if (value === null || typeof value !== "object") return {};
+  const result: { treeRestore?: TreeRestore; sourceTree?: string } = {};
+  if (
+    "sourceTree" in value &&
+    typeof value.sourceTree === "string" &&
+    /^\/services(?:\?[^#]*)?$/.test(value.sourceTree)
+  )
+    result.sourceTree = value.sourceTree;
+  if (
+    "treeRestore" in value &&
+    value.treeRestore !== null &&
+    typeof value.treeRestore === "object"
+  ) {
+    const tree = value.treeRestore;
+    if (
+      "mode" in tree &&
+      (tree.mode === "history" ||
+        tree.mode === "fallback" ||
+        tree.mode === "deleted") &&
+      "left" in tree &&
+      typeof tree.left === "number" &&
+      Number.isFinite(tree.left) &&
+      "top" in tree &&
+      typeof tree.top === "number" &&
+      Number.isFinite(tree.top)
+    )
+      result.treeRestore = {
+        mode: tree.mode,
+        left: Math.max(0, tree.left),
+        top: Math.max(0, tree.top),
+      };
+  }
+  return result;
 }
 function normalizedLocation(): RouteLocation {
   const current = readLocation();
@@ -2029,9 +2092,10 @@ function normalizedLocation(): RouteLocation {
       "",
       `${pathname}${search}`,
     );
-  return { pathname, search };
+  return { ...current, pathname, search };
 }
 function sectionForPath(pathname: string): Section {
+  if (detailServiceName(pathname) !== null) return "services";
   const value = pathname.slice(1);
   return routes.find((route) => route.id === value)?.id ?? "overview";
 }
@@ -2042,9 +2106,15 @@ interface RouteProps {
   readonly client: AdministrationClient;
   readonly session: AdministratorSession;
   readonly location: RouteLocation;
-  readonly navigate: (path: string, replace?: boolean) => void;
+  readonly navigate: (
+    path: string,
+    replace?: boolean,
+    state?: NavigationState,
+  ) => void;
   readonly canNavigate: () => boolean;
-  readonly registerNavigationGuard: (guard: () => boolean) => () => void;
+  readonly registerNavigationGuard: (
+    guard: (intent?: "unload") => boolean,
+  ) => () => void;
 }
 function useRouteNotice() {
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -2260,7 +2330,10 @@ function useServiceContext(props: RouteProps, resource: RouteSources) {
     (service) => service.api_name === received,
   )
     ? received
-    : "";
+    : location.pathname === "/services" &&
+        location.treeRestore?.mode === "deleted"
+      ? (resource.data.services[0]?.api_name ?? "")
+      : "";
   const replaceService = useCallback(
     (value: string) => {
       const next = new URLSearchParams(location.search);
@@ -2276,7 +2349,7 @@ function useServiceContext(props: RouteProps, resource: RouteSources) {
   useEffect(() => {
     if (
       resource.confirmed.services &&
-      (received !== selectedService || serviceCount > 1)
+      ((received !== "" && received !== selectedService) || serviceCount > 1)
     )
       replaceService(selectedService);
   }, [
@@ -2299,6 +2372,7 @@ function ServicesRoute(props: RouteProps) {
   const resource = useRouteSources(props.client, serviceSources);
   const context = useServiceContext(props, resource);
   const notices = useRouteNotice();
+  const treeScroll = useRef({ left: 0, top: 0 });
   return (
     <AuthenticatedAdministration
       {...props}
@@ -2311,6 +2385,22 @@ function ServicesRoute(props: RouteProps) {
       </h1>
       <SourceFailures resource={resource} retryLabel="Retry services" />
       <ServiceManagement
+        {...(props.location.treeRestore === undefined
+          ? {}
+          : { restoreTree: props.location.treeRestore })}
+        onTreeScroll={(position) => {
+          treeScroll.current = position;
+        }}
+        onOpenDetails={(name) => {
+          if (!props.canNavigate()) return;
+          const source = `/services?service=${encodeURIComponent(name)}`;
+          props.navigate(source, true, {
+            treeRestore: { mode: "history", ...treeScroll.current },
+          });
+          props.navigate(`/services/${encodeURIComponent(name)}`, false, {
+            sourceTree: source,
+          });
+        }}
         available={resource.confirmed.services === true}
         initialState={
           resource.pending ? (
@@ -2336,6 +2426,57 @@ function ServicesRoute(props: RouteProps) {
             onRefresh={resource.load}
           />
         }
+      />
+    </AuthenticatedAdministration>
+  );
+}
+function ServiceDetailsRoute(
+  props: RouteProps & { readonly serviceApiName: string },
+) {
+  const notices = useRouteNotice();
+  const [context, setContext] = useState("");
+  return (
+    <AuthenticatedAdministration
+      {...props}
+      {...notices}
+      onDismissNotice={notices.dismiss}
+      destinations={routes.map((route) => ({
+        ...route,
+        href: destinationPath(route.id, context),
+      }))}
+    >
+      <ServiceDetails
+        client={props.client}
+        csrf={props.session.csrf_token}
+        serviceApiName={props.serviceApiName}
+        onContext={setContext}
+        onNotice={notices.notify}
+        registerNavigationGuard={props.registerNavigationGuard}
+        onBack={(unavailable) => {
+          if (!unavailable && props.location.sourceTree !== undefined) {
+            globalThis.history.back();
+            return;
+          }
+          if (!props.canNavigate()) return;
+          props.navigate(
+            unavailable
+              ? "/services"
+              : `/services?service=${encodeURIComponent(props.serviceApiName)}`,
+            true,
+            {
+              treeRestore: {
+                mode: unavailable ? "deleted" : "fallback",
+                left: 0,
+                top: 0,
+              },
+            },
+          );
+        }}
+        onDeleted={() => {
+          props.navigate("/services", true, {
+            treeRestore: { mode: "deleted", left: 0, top: 0 },
+          });
+        }}
       />
     </AuthenticatedAdministration>
   );
@@ -2646,15 +2787,18 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
     status: "loading",
   });
   const [location, setLocation] = useState(readLocation);
-  const navigationGuard = useRef<(() => boolean) | null>(null);
+  const navigationGuard = useRef<((intent?: "unload") => boolean) | null>(null);
   const historyIndex = useRef(0);
   const restoringHistory = useRef(false);
-  const registerNavigationGuard = useCallback((guard: () => boolean) => {
-    navigationGuard.current = guard;
-    return () => {
-      if (navigationGuard.current === guard) navigationGuard.current = null;
-    };
-  }, []);
+  const registerNavigationGuard = useCallback(
+    (guard: (intent?: "unload") => boolean) => {
+      navigationGuard.current = guard;
+      return () => {
+        if (navigationGuard.current === guard) navigationGuard.current = null;
+      };
+    },
+    [],
+  );
   const canNavigate = useCallback(() => {
     if (restoringHistory.current) return false;
     if (navigationGuard.current?.() !== false) return true;
@@ -2683,7 +2827,7 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
           ? state.routerIndex
           : 0;
       globalThis.history.replaceState(
-        { routerIndex: historyIndex.current },
+        { routerIndex: historyIndex.current, ...readNavigationState() },
         "",
         `${current.pathname}${current.search}`,
       );
@@ -2742,7 +2886,9 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
       setLocation((current) => ({ ...next, entry: (current.entry ?? 0) + 1 }));
     };
     const beforeUnload = (event: BeforeUnloadEvent) => {
-      if (navigationGuard.current?.() === false) event.preventDefault();
+      if (navigationGuard.current?.("unload") === false) {
+        event.preventDefault();
+      }
     };
     globalThis.addEventListener("popstate", restore);
     globalThis.addEventListener("beforeunload", beforeUnload);
@@ -2752,11 +2898,11 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
     };
   }, [canNavigate]);
   const navigate = useCallback(
-    (path: string, replace = false) => {
+    (path: string, replace = false, state: NavigationState = {}) => {
       if (!replace && !canNavigate()) return;
       if (!replace) historyIndex.current += 1;
       globalThis.history[replace ? "replaceState" : "pushState"](
-        { routerIndex: historyIndex.current },
+        { routerIndex: historyIndex.current, ...state },
         "",
         path,
       );
@@ -2836,6 +2982,15 @@ export function App({ client = defaultAdministrationClient }: AppProps) {
     registerNavigationGuard,
   };
   const section = sectionForPath(location.pathname);
+  const serviceApiName = detailServiceName(location.pathname);
+  if (serviceApiName !== null)
+    return (
+      <ServiceDetailsRoute
+        key={serviceApiName}
+        {...props}
+        serviceApiName={serviceApiName}
+      />
+    );
   if (section === "services") return <ServicesRoute {...props} />;
   if (section === "configuration") return <ConfigurationRoute {...props} />;
   if (section === "logs") return <LogsRoute {...props} />;

@@ -91,6 +91,11 @@ const fixture: ShellFixture = {
       csrf_token: "synthetic-csrf",
     },
     services: page(services),
+    service: services[0],
+    "service:root": services[0],
+    "service:child": services[1],
+    updateService: services[1],
+    deleteService: undefined,
     providers: page([provider]),
     models: page([model]),
     providerModels: page([mapping]),
@@ -163,6 +168,31 @@ const client = new Proxy({} as AdministrationClient, {
       )
         return Promise.reject(
           new AdministrationApiError(401, "unauthorized", "Sign in."),
+        );
+      if (
+        name === "service" &&
+        !(
+          String(args[0]) in
+          Object.fromEntries(
+            services.map((service) => [service.api_name, true]),
+          )
+        ) &&
+        !(`${name}:${String(args[0])}` in fixture.values)
+      )
+        return Promise.reject(
+          new AdministrationApiError(
+            404,
+            "not_found",
+            "Service was not found.",
+          ),
+        );
+      if (name === "service" && fixture.fail.includes("service:not_found"))
+        return Promise.reject(
+          new AdministrationApiError(
+            404,
+            "not_found",
+            "Service was not found.",
+          ),
         );
       if (!(name in fixture.values))
         return Promise.reject(Error(`Unexpected client operation: ${name}`));
