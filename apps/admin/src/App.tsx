@@ -2026,8 +2026,9 @@ interface RouteLocation extends NavigationState {
 }
 function readLocation(): RouteLocation {
   return typeof location === "undefined"
-    ? { pathname: "/overview", search: "" }
+    ? { entry: 0, pathname: "/overview", search: "" }
     : {
+        entry: 0,
         pathname: location.pathname,
         search: location.search,
         ...readNavigationState(),
