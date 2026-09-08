@@ -7,7 +7,10 @@ graph-inspector, shared table-alignment, and selectable configuration-command
 amendments were accepted on 2026-08-29. The contextual child-creation amendment
 and the full-height and edge-to-edge graph-page amendments were accepted on
 2026-08-30. The Overview and no-top-bar shell amendment was accepted on
-2026-08-30.
+2026-08-30. The wrapped-toolbar placement and extreme-title scrolling
+amendments were accepted on 2026-09-08. The
+[inspector fit decision](../decisions/0010-keep-inspector-controls-reachable.md)
+records the reasons and consequences.
 
 ## Service API keys
 
@@ -526,9 +529,10 @@ Wide tests with a split inspector MUST verify the exact `21rem` inline-end
 inspector border box, its included separator, its full inspector-host block
 size, the remaining edge-to-edge graph region, and the control inset inside
 that region. Narrow tests with an overlay inspector MUST verify its exact
-`21rem` width, `0.875rem` inline-end and block-end insets, and `4.75rem`
-block-start inset from the stage edge. They MUST verify that it stays below
-graph-wide controls, receives no added control inset, and does not change the
+`21rem` width, `0.875rem` inline-end and block-end insets, and the block-start
+inset from the [shared inspector placement rule](#shared-compact-graph-inspector).
+They MUST verify that it stays below graph-wide controls, receives no added
+control inset, and does not change the
 stage or viewport width. Phone tests MUST verify a stage and viewport from
 inline coordinate zero through the dynamic viewport width, control insets with
 zero and unequal non-zero physical left and right safe areas, the independent
@@ -1121,10 +1125,18 @@ that needs more than that floor MUST use the labelled local graph viewport.
 Split mode MUST NOT add page-level horizontal overflow or change the page
 width.
 
-In overlay mode, the inspector MUST use an inline-end inset of `0.875rem`, a
-block-start inset of `4.75rem`, and a block-end inset of `0.875rem`. It MUST NOT
-cover the toolbar. The graph region and its controls MUST keep their width, and
-the graph region MUST keep its local scroll. When the selected control is
+In overlay mode, the inspector MUST use an inline-end inset of `0.875rem` and a
+block-end inset of `0.875rem`. Its block-start inset MUST be the greater of
+`4.75rem` and the rendered block-end position of the graph-wide controls plus
+`0.875rem`, measured from the inspector-host block-start edge. The measurement
+MUST include all wrapped toolbar or standalone-search rows. If there are no
+graph-wide controls, the block-start inset MUST be `4.75rem`. OpenDLE UI MUST
+measure and update this inset when the controls, their size, text size, or host
+size changes. A larger inset MUST reduce the available inspector height; it
+MUST NOT increase the host or page height. The inspector MUST NOT cover the
+controls or move their actions into a menu to make room. The graph region and
+its controls MUST keep their width, and the graph region MUST keep its local
+scroll. When the selected control is
 behind the overlay, the shared system MUST scroll that control into the visible
 part of its local viewport and account for the overlay width. A host MUST NOT
 calculate this scroll offset. The complete graph MUST remain reachable without
@@ -1212,9 +1224,30 @@ use the fixed `GraphInspector` footer. A form action MAY stay with its form.
 Other domain-specific media, tags, routes, forms, and controls MAY use the
 content extension point when no shared primitive applies.
 
-Only the inspector content region MAY scroll vertically. The header and action
-footer MUST remain visible. The inspector MUST NOT scroll horizontally. Long
-titles, labels, identifiers, URLs, values, notices, errors, and action text MUST
+By default, only the inspector content region MAY scroll vertically. The header
+and action footer MUST remain visible. OpenDLE UI MUST measure whether the
+natural header height in the default layout and the footer height, including
+their padding and borders, leave room for the content region's block padding
+and one `2.75rem` control within
+the available inspector height. An absent footer MUST count as zero height.
+If they do not fit, the title, eyebrow, icon, and details MUST share one local
+vertical scroll region. The complete title MUST remain available through that
+region, but MAY scroll out of view. Reading the complete title MUST NOT require
+a separate action, tooltip, or dialog. The Close control and action footer MUST
+remain fixed and reachable within the inspector. When the fixed header fits
+again, the inspector MUST return to the default behavior. This rule MUST use
+rendered measurements, including wrapped text and actions, and MUST apply in
+all three modes. The host MUST NOT select the scroll behavior.
+
+A change between these scroll behaviors MUST keep the same inspector and
+content DOM elements, selected record, entered non-secret values, and focused
+element. It MUST NOT close and reopen the inspector, return focus to the graph,
+or add an announcement. It MUST preserve the visible content position where
+the new scroll bounds permit. Opening the inspector MUST still show and focus
+the heading. The mode-change and focus rules below MUST continue to apply.
+
+The inspector MUST NOT scroll horizontally. Long titles, labels, identifiers,
+URLs, values, notices, errors, and action text MUST
 wrap or break safely without hiding information or controls. At 200% text size,
 all content and controls MUST remain reachable, the reading order MUST stay the
 same, and the inspector MUST NOT cause page-level overflow.
@@ -1278,19 +1311,31 @@ graph floor, three `13rem` minimum relationship columns, reduced shared gaps
 and padding, contracted `GraphWorkspace` stage and toolbar, contracted
 `RelationshipGraph` toolbar or standalone search and viewport, unchanged host
 width, local graph scrolling, and no page-level overflow. Overlay tests MUST
-prove the exact insets and `21rem` border-box width, an active background, an
+prove the specified insets and `21rem` border-box width, an active background, an
 uncovered toolbar, unchanged graph width, local scroll, reachability through a
 host `selectedControlRef`, and internal `RelationshipGraph` selected-control
-reachability. Bottom-sheet tests MUST prove the exact viewport insets,
-full width between those insets, maximum height, inactive background, focus
+reachability. They MUST cover absent controls, a single control row, wrapped
+actions, controls that change after opening, and 200% text. They MUST measure
+the inspector below the complete rendered control area, verify each action by
+pointer hit testing and keyboard access, and prove that the greater block-start
+inset reduces inspector height without document overflow. Bottom-sheet tests
+MUST prove the exact viewport insets, full width between those insets, maximum
+height, inactive background, focus
 containment, and local content scrolling. They MUST prove that the sheet does
 not keep the `21rem` split-and-overlay width.
 
 Component tests MUST cover the exact header, content, footer, section, facts,
 row, notice, and action spacing. They MUST cover empty and absent optional
 regions, long data, long actions, forms, errors, notices, local overflow, 200%
-text, and the `2.75rem` interactive-control minimum. They MUST confirm the
-`h2`, labelled `h3` sections, associated description terms and descriptions,
+text, and the `2.75rem` interactive-control minimum. They MUST cover the fixed
+header fit boundary in both directions, an extreme unbroken title, and wrapped
+footer actions in all three modes. A phone case MUST use a `412 × 1000` CSS
+pixel viewport, 200% text, and a title of 200 `W` characters. Tests MUST prove
+that the complete title and details are reachable in one local scroll region,
+Close and footer actions stay visible and usable, initial heading focus works,
+and scroll-behavior changes preserve DOM, focus, selection, and entered values.
+They MUST confirm the `h2`, labelled `h3` sections, associated description terms
+and descriptions,
 semantic lists, sibling row actions, whole-row action option, and static and
 dynamic notice roles without nested interactive controls. They MUST also cover
 initial heading focus, Tab and Shift+Tab, Escape, close, exact focus return,
