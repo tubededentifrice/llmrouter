@@ -629,6 +629,32 @@ scene("configuration-context-discard", "/configuration", {
       .getByRole("combobox", { name: "Service context", exact: true })
       .selectOption("child");
     await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 });
+    const confirmation = page.getByRole("dialog", {
+      name: "Discard assignment changes?",
+      exact: true,
+    });
+    await expect
+      .poll(() =>
+        confirmation.evaluate((dialog) =>
+          dialog.contains(document.activeElement),
+        ),
+      )
+      .toBe(true);
+    await confirmation
+      .getByRole("button", { name: "Cancel", exact: true })
+      .click({
+        trial: true,
+      });
+    const impact = confirmation.getByRole("textbox", {
+      name: "Enter the impact statement to continue",
+      exact: true,
+    });
+    await impact.click();
+    await expect(impact).toBeFocused();
+    await impact.fill("discard assignment changes for root");
+    await confirmation
+      .getByRole("button", { name: "Discard and change service", exact: true })
+      .click({ trial: true });
   },
 });
 scene("configuration-playground", "/configuration", {

@@ -52,14 +52,6 @@ The retention reduction uses a native browser confirmation. The test records
 its exact message and dismisses it. Page screenshots cannot capture native
 browser controls. The corresponding screenshot shows the underlying page.
 
-The phone `configuration-context-discard` scene opens the confirmation on a
-desktop and then reduces the viewport width. Review found an existing dialog
-order defect in that transition: the new phone inspector covers part of the
-confirmation and receives focus. Its text passes the content check and Axe,
-but this snapshot does not prove that the confirmation actions are reachable.
-This defect requires separate shared dialog work. The normal phone inspector
-prevents a toolbar service change while it is open.
-
 At the 2026-09-09 review, the statistics view still used its earlier local
 date-and-time controls. The accepted UTC date-only and advanced-filter work
 belongs to implementation task `llmr-f477` and review `llmr-dh0a`. This inventory checks the current
