@@ -297,7 +297,6 @@ function WorkspaceAccessSection({
           </Button>
         }
       />
-      <p>Accounting labels for this service.</p>
       <Button
         disabled={workspaceDraft !== null || !writable}
         onClick={() => {

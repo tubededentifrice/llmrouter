@@ -964,7 +964,6 @@ function OperationsPage({
   return (
     <PageSurface className="administration-page">
       <PageHeading
-        description="Inspect current health, best-effort cooldowns, retention, and basic configuration activity."
         eyebrow="Operations"
         title="Activity & health"
         actions={
@@ -995,7 +994,9 @@ function OperationsPage({
                 <li key={item.name}>
                   <span>
                     <strong>{item.name.replaceAll("_", " ")}</strong>
-                    <small>{item.message ?? "No corrective message"}</small>
+                    {item.message == null ? null : (
+                      <small>{item.message}</small>
+                    )}
                   </span>
                   <StatusPill tone={tone(item.status)}>
                     {item.status}
@@ -1068,7 +1069,6 @@ function OperationsPage({
               Refresh activity
             </Button>
           }
-          description="This is a basic activity record. It is not immutable configuration history."
           title="Configuration activity, last 7 days"
         />
         <DataTable

@@ -1,0 +1,960 @@
+{
+  "specification": "docs/specs/04-authentication-administration-and-shared-ui.md#administration-content",
+  "keepReasons": [
+    "corrective error",
+    "required action",
+    "non-obvious effect",
+    "safety fact",
+    "security boundary",
+    "retention effect",
+    "loading state",
+    "empty state",
+    "unavailable state",
+    "failure state",
+    "destructive impact",
+    "accessibility state"
+  ],
+  "rules": "Static helpers have exact presence/absence expectations. State, live-region and synthetic dynamic record messages are also checked but are outside the static-helper removal rule. Source paths are relative to apps/admin/src. Conditional text has exact scene fixtures at both widths. Headings, labels, actions, records and accessible names are not removal candidates.",
+  "routes": [
+    {
+      "path": "/overview",
+      "sources": ["App.tsx"],
+      "scope": "Totals and headings are record labels; checked time is a record value. Optional health messages are record state. No extra normal static helper is present.",
+      "items": [
+        {
+          "id": "overview-health-action",
+          "text": "Restore storage access before you retry the request.",
+          "expected": "present",
+          "reason": "required action",
+          "scenes": ["overview-health"],
+          "source": "App.tsx:Overview health item.message",
+          "category": "fixture record state"
+        },
+        {
+          "id": "overview-loading",
+          "text": "Loading Overview.",
+          "expected": "present",
+          "reason": "loading state",
+          "scenes": ["overview-loading"],
+          "source": "App.tsx:Overview LoadingPage",
+          "category": "state"
+        },
+        {
+          "id": "overview-unavailable",
+          "text": "Overview is unavailable.",
+          "expected": "present",
+          "reason": "unavailable state",
+          "scenes": ["overview-failure"],
+          "source": "App.tsx:Overview StatePanel",
+          "category": "state"
+        },
+        {
+          "id": "overview-stale",
+          "text": "Overview is partial or stale. Retry the failed summaries.",
+          "expected": "present",
+          "reason": "failure state",
+          "scenes": ["overview-stale"],
+          "source": "App.tsx:Overview role=status",
+          "category": "live region"
+        },
+        {
+          "id": "overview-read-state",
+          "text": "Wait while the Router reads current state.",
+          "expected": "present",
+          "reason": "loading state",
+          "scenes": ["overview-loading"],
+          "source": "App.tsx:LoadingPage",
+          "category": "helper"
+        },
+        {
+          "id": "overview-partial-info",
+          "text": "Some resource lists are incomplete. Refresh overview to try again.",
+          "expected": "present",
+          "reason": "unavailable state",
+          "scenes": ["overview-partial"],
+          "source": "App.tsx:Overview",
+          "category": "helper"
+        }
+      ]
+    },
+    {
+      "path": "/services",
+      "sources": ["App.tsx", "ServiceManagement.tsx"],
+      "scope": "Tree nodes, compact inspector facts and create field names are labels or record values. The graph h1 remains programmatic. Compact and clean create inspectors have no static helper.",
+      "items": [
+        {
+          "id": "services-wait",
+          "text": "Wait while the Router reads the service tree.",
+          "expected": "present",
+          "reason": "loading state",
+          "scenes": ["services-loading"],
+          "source": "App.tsx:ServicesRoute GraphEmptyState",
+          "category": "helper"
+        },
+        {
+          "id": "services-discard",
+          "text": "The new service has not been created. Discard the entered values to select another service.",
+          "expected": "present",
+          "reason": "non-obvious effect",
+          "scenes": ["services-discard"],
+          "source": "ServiceManagement.tsx:ConfirmationDialog",
+          "category": "helper"
+        },
+        {
+          "id": "services-error",
+          "text": "The service was not created. Enter a display name. Correct the values and try again.",
+          "expected": "present",
+          "reason": "corrective error",
+          "scenes": ["services-create-error"],
+          "source": "ServiceManagement.tsx:CreateServiceInspector GraphInspectorNotice",
+          "category": "state"
+        },
+        {
+          "id": "services-loading",
+          "text": "Loading Services.",
+          "expected": "present",
+          "reason": "loading state",
+          "scenes": ["services-loading"],
+          "source": "App.tsx:ServicesRoute",
+          "category": "live region"
+        },
+        {
+          "id": "services-unavailable",
+          "text": "Services are unavailable.",
+          "expected": "present",
+          "reason": "unavailable state",
+          "scenes": ["services-unavailable"],
+          "source": "App.tsx:ServicesRoute",
+          "category": "state"
+        }
+      ]
+    },
+    {
+      "path": "/services/{serviceApiName}",
+      "sources": ["ServiceDetails.tsx", "ServiceAccess.tsx"],
+      "scope": "Heading, facts, service form, workspaces, API keys, root deletion protection, deletion dialogs and conditional access states.",
+      "items": [
+        {
+          "id": "workspace-purpose",
+          "text": "Accounting labels for this service.",
+          "expected": "absent",
+          "source": "ServiceAccess.tsx:WorkspaceAccessSection",
+          "category": "helper"
+        },
+        {
+          "id": "key-security",
+          "text": "Backend-only bearer credentials with full service authority.",
+          "expected": "present",
+          "reason": "security boundary",
+          "scenes": ["details-normal", "details-child"],
+          "source": "ServiceAccess.tsx:KeyAccessSection",
+          "category": "helper"
+        },
+        {
+          "id": "key-secret",
+          "text": "The Router will not show it again. Deploy it to the service backend, and then clear this value.",
+          "expected": "present",
+          "reason": "security boundary",
+          "scenes": ["details-key-secret"],
+          "source": "ServiceAccess.tsx:OneTimeKey",
+          "category": "helper"
+        },
+        {
+          "id": "key-pending",
+          "text": "Keep this page open. The one-time secret will appear here.",
+          "expected": "present",
+          "reason": "required action",
+          "scenes": ["details-key-pending"],
+          "source": "ServiceAccess.tsx:StatePanel",
+          "category": "helper"
+        },
+        {
+          "id": "root-protection",
+          "text": "The permanent root service cannot be deleted.",
+          "expected": "present",
+          "reason": "safety fact",
+          "scenes": ["details-normal"],
+          "source": "ServiceDetails.tsx:Delete service panel",
+          "category": "helper"
+        },
+        {
+          "id": "delete-service",
+          "text": "This action deletes the service, API keys, workspaces, local assignments, logs, raw accounting, daily aggregates, media jobs, and retained media. It keeps parent and child services.",
+          "expected": "present",
+          "reason": "destructive impact",
+          "scenes": ["details-child", "details-delete"],
+          "source": "ServiceDetails.tsx:Delete panel and ConfirmationDialog",
+          "category": "helper"
+        },
+        {
+          "id": "delete-workspace",
+          "text": "This action deletes its logs, accounting, jobs, uploaded images, and retained generated media.",
+          "expected": "present",
+          "reason": "destructive impact",
+          "scenes": ["details-workspace-delete"],
+          "source": "ServiceAccess.tsx:WorkspaceAccessSection getDeleteConfirmation",
+          "category": "helper"
+        },
+        {
+          "id": "revoke-key",
+          "text": "Each later request that uses this key will fail authentication.",
+          "expected": "present",
+          "reason": "destructive impact",
+          "scenes": ["details-revoke"],
+          "source": "ServiceAccess.tsx:KeyAccessSection getDeleteConfirmation",
+          "category": "helper"
+        },
+        {
+          "id": "details-return",
+          "text": "Return to services to continue.",
+          "expected": "present",
+          "reason": "required action",
+          "scenes": ["details-absent"],
+          "source": "ServiceDetails.tsx:absent StatePanel",
+          "category": "helper"
+        },
+        {
+          "id": "workspace-empty",
+          "text": "This service has no workspaces.",
+          "expected": "present",
+          "reason": "empty state",
+          "scenes": ["details-normal"],
+          "source": "ServiceAccess.tsx:workspace tableState",
+          "category": "state"
+        },
+        {
+          "id": "keys-empty",
+          "text": "This service has no active API keys.",
+          "expected": "present",
+          "reason": "empty state",
+          "scenes": ["details-normal"],
+          "source": "ServiceAccess.tsx:key tableState",
+          "category": "state"
+        },
+        {
+          "id": "workspaces-unavailable",
+          "text": "The workspaces are unavailable.",
+          "expected": "present",
+          "reason": "unavailable state",
+          "scenes": ["details-access-error"],
+          "source": "ServiceAccess.tsx:workspace tableState",
+          "category": "state"
+        },
+        {
+          "id": "keys-unavailable",
+          "text": "The service API keys are unavailable.",
+          "expected": "present",
+          "reason": "unavailable state",
+          "scenes": ["details-access-error"],
+          "source": "ServiceAccess.tsx:key tableState",
+          "category": "state"
+        },
+        {
+          "id": "details-loading",
+          "text": "Loading service details.",
+          "expected": "present",
+          "reason": "loading state",
+          "scenes": ["details-loading"],
+          "source": "ServiceDetails.tsx:StatePanel",
+          "category": "state"
+        },
+        {
+          "id": "details-child-blocker",
+          "text": "Move or delete each child before you delete this service.",
+          "expected": "present",
+          "reason": "required action",
+          "scenes": ["details-has-children"],
+          "source": "ServiceDetails.tsx:Delete service InlineAlert",
+          "category": "helper"
+        },
+        {
+          "id": "workspaces-loading",
+          "text": "Loading workspaces…",
+          "expected": "present",
+          "reason": "loading state",
+          "scenes": ["details-access-loading"],
+          "source": "ServiceAccess.tsx:tableState",
+          "category": "state"
+        },
+        {
+          "id": "keys-loading",
+          "text": "Loading service API keys…",
+          "expected": "present",
+          "reason": "loading state",
+          "scenes": ["details-access-loading"],
+          "source": "ServiceAccess.tsx:tableState",
+          "category": "state"
+        },
+        {
+          "id": "service-write-correction",
+          "text": "The Router could not complete the operation. Try again. Correct the problem and try again.",
+          "expected": "present",
+          "reason": "corrective error",
+          "scenes": ["details-write-error"],
+          "source": "ServiceDetails.tsx:writeError InlineAlert",
+          "category": "fixture error"
+        },
+        {
+          "id": "impact-service",
+          "text": "Service child will be deleted.",
+          "expected": "present",
+          "reason": "destructive impact",
+          "scenes": ["details-delete"],
+          "source": "ServiceDetails.tsx:ConfirmationDialog",
+          "category": "fixture impact statement"
+        },
+        {
+          "id": "impact-workspace",
+          "text": "Workspace workspace will be deleted.",
+          "expected": "present",
+          "reason": "destructive impact",
+          "scenes": ["details-workspace-delete"],
+          "source": "ServiceAccess.tsx:getDeleteConfirmation",
+          "category": "fixture impact statement"
+        },
+        {
+          "id": "impact-key",
+          "text": "Key Fixture key will stop working.",
+          "expected": "present",
+          "reason": "destructive impact",
+          "scenes": ["details-revoke"],
+          "source": "ServiceAccess.tsx:getDeleteConfirmation",
+          "category": "fixture impact statement"
+        }
+      ]
+    },
+    {
+      "path": "/configuration",
+      "sources": ["App.tsx", "ConfigurationGraph.tsx", "PlaygroundModal.tsx"],
+      "scope": "All three board columns, provider/model/mapping/assignment inspectors, forms, exact import review, destructive dialogs and playground. Record values, headings, actions and accessible names stay outside removal.",
+      "items": [
+        {
+          "id": "configuration-wait",
+          "text": "Wait while the Router reads the global catalog.",
+          "expected": "present",
+          "reason": "loading state",
+          "scenes": ["configuration-loading"],
+          "source": "ConfigurationGraph.tsx:ConfigurationState",
+          "category": "helper"
+        },
+        {
+          "id": "configuration-retry",
+          "text": "Existing confirmed records remain unchanged. Try the read again.",
+          "expected": "present",
+          "reason": "failure state",
+          "scenes": ["configuration-failure"],
+          "source": "ConfigurationGraph.tsx:ConfigurationState",
+          "category": "helper"
+        },
+        {
+          "id": "provider-no-credential",
+          "text": "This adapter does not use a credential.",
+          "expected": "present",
+          "reason": "non-obvious effect",
+          "scenes": ["configuration-provider-no-credential"],
+          "source": "ConfigurationGraph.tsx:ProviderInspector",
+          "category": "helper"
+        },
+        {
+          "id": "provider-default-endpoint",
+          "text": "The Router will use the registered standard endpoint and safe adapter defaults.",
+          "expected": "present",
+          "reason": "non-obvious effect",
+          "scenes": ["configuration-provider"],
+          "source": "ConfigurationGraph.tsx:ProviderInspector",
+          "category": "helper"
+        },
+        {
+          "id": "provider-explicit-endpoint",
+          "text": "This adapter has no registered standard endpoint. Review the explicit endpoint before save.",
+          "expected": "present",
+          "reason": "required action",
+          "scenes": ["configuration-provider-local"],
+          "source": "ConfigurationGraph.tsx:ProviderInspector",
+          "category": "helper"
+        },
+        {
+          "id": "credential-write-only",
+          "text": "Create or replace one encrypted credential. The Router never returns its secret.",
+          "expected": "present",
+          "reason": "security boundary",
+          "scenes": ["configuration-provider", "configuration-provider-local"],
+          "source": "ConfigurationGraph.tsx:ProviderInspector",
+          "category": "helper"
+        },
+        {
+          "id": "mapping-capabilities",
+          "text": "Empty capability fields use the canonical model. Enter values only to narrow this provider route.",
+          "expected": "present",
+          "reason": "non-obvious effect",
+          "scenes": ["configuration-mapping"],
+          "source": "ConfigurationGraph.tsx:MappingCapabilities",
+          "category": "helper"
+        },
+        {
+          "id": "assignment-required",
+          "text": "Select one service. Providers, models, mappings, credentials, and prices stay global.",
+          "expected": "absent",
+          "reason": "security boundary",
+          "source": "ConfigurationGraph.tsx:AssignmentInspector",
+          "category": "helper",
+          "absenceReason": "Retained source fallback. Public App disables Add assignment without service context, so this inspector cannot open. No direct component fixture is used."
+        },
+        {
+          "id": "assignment-observed",
+          "text": "Remove a stale observation only after you confirm its exact assignment impact.",
+          "expected": "present",
+          "reason": "safety fact",
+          "scenes": ["configuration-observed"],
+          "source": "ConfigurationGraph.tsx:AssignmentInspector",
+          "category": "helper"
+        },
+        {
+          "id": "import-exact",
+          "text": "Confirmation sends the exact reviewed model, price, and selected mapping objects. It does not normalize or refetch them.",
+          "expected": "present",
+          "reason": "non-obvious effect",
+          "scenes": ["configuration-import"],
+          "source": "ConfigurationGraph.tsx:OpenRouterPreview",
+          "category": "helper"
+        },
+        {
+          "id": "assignment-context-discard",
+          "text": "The open assignment form has unsaved values. The service change closes that form and replaces only the assignment column.",
+          "expected": "present",
+          "reason": "non-obvious effect",
+          "scenes": ["configuration-context-discard"],
+          "source": "App.tsx:ConfigurationRoute ConfirmationDialog",
+          "category": "helper"
+        },
+        {
+          "id": "playground-authority",
+          "text": "Run one unrestricted global administrator call. Assignment service context selects configuration only.",
+          "expected": "present",
+          "reason": "security boundary",
+          "scenes": ["configuration-playground"],
+          "source": "PlaygroundModal.tsx:Dialog",
+          "category": "helper"
+        },
+        {
+          "id": "playground-uncertain",
+          "text": "The browser did not receive a trustworthy media admission result. The Router can still have created a job. Check detailed logs before you allow another media submission for this target.",
+          "expected": "present",
+          "reason": "safety fact",
+          "scenes": ["configuration-media-uncertain"],
+          "source": "PlaygroundModal.tsx:Uncertain media admission",
+          "category": "helper"
+        },
+        {
+          "id": "playground-recovery",
+          "text": "Media job content-job is running. The Router will not submit a replacement job.",
+          "expected": "present",
+          "reason": "non-obvious effect",
+          "scenes": ["configuration-media-recovery"],
+          "source": "PlaygroundModal.tsx:Admitted media job recovery",
+          "category": "fixture record state"
+        },
+        {
+          "id": "providers-empty",
+          "text": "No providers are configured.",
+          "expected": "present",
+          "reason": "empty state",
+          "scenes": ["configuration-empty"],
+          "source": "ConfigurationGraph.tsx:emptyCatalogState",
+          "category": "state"
+        },
+        {
+          "id": "models-empty",
+          "text": "No canonical models are configured.",
+          "expected": "present",
+          "reason": "empty state",
+          "scenes": ["configuration-empty"],
+          "source": "ConfigurationGraph.tsx:emptyCatalogState",
+          "category": "state"
+        },
+        {
+          "id": "configuration-partial-info",
+          "text": "The Router returned a bounded subset. More global records are available. This graph does not claim to be complete.",
+          "expected": "present",
+          "reason": "unavailable state",
+          "scenes": ["configuration-partial"],
+          "source": "ConfigurationGraph.tsx:InlineAlert",
+          "category": "helper"
+        },
+        {
+          "id": "delete-provider",
+          "text": "delete provider provider",
+          "expected": "present",
+          "reason": "destructive impact",
+          "scenes": ["configuration-delete-provider"],
+          "source": "ConfigurationGraph.tsx:DeleteTarget impact",
+          "category": "fixture impact statement"
+        },
+        {
+          "id": "delete-model",
+          "text": "delete canonical model model",
+          "expected": "present",
+          "reason": "destructive impact",
+          "scenes": ["configuration-delete-model"],
+          "source": "ConfigurationGraph.tsx:DeleteTarget impact",
+          "category": "fixture impact statement"
+        },
+        {
+          "id": "delete-mapping",
+          "text": "delete provider-model mapping route",
+          "expected": "present",
+          "reason": "destructive impact",
+          "scenes": ["configuration-delete-mapping"],
+          "source": "ConfigurationGraph.tsx:DeleteTarget impact",
+          "category": "fixture impact statement"
+        },
+        {
+          "id": "delete-assignment",
+          "text": "delete local assignment assignment from root",
+          "expected": "present",
+          "reason": "destructive impact",
+          "scenes": ["configuration-delete-assignment"],
+          "source": "ConfigurationGraph.tsx:DeleteTarget impact",
+          "category": "fixture impact statement"
+        },
+        {
+          "id": "delete-credential",
+          "text": "delete credential credential",
+          "expected": "present",
+          "reason": "destructive impact",
+          "scenes": ["configuration-delete-credential"],
+          "source": "ConfigurationGraph.tsx:DeleteTarget impact",
+          "category": "fixture impact statement"
+        },
+        {
+          "id": "delete-requirement",
+          "text": "remove observed requirement streaming from assignment assignment for service root",
+          "expected": "present",
+          "reason": "destructive impact",
+          "scenes": ["configuration-delete-requirement"],
+          "source": "ConfigurationGraph.tsx:DeleteTarget impact",
+          "category": "fixture impact statement"
+        },
+        {
+          "id": "playground-model-prompt",
+          "text": "Enter the prompt for the model operation.",
+          "expected": "present",
+          "reason": "required action",
+          "scenes": ["configuration-playground"],
+          "source": "@opendle/ui:OperationPlayground inputContent",
+          "category": "helper"
+        },
+        {
+          "id": "playground-image-prompt",
+          "text": "Enter the prompt for the image operation.",
+          "expected": "present",
+          "reason": "required action",
+          "scenes": [
+            "configuration-media-uncertain",
+            "configuration-media-recovery"
+          ],
+          "source": "@opendle/ui:OperationPlayground inputContent",
+          "category": "helper"
+        },
+        {
+          "id": "playground-image-types",
+          "text": "JPEG, PNG, and WebP files are supported.",
+          "expected": "present",
+          "reason": "required action",
+          "scenes": ["configuration-playground"],
+          "source": "@opendle/ui:OperationPlayground",
+          "category": "helper"
+        },
+        {
+          "id": "playground-images-empty",
+          "text": "No input images",
+          "expected": "present",
+          "reason": "empty state",
+          "scenes": ["configuration-playground"],
+          "source": "@opendle/ui:OperationPlayground",
+          "category": "state"
+        },
+        {
+          "id": "playground-initial",
+          "text": "Run this fixed target to see its global administrator result.",
+          "expected": "present",
+          "reason": "required action",
+          "scenes": ["configuration-playground"],
+          "source": "PlaygroundModal.tsx:initialRunState",
+          "category": "state"
+        },
+        {
+          "id": "playground-embedding-help",
+          "text": "Put each input item on a new line.",
+          "expected": "present",
+          "reason": "required action",
+          "scenes": ["configuration-playground-embedding"],
+          "source": "@opendle/ui:OperationPlayground inputContent",
+          "category": "helper"
+        },
+        {
+          "id": "playground-audio-help",
+          "text": "Enter the text for the audio operation.",
+          "expected": "present",
+          "reason": "required action",
+          "scenes": ["configuration-playground-audio"],
+          "source": "@opendle/ui:OperationPlayground inputContent",
+          "category": "helper"
+        },
+        {
+          "id": "playground-video-help",
+          "text": "Enter the prompt for the video operation.",
+          "expected": "present",
+          "reason": "required action",
+          "scenes": ["configuration-playground-video"],
+          "source": "@opendle/ui:OperationPlayground inputContent",
+          "category": "helper"
+        },
+        {
+          "id": "credential-replacement",
+          "text": "replace the stored secret for credential credential; the prior secret stops serving new attempts after commit",
+          "expected": "present",
+          "reason": "non-obvious effect",
+          "scenes": ["configuration-credential-replace"],
+          "source": "ConfigurationGraph.tsx:saveCredential",
+          "category": "fixture impact statement"
+        },
+        {
+          "id": "assignment-draft-discard",
+          "text": "discard unsaved assignment changes for service root",
+          "expected": "present",
+          "reason": "destructive impact",
+          "scenes": ["configuration-draft-discard"],
+          "source": "ConfigurationGraph.tsx:DeleteTarget",
+          "category": "fixture impact statement"
+        },
+        {
+          "id": "playground-attempt-empty",
+          "text": "No provider attempt completed.",
+          "expected": "present",
+          "reason": "empty state",
+          "scenes": ["configuration-media-recovery"],
+          "source": "PlaygroundModal.tsx:PlaygroundDiagnosticsView",
+          "category": "state"
+        }
+      ]
+    },
+    {
+      "path": "/logs",
+      "sources": ["LogsPage.tsx", "LogsDetail.tsx", "logsState.ts"],
+      "scope": "Filters, retained records, selected details, attempts, media, retention bounds and state messages. JSON, price, request and actor facts are record values.",
+      "items": [
+        {
+          "id": "logs-security",
+          "text": "Only global administrators can read complete retained model content and media.",
+          "expected": "present",
+          "reason": "security boundary",
+          "scenes": ["logs-normal", "logs-detail", "logs-empty"],
+          "source": "LogsPage.tsx:PageHeading",
+          "category": "helper"
+        },
+        {
+          "id": "logs-empty",
+          "text": "No Logs are available in the configured retention window.",
+          "expected": "present",
+          "reason": "retention effect",
+          "scenes": ["logs-empty"],
+          "source": "LogsPage.tsx:logsMessage",
+          "category": "state"
+        },
+        {
+          "id": "logs-loading",
+          "text": "Loading Logs.",
+          "expected": "present",
+          "reason": "loading state",
+          "scenes": ["logs-loading"],
+          "source": "LogsPage.tsx:logsMessage",
+          "category": "live region"
+        },
+        {
+          "id": "logs-unavailable",
+          "text": "Logs are unavailable.",
+          "expected": "present",
+          "reason": "unavailable state",
+          "scenes": ["logs-failure", "logs-retention-failure"],
+          "source": "LogsPage.tsx:logsMessage",
+          "category": "live region"
+        },
+        {
+          "id": "logs-detail-loading",
+          "text": "Loading Logs details.",
+          "expected": "present",
+          "reason": "loading state",
+          "scenes": ["logs-detail-loading"],
+          "source": "LogsDetail.tsx:role=status",
+          "category": "live region"
+        },
+        {
+          "id": "logs-detail-unavailable",
+          "text": "Logs details are unavailable.",
+          "expected": "present",
+          "reason": "unavailable state",
+          "scenes": ["logs-detail-failure"],
+          "source": "LogsDetail.tsx:role=status",
+          "category": "live region"
+        },
+        {
+          "id": "logs-detail-loaded",
+          "text": "Logs details loaded.",
+          "expected": "present",
+          "reason": "accessibility state",
+          "scenes": ["logs-detail"],
+          "source": "LogsDetail.tsx:role=status",
+          "category": "live region"
+        },
+        {
+          "id": "logs-response-unavailable",
+          "text": "Response content is unavailable.",
+          "expected": "present",
+          "reason": "unavailable state",
+          "scenes": ["logs-media-empty"],
+          "source": "LogsDetail.tsx:LogsContent",
+          "category": "state"
+        },
+        {
+          "id": "logs-media-empty",
+          "text": "No retained media",
+          "expected": "present",
+          "reason": "empty state",
+          "scenes": ["logs-media-empty"],
+          "source": "LogsDetail.tsx:LogsContent",
+          "category": "state"
+        },
+        {
+          "id": "logs-retention-bound",
+          "text": "Select times inside the configured Logs retention window.",
+          "expected": "present",
+          "reason": "retention effect",
+          "scenes": ["logs-invalid-filter"],
+          "source": "logsState.ts:validateLogsFilters",
+          "category": "state"
+        }
+      ]
+    },
+    {
+      "path": "/statistics",
+      "sources": ["App.tsx"],
+      "scope": "Filters, query status, accounting results and retained page heading. Group dimensions, prices, units and counts are record values.",
+      "items": [
+        {
+          "id": "statistics-bound",
+          "text": "Group calls, attempts, typed units, and fixed-decimal cost across at most 366 days.",
+          "expected": "present",
+          "reason": "non-obvious effect",
+          "scenes": [
+            "statistics-normal",
+            "statistics-loading",
+            "statistics-failure",
+            "statistics-empty"
+          ],
+          "source": "App.tsx:Statistics PageHeading",
+          "category": "helper"
+        },
+        {
+          "id": "statistics-unqueried",
+          "text": "Choose filters and run the statistics query.",
+          "expected": "present",
+          "reason": "required action",
+          "scenes": ["statistics-normal"],
+          "source": "App.tsx:Statistics DataTable",
+          "category": "state"
+        },
+        {
+          "id": "statistics-loading",
+          "text": "Loading accounting groups",
+          "expected": "present",
+          "reason": "loading state",
+          "scenes": ["statistics-loading"],
+          "source": "App.tsx:Statistics DataTable",
+          "category": "state"
+        },
+        {
+          "id": "statistics-failure",
+          "text": "The statistics query failed. Review the filters and run it again.",
+          "expected": "present",
+          "reason": "failure state",
+          "scenes": ["statistics-failure"],
+          "source": "App.tsx:Statistics DataTable",
+          "category": "state"
+        },
+        {
+          "id": "statistics-empty",
+          "text": "No accounting groups match these filters.",
+          "expected": "present",
+          "reason": "empty state",
+          "scenes": ["statistics-empty"],
+          "source": "App.tsx:Statistics DataTable",
+          "category": "state"
+        }
+      ]
+    },
+    {
+      "path": "/operations",
+      "sources": ["App.tsx", "administrationSafety.ts"],
+      "scope": "Health, global retention, retention reduction confirmation, cooldowns and activity. Checked times, health statuses, cooldown reasons and activity records are record values.",
+      "items": [
+        {
+          "id": "operations-purpose",
+          "text": "Inspect current health, best-effort cooldowns, retention, and basic configuration activity.",
+          "expected": "absent",
+          "source": "App.tsx:Operations PageHeading",
+          "category": "helper"
+        },
+        {
+          "id": "health-placeholder",
+          "text": "No corrective message",
+          "expected": "absent",
+          "source": "App.tsx:Operations health list",
+          "category": "helper"
+        },
+        {
+          "id": "activity-disclaimer",
+          "text": "This is a basic activity record. It is not immutable configuration history.",
+          "expected": "absent",
+          "source": "App.tsx:Operations activity PanelHeader",
+          "category": "helper"
+        },
+        {
+          "id": "operations-retention",
+          "text": "The duration applies to detailed logs, activity, uploaded images, and retained generated media.",
+          "expected": "present",
+          "reason": "retention effect",
+          "scenes": ["operations-normal"],
+          "source": "App.tsx:Operations retention PanelHeader",
+          "category": "helper"
+        },
+        {
+          "id": "operations-cooldowns",
+          "text": "Cooldowns are process-local best-effort state and can clear after a restart.",
+          "expected": "present",
+          "reason": "non-obvious effect",
+          "scenes": ["operations-normal"],
+          "source": "App.tsx:Operations cooldown PanelHeader",
+          "category": "helper"
+        },
+        {
+          "id": "operations-health-action",
+          "text": "Restore storage access before you retry the request.",
+          "expected": "present",
+          "reason": "required action",
+          "scenes": ["operations-health"],
+          "source": "App.tsx:Operations item.message",
+          "category": "fixture record state"
+        },
+        {
+          "id": "operations-health-retry",
+          "text": "Refresh the administration data to try the health read again.",
+          "expected": "present",
+          "reason": "required action",
+          "scenes": ["operations-failure"],
+          "source": "App.tsx:Operations health StatePanel",
+          "category": "helper"
+        },
+        {
+          "id": "operations-retention-retry",
+          "text": "Refresh the administration data to try the retention read again.",
+          "expected": "present",
+          "reason": "required action",
+          "scenes": ["operations-failure"],
+          "source": "App.tsx:Operations retention StatePanel",
+          "category": "helper"
+        },
+        {
+          "id": "operations-cooldowns-empty",
+          "text": "No current cooldowns",
+          "expected": "present",
+          "reason": "empty state",
+          "scenes": ["operations-empty"],
+          "source": "App.tsx:Operations cooldown list",
+          "category": "state"
+        },
+        {
+          "id": "operations-activity-empty",
+          "text": "No retained activity is available.",
+          "expected": "present",
+          "reason": "empty state",
+          "scenes": ["operations-normal"],
+          "source": "App.tsx:Operations activity DataTable",
+          "category": "state"
+        },
+        {
+          "id": "operations-health-loading",
+          "text": "Loading health.",
+          "expected": "present",
+          "reason": "loading state",
+          "scenes": ["operations-loading"],
+          "source": "App.tsx:Operations LoadingPage",
+          "category": "state"
+        },
+        {
+          "id": "operations-retention-loading",
+          "text": "Loading retention.",
+          "expected": "present",
+          "reason": "loading state",
+          "scenes": ["operations-loading"],
+          "source": "App.tsx:Operations LoadingPage",
+          "category": "state"
+        },
+        {
+          "id": "operations-cooldowns-loading",
+          "text": "Loading current cooldowns.",
+          "expected": "present",
+          "reason": "loading state",
+          "scenes": ["operations-loading"],
+          "source": "App.tsx:Operations cooldown list",
+          "category": "state"
+        },
+        {
+          "id": "operations-activity-loading",
+          "text": "Loading retained activity",
+          "expected": "present",
+          "reason": "loading state",
+          "scenes": ["operations-loading"],
+          "source": "App.tsx:Operations activity DataTable",
+          "category": "state"
+        },
+        {
+          "id": "operations-read-state",
+          "text": "Wait while the Router reads current state.",
+          "expected": "present",
+          "reason": "loading state",
+          "scenes": ["operations-loading"],
+          "source": "App.tsx:LoadingPage",
+          "category": "helper"
+        }
+      ]
+    }
+  ],
+  "nativeDialogs": [
+    {
+      "route": "/operations",
+      "source": "administrationSafety.ts:updateRetentionDuration",
+      "text": "Lower global retention from 7 to 3 days? Detailed logs, activity, uploaded images, and retained generated media will become eligible for earlier deletion.",
+      "expected": "present",
+      "reason": "retention effect",
+      "scenes": ["operations-retention-reduce"],
+      "evidence": "Exact Playwright native dialog event at both widths; dismissed without a write. Native browser chrome is outside DOM screenshots."
+    }
+  ],
+  "sourceOnlyFallbacks": [
+    {
+      "route": "/configuration",
+      "source": "ConfigurationGraph.tsx:ConfirmationDialog description",
+      "text": "Delete the selected record.",
+      "expected": "absent",
+      "reason": "The closed dialog has no delete target. Every open dialog uses its exact impact statement."
+    },
+    {
+      "route": "/services",
+      "source": "App.tsx:ServicesRoute GraphEmptyState",
+      "text": "The permanent root service is unavailable. Retry services to continue.",
+      "expected": "absent",
+      "reason": "The failure title can select this fallback only after the failed source has supplied its own corrective message."
+    }
+  ]
+}
