@@ -387,7 +387,7 @@ describe("accepted administration composition", () => {
     expect(markup).not.toContain('dateTime="not-a-timestamp"');
   });
 
-  it("renders the empty service tree without resetting an empty focus target", () => {
+  it("does not offer parentless creation before a service is confirmed", () => {
     const markup = renderToStaticMarkup(
       <ServiceManagement
         onOpenDetails={vi.fn()}
@@ -401,8 +401,9 @@ describe("accepted administration composition", () => {
       />,
     );
 
-    expect(markup).toContain("No services");
-    expect(markup).toContain("Create a root service");
+    expect(markup).not.toContain("No services");
+    expect(markup).not.toContain("Create a root service");
+    expect(markup).not.toContain("New service");
   });
 
   it("keeps service access only on the service-details route", () => {

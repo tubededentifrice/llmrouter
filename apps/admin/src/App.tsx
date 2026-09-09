@@ -69,7 +69,10 @@ import {
   type StatisticsResult,
 } from "./api.ts";
 import { ServiceDetails } from "./ServiceDetails.tsx";
-import { ServiceManagement } from "./ServiceManagement.tsx";
+import {
+  ServiceManagement,
+  type ServiceCreationEvent,
+} from "./ServiceManagement.tsx";
 import { ConfigurationGraph } from "./ConfigurationGraph.tsx";
 import { createScopeLoadGuard } from "./accessState.ts";
 import type { ConfigurationLoadPhase } from "./configurationState.ts";
@@ -1830,6 +1833,7 @@ const emptyData: AppData = {
   retentionDays: null,
 };
 interface RouteSourceState {
+  readonly servicesReadVersion: number;
   readonly checkedAt: number;
   readonly data: AppData;
   readonly confirmed: Partial<Record<Source, boolean>>;
@@ -1850,6 +1854,7 @@ function useRouteSources(
       patch: Partial<RouteSourceState>,
     ): RouteSourceState => ({ ...current, ...patch }),
     {
+      servicesReadVersion: 0,
       checkedAt: 0,
       data: emptyData,
       confirmed: {},
@@ -1864,6 +1869,90 @@ function useRouteSources(
   }, [state]);
   const guard = useRef(createScopeLoadGuard());
   const pending = useRef<Promise<void> | null>(null);
+  const serviceCreation = useRef<{
+    parent: Service;
+    pending: boolean;
+    deferred: RouteSourceState | null;
+  } | null>(null);
+  const onCreationEvent = useCallback((event: ServiceCreationEvent) => {
+    const creation = serviceCreation.current;
+    if (event.type === "opened") {
+      // A pre-open list request cannot change this attempt or its eventual result.
+      guard.current.invalidate();
+      pending.current = null;
+      serviceCreation.current = {
+        parent: event.parent,
+        pending: false,
+        deferred: null,
+      };
+      const next = { ...stateRef.current, pending: false };
+      stateRef.current = next;
+      update(next);
+      return;
+    }
+    if (event.type === "closed") {
+      serviceCreation.current = null;
+      return;
+    }
+    if (creation === null) return;
+    if (event.type === "started") {
+      creation.pending = true;
+      return;
+    }
+    if (event.type === "succeeded") {
+      guard.current.invalidate();
+      pending.current = null;
+      const previous = stateRef.current;
+      const failures = { ...previous.failures };
+      delete failures.services;
+      const next: RouteSourceState = {
+        ...previous,
+        servicesReadVersion: previous.servicesReadVersion + 1,
+        data: {
+          ...previous.data,
+          services: [
+            ...previous.data.services.filter(
+              (service) => service.api_name !== event.service.api_name,
+            ),
+            event.service,
+          ],
+        },
+        confirmed: { ...previous.confirmed, services: true },
+        phases: { ...previous.phases, services: "ready" },
+        failures,
+        pending: false,
+      };
+      serviceCreation.current = null;
+      stateRef.current = next;
+      update(next);
+      return;
+    }
+    creation.pending = false;
+    let next = creation.deferred ?? stateRef.current;
+    creation.deferred = null;
+    if (event.parentUnavailable) {
+      guard.current.invalidate();
+      pending.current = null;
+      const removed = new Set([creation.parent.api_name]);
+      for (let count = -1; count !== removed.size;) {
+        count = removed.size;
+        for (const service of next.data.services)
+          if (removed.has(service.parent_service_api_name ?? ""))
+            removed.add(service.api_name);
+      }
+      const services = next.data.services.filter(
+        (service) => !removed.has(service.api_name),
+      );
+      next = {
+        ...next,
+        servicesReadVersion: next.servicesReadVersion + 1,
+        data: { ...next.data, services },
+        pending: false,
+      };
+    }
+    stateRef.current = next;
+    update(next);
+  }, []);
   const load = useCallback((): Promise<void> => {
     if (pending.current !== null) return pending.current;
     const generation = guard.current.begin();
@@ -1904,7 +1993,7 @@ function useRouteSources(
       .then((results) => {
         if (!guard.current.isCurrent(generation)) return;
         const previous = stateRef.current;
-        const values = Object.fromEntries(
+        let values = Object.fromEntries(
           results.flatMap((result, index) =>
             result.status === "fulfilled"
               ? [[sources[index], result.value.value]]
@@ -1926,7 +2015,32 @@ function useRouteSources(
             failures[source] = errorMessage(reason);
           }
         });
-        const next = {
+        // A partial list cannot establish that an existing service is absent.
+        const servicesIndex = sources.indexOf("services");
+        const serviceResult = results[servicesIndex];
+        const completeServices =
+          serviceResult?.status === "fulfilled" && !serviceResult.value.partial;
+        if (
+          requireServiceRoot &&
+          values.services !== undefined &&
+          !completeServices
+        ) {
+          values = {
+            ...values,
+            services: [
+              ...previous.data.services.filter(
+                (old) =>
+                  !values.services?.some(
+                    (service) => service.api_name === old.api_name,
+                  ),
+              ),
+              ...values.services,
+            ],
+          };
+        }
+        const next: RouteSourceState = {
+          servicesReadVersion:
+            previous.servicesReadVersion + (completeServices ? 1 : 0),
           checkedAt: Date.now(),
           data: { ...previous.data, ...values },
           confirmed,
@@ -1934,6 +2048,19 @@ function useRouteSources(
           failures,
           pending: false,
         };
+        const creation = serviceCreation.current;
+        if (
+          creation?.pending &&
+          completeServices &&
+          !next.data.services.some(
+            (service) => service.api_name === creation.parent.api_name,
+          )
+        ) {
+          creation.deferred = next;
+          update({ pending: false });
+          return;
+        }
+        if (creation !== null && completeServices) creation.deferred = null;
         stateRef.current = next;
         update(next);
       })
@@ -1954,7 +2081,7 @@ function useRouteSources(
       pending.current = null;
     };
   }, [load]);
-  return { ...state, load };
+  return { ...state, load, onCreationEvent };
 }
 
 type RouteSources = ReturnType<typeof useRouteSources>;
@@ -2383,9 +2510,11 @@ function useServiceContext(props: RouteProps, resource: RouteSources) {
     (service) => service.api_name === received,
   )
     ? received
-    : location.pathname === "/services" &&
-        location.treeRestore?.mode === "deleted"
-      ? (resource.data.services[0]?.api_name ?? "")
+    : location.pathname === "/services"
+      ? (resource.data.services.find((service) => service.api_name === "root")
+          ?.api_name ??
+        resource.data.services[0]?.api_name ??
+        "")
       : "";
   const replaceService = useCallback(
     (value: string) => {
@@ -2402,7 +2531,7 @@ function useServiceContext(props: RouteProps, resource: RouteSources) {
   useEffect(() => {
     if (
       resource.confirmed.services &&
-      ((received !== "" && received !== selectedService) || serviceCount > 1)
+      (received !== selectedService || serviceCount > 1)
     )
       replaceService(selectedService);
   }, [
@@ -2437,6 +2566,13 @@ function ServicesRoute(props: RouteProps) {
         Services
       </h1>
       <ServiceManagement
+        initialSelectionRequested={resource.data.services.some(
+          (service) =>
+            service.api_name ===
+            new URLSearchParams(props.location.search).get("service"),
+        )}
+        onCreationEvent={resource.onCreationEvent}
+        servicesReadVersion={resource.servicesReadVersion}
         {...(props.location.treeRestore === undefined
           ? {}
           : { restoreTree: props.location.treeRestore })}
