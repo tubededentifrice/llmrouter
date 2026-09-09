@@ -1999,6 +1999,11 @@ export interface AdministrationClient {
     from: string,
     to: string,
     cursor?: string,
+    filters?: {
+      readonly call_actor?: "service" | "administrator";
+      readonly administrator?: string;
+      readonly configuration_service?: string;
+    },
   ): Promise<Page<RequestLogSummary>>;
   requestLog(id: string): Promise<RequestLog>;
   requestLogMedia(id: string, mediaId: string): Promise<Blob>;
@@ -2527,6 +2532,10 @@ export function createAdministrationClient(
   function parseListPage<T>(
     value: unknown,
     parseItem?: (item: unknown) => T,
+    options: {
+      readonly limit?: number;
+      readonly deferCursorValidation?: boolean;
+    } = {},
   ): Page<T> {
     if (
       typeof value !== "object" ||
@@ -2544,7 +2553,8 @@ export function createAdministrationClient(
       ) ||
       !("has_more" in value.page) ||
       typeof value.page.has_more !== "boolean" ||
-      ("next_cursor" in value.page &&
+      (!options.deferCursorValidation &&
+        "next_cursor" in value.page &&
         value.page.next_cursor !== null &&
         (typeof value.page.next_cursor !== "string" ||
           value.page.next_cursor.length < 1 ||
@@ -2554,12 +2564,16 @@ export function createAdministrationClient(
         "The list page does not match the native cursor contract.",
       );
     const page = value.page as Record<string, unknown>;
-    if (value.items.length > listLimit)
+    if (value.items.length > (options.limit ?? listLimit))
       throw invalidListResponse(
-        `The list page exceeds the requested ${String(listLimit)} item limit.`,
+        `The list page exceeds the requested ${String(options.limit ?? listLimit)} item limit.`,
       );
     const nextCursor = page.next_cursor;
-    if (page.has_more && (nextCursor === undefined || nextCursor === null))
+    if (
+      !options.deferCursorValidation &&
+      page.has_more &&
+      (nextCursor === undefined || nextCursor === null)
+    )
       throw invalidListResponse(
         "The list says that more items exist, but it has no next cursor.",
       );
@@ -2904,12 +2918,14 @@ export function createAdministrationClient(
       ),
     requestLogs: (from, to) =>
       allPages("/v1/admin/request-logs", { from, to }, parseRequestLogSummary),
-    requestLogsPage: (from, to, cursor) =>
-      listPage(
-        "/v1/admin/request-logs",
-        { from, to },
-        cursor,
-        parseRequestLogSummary,
+    requestLogsPage: (from, to, cursor, filters = {}) =>
+      request<unknown>(
+        `/v1/admin/request-logs${query({ from, to, limit: "100", cursor, call_actor: filters.call_actor, administrator: filters.administrator, configuration_service: filters.configuration_service })}`,
+      ).then((value) =>
+        parseListPage(value, parseRequestLogSummary, {
+          limit: 100,
+          deferCursorValidation: true,
+        }),
       ),
     requestLog: (id) =>
       request(

@@ -224,29 +224,28 @@ describe("accepted administration composition", () => {
     );
   });
 
-  it("uses the shared page and table contracts for each retained page", () => {
-    const application = readFileSync(
-      new URL("../src/App.tsx", import.meta.url),
-      "utf8",
-    );
+  it("uses shared page and table contracts across retained page modules", () => {
+    const application = ["App.tsx", "LogsPage.tsx"]
+      .map((file) =>
+        readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8"),
+      )
+      .join("\n");
     const styles = readFileSync(
       new URL("../src/styles.css", import.meta.url),
       "utf8",
     );
-
     expect(
       application.match(/<PageSurface className="administration-page">/g),
     ).toHaveLength(4);
     expect(application.match(/<DataTable/g)).toHaveLength(3);
     expect(application).not.toContain("<table");
     expect(application).not.toContain("EmptyTable");
-    expect(application).toContain('ariaLabel="Detailed request logs"');
+    expect(application).toContain('ariaLabel="Logs"');
     expect(application).toContain('ariaLabel="Usage and cost statistics"');
     expect(application).toContain('ariaLabel="Configuration activity"');
     expect(administrationListMaximum).toBe(20_000);
     expect(administrationListPageMaximum).toBe(100);
     expect(application).toContain("STATISTICS_GROUP_MAXIMUM = 1_000");
-    expect(application).toContain("requestLogsPage(");
     expect(application).toContain("activityPage(");
     expect(application.match(/loadMore: \{/g)).toHaveLength(2);
     expect(styles).not.toContain(".administration-table-region");
@@ -254,30 +253,24 @@ describe("accepted administration composition", () => {
     expect(styles).not.toContain("padding-block: 32px 76px");
   });
 
-  it("keeps an unavailable selected log explicit and recoverable", () => {
-    const application = readFileSync(
-      new URL("../src/App.tsx", import.meta.url),
+  it("renders retained Logs details as inert text with authenticated downloads", () => {
+    const detail = readFileSync(
+      new URL("../src/LogsDetail.tsx", import.meta.url),
       "utf8",
     );
-    expect(application).toContain("detailFailure");
-    expect(application).toContain("The selected request log is unavailable.");
-    expect(application).toContain("detailReturnFocus.current");
-    expect(application).toContain('id="request-log-close"');
-    expect(application).toContain(
-      "[logs.detail, logs.detailFailure, logs.detailId]",
+    const state = readFileSync(
+      new URL("../src/logsState.ts", import.meta.url),
+      "utf8",
     );
-    expect(
-      application.match(
-        /detailReturnFocus\.current = context\?\.trigger \?\? null;/g,
-      ),
-    ).toHaveLength(1);
-    expect(application).toContain("Usage unavailable");
-    expect(application).toContain("detailLoadGuard.current.invalidate()");
-    expect(application).toContain("detailReturnFocus.current = null");
-    expect(application).toContain(
-      'getElementById("request-log-load")?.focus()',
-    );
-    expect(application).toContain("setResult(null)");
+    expect(detail).toContain('aria-label="Logs details"');
+    expect(detail).toContain("Logs details are unavailable.");
+    expect(detail).toContain("Retry Logs details");
+    expect(detail).toContain("Close Logs details");
+    expect(detail).toContain("Usage unavailable");
+    expect(detail).toContain("<pre>{detail.request_json}</pre>");
+    expect(detail).not.toContain("dangerouslySetInnerHTML");
+    expect(state).toContain(".requestLogMedia(detail.id, id)");
+    expect(state).toContain('type: "application/octet-stream"');
   });
 
   it("rejects inconsistent incremental pages without changing loaded rows", () => {

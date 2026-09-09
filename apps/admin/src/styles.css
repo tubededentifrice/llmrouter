@@ -165,8 +165,8 @@ textarea,
   grid-template-columns: minmax(220px, 1fr) auto;
 }
 
-.request-log-filter-form {
-  grid-template-columns: repeat(2, minmax(180px, 1fr)) auto;
+.logs-filter-form {
+  grid-template-columns: minmax(0, 1fr);
   border-top: 0;
 }
 
@@ -368,10 +368,8 @@ input:not(.od-form-control):focus {
 
 .log-detail pre {
   max-width: 100%;
-  max-height: 420px;
   margin: 0;
   padding: 14px;
-  overflow: auto;
   border: 1px solid var(--od-color-border);
   border-radius: var(--od-radius-sm);
   background: var(--od-color-background);

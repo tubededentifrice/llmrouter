@@ -269,12 +269,12 @@ describe("native administration client", () => {
     await client.activityPage("from", "to", "next activity");
 
     expect(paths).toEqual([
-      "/v1/admin/request-logs?from=from&to=to&limit=200&cursor=next+log",
+      "/v1/admin/request-logs?from=from&to=to&limit=100&cursor=next+log",
       "/v1/admin/activity?from=from&to=to&limit=200&cursor=next+activity",
     ]);
   });
 
-  it("rejects an unsafe continuation page before it reaches the table", async () => {
+  it("keeps non-Logs list cursor validation strict", async () => {
     const client = createAdministrationClient(
       vi.fn(() =>
         Promise.resolve(
@@ -284,7 +284,7 @@ describe("native administration client", () => {
     );
 
     const error: unknown = await client
-      .requestLogsPage("from", "to")
+      .activityPage("from", "to")
       .catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(AdministrationApiError);
     if (!(error instanceof AdministrationApiError)) throw error;
