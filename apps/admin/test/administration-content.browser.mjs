@@ -524,6 +524,50 @@ scene("statistics-failure", "/statistics", {
 scene("statistics-empty", "/statistics", {
   action: async (page) => button(page, "Run statistics").click(),
 });
+scene("statistics-advanced", "/statistics", {
+  action: async (page) =>
+    page.locator("#statistics-advanced > summary").click(),
+});
+for (const [id, from, through] of [
+  ["statistics-invalid-from", "", "2026-03-08"],
+  ["statistics-invalid-through", "2026-03-08", ""],
+  ["statistics-invalid-order", "2026-03-09", "2026-03-08"],
+  ["statistics-over-limit", "2028-01-01", "2029-01-01"],
+  ["statistics-overflow", "9999-12-31", "9999-12-31"],
+])
+  scene(id, "/statistics", {
+    action: async (page) => {
+      await page.locator("#statistics-filter-from").fill(from);
+      await page.locator("#statistics-filter-through").fill(through);
+      await button(page, "Run statistics").click();
+    },
+  });
+scene("statistics-group-limit", "/statistics", {
+  action: async (page) => {
+    await page.locator("#statistics-advanced > summary").click();
+    await page.locator("#statistics-filter-group_by summary").click();
+    for (const label of [
+      "Date",
+      "Call actor",
+      "Service",
+      "Workspace",
+      "Administrator",
+      "Assignment configuration service",
+      "Assignment",
+      "Provider route",
+    ])
+      await page.getByRole("checkbox", { name: label, exact: true }).check();
+  },
+});
+scene("statistics-advanced-invalid", "/statistics", {
+  action: async (page) => {
+    await page.locator("#statistics-advanced > summary").click();
+    await page.locator("#statistics-filter-tag").fill("x".repeat(129));
+    await page.locator("#statistics-advanced > summary").click();
+    await button(page, "Run statistics").click();
+    await expect(page.locator("#statistics-filter-tag")).toBeFocused();
+  },
+});
 scene("operations-health", "/operations", {
   values: {
     health: {

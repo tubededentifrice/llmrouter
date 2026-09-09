@@ -1847,6 +1847,9 @@ function query(
 }
 const encode = encodeURIComponent;
 export interface StatisticsFilters {
+  readonly call_actor?: "service" | "administrator";
+  readonly administrator?: string;
+  readonly configuration_service?: string;
   readonly from: string;
   readonly to: string;
   readonly service?: string;
@@ -2914,7 +2917,7 @@ export function createAdministrationClient(
       listPage("/v1/admin/activity", { from, to }, cursor, parseActivityEvent),
     statistics: (filters) =>
       request(
-        `/v1/admin/statistics${query({ from: filters.from, to: filters.to, service: filters.service, workspace: filters.workspace, assignment: filters.assignment, provider_model: filters.provider_model, outcome: filters.outcome, tag: filters.tag, group_by: filters.group_by })}`,
+        `/v1/admin/statistics${query({ from: filters.from, to: filters.to, call_actor: filters.call_actor, administrator: filters.administrator, configuration_service: filters.configuration_service, service: filters.service, workspace: filters.workspace, assignment: filters.assignment, provider_model: filters.provider_model, outcome: filters.outcome, tag: filters.tag, group_by: filters.group_by })}`,
       ),
     requestLogs: (from, to) =>
       allPages("/v1/admin/request-logs", { from, to }, parseRequestLogSummary),

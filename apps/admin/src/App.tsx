@@ -1,3 +1,4 @@
+import { StatisticsPage } from "./StatisticsPage.tsx";
 import { LogsPage } from "./LogsPage.tsx";
 import {
   useCallback,
@@ -17,7 +18,6 @@ import {
   ApplicationShell,
   ApplicationSidebar,
   Button,
-  CheckboxControl,
   ConfirmationDialog,
   DataTable,
   DateTime,
@@ -40,7 +40,6 @@ import {
   StatePanel,
   StatusPill,
   Toast,
-  TextControl,
   type DataTableColumn,
   type IconName,
 } from "@opendle/ui";
@@ -62,8 +61,6 @@ import {
   type Provider,
   type ProviderModel,
   type Service,
-  type StatisticsBucket,
-  type StatisticsResult,
 } from "./api.ts";
 import { ServiceDetails } from "./ServiceDetails.tsx";
 import {
@@ -219,13 +216,6 @@ function withUnauthorizedSessionHandler(
   });
   /* eslint-enable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return */
 }
-function displayTimeText(value: string | null | undefined): string {
-  if (value == null) return "Never";
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime())
-    ? "Unavailable"
-    : parsed.toLocaleString();
-}
 function RouterDateTime({
   value,
 }: {
@@ -252,61 +242,6 @@ function tone(value: string): "green" | "amber" | "red" | "blue" {
   if (["failed", "unavailable", "disabled"].includes(value)) return "red";
   return "blue";
 }
-const STATISTICS_GROUP_MAXIMUM = 1_000;
-
-function usageLabel(item: StatisticsBucket): string {
-  return (
-    item.units.map((unit) => `${unit.unit} ${unit.quantity}`).join(", ") ||
-    "None"
-  );
-}
-
-const statisticsColumns: readonly DataTableColumn<StatisticsBucket>[] = [
-  {
-    key: "dimensions",
-    header: "Dimensions",
-    width: "32%",
-    render: ({ row }) =>
-      row.dimensions.length === 0
-        ? "Total"
-        : row.dimensions
-            .map((dimension) => dimension ?? "Not applicable")
-            .join(" / "),
-  },
-  {
-    align: "end",
-    key: "calls",
-    header: "Calls",
-    width: "7rem",
-    render: ({ row }) => row.calls,
-  },
-  {
-    align: "end",
-    key: "attempts",
-    header: "Attempts",
-    width: "7rem",
-    render: ({ row }) => row.attempts,
-  },
-  {
-    key: "usage",
-    header: "Typed usage",
-    width: "32%",
-    render: ({ row }) => usageLabel(row),
-  },
-  {
-    align: "end",
-    key: "cost",
-    header: "Cost",
-    width: "10rem",
-    render: ({ row }) =>
-      row.cost === null
-        ? "Unavailable"
-        : row.currency === null
-          ? `${row.cost} (no currency)`
-          : `${row.currency} ${row.cost}`,
-  },
-];
-
 const activityColumns: readonly DataTableColumn<ActivityEvent>[] = [
   {
     key: "time",
@@ -500,261 +435,6 @@ function Overview({ resource }: { readonly resource: RouteSources }) {
           Overview is partial or stale. Retry the failed summaries.
         </p>
       ) : null}
-    </PageSurface>
-  );
-}
-
-function StatisticsPage({
-  client,
-  onNotice,
-  services,
-}: {
-  readonly client: AdministrationClient;
-  readonly onNotice: (tone: "success" | "error", message: string) => void;
-  readonly services: readonly Service[];
-}) {
-  const initial = useMemo(() => isoRange(30), []);
-  const [filters, setFilters] = useState({
-    service: "",
-    workspace: "",
-    assignment: "",
-    providerModel: "",
-    outcome: "",
-    tag: "",
-    groupBy: new Set<string>(),
-  });
-  const [result, setResult] = useState<StatisticsResult | null>(null);
-  const [phase, setPhase] = useState<
-    "unqueried" | "loading" | "ready" | "error"
-  >("unqueried");
-  const loadGuard = useRef(createScopeLoadGuard());
-  useEffect(
-    () => () => {
-      loadGuard.current.invalidate();
-    },
-    [],
-  );
-  async function load(event: SubmitEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const generation = loadGuard.current.begin();
-    const form = new FormData(event.currentTarget);
-    const outcome = formText(form, "outcome");
-    setResult(null);
-    setPhase("loading");
-    try {
-      const nextResult = await client.statistics({
-        from: new Date(formText(form, "from")).toISOString(),
-        to: new Date(formText(form, "to")).toISOString(),
-        ...(formText(form, "service") === ""
-          ? {}
-          : { service: formText(form, "service") }),
-        ...(formText(form, "workspace") === ""
-          ? {}
-          : { workspace: formText(form, "workspace") }),
-        ...(formText(form, "assignment") === ""
-          ? {}
-          : { assignment: formText(form, "assignment") }),
-        ...(formText(form, "provider_model") === ""
-          ? {}
-          : { provider_model: formText(form, "provider_model") }),
-        ...(outcome === "succeeded" || outcome === "failed" ? { outcome } : {}),
-        ...(formText(form, "tag") === "" ? {} : { tag: formText(form, "tag") }),
-        group_by: form.getAll("group_by").map(String),
-      });
-      if (loadGuard.current.isCurrent(generation)) {
-        setResult(nextResult);
-        setPhase("ready");
-      }
-    } catch (error) {
-      if (!loadGuard.current.isCurrent(generation)) return;
-      setPhase("error");
-      onNotice("error", errorMessage(error));
-    }
-  }
-  const buckets = result?.buckets ?? [];
-  return (
-    <PageSurface className="administration-page">
-      <PageHeading
-        description="Group calls, attempts, typed units, and fixed-decimal cost across at most 366 days."
-        eyebrow="Durable accounting"
-        title="Usage and cost statistics"
-      />
-      <DataTable
-        ariaLabel="Usage and cost statistics"
-        className="administration-data-table"
-        columns={statisticsColumns}
-        filters={
-          <form
-            className="administration-form statistics-form"
-            onSubmit={(event) => void load(event)}
-          >
-            <label>
-              From
-              <input
-                defaultValue={initial.from.slice(0, 16)}
-                name="from"
-                type="datetime-local"
-              />
-            </label>
-            <label>
-              To
-              <input
-                defaultValue={initial.to.slice(0, 16)}
-                name="to"
-                type="datetime-local"
-              />
-            </label>
-            <SelectControl
-              label="Service"
-              name="service"
-              onChange={(event) => {
-                setFilters((current) => ({
-                  ...current,
-                  service: event.currentTarget.value,
-                }));
-              }}
-              value={filters.service}
-            >
-              <option value="">All services</option>
-              {services.map((item) => (
-                <option key={item.api_name}>{item.api_name}</option>
-              ))}
-            </SelectControl>
-            <TextControl
-              label="Workspace"
-              name="workspace"
-              onChange={(event) => {
-                setFilters((current) => ({
-                  ...current,
-                  workspace: event.currentTarget.value,
-                }));
-              }}
-              value={filters.workspace}
-            />
-            <TextControl
-              label="Assignment"
-              name="assignment"
-              onChange={(event) => {
-                setFilters((current) => ({
-                  ...current,
-                  assignment: event.currentTarget.value,
-                }));
-              }}
-              placeholder="Name or (exact)"
-              value={filters.assignment}
-            />
-            <TextControl
-              label="Provider-model"
-              name="provider_model"
-              onChange={(event) => {
-                setFilters((current) => ({
-                  ...current,
-                  providerModel: event.currentTarget.value,
-                }));
-              }}
-              value={filters.providerModel}
-            />
-            <SelectControl
-              label="Outcome"
-              name="outcome"
-              onChange={(event) => {
-                setFilters((current) => ({
-                  ...current,
-                  outcome: event.currentTarget.value,
-                }));
-              }}
-              value={filters.outcome}
-            >
-              <option value="">All outcomes</option>
-              <option>succeeded</option>
-              <option>failed</option>
-            </SelectControl>
-            <TextControl
-              label="Tag"
-              name="tag"
-              onChange={(event) => {
-                setFilters((current) => ({
-                  ...current,
-                  tag: event.currentTarget.value,
-                }));
-              }}
-              value={filters.tag}
-            />
-            <fieldset>
-              <legend>Group by</legend>
-              {[
-                "date",
-                "service",
-                "workspace",
-                "assignment",
-                "provider_model",
-                "outcome",
-                "tag",
-              ].map((item) => (
-                <CheckboxControl
-                  checked={filters.groupBy.has(item)}
-                  key={item}
-                  label={item}
-                  name="group_by"
-                  onChange={(event) => {
-                    setFilters((current) => {
-                      const groupBy = new Set(current.groupBy);
-                      if (event.currentTarget.checked) groupBy.add(item);
-                      else groupBy.delete(item);
-                      return { ...current, groupBy };
-                    });
-                  }}
-                  value={item}
-                />
-              ))}
-            </fieldset>
-            <Button type="submit">Run statistics</Button>
-          </form>
-        }
-        getRowId={(item, index) =>
-          `${String(index)}:${JSON.stringify([item.dimensions, item.currency])}`
-        }
-        getRowLabel={(item) =>
-          `Statistics group ${
-            item.dimensions.length === 0
-              ? "Total"
-              : item.dimensions
-                  .map((dimension) => dimension ?? "Not applicable")
-                  .join(" / ")
-          }`
-        }
-        liveMessage={
-          result === null
-            ? undefined
-            : `${String(buckets.length)} accounting groups loaded for ${displayTimeText(result.from)} through ${displayTimeText(result.to)}.`
-        }
-        maxRows={STATISTICS_GROUP_MAXIMUM}
-        minimumWidth="56rem"
-        rows={buckets}
-        state={
-          phase === "loading"
-            ? { kind: "loading", message: "Loading accounting groups" }
-            : phase === "error"
-              ? {
-                  kind: "error",
-                  message:
-                    "The statistics query failed. Review the filters and run it again.",
-                }
-              : buckets.length === 0
-                ? {
-                    kind: "empty",
-                    message:
-                      phase === "unqueried"
-                        ? "Choose filters and run the statistics query."
-                        : "No accounting groups match these filters.",
-                  }
-                : {
-                    kind: "ready",
-                    message: `${String(buckets.length)} accounting groups loaded.`,
-                  }
-        }
-        toolbarLabel="Usage and cost filters"
-      />
     </PageSurface>
   );
 }
@@ -2306,11 +1986,7 @@ function StatisticsRoute(props: RouteProps) {
       {...notices}
       onDismissNotice={notices.dismiss}
     >
-      <StatisticsPage
-        client={props.client}
-        onNotice={notices.notify}
-        services={resource.data.services}
-      />
+      <StatisticsPage client={props.client} services={resource.data.services} />
       <SourceFailures resource={resource} retryLabel="Retry service filters" />
     </AuthenticatedAdministration>
   );

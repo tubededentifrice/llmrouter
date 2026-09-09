@@ -170,8 +170,9 @@ textarea,
   border-top: 0;
 }
 
-.statistics-form {
-  grid-template-columns: repeat(4, minmax(150px, 1fr));
+.administration-form.statistics-form {
+  grid-template-columns: minmax(0, 1fr);
+  padding: 0;
   border-top: 0;
 }
 
@@ -182,26 +183,13 @@ textarea,
 }
 
 .administration-form > label,
-.service-inspector-form > label,
-.statistics-form fieldset {
+.service-inspector-form > label {
   display: grid;
   min-width: 0;
   gap: 6px;
   color: var(--od-color-muted-strong);
   font-size: 11px;
   font-weight: 700;
-}
-
-.statistics-form fieldset {
-  grid-column: 1 / -1;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
-  padding: 12px;
-  border: 1px solid var(--od-color-border);
-  border-radius: var(--od-radius-md);
-}
-
-.statistics-form legend {
-  padding: 0 5px;
 }
 
 input:not(.od-form-control) {
@@ -600,10 +588,6 @@ input:not(.od-form-control):focus {
   .statistics-form {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-
-  .statistics-form fieldset {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
 }
 
 @media (max-width: 48rem) {
@@ -613,11 +597,6 @@ input:not(.od-form-control):focus {
   .statistics-form,
   .log-detail {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .statistics-form fieldset {
-    grid-column: auto;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .administration-form,
@@ -647,10 +626,6 @@ input:not(.od-form-control):focus {
 }
 
 @media (max-width: 420px) {
-  .statistics-form fieldset {
-    grid-template-columns: 1fr;
-  }
-
   .health-list li,
   .record-list li,
   .catalog-preview li,

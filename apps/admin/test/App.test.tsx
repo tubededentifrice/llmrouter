@@ -225,7 +225,7 @@ describe("accepted administration composition", () => {
   });
 
   it("uses shared page and table contracts across retained page modules", () => {
-    const application = ["App.tsx", "LogsPage.tsx"]
+    const application = ["App.tsx", "LogsPage.tsx", "StatisticsPage.tsx"]
       .map((file) =>
         readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8"),
       )

@@ -17,13 +17,13 @@ fixtures current when route content changes.
 | `/services/{serviceApiName}` | `ServiceDetails.tsx`, `ServiceAccess.tsx`                  | Heading, facts, form, workspaces, keys, secret, deletion and read/write states                                                 |
 | `/configuration`             | `App.tsx`, `ConfigurationGraph.tsx`, `PlaygroundModal.tsx` | Three columns, provider/model/route/assignment inspectors, advanced forms, import, deletion, playground and conditional states |
 | `/logs`                      | `LogsPage.tsx`, `LogsDetail.tsx`, `logsState.ts`           | Filters, retention, records, selected details, retained media and read states                                                  |
-| `/statistics`                | `App.tsx`                                                  | Query bound, filters, query states and accounting results                                                                      |
+| `/statistics`                | `StatisticsPage.tsx`, `statisticsState.ts`                 | UTC date effect, basic and advanced filters, group limits, corrective errors and all query states                              |
 | `/operations`                | `App.tsx`, `administrationSafety.ts`                       | Health messages, retention, cooldowns, activity and read states                                                                |
 
 Headings, labels, actions, record values, corrective errors, state messages,
 accessible names, and live regions are outside the static-helper removal
 rule. The checks preserve these items. Each retained helper has one reason
-from the accepted rule. The 366-day statistics note explains a query limit;
+from the accepted rule. The statistics UTC note explains inclusive calendar dates;
 the Operations retention note explains which data can expire; the credential
 and playground notes explain authority and secret handling. The service and
 workspace deletion notices explain the records that deletion removes.
@@ -52,9 +52,13 @@ The retention reduction uses a native browser confirmation. The test records
 its exact message and dismisses it. Page screenshots cannot capture native
 browser controls. The corresponding screenshot shows the underlying page.
 
-At the 2026-09-09 review, the statistics view still used its earlier local
-date-and-time controls. The accepted UTC date-only and advanced-filter work
-belongs to implementation task `llmr-f477` and review `llmr-dh0a`. This inventory checks the current
-helper content and does not certify that earlier filter behavior. That task
-must update the inventory and fixtures when it adds the required UTC note
-and filter states.
+The statistics fixtures cover the accepted UTC date-only filters, the advanced
+filter disclosure, the group limit, the five date errors, and loading, empty,
+failed and ready query states. The focused [statistics browser check](statistics.browser.mjs)
+also verifies exact HTTP queries in four time zones, later-query state, keyboard
+access, focus, desktop and phone layouts, and 200% text. Native date checks
+inspect the browser shadow fields, complete year, and calendar button. Radio
+checks use Tab, Shift+Tab, and arrows, and measure full words, rows, and focus
+outlines against the phone navigation. Layout checks compare common page
+gutters and the shared result-card layout at 320, 390, and 1440 pixels. All
+statistics states use the real application with synthetic loopback responses.

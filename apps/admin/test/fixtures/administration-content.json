@@ -738,21 +738,30 @@
     },
     {
       "path": "/statistics",
-      "sources": ["App.tsx"],
-      "scope": "Filters, query status, accounting results and retained page heading. Group dimensions, prices, units and counts are record values.",
+      "sources": ["StatisticsPage.tsx", "statisticsState.ts"],
+      "scope": "UTC date filters, basic and advanced filter groups, group selection, corrective errors, query states and accounting results. Group dimensions, prices, units and counts are record values.",
       "items": [
         {
-          "id": "statistics-bound",
-          "text": "Group calls, attempts, typed units, and fixed-decimal cost across at most 366 days.",
+          "id": "statistics-utc",
+          "text": "UTC dates. From and Through include the selected dates.",
           "expected": "present",
           "reason": "non-obvious effect",
           "scenes": [
             "statistics-normal",
+            "statistics-advanced",
             "statistics-loading",
             "statistics-failure",
-            "statistics-empty"
+            "statistics-empty",
+            "statistics-results",
+            "statistics-invalid-from",
+            "statistics-invalid-through",
+            "statistics-invalid-order",
+            "statistics-over-limit",
+            "statistics-overflow",
+            "statistics-group-limit",
+            "statistics-advanced-invalid"
           ],
-          "source": "App.tsx:Statistics PageHeading",
+          "source": "StatisticsPage.tsx:statistics-utc",
           "category": "helper"
         },
         {
@@ -761,34 +770,106 @@
           "expected": "present",
           "reason": "required action",
           "scenes": ["statistics-normal"],
-          "source": "App.tsx:Statistics DataTable",
+          "source": "statisticsState.ts:statisticsMessage",
           "category": "state"
         },
         {
           "id": "statistics-loading",
-          "text": "Loading accounting groups",
+          "text": "Loading usage and cost.",
           "expected": "present",
           "reason": "loading state",
           "scenes": ["statistics-loading"],
-          "source": "App.tsx:Statistics DataTable",
-          "category": "state"
+          "source": "statisticsState.ts:statisticsMessage",
+          "category": "live region"
         },
         {
           "id": "statistics-failure",
-          "text": "The statistics query failed. Review the filters and run it again.",
+          "text": "Unable to load usage and cost. Review the filters and try again.",
           "expected": "present",
           "reason": "failure state",
           "scenes": ["statistics-failure"],
-          "source": "App.tsx:Statistics DataTable",
-          "category": "state"
+          "source": "statisticsState.ts:statisticsMessage",
+          "category": "live region"
         },
         {
           "id": "statistics-empty",
-          "text": "No accounting groups match these filters.",
+          "text": "No usage or cost matches these filters.",
           "expected": "present",
           "reason": "empty state",
           "scenes": ["statistics-empty"],
-          "source": "App.tsx:Statistics DataTable",
+          "source": "statisticsState.ts:statisticsMessage",
+          "category": "live region"
+        },
+        {
+          "id": "statistics-ready",
+          "text": "1 accounting group loaded.",
+          "expected": "present",
+          "reason": "accessibility state",
+          "scenes": ["statistics-results"],
+          "source": "statisticsState.ts:statisticsMessage",
+          "category": "live region"
+        },
+        {
+          "id": "statistics-invalid-from",
+          "text": "Enter a valid From date.",
+          "expected": "present",
+          "reason": "required action",
+          "scenes": ["statistics-invalid-from"],
+          "source": "statisticsState.ts:validateStatistics",
+          "category": "state"
+        },
+        {
+          "id": "statistics-invalid-through",
+          "text": "Enter a valid Through date.",
+          "expected": "present",
+          "reason": "required action",
+          "scenes": ["statistics-invalid-through"],
+          "source": "statisticsState.ts:validateStatistics",
+          "category": "state"
+        },
+        {
+          "id": "statistics-invalid-order",
+          "text": "Through must be the same as or after From.",
+          "expected": "present",
+          "reason": "required action",
+          "scenes": ["statistics-invalid-order"],
+          "source": "statisticsState.ts:validateStatistics",
+          "category": "state"
+        },
+        {
+          "id": "statistics-over-limit",
+          "text": "Select 366 dates or fewer.",
+          "expected": "present",
+          "reason": "required action",
+          "scenes": ["statistics-over-limit"],
+          "source": "statisticsState.ts:validateStatistics",
+          "category": "state"
+        },
+        {
+          "id": "statistics-overflow",
+          "text": "Through is outside the supported date range.",
+          "expected": "present",
+          "reason": "required action",
+          "scenes": ["statistics-overflow"],
+          "source": "statisticsState.ts:validateStatistics",
+          "category": "state"
+        },
+        {
+          "id": "statistics-group-limit",
+          "text": "Select up to 8 groups.",
+          "expected": "present",
+          "reason": "required action",
+          "scenes": ["statistics-group-limit"],
+          "source": "StatisticsPage.tsx:statistics-group-limit",
+          "category": "live region"
+        },
+        {
+          "id": "statistics-advanced-invalid",
+          "text": "Enter a tag of 128 UTF-8 bytes or fewer.",
+          "expected": "present",
+          "reason": "corrective error",
+          "scenes": ["statistics-advanced-invalid"],
+          "source": "statisticsState.ts:validateStatistics",
           "category": "state"
         }
       ]
