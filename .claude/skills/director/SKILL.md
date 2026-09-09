@@ -59,6 +59,9 @@ in the candidate. Avoid a complete copied install for each consumer. Before
 cleanup, stop and collect all related processes. Remove only ignored
 dependencies owned by the completed task. Keep source files and review evidence.
 
+Keep temporary executable UI probes outside package roots. React Doctor scans
+Git-ignored files and can report these probes as unused application source.
+
 Run the narrowest applicable check after each edit. The Director owns broad
 suite execution by default. Do not restart a complete suite when no changed
 path is in that suite's scope.
