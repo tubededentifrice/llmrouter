@@ -398,3 +398,112 @@ describe("Logs retained media lifetime", () => {
     expect(controller.getSnapshot().focus?.target).toBe("logs-refresh");
   });
 });
+
+describe("independent Logs cancellation review", () => {
+  it.each(["retention", "first page", "load more", "detail", "media"] as const)(
+    "disposal rejects late %s success and failure",
+    async (operation) => {
+      for (const fail of [false, true]) {
+        const { client, controller } = setup();
+        const pending = deferred<never>();
+        let request: Promise<void>;
+        if (operation === "retention") {
+          client.retention.mockReturnValueOnce(pending.promise);
+          request = controller.refresh();
+        } else {
+          await controller.refresh();
+          if (operation === "first page") {
+            client.requestLogsPage.mockReturnValueOnce(pending.promise);
+            request = controller.apply();
+          } else if (operation === "load more") {
+            client.requestLogsPage.mockReturnValueOnce(pending.promise);
+            request = controller.loadMore();
+          } else if (operation === "detail") {
+            client.requestLog.mockReturnValueOnce(pending.promise);
+            request = controller.inspect("new");
+          } else {
+            await controller.inspect("new");
+            client.requestLogMedia.mockReturnValueOnce(pending.promise);
+            request = controller.prepareMedia("image");
+          }
+        }
+        controller.dispose();
+        const disposed = controller.getSnapshot();
+        const listener = vi.fn();
+        const unsubscribe = controller.subscribe(listener);
+        if (fail) pending.reject(Error("late unavailable"));
+        else {
+          const result =
+            operation === "retention"
+              ? { duration_days: 1 }
+              : operation === "detail"
+                ? { summary: row("new"), request_json: "late", attempts: [] }
+                : operation === "media"
+                  ? new Blob(["late"])
+                  : page(["late"]);
+          pending.resolve(result as never);
+        }
+        await request;
+        expect(controller.getSnapshot()).toBe(disposed);
+        expect(listener).not.toHaveBeenCalled();
+        unsubscribe();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "invalid Apply keeps ready detail and rejects pending media; late failure=%s",
+    async (fail) => {
+      const { client, controller } = setup();
+      await controller.refresh();
+      await controller.inspect("new");
+      const record = controller.getSnapshot().detail?.record;
+      const pending = deferred<Blob>();
+      client.requestLogMedia.mockReturnValueOnce(pending.promise);
+      const media = controller.prepareMedia("image");
+      controller.changeFilter("configuration_service", "Invalid_");
+      await controller.apply();
+      const restored = controller.getSnapshot();
+      expect(restored.detail?.record).toBe(record);
+      expect(restored.detail?.phase).toBe("ready");
+      expect(restored.detail?.mediaPending).toBe(false);
+      if (fail) pending.reject(Error("late media loss"));
+      else pending.resolve(new Blob(["late media"]));
+      await media;
+      expect(controller.getSnapshot()).toBe(restored);
+    },
+  );
+
+  it.each([false, true])(
+    "a restored walk accepts its new request but rejects the old one; late failure=%s",
+    async (fail) => {
+      const { client, controller } = setup();
+      await controller.refresh();
+      const oldPage = deferred<Page<RequestLogSummary>>();
+      client.requestLogsPage.mockReturnValueOnce(oldPage.promise);
+      const oldRequest = controller.loadMore();
+      controller.changeFilter("from", "invalid");
+      await controller.apply();
+      const currentPage = deferred<Page<RequestLogSummary>>();
+      client.requestLogsPage.mockReturnValueOnce(currentPage.promise);
+      const currentRequest = controller.loadMore();
+      await controller.loadMore();
+      expect(client.requestLogsPage).toHaveBeenCalledTimes(3);
+      expect(client.requestLogsPage.mock.calls[1]).toEqual(
+        client.requestLogsPage.mock.calls[2],
+      );
+      currentPage.resolve(page(["current"]));
+      await currentRequest;
+      const current = controller.getSnapshot();
+      if (fail) oldPage.reject(Error("late page loss"));
+      else oldPage.resolve(page(["obsolete"]));
+      await oldRequest;
+      expect(controller.getSnapshot()).toBe(current);
+      expect(current.walk?.rows.map((item) => item.id)).toEqual([
+        "new",
+        "current",
+      ]);
+      expect(current.focus?.target).toBe("logs-ready");
+    },
+  );
+});
