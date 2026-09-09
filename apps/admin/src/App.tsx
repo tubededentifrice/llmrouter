@@ -21,10 +21,12 @@ import {
   DataTable,
   DateTime,
   Icon,
+  InlineAlert,
   MobileNavigation,
   NavigationLink,
   NumberControl,
   PageHeading,
+  GraphEmptyState,
   PageSurface,
   Panel,
   PanelHeader,
@@ -1840,6 +1842,7 @@ interface RouteSourceState {
 function useRouteSources(
   client: AdministrationClient,
   sources: readonly Source[],
+  requireServiceRoot = false,
 ) {
   const [state, update] = useReducer(
     (
@@ -1873,6 +1876,24 @@ function useRouteSources(
           value: (await client.retention()).duration_days,
           partial: false,
         };
+      if (source === "services" && requireServiceRoot) {
+        const page = await client.services();
+        if (
+          !page.items.some(
+            (service) =>
+              service.api_name === "root" &&
+              service.parent_service_api_name === null,
+          )
+        ) {
+          throw new Error(
+            "The permanent root service is unavailable. Retry services to continue.",
+          );
+        }
+        return {
+          value: page.items,
+          partial: page.page.has_more || page.retrieval?.complete === false,
+        };
+      }
       const page = await client[source]();
       return {
         value: page.items,
@@ -1921,7 +1942,7 @@ function useRouteSources(
       });
     pending.current = request;
     return request;
-  }, [client, sources]);
+  }, [client, sources, requireServiceRoot]);
   useEffect(() => {
     const loadGuard = guard.current;
     const timer = globalThis.setTimeout(() => {
@@ -1963,14 +1984,33 @@ function RefreshAction({
 function SourceFailures({
   resource,
   retryLabel,
+  graph = false,
 }: {
   readonly resource: RouteSources;
   readonly retryLabel: string;
+  readonly graph?: boolean;
 }) {
   return (
     <>
       {Object.entries(resource.failures).map(([name, message]) => {
         const source = name as Source;
+        if (graph)
+          return (
+            <InlineAlert
+              key={source}
+              tone="error"
+              title={`${sourceLabels[source]} ${resource.confirmed[source] ? "is stale." : "is unavailable."}`}
+              actions={
+                <RefreshAction
+                  label={retryLabel}
+                  pending={resource.pending}
+                  onRefresh={resource.load}
+                />
+              }
+            >
+              {message}
+            </InlineAlert>
+          );
         return (
           <StatePanel
             key={source}
@@ -2156,6 +2196,9 @@ function AuthenticatedAdministration({
   readonly notify: (tone: "success" | "error", message: string) => void;
 }) {
   const section = sectionForPath(routeLocation.pathname);
+  const graphPage =
+    routeLocation.pathname === "/services" ||
+    routeLocation.pathname === "/configuration";
   useLayoutEffect(() => {
     const heading = document.querySelector<HTMLElement>("#main-content h1");
     if (heading) {
@@ -2206,7 +2249,16 @@ function AuthenticatedAdministration({
         }}
       />
       <ApplicationShell
-        mainProps={{ id: "main-content", tabIndex: -1 }}
+        mainProps={{
+          id: "main-content",
+          tabIndex: -1,
+          ...(graphPage
+            ? {
+                className: "administration-graph-main",
+                "aria-labelledby": "graph-page-heading",
+              }
+            : {}),
+        }}
         sidebar={
           <ApplicationSidebar
             brand={
@@ -2370,7 +2422,7 @@ function useServiceContext(props: RouteProps, resource: RouteSources) {
   };
 }
 function ServicesRoute(props: RouteProps) {
-  const resource = useRouteSources(props.client, serviceSources);
+  const resource = useRouteSources(props.client, serviceSources, true);
   const context = useServiceContext(props, resource);
   const notices = useRouteNotice();
   const treeScroll = useRef({ left: 0, top: 0 });
@@ -2381,10 +2433,9 @@ function ServicesRoute(props: RouteProps) {
       destinations={context.destinations}
       onDismissNotice={notices.dismiss}
     >
-      <h1 className="od-visually-hidden" tabIndex={-1}>
+      <h1 className="od-visually-hidden" id="graph-page-heading" tabIndex={-1}>
         Services
       </h1>
-      <SourceFailures resource={resource} retryLabel="Retry services" />
       <ServiceManagement
         {...(props.location.treeRestore === undefined
           ? {}
@@ -2403,14 +2454,46 @@ function ServicesRoute(props: RouteProps) {
           });
         }}
         available={resource.confirmed.services === true}
+        stateContent={
+          resource.confirmed.services &&
+          Object.keys(resource.failures).length > 0 ? (
+            <SourceFailures
+              graph
+              resource={resource}
+              retryLabel="Retry services"
+            />
+          ) : undefined
+        }
         initialState={
-          resource.pending ? (
-            <LoadingPage title="Loading Services." />
-          ) : (
-            <StatePanel kind="error" title="Services are unavailable.">
-              Retry services to continue.
-            </StatePanel>
-          )
+          <GraphEmptyState
+            icon={<Icon name={resource.pending ? "layers" : "warning"} />}
+            title={
+              resource.pending
+                ? "Loading Services."
+                : "Services are unavailable."
+            }
+            description={
+              resource.pending
+                ? "Wait while the Router reads the service tree."
+                : (resource.failures.services ??
+                  "The permanent root service is unavailable. Retry services to continue.")
+            }
+            role={resource.pending ? "status" : "alert"}
+            actions={
+              resource.pending &&
+              resource.failures.services === undefined ? undefined : (
+                <Button
+                  aria-busy={resource.pending}
+                  aria-disabled={resource.pending}
+                  onClick={() => {
+                    if (!resource.pending) void resource.load();
+                  }}
+                >
+                  Retry services
+                </Button>
+              )
+            }
+          />
         }
         registerNavigationGuard={props.registerNavigationGuard}
         client={props.client}
@@ -2630,17 +2713,31 @@ function ConfigurationRoute(props: RouteProps) {
       destinations={destinations}
       onDismissNotice={notices.dismiss}
     >
-      <h1 className="od-visually-hidden" tabIndex={-1}>
+      <h1 className="od-visually-hidden" id="graph-page-heading" tabIndex={-1}>
         LLM configuration
       </h1>
-      <SourceFailures resource={resource} retryLabel="Retry configuration" />
-      {assignments.failure === null ? null : (
-        <StatePanel kind="error" title="Assignments are stale or unavailable.">
-          {assignments.failure}
-        </StatePanel>
-      )}
       <PageSurface edgeToEdge>
         <ConfigurationGraph
+          stateContent={
+            Object.keys(resource.failures).length > 0 ||
+            assignments.failure !== null ? (
+              <>
+                <SourceFailures
+                  resource={resource}
+                  graph
+                  retryLabel="Retry configuration"
+                />
+                {assignments.failure === null ? null : (
+                  <InlineAlert
+                    tone="error"
+                    title="Assignments are stale or unavailable."
+                  >
+                    {assignments.failure}
+                  </InlineAlert>
+                )}
+              </>
+            ) : undefined
+          }
           assignmentPhase={assignments.phase}
           assignments={assignments.items}
           catalogPhase={resourcePhase(resource, ["models", "providerModels"])}

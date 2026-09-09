@@ -163,6 +163,7 @@ function useServiceTreeRestoration({
 function ServiceGraph({
   available,
   initialState,
+  stateContent,
   graphActions,
   inspector,
   layout,
@@ -178,6 +179,7 @@ function ServiceGraph({
 }: {
   readonly available: boolean;
   readonly initialState?: ReactNode;
+  readonly stateContent?: ReactNode;
   readonly graphActions?: ReactNode;
   readonly inspector: ReactNode;
   readonly layout: TreeLayoutResult;
@@ -227,7 +229,7 @@ function ServiceGraph({
   });
   const selectionChanged = rovingState.selection !== selectedService;
   const activeNodeUnavailable =
-    rovingState.activeNode !== "" &&
+    rovingState.activeNode !== initialActive &&
     !services.some((service) => service.api_name === rovingState.activeNode);
   const resetActiveNode = selectionChanged || activeNodeUnavailable;
   const activeNode = resetActiveNode ? initialActive : rovingState.activeNode;
@@ -294,7 +296,8 @@ function ServiceGraph({
 
   return (
     <GraphWorkspace
-      aria-label="Services and parent relationships"
+      aria-label="Service graph workspace"
+      fullPage
       inspector={inspector}
       selectedControlRef={selectedControlRef}
       toolbar={
@@ -319,19 +322,21 @@ function ServiceGraph({
       }
     >
       <GraphViewport
-        aria-label="Service tree canvas"
+        aria-label="Services and parent relationships"
+        viewportContent={stateContent}
         onScroll={(event) => {
           onTreeScroll?.({
             left: event.currentTarget.scrollLeft,
             top: event.currentTarget.scrollTop,
           });
         }}
-        canvasAlignment="center"
-        canvasHeight={height}
+        canvasAlignment={initialState === undefined ? "center" : "start"}
+        {...(initialState === undefined
+          ? { canvasHeight: height, canvasWidth: width }
+          : {})}
         canvasProps={{
           "aria-label": `${String(services.length)} services in parent order`,
         }}
-        canvasWidth={width}
       >
         {initialState ??
           (services.length === 0 ? (
@@ -643,6 +648,7 @@ function serviceManagementReducer(
 export function ServiceManagement({
   available = true,
   initialState,
+  stateContent,
   registerNavigationGuard,
   graphActions,
   client,
@@ -658,6 +664,7 @@ export function ServiceManagement({
 }: {
   readonly available?: boolean;
   readonly initialState?: ReactNode;
+  readonly stateContent?: ReactNode;
   readonly registerNavigationGuard?: (guard: () => boolean) => () => void;
   readonly client: AdministrationClient;
   readonly csrf: string;
@@ -792,6 +799,7 @@ export function ServiceManagement({
       <ServiceGraph
         available={available}
         initialState={available ? undefined : initialState}
+        stateContent={stateContent}
         graphActions={graphActions}
         inspector={inspector}
         layout={layout}

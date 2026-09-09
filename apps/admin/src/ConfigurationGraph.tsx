@@ -17,6 +17,7 @@ import {
   ConfirmationDialog,
   EditableTable,
   FormActions,
+  InlineAlert,
   GraphInspector,
   GraphInspectorFact,
   GraphInspectorFacts,
@@ -88,6 +89,7 @@ import {
 } from "./playgroundState.ts";
 
 interface ConfigurationGraphProps {
+  readonly stateContent?: ReactNode;
   readonly toolbar?: {
     readonly leading?: ReactNode;
     readonly actions?: ReactNode;
@@ -745,19 +747,19 @@ function GraphState({
 }) {
   if (phase === "loading")
     return (
-      <StatePanel kind="loading" title="Loading configuration">
+      <InlineAlert role="status" title="Loading configuration">
         Wait while the Router reads the global catalog.
-      </StatePanel>
+      </InlineAlert>
     );
   if (phase === "error")
     return (
-      <StatePanel
-        kind="error"
-        onRetry={onRetry}
+      <InlineAlert
+        tone="error"
+        actions={<Button onClick={onRetry}>Retry</Button>}
         title="Configuration unavailable"
       >
         Existing confirmed records remain unchanged. Try the read again.
-      </StatePanel>
+      </InlineAlert>
     );
   return null;
 }
@@ -2503,17 +2505,26 @@ export function ConfigurationGraph(props: ConfigurationGraphProps) {
   const hasSafeRecords = columns.some((column) => column.nodes.length > 0);
   return (
     <section className="configuration-graph-page">
-      {globalPhase === "partial" ? (
-        <StatePanel kind="empty" title="Partial configuration graph">
-          The Router returned a bounded subset. More global records are
-          available. This graph does not claim to be complete.
-        </StatePanel>
-      ) : null}
-      {globalPhase === "loading" || (globalPhase === "error" && !hasSafeRecords)
-        ? graphState
-        : null}
       <RelationshipGraph
-        aria-label="LLM configuration relationships"
+        aria-label="Configuration graph workspace"
+        viewportLabel="LLM configuration relationships"
+        fullPage
+        viewportContent={
+          props.stateContent !== undefined ||
+          globalPhase === "partial" ||
+          (globalPhase === "loading" && hasSafeRecords) ? (
+            <>
+              {props.stateContent}
+              {globalPhase === "loading" && hasSafeRecords ? graphState : null}
+              {globalPhase === "partial" ? (
+                <InlineAlert role="status" title="Partial configuration graph">
+                  The Router returned a bounded subset. More global records are
+                  available. This graph does not claim to be complete.
+                </InlineAlert>
+              ) : null}
+            </>
+          ) : undefined
+        }
         auxiliaryInspector={auxiliaryInspector}
         columns={
           globalPhase === "loading" && !hasSafeRecords
@@ -2525,8 +2536,9 @@ export function ConfigurationGraph(props: ConfigurationGraphProps) {
             : columns
         }
         emptyState={
-          globalPhase === "loading" && !hasSafeRecords
-            ? "Loading configuration."
+          (globalPhase === "loading" || globalPhase === "error") &&
+          !hasSafeRecords
+            ? graphState
             : emptyCatalogState
         }
         inspector={selectedNodeInspector}

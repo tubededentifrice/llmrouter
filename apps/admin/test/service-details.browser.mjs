@@ -947,13 +947,28 @@ describe("service details and compact graph", () => {
           .click();
         await finish(page, "deleteWorkspace", true);
         await browserExpect(
-          record(workspaceRegion, "Created workspace"),
-        ).toHaveCount(1);
+          dialog.getByText(
+            "The row could not be deleted. The row is unchanged.",
+            { exact: true },
+          ),
+        ).toBeVisible();
+        // The retained cell also contains the inline deletion error.
+        const retainedWorkspace = page
+          .locator('section[aria-label="Workspaces for Child service"]')
+          .locator(
+            '[data-editable-table-row="created-space"][data-editable-table-cell="display-name"]',
+          )
+          .filter({ visible: true });
+        await browserExpect(retainedWorkspace).toHaveCount(1);
+        await browserExpect(retainedWorkspace).toHaveText(
+          "Created workspaceThe row could not be deleted. The row is unchanged.",
+        );
         await screenshot(page, "workspace-delete-failed");
         await dialog
           .getByRole("button", { name: "Delete workspace", exact: true })
           .click();
         await finish(page, "deleteWorkspace");
+        await browserExpect(dialog).toHaveCount(0);
         await browserExpect(
           record(workspaceRegion, "Created workspace"),
         ).toHaveCount(0);
@@ -1343,7 +1358,7 @@ describe("service details and compact graph", () => {
         } else expect(geometry.width).toBeCloseTo(21 * geometry.rem, 0);
         await screenshot(page, "graph-local-scroll");
         const viewport = page.getByRole("region", {
-          name: "Service tree canvas",
+          name: "Services and parent relationships",
           exact: true,
         });
         const position = await viewport.evaluate((element) => ({

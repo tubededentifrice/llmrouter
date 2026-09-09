@@ -206,7 +206,7 @@ describe("accepted administration composition", () => {
     expect(configuration).toContain('rowsLabel: "Provider routes"');
     expect(configuration).toContain('label: "Provides"');
     expect(configuration).toContain(
-      'aria-label="LLM configuration relationships"',
+      'viewportLabel="LLM configuration relationships"',
     );
     expect(configuration).toContain('searchLabel="Search configuration"');
     expect(application).not.toContain("key={selectedService}");
@@ -346,7 +346,7 @@ describe("accepted administration composition", () => {
         services={services}
       />,
     );
-    expect(markup).toContain("Service tree canvas");
+    expect(markup).toContain("Services and parent relationships");
     expect(markup).not.toContain("Accessible service list");
     expect(markup).not.toContain("<strong>Service tree</strong>");
     expect(markup).toContain('data-canvas-alignment="center"');

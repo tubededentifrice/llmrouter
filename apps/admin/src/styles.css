@@ -98,6 +98,23 @@ textarea,
   padding-block: 0;
 }
 
+.administration-graph-main {
+  flex: none;
+  block-size: calc(100dvh - var(--od-application-navigation-height, 0px));
+  min-block-size: 0;
+  overflow: hidden;
+}
+
+.administration-graph-main > .administration-content,
+.administration-graph-main > .administration-content > .od-page-surface,
+.administration-graph-main
+  > .administration-content
+  > .od-page-surface
+  > .configuration-graph-page {
+  block-size: 100%;
+  min-block-size: 0;
+}
+
 .administration-page {
   display: grid;
   min-width: 0;
@@ -374,19 +391,10 @@ input:not(.od-form-control):focus {
   min-width: 0;
 }
 
-.configuration-graph-page {
-  display: grid;
-  gap: 16px;
-}
-
 .configuration-column-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-}
-
-.configuration-graph-page .od-relationship-graph-viewport {
-  min-height: 34rem;
 }
 
 .configuration-form {
