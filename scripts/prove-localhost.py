@@ -179,21 +179,53 @@ def _seed(
     connection: psycopg.Connection[dict[str, object]], controls: ControlKeys
 ) -> tuple[str, str, str, str]:
     """Create one deterministic service tree and fake-only route catalog."""
-    existing = connection.execute(
-        "SELECT count(*) AS count FROM router.services"
-    ).fetchone()
-    if existing is None or existing["count"] != 0:
-        raise SystemExit(
-            "The localhost proof requires the approved clean database reset."
-        )
+    with connection.transaction():
+        connection.execute("LOCK TABLE router.services IN SHARE ROW EXCLUSIVE MODE")
+        existing = connection.execute(
+            "SELECT id, api_name, parent_service_id FROM router.services"
+        ).fetchall()
+        if (
+            len(existing) != 1
+            or existing[0]["api_name"] != "root"
+            or existing[0]["parent_service_id"] is not None
+        ):
+            raise SystemExit(
+                "The localhost proof requires a clean database with its stored root."
+            )
+        # Bootstrap settings and administrator test access can already exist.
+        tables = connection.execute(
+            """SELECT tablename FROM pg_tables WHERE schemaname = 'router'
+               AND tablename NOT IN (
+                   'services', 'global_settings', 'administrator_sessions',
+                   'administrator_oidc_flows'
+               ) ORDER BY tablename"""
+        ).fetchall()
+        for table in tables:
+            occupied = connection.execute(
+                psycopg.sql.SQL("SELECT 1 FROM router.{} LIMIT 1").format(
+                    psycopg.sql.Identifier(str(table["tablename"]))
+                )
+            ).fetchone()
+            if occupied is not None:
+                raise SystemExit(
+                    "The localhost proof requires a clean database with its stored root."
+                )
+        return _seed_fixture(connection, controls, cast("UUID", existing[0]["id"]))
 
-    services: dict[str, UUID] = {}
+
+def _seed_fixture(
+    connection: psycopg.Connection[dict[str, object]],
+    controls: ControlKeys,
+    root_id: UUID,
+) -> tuple[str, str, str, str]:
+    """Insert proof records in the caller's seed transaction."""
+    services: dict[str, UUID] = {"root": root_id}
     for api_name, parent in (
-        ("alpha", None),
+        ("alpha", "root"),
         ("alpha-child", "alpha"),
-        ("beta", None),
+        ("beta", "root"),
     ):
-        parent_id = None if parent is None else services[parent]
+        parent_id = services[parent]
         row = connection.execute(
             """INSERT INTO router.services
                    (api_name, display_name, parent_service_id)
@@ -263,7 +295,6 @@ def _seed(
         expires_at=datetime.now(tz=UTC) - timedelta(seconds=1),
     )
 
-    connection.commit()
     return alpha_key, child_key, beta_key, expired_admin_session
 
 
