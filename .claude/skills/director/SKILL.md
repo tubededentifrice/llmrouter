@@ -52,6 +52,13 @@ must not edit the worker's owned paths.
 
 ## Use staged verification
 
+Before an install, check free disk space and free inodes. For scoped consumer
+compatibility checks, reuse existing locked dependencies through read-only
+references and resolve the shared package to the candidate. Keep build output
+in the candidate. Avoid a complete copied install for each consumer. Before
+cleanup, stop and collect all related processes. Remove only ignored
+dependencies owned by the completed task. Keep source files and review evidence.
+
 Run the narrowest applicable check after each edit. The Director owns broad
 suite execution by default. Do not restart a complete suite when no changed
 path is in that suite's scope.
