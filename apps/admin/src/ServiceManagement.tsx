@@ -458,6 +458,7 @@ function CreateServiceInspector({
   return (
     <GraphInspector
       activationKey="create-service"
+      closeDisabled={busy}
       closeLabel="Close create service"
       eyebrow="Service tree"
       onClose={onClose}
