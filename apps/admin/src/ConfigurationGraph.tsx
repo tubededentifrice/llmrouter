@@ -801,7 +801,7 @@ function ReferenceRetryAction({
           else restoreFocus();
         });
       }}
-      variant="quiet"
+      variant="primary"
     >
       Retry
     </Button>

@@ -914,4 +914,97 @@ describe("full-height edge-to-edge graph pages", () => {
       },
     );
   }
+
+  for (const [width, height] of sizes) {
+    it(
+      `${width} configuration: staggered source failure keeps group retry readable`,
+      { timeout: 30000 },
+      async () => {
+        const { page, context, errors } = await open(
+          width,
+          height,
+          "configuration",
+          { hold: methods },
+        );
+        try {
+          await page.evaluate(() => {
+            const fixture = window.shellFixture;
+            for (const name of [
+              "services",
+              "models",
+              "providerModels",
+              "credentials",
+            ])
+              fixture.finish(name);
+          });
+          await expect(
+            page.getByText("Loading configuration", { exact: true }),
+          ).toBeVisible();
+          await expect(page.locator(".od-relationship-graph-node")).toHaveCount(
+            0,
+          );
+          await page.evaluate(() => {
+            const fixture = window.shellFixture;
+            fixture.hold = [];
+            fixture.finish("providers", true);
+          });
+          await settle(page);
+          await expect(
+            page.getByText("Provider connections is unavailable.", {
+              exact: true,
+            }),
+          ).toBeVisible();
+          const model = page.locator('[data-group-id="model:model"]');
+          const retry = model.getByRole("button", {
+            name: "Retry",
+            exact: true,
+          });
+          for (const textSize of [100, 200]) {
+            await page.evaluate((size) => {
+              document.documentElement.style.fontSize = `${(16 * size) / 100}px`;
+            }, textSize);
+            await retry.click({ trial: true });
+            await retry.scrollIntoViewIfNeeded();
+            await retry.focus();
+            await expect(retry).toBeFocused();
+            expect(
+              await retry.evaluate((element) => {
+                const box = element.getBoundingClientRect();
+                const hit = document.elementFromPoint(
+                  box.left + box.width / 2,
+                  box.top + box.height / 2,
+                );
+                return hit === element || element.contains(hit);
+              }),
+            ).toBe(true);
+            await evidenceFor(
+              page,
+              "configuration",
+              `${width}-configuration-source-failure-${textSize}`,
+            );
+          }
+          await page.evaluate(() => {
+            document.documentElement.style.fontSize = "16px";
+            window.shellFixture.calls.length = 0;
+          });
+          await retry.click();
+          await settle(page);
+          await expect(retry).toHaveCount(0);
+          await expect(
+            model.locator('[data-node-id="model:model"]'),
+          ).toBeFocused();
+          expect(
+            await page.evaluate(
+              () =>
+                window.shellFixture.calls.filter(
+                  (call) => call.name === "providers",
+                ).length,
+            ),
+          ).toBe(1);
+        } finally {
+          await close(context, errors);
+        }
+      },
+    );
+  }
 });
