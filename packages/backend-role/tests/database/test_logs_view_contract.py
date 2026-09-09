@@ -179,8 +179,13 @@ def _walk(
     *,
     limit: int = 100,
     filters: dict[str, str] | None = None,
+    bounds: dict[str, str] | None = None,
 ) -> None:
-    parameters = {**BOUNDS, "limit": str(limit), **(filters or {})}
+    parameters = {
+        **(BOUNDS if bounds is None else bounds),
+        "limit": str(limit),
+        **(filters or {}),
+    }
     seen: list[str] = []
     cursors: set[str] = set()
     for start in range(0, max(1, len(expected)), limit):
@@ -353,10 +358,11 @@ def test_logs_detail_and_authentication_boundaries(logs_context: LogContext) -> 
         assert unavailable.json()["error"]["code"] == "not_found"
 
 
+@pytest.mark.parametrize("interior_count", [0, 100])
 def test_logs_custom_time_bounds_keep_retained_controls(
-    logs_context: LogContext,
+    logs_context: LogContext, interior_count: int
 ) -> None:
-    """Exclude retained rows outside a narrower inclusive/exclusive query range."""
+    """Keep custom time bounds on every page while all control rows stay stored."""
     context = logs_context
     start = NOW - timedelta(hours=2)
     stop = NOW - timedelta(hours=1)
@@ -366,19 +372,19 @@ def test_logs_custom_time_bounds_keep_retained_controls(
         (uuid.UUID(int=3), stop - timedelta(microseconds=1)),
         (uuid.UUID(int=4), stop),
     ]
-    _seed(context, records)
-    parameters = {
+    interior = [
+        (uuid.UUID(int=100 + index), stop - timedelta(seconds=index + 1))
+        for index in range(interior_count)
+    ]
+    _seed(context, records + list(reversed(interior)))
+    bounds = {
         "from": "2026-08-29T10:34:56Z",
         "to": "2026-08-29T11:34:56Z",
-        "limit": "100",
     }
-    _, page = _page(context, parameters)
-    assert [item["id"] for item in page["items"]] == [
-        str(records[2][0]),
-        str(records[1][0]),
-    ]
-    assert page["page"] == {"has_more": False}
+    # With 100 interior rows, the lower boundary is on page two. The retained
+    # row just below it exposes a lost lower bound on that later request.
+    _walk(context, [records[2], *interior, records[1]], bounds=bounds)
     with psycopg.connect(context.database_url) as connection:
         assert connection.execute(
             "SELECT count(*) FROM router.request_logs"
-        ).fetchone() == (4,)
+        ).fetchone() == (4 + interior_count,)
