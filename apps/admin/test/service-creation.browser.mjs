@@ -1274,3 +1274,163 @@ describe("dirty service navigation", () => {
     },
   );
 });
+
+describe("independent creation review", () => {
+  it("pre-open reads cannot change a pending draft or a failed attempt", async () => {
+    for (const timing of ["pending", "failed"]) {
+      const { page, context, errors } = await open(1440, 1000);
+      try {
+        await ready(page);
+        await hold(page, ["services", "createService"]);
+        await refresh(page).click();
+        await pending(page, "services");
+        await draft(page, "parent");
+        await start(page);
+        if (timing === "pending") {
+          await finish(page, "services", await list(page, true));
+          await expect(inspector(page)).toHaveAttribute("aria-busy", "true");
+        }
+        await finish(page, "createService", undefined, serverError);
+        if (timing === "failed")
+          await finish(page, "services", await list(page, true));
+        await expect(submit(page)).toBeFocused();
+        await expect(node(page, "parent")).toHaveAttribute(
+          "aria-pressed",
+          "true",
+        );
+        await expect(
+          page.getByRole("textbox", { name: "API name", exact: true }),
+        ).toHaveValue("new-child");
+        await expect(inspector(page).locator("dd")).toHaveText(
+          "Parent service parent",
+        );
+        expect(await count(page, "createService")).toBe(1);
+      } finally {
+        await close(context, errors);
+      }
+    }
+  });
+
+  it("current parent changes keep the captured context and use the confirmed child", async () => {
+    const { page, context, errors } = await open(1440, 1000);
+    try {
+      await ready(page);
+      await draft(page, "parent");
+      await fill(page);
+      await hold(page, ["services", "createService"]);
+      const reads = await count(page, "services");
+      await refresh(page).evaluate((button) => {
+        button.click();
+        button.click();
+      });
+      await pending(page, "services");
+      expect(await count(page, "services")).toBe(reads + 1);
+      const current = await list(page);
+      current.items.find(
+        (service) => service.api_name === "parent",
+      ).display_name = "Renamed parent";
+      await finish(page, "services", current);
+      await expect(node(page, "parent")).toContainText("Renamed parent");
+      await expect(inspector(page).locator("dd")).toHaveText(
+        "Parent service parent",
+      );
+      await action(page, "Renamed parent", "parent").click();
+      await expect(heading(page)).toBeFocused();
+      await expect(
+        page.getByRole("textbox", { name: "API name", exact: true }),
+      ).toHaveValue("new-child");
+      await submit(page).evaluate((button) => {
+        button.click();
+        button.click();
+      });
+      await pending(page, "createService");
+      expect(await count(page, "createService")).toBe(1);
+      await finish(page, "createService", {
+        api_name: "new-child",
+        display_name: "Confirmed child",
+        parent_service_api_name: "parent",
+        created_at: "2026-09-09T00:00:00Z",
+      });
+      await expect(inspector(page).locator("h2")).toHaveText("Confirmed child");
+      await expect(inspector(page).locator("h2")).toBeFocused();
+      await expect(node(page, "new-child")).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+      await expect(inspector(page).locator("dd").nth(1)).toHaveText(
+        "Renamed parent parent",
+      );
+      expect(new URL(page.url()).pathname).toBe("/services");
+      await evidenceFor(page, "review-confirmed-child");
+    } finally {
+      await close(context, errors);
+    }
+  });
+
+  it("current parent loss closes an open discard confirmation and restores node focus", async () => {
+    const { page, context, errors } = await open(1440, 1000);
+    try {
+      await ready(page);
+      await draft(page, "parent");
+      await fill(page);
+      await hold(page, ["services", "createService"]);
+      await refresh(page).click();
+      await pending(page, "services");
+      await node(page, "other").click();
+      await expect(
+        page.getByRole("button", { name: "Keep editing", exact: true }),
+      ).toBeFocused();
+      await finish(page, "services", await list(page, true));
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+      await expect(node(page, "root")).toBeFocused();
+      await expect(node(page, "root")).toHaveAttribute("aria-pressed", "true");
+      await expect(action(page)).toBeVisible();
+      expect(await count(page, "createService")).toBe(0);
+      await evidenceFor(page, "review-loss-during-discard");
+    } finally {
+      await close(context, errors);
+    }
+  });
+
+  it("dirty browser Back can be canceled and then accepted once", async () => {
+    const { page, context, errors } = await open(1440, 1000, {
+      path: "/overview",
+    });
+    let accept = false,
+      confirmations = 0;
+    page.on("dialog", async (dialog) => {
+      expect(dialog.type()).toBe("confirm");
+      confirmations++;
+      if (accept) await dialog.accept();
+      else await dialog.dismiss();
+    });
+    try {
+      await page.getByRole("link", { name: "Services", exact: true }).click();
+      await ready(page);
+      await draft(page, "parent");
+      const apiName = page.getByRole("textbox", {
+        name: "API name",
+        exact: true,
+      });
+      await apiName.fill("review-draft");
+      await page.evaluate(() => window.history.back());
+      await expect.poll(() => confirmations).toBe(1);
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/services");
+      await expect(apiName).toBeFocused();
+      await expect(apiName).toHaveValue("review-draft");
+      expect(
+        JSON.stringify(await page.evaluate(() => window.history.state)),
+      ).not.toContain("review-draft");
+      accept = true;
+      await page.evaluate(() => window.history.back());
+      await expect(page.locator("main h1")).toHaveText("Overview");
+      expect(confirmations).toBe(2);
+      await page.goForward();
+      await expect(page.locator("main h1")).toHaveText("Services");
+      await expect(heading(page)).toHaveCount(0);
+      expect(await count(page, "createService")).toBe(0);
+    } finally {
+      await close(context, errors);
+    }
+  });
+});
