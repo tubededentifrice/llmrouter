@@ -57,6 +57,44 @@ The session expires after 15 minutes. It uses the production session store,
 verifier, encryption, CSRF, origin, expiry, and administrator authorization
 path. The complete product proof uses this fixture and tests it on localhost.
 
+### Check browser-proof changes without a reset
+
+Use `uv run python scripts/tests/run_browser_proof.py` for controlled browser
+checks. It builds the existing real-App fixtures from installed dependencies,
+fulfills or rejects every browser request, and tests the actual Python proof
+helpers. It writes synthetic images and measurements to one new private
+`/tmp/llmrouter-browser-proof-*` directory. Review the images and collect all
+results before reporting completion. Do not run unchanged complete UI suites
+again when their exact source and dependency evidence remains valid.
+
+For a live read-only check, run from the checkout that owns the running local
+deployment and its installed Python environment. The session commands use the
+current working directory. Import the proof without calling its `main()`:
+
+```bash
+(
+set -e
+trap './scripts/local-development.sh clear-test-session' EXIT
+./scripts/local-development.sh test-session
+uv run python - <<'PYTHON'
+import runpy
+import sys
+
+sys.path.insert(0, "scripts")
+proof = runpy.run_path("scripts/prove-localhost.py")
+session = proof["read_development_administrator_session"]()
+proof["_prove_read_only_administration"](session.cookie_value)
+PYTHON
+)
+```
+
+This path permits only GET requests to `http://127.0.0.1:5174`, blocks browser
+WebSocket channels, and saves no live content or screenshots. It does not seed
+data or run playground operations. A candidate may receive the parsed session
+in memory from the real checkout; do not copy its ignored file. The full
+`prove` command remains a separate destructive workflow and requires authority
+to reset the deployment.
+
 ## Preserve quality
 
 - Use LSP inspection before a behavior edit and LSP diagnostics after it when

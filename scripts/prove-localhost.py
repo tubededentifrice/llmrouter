@@ -17,7 +17,7 @@ import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Self, cast
-from urllib.parse import quote
+from urllib.parse import quote, unquote, urlsplit
 
 import httpx
 import psycopg
@@ -56,6 +56,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 STATE_DIRECTORY = REPOSITORY_ROOT / ".local-development"
 ROUTER_URL = "http://127.0.0.1:8010"
 ADMIN_ORIGIN = "http://127.0.0.1:5174"
+_READ_ONLY_CSP = "connect-src http://127.0.0.1:5174"
 _CONTROL_MARKER = "proof-control-must-not-appear"
 _BROWSER_PROOF_BOOTSTRAP = r"""
 (() => {
@@ -1264,8 +1265,10 @@ def _prove_persisted_facts(
             assert control not in log_text
 
 
-def _prove_hydrated_administration(admin_session: str) -> None:
-    """Prove the complete graph-first administrator UI at two widths."""
+def _prove_hydrated_administration(
+    admin_session: str, *, read_only: bool = False
+) -> None:
+    """Prove the complete graph-first administrator UI at three widths."""
     chrome = Path("/usr/bin/google-chrome")
     if not chrome.is_file():
         raise SystemExit("Google Chrome is required for the hydrated UI proof.")
@@ -1279,6 +1282,7 @@ def _prove_hydrated_administration(admin_session: str) -> None:
                 "--no-sandbox",
                 "--disable-gpu",
                 "--disable-dev-shm-usage",
+                "--disable-background-networking",
                 f"--remote-allow-origins=http://127.0.0.1:{port}",
                 "--remote-debugging-address=127.0.0.1",
                 f"--remote-debugging-port={port}",
@@ -1290,10 +1294,25 @@ def _prove_hydrated_administration(admin_session: str) -> None:
         )
         try:
             endpoint = _debugging_endpoint(port)
-            with _Cdp(endpoint) as browser:
+            with _Cdp(endpoint, read_only=read_only) as browser:
                 browser.command("Network.enable")
                 browser.command("Page.enable")
                 browser.command("Accessibility.enable")
+                if read_only:
+                    browser.command("Network.setBypassServiceWorker", {"bypass": True})
+                    browser.command(
+                        "Fetch.enable",
+                        {
+                            "patterns": [
+                                {"urlPattern": "*", "requestStage": "Request"},
+                                {
+                                    "urlPattern": "*",
+                                    "resourceType": "Document",
+                                    "requestStage": "Response",
+                                },
+                            ]
+                        },
+                    )
                 browser.command(
                     "Page.addScriptToEvaluateOnNewDocument",
                     {"source": _BROWSER_PROOF_BOOTSTRAP},
@@ -1313,8 +1332,15 @@ def _prove_hydrated_administration(admin_session: str) -> None:
                     },
                 )
                 assert cookie.get("success") is True
-                _prove_viewport(browser, width=1440, mobile=False)
-                _prove_viewport(browser, width=390, mobile=True)
+                if read_only:
+                    _prove_read_only_viewports(browser)
+                    assert browser.blocked_requests == 0, (
+                        "The read-only browser attempted a prohibited request."
+                    )
+                else:
+                    _prove_viewport(browser, width=1440, mobile=False)
+                    _prove_viewport(browser, width=1100, mobile=False)
+                    _prove_viewport(browser, width=390, mobile=True)
         finally:
             process.terminate()
             try:
@@ -1324,6 +1350,100 @@ def _prove_hydrated_administration(admin_session: str) -> None:
                 process.wait(timeout=5)
     finally:
         _remove_chrome_profile(profile)
+
+
+def _prove_read_only_administration(admin_session: str) -> None:
+    """Inspect the authenticated localhost UI without seed, write, or provider calls.
+
+    The caller must use test-session, parse its ignored file in memory, and
+    revoke it with clear-test-session in a finally block. No screenshot or
+    response content from this live path is written to disk.
+    """
+    _prove_hydrated_administration(admin_session, read_only=True)
+
+
+def _prove_read_only_viewports(browser: _Cdp) -> None:
+    """Visit retained routes with GET-only enforcement in Chrome Fetch."""
+    for width, height in ((1440, 1000), (1100, 800), (390, 844)):
+        browser.command(
+            "Emulation.setDeviceMetricsOverride",
+            {
+                "width": width,
+                "height": height,
+                "deviceScaleFactor": 1,
+                "mobile": width == 390,
+            },
+        )
+        for path, heading in (
+            ("/", "Overview"),
+            ("/overview", "Overview"),
+            ("/services", "Services"),
+            ("/configuration", "LLM configuration"),
+            ("/logs", "Logs"),
+            ("/statistics", "Usage and cost statistics"),
+            ("/operations", "Activity & health"),
+        ):
+            _navigate(browser, path, heading)
+            _assert_layout(browser, mobile=width == 390)
+            _assert_route_controls(browser)
+            _assert_axe(browser)
+        browser.command(
+            "Page.navigate", {"url": _local_application_url("/services/root")}
+        )
+        _wait_browser(
+            browser,
+            "location.pathname === '/services/root' && document.querySelector('main h1') !== null && document.querySelector('main')?.textContent.includes('Workspaces')",
+            "The root service details did not load",
+        )
+        _assert_layout(browser, mobile=width == 390)
+        _assert_axe(browser)
+
+
+def _assert_route_controls(browser: _Cdp) -> None:
+    """Require route-owned refresh and context, with current Logs/date labels."""
+    assert (
+        browser.evaluate(
+            """(() => {
+          const main = document.querySelector('main');
+          const button = (text) => [...main.querySelectorAll('button')].find(e => e.textContent.trim() === text);
+          const route = location.pathname;
+          const refresh = { '/overview':'Refresh overview', '/services':'Refresh services', '/configuration':'Refresh configuration', '/logs':'Refresh Logs', '/operations':'Refresh operations' }[route];
+          if (refresh && !button(refresh)) return false;
+          if (route === '/configuration') {
+            const context = main.querySelector("select[aria-label='Service context']");
+            if (!context || !context.closest('.od-graph-toolbar') || context.options[0]?.text !== 'All services') return false;
+          }
+          if (route === '/services' && [...main.querySelectorAll('.od-graph-toolbar button')].some(e => /create|new service/i.test(e.textContent))) return false;
+          if (route === '/logs' && (!main.querySelector("[aria-label='Logs filters']") || !main.querySelector("[aria-label='Logs']") || /Detailed request logs|Load logs/.test(main.innerText))) return false;
+          if (route === '/statistics') {
+            const labels = [...main.querySelectorAll('label')].map(e => e.textContent.trim());
+            if (!labels.includes('From') || !labels.includes('Through') || labels.includes('To')) return false;
+            if (main.querySelectorAll("input[type='date']").length !== 2 || main.querySelector("input[type='datetime-local']")) return false;
+            if (!main.innerText.includes('UTC dates. From and Through include the selected dates.')) return false;
+            if (!button('Run statistics') || !main.querySelector('#statistics-advanced')) return false;
+          }
+          return true;
+        })()"""
+        )
+        is True
+    ), "A route still uses an obsolete control or label."
+
+
+def _assert_missing_root_state(browser: _Cdp) -> None:
+    """Require a corrective error and retry without an unconfirmed create action."""
+    assert (
+        browser.evaluate("""(() => {
+      const main = document.querySelector('main');
+      const text = main?.innerText ?? '';
+      return location.pathname === '/services'
+        && text.includes('Services are unavailable.')
+        && text.includes('The Router could not complete the operation. Try again.')
+        && !text.includes('No services')
+        && [...main.querySelectorAll('button')].some(e => e.textContent.trim() === 'Retry services')
+        && !main.querySelector('[data-service-api-name], [data-service-create-action]');
+    })()""")
+        is True
+    ), "The missing-root state is not corrective."
 
 
 def _prove_administrator_logout(admin_session: str, csrf: str) -> None:
@@ -1373,18 +1493,65 @@ def _wait_browser(
         if last_value:
             return last_value
         time.sleep(0.05)
-    failure = f"{message}: {last_value!r}"
-    raise AssertionError(failure)
+    raise AssertionError(message)
+
+
+def _local_application_url(path: str) -> str:
+    """Reject a path that can leave the fixed local application origin."""
+    try:
+        parsed = urlsplit(path)
+    except ValueError:
+        raise ValueError("The browser proof path is invalid.") from None
+    decoded = unquote(parsed.path)
+    if (
+        not path.startswith("/")
+        or path.startswith("//")
+        or decoded.startswith("//")
+        or "\\" in decoded
+        or "%" in decoded
+        or any(ord(character) < 32 or ord(character) == 127 for character in path)
+        or any(ord(character) < 33 or ord(character) == 127 for character in decoded)
+        or parsed.scheme
+        or parsed.netloc
+        or any(part in {".", ".."} for part in decoded.split("?", 1)[0].split("/"))
+    ):
+        raise ValueError("The browser proof path is invalid.")
+    return ADMIN_ORIGIN + path
+
+
+def _read_only_request_allowed(method: str, url: str) -> bool:
+    """Permit GET requests only at the exact fixed administration origin."""
+    if method != "GET" or not url.startswith(ADMIN_ORIGIN + "/"):
+        return False
+    try:
+        return _local_application_url(url[len(ADMIN_ORIGIN) :]) == url
+    except ValueError:
+        return False
 
 
 def _navigate(browser: _Cdp, path: str, expected_text: str) -> None:
-    """Navigate to one localhost application path and wait for hydration."""
-    browser.command("Page.navigate", {"url": f"{ADMIN_ORIGIN}{path}"})
+    """Wait for the current main heading and canonical route after hydration."""
+    url = _local_application_url(path)
+    route = urlsplit(path).path
+    route = {"/": "/overview", "/access": "/services"}.get(route, route)
+    if route in {"/providers", "/models", "/assignments", "/playground"}:
+        route = "/configuration"
+    heading = {
+        "/overview": "Overview",
+        "/services": "Services",
+        "/configuration": "LLM configuration",
+        "/logs": "Logs",
+        "/statistics": "Usage and cost statistics",
+        "/operations": "Activity & health",
+    }.get(route, expected_text)
+    browser.command("Page.navigate", {"url": url})
     _wait_browser(
         browser,
         f"""(() => document.readyState === "complete" &&
-          (document.body?.innerText ?? "").includes({json.dumps(expected_text)}))()""",
-        f"The page did not show {expected_text}",
+          location.pathname === {json.dumps(route)} &&
+          document.querySelector("main h1")?.textContent?.trim() === {json.dumps(heading)} &&
+          (document.querySelector("main")?.textContent ?? "").includes({json.dumps(expected_text)}))()""",
+        "The local application route did not become ready",
     )
 
 
@@ -1445,34 +1612,169 @@ def _set_control(browser: _Cdp, selector: str, value: str) -> None:
 
 
 def _press_key(browser: _Cdp, key: str) -> None:
-    """Send one trusted keyboard action to the focused browser control."""
-    key_codes = (
-        {"windowsVirtualKeyCode": 27, "nativeVirtualKeyCode": 27}
-        if key == "Escape"
+    """Send a native browser key, including its default control action."""
+    codes = {
+        "Escape": 27,
+        "Tab": 9,
+        "Enter": 13,
+        "Space": 32,
+        "ArrowLeft": 37,
+        "ArrowUp": 38,
+        "ArrowRight": 39,
+        "ArrowDown": 40,
+        "Home": 36,
+        "End": 35,
+        "/": 191,
+    }
+    code = codes.get(key, 0)
+    values = {
+        "key": " " if key == "Space" else key,
+        "code": "Slash" if key == "/" else key,
+        "windowsVirtualKeyCode": code,
+        "nativeVirtualKeyCode": code,
+    }
+    text = (
+        {
+            "text": "\r" if key == "Enter" else " ",
+            "unmodifiedText": "\r" if key == "Enter" else " ",
+        }
+        if key in {"Enter", "Space"}
         else {}
     )
-    browser.command(
-        "Input.dispatchKeyEvent",
-        {
-            "type": "rawKeyDown" if key == "Escape" else "keyDown",
-            "key": key,
-            "code": key,
-            **key_codes,
-        },
+    browser.command("Input.dispatchKeyEvent", {"type": "keyDown", **values, **text})
+    browser.command("Input.dispatchKeyEvent", {"type": "keyUp", **values})
+
+
+def _assert_shell_and_graph(browser: _Cdp, *, mobile: bool) -> dict[str, object]:
+    """Measure current shell and graph edges with a one CSS pixel tolerance."""
+    value = browser.evaluate(
+        """(() => {
+          const box = (e) => { const b = e.getBoundingClientRect(); return {left:b.left,right:b.right,top:b.top,bottom:b.bottom,width:b.width,height:b.height}; };
+          const main = document.querySelector('main');
+          const sidebar = document.querySelector('.od-application-sidebar');
+          const nav = document.querySelector('.od-application-mobile-navigation');
+          const host = main.querySelector('.od-graph-workspace, .od-relationship-graph');
+          const viewport = host?.querySelector('.od-graph-viewport, .od-relationship-graph-viewport');
+          const toolbar = host?.querySelector('.od-graph-toolbar');
+          const inspector = host?.querySelector('.od-graph-inspector[open]');
+          const root = document.documentElement;
+          const probe = document.createElement('div');
+          probe.style.cssText = 'position:fixed;width:var(--od-page-gutter)';
+          document.body.append(probe);
+          const gutter = probe.getBoundingClientRect().width;
+          probe.remove();
+          return {
+            main:box(main), sidebar:box(sidebar), nav:box(nav),
+            firstChild:document.querySelector('.od-application-column')?.firstElementChild?.tagName,
+            topbars:document.querySelectorAll('.od-application-topbar, .administration-topbar').length,
+            globalSelector:document.querySelector("select[aria-label='Selected service']") !== null,
+            globalRefresh:[...document.querySelectorAll('button')].some(e => e.textContent.trim() === 'Refresh'),
+            width:innerWidth,height:innerHeight,scrollY:scrollY, font:parseFloat(getComputedStyle(root).fontSize),gutter,
+            scrollWidth:root.scrollWidth,scrollHeight:root.scrollHeight,clientWidth:root.clientWidth,clientHeight:root.clientHeight,
+            heading:main.querySelector('h1')?.textContent?.trim(),
+            title:document.title,
+            graph:host ? {host:box(host),viewport:box(viewport),toolbar:box(toolbar),
+              name:viewport.getAttribute('aria-label'),mainLabel:main.getAttribute('aria-labelledby'),
+              heading:box(main.querySelector('h1')),headingStyle:getComputedStyle(main.querySelector('h1')).position,
+              headingHidden:main.querySelector('h1').hidden || main.querySelector('h1').getAttribute('aria-hidden') === 'true' || getComputedStyle(main.querySelector('h1')).display === 'none',
+              paddingLeft:parseFloat(getComputedStyle(toolbar).paddingLeft),paddingRight:parseFloat(getComputedStyle(toolbar).paddingRight),
+              inspector:inspector ? box(inspector) : null,mode:inspector?.dataset.mode,
+              surfaces:[host,viewport].map(e => {const c=getComputedStyle(e);return {leftBorder:parseFloat(c.borderLeftWidth),rightBorder:parseFloat(c.borderRightWidth),radius:parseFloat(c.borderTopLeftRadius),marginLeft:parseFloat(c.marginLeft),maxWidth:c.maxWidth};})
+            } : null
+          };
+        })()"""
     )
-    browser.command(
-        "Input.dispatchKeyEvent",
-        {
-            "type": "keyUp",
-            "key": key,
-            "code": key,
-            **key_codes,
-        },
+    assert isinstance(value, dict)
+
+    def near(actual: float, expected: float) -> None:
+        assert abs(actual - expected) <= 1, "The shell or graph geometry changed."
+
+    assert value["firstChild"] == "MAIN"
+    assert value["topbars"] == 0
+    assert value["globalSelector"] is False
+    assert value["globalRefresh"] is False
+    assert value["scrollWidth"] <= value["clientWidth"]
+    near(value["main"]["top"] + (value["scrollY"] if value["graph"] is None else 0), 0)
+    if mobile:
+        near(value["main"]["left"], 0)
+        near(value["nav"]["bottom"], value["height"])
+        assert value["sidebar"]["width"] == 0
+    else:
+        near(value["sidebar"]["top"], 0)
+        near(value["sidebar"]["bottom"], value["height"])
+        near(value["sidebar"]["right"], value["main"]["left"])
+    assert str(value["title"]).startswith(str(value["heading"]))
+    graph = value["graph"]
+    if graph is None:
+        return value
+    bottom = value["nav"]["top"] if mobile else value["height"]
+    assert value["scrollHeight"] <= value["clientHeight"]
+    for field in ("main",):
+        near(value[field]["bottom"], bottom)
+    host, viewport, toolbar = graph["host"], graph["viewport"], graph["toolbar"]
+    near(host["top"], 0)
+    near(host["bottom"], bottom)
+    near(host["left"], value["main"]["left"])
+    near(host["right"], value["main"]["right"])
+    near(viewport["top"], toolbar["bottom"])
+    near(viewport["bottom"], host["bottom"])
+    near(viewport["left"], host["left"])
+    inspector = graph["inspector"]
+    near(
+        viewport["right"],
+        inspector["left"] if graph.get("mode") == "split" else host["right"],
     )
+    near(toolbar["left"], viewport["left"])
+    near(toolbar["right"], viewport["right"])
+    near(graph["paddingLeft"], value["gutter"])
+    near(graph["paddingRight"], value["gutter"])
+    assert graph["mainLabel"] == "graph-page-heading"
+    assert graph["headingHidden"] is False
+    assert graph["headingStyle"] == "absolute"
+    assert graph["heading"]["height"] <= 1
+    assert graph["name"] == (
+        "Services and parent relationships"
+        if value["heading"] == "Services"
+        else "LLM configuration relationships"
+    )
+    for surface in graph["surfaces"]:
+        assert surface["leftBorder"] == surface["rightBorder"] == surface["radius"] == 0
+        assert surface["marginLeft"] >= 0
+        assert surface["maxWidth"] in {"none", "100%"}
+    if inspector:
+        font = value["font"]
+        mode = (
+            "split"
+            if host["width"] >= 69 * font
+            else "overlay"
+            if host["width"] > 48 * font
+            else "sheet"
+        )
+        assert graph["mode"] == mode
+        if mode == "split":
+            near(inspector["width"], 21 * font)
+            near(inspector["right"], host["right"])
+            near(inspector["top"], host["top"])
+            near(inspector["bottom"], host["bottom"])
+        elif mode == "overlay":
+            near(inspector["width"], 21 * font)
+            near(host["right"] - inspector["right"], 0.875 * font)
+            near(host["bottom"] - inspector["bottom"], 0.875 * font)
+            near(
+                inspector["top"] - host["top"],
+                max(4.75 * font, toolbar["bottom"] - host["top"] + 0.875 * font),
+            )
+        else:
+            near(inspector["left"], 0.75 * font)
+            near(inspector["right"], value["width"] - 0.75 * font)
+            near(inspector["bottom"], value["height"] - 0.75 * font)
+            assert inspector["height"] <= value["height"] - 1.5 * font + 1
+    return value
 
 
 def _assert_layout(browser: _Cdp, *, mobile: bool) -> None:
     """Keep the complete document inside one full-width responsive shell."""
+    _assert_shell_and_graph(browser, mobile=mobile)
     value = browser.evaluate(
         """(() => {
           const root = document.documentElement;
@@ -1548,10 +1850,7 @@ def _assert_dialog_layout(browser: _Cdp, selector: str, *, mobile: bool) -> None
         assert float(value["left"]) >= float(value["workspaceLeft"]) - 1
         assert float(value["bottom"]) <= float(value["workspaceBottom"]) + 1
         assert float(value["right"]) <= float(value["workspaceRight"]) + 1
-    if mobile:
-        assert float(value["width"]) >= float(value["viewportWidth"]) * 0.9
-        assert float(value["bottom"]) >= float(value["viewportHeight"]) - 16
-    elif value["fixed"] is not True:
+    if value["fixed"] is not True:
         assert float(value["left"]) >= float(value["viewportWidth"]) * 0.45
 
 
@@ -1559,11 +1858,13 @@ def _assert_axe(browser: _Cdp) -> None:
     """Run the installed shared UI Axe engine against the hydrated page."""
     _wait_browser(
         browser,
-        "document.getAnimations().every((animation) => animation.playState !== 'running')",
+        """document.getAnimations().every((animation) =>
+          animation.playState !== 'running' ||
+          animation.effect?.getComputedTiming().endTime === Infinity)""",
         "The page animations did not settle before its accessibility scan",
     )
     browser_errors = browser.evaluate("globalThis.__llmrouterProofErrors ?? []")
-    assert browser_errors == [], browser_errors
+    assert browser_errors == [], "The browser reported a console or runtime error."
     source = (
         REPOSITORY_ROOT.parent
         / "opendle-ui"
@@ -1571,8 +1872,8 @@ def _assert_axe(browser: _Cdp) -> None:
         / "axe-core"
         / "axe.min.js"
     ).read_text(encoding="utf-8")
-    assert browser.evaluate("typeof globalThis.axe === 'object'") is False
-    browser.evaluate(source)
+    if browser.evaluate("typeof globalThis.axe === 'object'") is not True:
+        browser.evaluate(source)
     result = browser.evaluate(
         """globalThis.axe.run(document, {
           resultTypes: ["violations"],
@@ -1585,7 +1886,7 @@ def _assert_axe(browser: _Cdp) -> None:
           }))
         })))"""
     )
-    assert result == [], result
+    assert result == [], "Axe found accessibility violations."
 
 
 def _assert_accessibility_tree(browser: _Cdp, required_names: set[str]) -> None:
@@ -1605,11 +1906,11 @@ def _assert_accessibility_tree(browser: _Cdp, required_names: set[str]) -> None:
 
 def _prove_service_tree(browser: _Cdp, *, mobile: bool) -> None:
     """Prove the graph-only service and access interaction."""
-    _navigate(browser, "/services", "Services and parent relationships")
+    _navigate(browser, "/services", "Services")
     _assert_layout(browser, mobile=mobile)
     tree = browser.evaluate(
         """(() => {
-          const viewport = document.querySelector("[aria-label='Service tree canvas']");
+          const viewport = document.querySelector("[aria-label='Services and parent relationships']");
           const canvas = viewport?.querySelector(".od-graph-canvas");
           if (!(viewport instanceof HTMLElement) || !(canvas instanceof HTMLElement))
             return null;
@@ -1628,9 +1929,9 @@ def _prove_service_tree(browser: _Cdp, *, mobile: bool) -> None:
     )
     assert isinstance(tree, dict)
     assert tree["alignment"] == "center"
-    assert tree["nodes"] == 2
+    assert tree["nodes"] == 3
     assert tree["tabStops"] == 1
-    assert tree["toolbarText"].strip() == "Create service"
+    assert tree["toolbarText"].strip() == "Refresh services"
     assert tree["duplicateList"] is False
     if float(tree["leftGap"]) >= 0 and float(tree["rightGap"]) >= 0:
         assert abs(float(tree["leftGap"]) - float(tree["rightGap"])) <= 3
@@ -1655,46 +1956,84 @@ def _prove_service_tree(browser: _Cdp, *, mobile: bool) -> None:
     _press_key(browser, "Home")
     _wait_browser(
         browser,
-        "document.activeElement?.getAttribute('data-service-api-name') === 'alpha'",
+        "document.activeElement?.getAttribute('data-service-api-name') === 'root'",
         "The service tree Home key did not reach the first node",
     )
 
     _click_selector(browser, "[data-service-api-name='alpha']")
     _wait_browser(
         browser,
-        "(() => { const text = document.querySelector('.od-graph-inspector[open]')?.innerText ?? ''; "
-        "return text.includes('Alpha private') && text.includes('localhost proof'); })()",
-        "The selected service inspector did not load workspaces and keys",
+        "document.querySelector('.od-graph-inspector[open] h2')?.textContent === 'Alpha'",
+        "The compact service inspector did not load",
     )
     inspector_text = browser.evaluate(
         "document.querySelector('.od-graph-inspector[open]')?.innerText ?? ''"
     )
     assert isinstance(inspector_text, str)
-    assert "Service API keys" in inspector_text
-    assert "Alpha private" in inspector_text
-    assert "localhost proof" in inspector_text
+    for fact in ("API name", "Parent", "Created", "Open service details"):
+        assert fact in inspector_text
+    for excluded in (
+        "Service API keys",
+        "Alpha private",
+        "localhost proof",
+        "Save changes",
+    ):
+        assert excluded not in inspector_text
     _assert_dialog_layout(browser, ".od-graph-inspector[open]", mobile=mobile)
     _assert_layout(browser, mobile=mobile)
+    _click_text(browser, "Open service details", scope=".od-graph-inspector[open]")
+    _wait_browser(
+        browser,
+        "location.pathname === '/services/alpha' && document.querySelector('main h1')?.textContent === 'Alpha' && "
+        "document.querySelector('main')?.innerText.includes('Alpha private') && "
+        "document.querySelector('main')?.innerText.includes('localhost proof')",
+        "The service-details route did not load workspaces and keys",
+    )
+    _assert_layout(browser, mobile=mobile)
+    _assert_axe(browser)
+    _navigate(browser, "/services?service=alpha", "Services")
+    _wait_browser(
+        browser,
+        "document.querySelector('.od-graph-inspector[open]') !== null",
+        "The service inspector did not restore",
+    )
     _press_key(browser, "Escape")
     _wait_browser(
         browser,
         "document.querySelector('.od-graph-inspector[open]') === null && document.activeElement?.getAttribute('data-service-api-name') === 'alpha'",
         "The service inspector did not restore node focus",
     )
-
-    _click_text(browser, "Create service", scope=".od-graph-toolbar")
+    _press_key(browser, "ArrowDown")
     _wait_browser(
         browser,
-        'document.querySelector(".od-graph-inspector[open] '
-        "input[name='api_name']\") === document.activeElement",
-        "The create-service inspector did not receive focus",
+        "document.activeElement?.hasAttribute('data-service-create-action') === true",
+        "Down did not reach the contextual creation action",
+    )
+    _press_key(browser, "Enter")
+    _wait_browser(
+        browser,
+        "document.querySelector('.od-graph-inspector[open] h2') === document.activeElement && document.activeElement?.textContent === 'New service'",
+        "The create-service inspector heading did not receive focus",
     )
     _assert_dialog_layout(browser, ".od-graph-inspector[open]", mobile=mobile)
+    assert (
+        browser.evaluate(
+            "document.querySelector('.od-graph-inspector[open] select') === null"
+        )
+        is True
+    )
+    _press_key(browser, "Tab")
+    assert (
+        browser.evaluate(
+            "document.activeElement?.getAttribute('name') === 'display_name'"
+        )
+        is True
+    )
     _press_key(browser, "Escape")
     _wait_browser(
         browser,
-        "document.querySelector('.od-graph-inspector[open]') === null && (document.activeElement?.textContent ?? '').includes('Create service')",
-        "The create-service inspector did not restore action focus",
+        "document.querySelector('.od-graph-inspector[open]') === null && document.activeElement?.hasAttribute('data-service-create-action') === true",
+        "The create-service inspector did not restore contextual action focus",
     )
     _assert_axe(browser)
 
@@ -1762,7 +2101,7 @@ def _prove_configuration_graph(browser: _Cdp, *, mobile: bool) -> None:
         "The graph did not restore its complete result",
     )
 
-    _set_control(browser, "select[aria-label='Selected service']", "alpha")
+    _set_control(browser, "select[aria-label='Service context']", "alpha")
     _wait_browser(
         browser,
         "document.querySelector(\"[data-node-id='assignment:workflow']\") !== null",
@@ -2063,7 +2402,7 @@ def _prove_configuration_graph(browser: _Cdp, *, mobile: bool) -> None:
         "document.querySelector('dialog.od-dialog[open]') === null",
         "The playground did not close with Escape",
     )
-    _click_text(browser, "Refresh")
+    _click_text(browser, "Refresh configuration")
     _wait_browser(
         browser,
         "document.querySelector(\"[data-node-id='mapping:text']\") !== null",
@@ -2166,16 +2505,38 @@ def _prove_other_playground_operations(browser: _Cdp) -> None:
     )
 
 
+def _assert_logs_content(browser: _Cdp, marker: str = "LLLLLLLLLLLL") -> None:
+    """Keep complete retained text inert and inside the current Logs region."""
+    detail = browser.evaluate(
+        """(() => ({
+          text: document.querySelector("#logs-details-region")?.innerText ?? "",
+          activeMarkup: document.querySelector("#logs-details-region script, #logs-details-region iframe") !== null,
+          executed: globalThis.__llmrouterProofExecuted === true,
+          overflow: document.documentElement.scrollWidth > innerWidth + 1
+        }))()"""
+    )
+    assert isinstance(detail, dict)
+    assert (
+        browser.evaluate(
+            "document.querySelector('#logs-details-region')?.getAttribute('aria-label') === 'Logs details'"
+        )
+        is True
+    )
+    assert marker in detail["text"]
+    assert detail["activeMarkup"] is False
+    assert detail["executed"] is False
+    assert detail["overflow"] is False
+
+
 def _prove_observation_pages(browser: _Cdp, *, mobile: bool) -> None:
     """Prove retained logs, statistics, health, and activity pages."""
-    _navigate(browser, "/logs", "Detailed request logs")
+    _navigate(browser, "/logs", "Logs")
     _assert_layout(browser, mobile=mobile)
     if not mobile:
-        _click_text(browser, "Load logs")
+        _click_text(browser, "Refresh Logs")
         _wait_browser(
             browser,
-            "document.querySelectorAll("
-            "\"[aria-label='Detailed request logs'] tbody tr\").length > 0",
+            "document.querySelectorAll(\"[aria-label='Logs'] tbody tr\").length > 0",
             "The detailed-log table did not load",
             attempts=400,
         )
@@ -2193,26 +2554,14 @@ def _prove_observation_pages(browser: _Cdp, *, mobile: bool) -> None:
         assert clicked_long is True
         _wait_browser(
             browser,
-            "document.querySelector('.log-detail')?.innerText.includes('Request content')",
+            "document.querySelector('#logs-details-region')?.innerText.includes('Request content')",
             "The selected detailed log did not load",
         )
-        detail = browser.evaluate(
-            """(() => ({
-              text: document.querySelector(".log-detail")?.innerText ?? "",
-              activeMarkup: document.querySelector(".log-detail script, .log-detail iframe") !== null,
-              executed: globalThis.__llmrouterProofExecuted === true,
-              overflow: document.documentElement.scrollWidth > innerWidth + 1
-            }))()"""
-        )
-        assert isinstance(detail, dict)
-        assert "LLLLLLLLLLLL" in detail["text"]
-        assert detail["activeMarkup"] is False
-        assert detail["executed"] is False
-        assert detail["overflow"] is False
-        _click_text(browser, "Close")
+        _assert_logs_content(browser)
+        _click_text(browser, "Close Logs details", scope="#logs-details-region")
         _wait_browser(
             browser,
-            "document.querySelector('.log-detail') === null",
+            "document.querySelector('#logs-details-region') === null",
             "The detailed-log panel did not close",
         )
         clicked_media = browser.evaluate(
@@ -2231,19 +2580,22 @@ def _prove_observation_pages(browser: _Cdp, *, mobile: bool) -> None:
         assert clicked_media is True
         _wait_browser(
             browser,
-            "[...document.querySelectorAll('.log-detail button')].some((item) => item.textContent?.trim() === 'Prepare retained media download')",
+            "[...document.querySelectorAll('#logs-details-region button')].some((item) => item.textContent?.trim() === 'Prepare retained media download')",
             "The media log did not expose its authenticated download action",
         )
-        _click_text(browser, "Prepare retained media download", scope=".log-detail")
+        _click_text(
+            browser, "Prepare retained media download", scope="#logs-details-region"
+        )
         _wait_browser(
             browser,
-            "document.querySelector('.log-detail a[download]')?.href.startsWith('blob:') ?? false",
+            "document.querySelector('#logs-details-region a[download]')?.href.startsWith('blob:') ?? false",
             "The retained media download was not prepared",
         )
     _assert_axe(browser)
 
     _navigate(browser, "/statistics", "Usage and cost statistics")
     _assert_layout(browser, mobile=mobile)
+    _assert_route_controls(browser)
     if not mobile:
         _click_text(browser, "Run statistics")
         _wait_browser(
@@ -2264,7 +2616,7 @@ def _prove_observation_pages(browser: _Cdp, *, mobile: bool) -> None:
         assert "cost" in statistics_copy
     _assert_axe(browser)
 
-    _navigate(browser, "/operations", "Activity and health")
+    _navigate(browser, "/operations", "Activity & health")
     _assert_layout(browser, mobile=mobile)
     _wait_browser(
         browser,
@@ -2305,30 +2657,31 @@ def _prove_observation_pages(browser: _Cdp, *, mobile: bool) -> None:
 def _prove_route_and_state_matrix(browser: _Cdp, *, mobile: bool) -> None:
     """Prove retained routes, removed routes, and bounded UI states."""
     retained = (
-        ("/overview", "Router overview"),
-        ("/services", "Services and parent relationships"),
+        ("/overview", "Overview"),
+        ("/services", "Services"),
         ("/configuration", "LLM configuration"),
-        ("/logs", "Detailed request logs"),
+        ("/logs", "Logs"),
         ("/statistics", "Usage and cost statistics"),
-        ("/operations", "Activity and health"),
+        ("/operations", "Activity & health"),
     )
     for path, title in retained:
         _navigate(browser, path, title)
         _assert_layout(browser, mobile=mobile)
+        _assert_route_controls(browser)
     for path in ("/providers", "/models", "/assignments", "/playground"):
         _navigate(browser, path, "LLM configuration")
         current_path = browser.evaluate("location.pathname")
         assert current_path == "/configuration"
-    _navigate(browser, "/access", "Services and parent relationships")
+    _navigate(browser, "/access", "Services")
     assert "Workspaces & keys" not in str(browser.evaluate("document.body.innerText"))
 
-    _navigate(browser, "/overview?proof_mode=loading", "Loading administration data")
+    _navigate(browser, "/overview?proof_mode=loading", "Loading Overview.")
     _assert_layout(browser, mobile=mobile)
-    _navigate(browser, "/overview?proof_mode=error", "Router overview")
+    _navigate(browser, "/overview?proof_mode=error", "Overview")
     _wait_browser(
         browser,
         "document.querySelector(\"[role='alert']\")?.textContent?.includes('Injected proof failure.') === true && "
-        "(document.body?.innerText ?? '').includes('Services\\n2') && "
+        "(document.body?.innerText ?? '').includes('Services\\n3') && "
         "(document.body?.innerText ?? '').includes('Provider-models\\n5')",
         "One failed global source discarded unrelated overview results",
     )
@@ -2361,7 +2714,12 @@ def _prove_route_and_state_matrix(browser: _Cdp, *, mobile: bool) -> None:
         "wholePageFailure": False,
     }
     _assert_layout(browser, mobile=mobile)
-    _navigate(browser, "/services?proof_mode=empty", "No services")
+    _navigate(
+        browser,
+        "/services?proof_mode=empty",
+        "The Router could not complete the operation. Try again.",
+    )
+    _assert_missing_root_state(browser)
     _assert_layout(browser, mobile=mobile)
     _navigate(
         browser,
@@ -2373,12 +2731,12 @@ def _prove_route_and_state_matrix(browser: _Cdp, *, mobile: bool) -> None:
     _wait_browser(
         browser,
         "document.querySelector(\"[aria-label='LLM configuration relationships']\") !== null && "
-        "[...document.querySelectorAll('.administration-topbar-actions button')].some("
-        "(item) => item.textContent?.trim() === 'Refresh' && !item.disabled)",
+        "[...document.querySelectorAll('.od-graph-toolbar button')].some("
+        "(item) => item.textContent?.trim() === 'Refresh configuration' && !item.disabled)",
         "The current configuration graph was not ready for its failed refresh proof",
     )
     browser.evaluate("globalThis.__llmrouterProofMode = 'error'")
-    _click_text(browser, "Refresh", scope=".administration-topbar-actions")
+    _click_text(browser, "Refresh configuration", scope=".od-graph-toolbar")
     _wait_browser(
         browser,
         "document.querySelector(\"[role='alert']\")?.textContent?.includes('Injected proof failure.') === true && "
@@ -2413,7 +2771,7 @@ def _prove_emulated_media(browser: _Cdp, *, mobile: bool) -> None:
     assert media == {"forced": True, "reduced": True}
     _assert_layout(browser, mobile=mobile)
     browser_errors = browser.evaluate("globalThis.__llmrouterProofErrors ?? []")
-    assert browser_errors == [], browser_errors
+    assert browser_errors == [], "The browser reported a console or runtime error."
     browser.command("Emulation.setEmulatedMedia", {"features": []})
 
 
@@ -2423,16 +2781,16 @@ def _prove_viewport(browser: _Cdp, *, width: int, mobile: bool) -> None:
         "Emulation.setDeviceMetricsOverride",
         {
             "width": width,
-            "height": 844 if mobile else 900,
+            "height": 844 if mobile else (1000 if width == 1440 else 800),
             "deviceScaleFactor": 1,
             "mobile": mobile,
         },
     )
     browser.command("Emulation.setEmulatedMedia", {"features": []})
     _prove_route_and_state_matrix(browser, mobile=mobile)
-    _navigate(browser, "/overview", "Router overview")
+    _navigate(browser, "/overview", "Overview")
     overview = browser.evaluate("document.body.innerText")
-    assert "Services\n2" in str(overview)
+    assert "Services\n3" in str(overview)
     assert "Provider connections\n1" in str(overview)
     assert "Provider-models\n5" in str(overview)
     _assert_axe(browser)
@@ -2471,15 +2829,27 @@ def _debugging_endpoint(port: int) -> str:
 class _Cdp:
     """Use the small Chrome DevTools websocket subset needed by the proof."""
 
-    def __init__(self, endpoint: str) -> None:
+    def __init__(self, endpoint: str, *, read_only: bool = False) -> None:
         """Open one validated loopback websocket."""
-        url = httpx.URL(endpoint)
-        if url.host != "127.0.0.1" or url.port is None or url.scheme != "ws":
+        try:
+            url = httpx.URL(endpoint)
+        except httpx.InvalidURL:
+            raise AssertionError("The Chrome endpoint is not on loopback.") from None
+        if (
+            url.host != "127.0.0.1"
+            or url.port is None
+            or url.scheme != "ws"
+            or url.username
+            or url.password
+        ):
             raise AssertionError("The Chrome endpoint is not on loopback.")
         self._socket = socket.create_connection((url.host, url.port), timeout=10)
         self._socket.settimeout(10)
         self._buffer = bytearray()
         self._identifier = 0
+        self._read_only = read_only
+        self.blocked_requests = 0
+        self._pending_interceptions: set[int] = set()
         key = base64.b64encode(secrets.token_bytes(16)).decode("ascii")
         request = (
             f"GET {url.raw_path.decode()} HTTP/1.1\r\n"
@@ -2515,15 +2885,78 @@ class _Cdp:
         if parameters is not None:
             value["params"] = parameters
         self._send(json.dumps(value, separators=(",", ":")))
+        pending = getattr(self, "_pending_interceptions", set())
+        self._pending_interceptions = pending
+        result: dict[str, object] | None = None
         while True:
             response = json.loads(self._receive())
+            if response.get("id") in pending:
+                pending.remove(response["id"])
+                if "error" in response:
+                    raise AssertionError(
+                        "The browser network policy could not be applied."
+                    )
+                if result is not None and not pending:
+                    return result
+                continue
+            if response.get("method") == "Fetch.requestPaused" and self._read_only:
+                self._intercept_read_only_request(response["params"])
+                continue
             if response.get("id") != identifier:
                 continue
             if "error" in response:
                 message = f"Chrome command failed: {method}"
                 raise AssertionError(message)
-            result = response.get("result", {})
-            return result if isinstance(result, dict) else {}
+            received_result = response.get("result", {})
+            result = received_result if isinstance(received_result, dict) else {}
+            if not pending:
+                return result
+
+    def _intercept_read_only_request(self, parameters: dict[str, object]) -> None:
+        """Apply the fixed request or document policy and track its acknowledgment."""
+        if "responseStatusCode" in parameters:
+            self._identifier += 1
+            self._pending_interceptions.add(self._identifier)
+            self._send(
+                json.dumps(
+                    {
+                        "id": self._identifier,
+                        "method": "Fetch.continueResponse",
+                        "params": {
+                            "requestId": parameters["requestId"],
+                            "responseCode": parameters["responseStatusCode"],
+                            "responseHeaders": [
+                                *parameters.get("responseHeaders", []),
+                                {
+                                    "name": "Content-Security-Policy",
+                                    "value": _READ_ONLY_CSP,
+                                },
+                            ],
+                        },
+                    }
+                )
+            )
+            return
+        request = parameters["request"]
+        allowed = _read_only_request_allowed(request["method"], request["url"])
+        if not allowed:
+            self.blocked_requests = getattr(self, "blocked_requests", 0) + 1
+        self._identifier += 1
+        self._pending_interceptions.add(self._identifier)
+        self._send(
+            json.dumps(
+                {
+                    "id": self._identifier,
+                    "method": "Fetch.continueRequest"
+                    if allowed
+                    else "Fetch.failRequest",
+                    "params": {
+                        "requestId": parameters["requestId"],
+                        **({} if allowed else {"errorReason": "BlockedByClient"}),
+                    },
+                }
+            )
+        )
 
     def evaluate(self, expression: str) -> object:
         """Evaluate one fixed proof expression and return its value."""
