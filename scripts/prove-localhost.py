@@ -182,6 +182,11 @@ def _seed(
     """Create one deterministic service tree and fake-only route catalog."""
     with connection.transaction():
         connection.execute("LOCK TABLE router.services IN SHARE ROW EXCLUSIVE MODE")
+        # Match the scheduler's write order and wait for its complete transaction.
+        connection.execute(
+            "LOCK TABLE router.price_synchronizations, router.activity_events "
+            "IN SHARE ROW EXCLUSIVE MODE"
+        )
         existing = connection.execute(
             "SELECT id, api_name, parent_service_id FROM router.services"
         ).fetchall()
@@ -202,6 +207,18 @@ def _seed(
                ) ORDER BY tablename"""
         ).fetchall()
         for table in tables:
+            connection.execute(
+                psycopg.sql.SQL("LOCK TABLE router.{} IN SHARE ROW EXCLUSIVE MODE").format(
+                    psycopg.sql.Identifier(str(table["tablename"]))
+                )
+            )
+        if not _seed_has_only_empty_scheduled_runs(connection):
+            raise SystemExit(
+                "The localhost proof requires a clean database with its stored root."
+            )
+        for table in tables:
+            if table["tablename"] in {"price_synchronizations", "activity_events"}:
+                continue
             occupied = connection.execute(
                 psycopg.sql.SQL("SELECT 1 FROM router.{} LIMIT 1").format(
                     psycopg.sql.Identifier(str(table["tablename"]))
@@ -212,6 +229,33 @@ def _seed(
                     "The localhost proof requires a clean database with its stored root."
                 )
         return _seed_fixture(connection, controls, cast("UUID", existing[0]["id"]))
+
+
+def _seed_has_only_empty_scheduled_runs(
+    connection: psycopg.Connection[dict[str, object]],
+) -> bool:
+    """Require one exact system event for each completed empty scheduled run."""
+    invalid = connection.execute(
+        """SELECT 1
+           FROM router.price_synchronizations AS run
+           FULL JOIN router.activity_events AS event ON event.resource_id = run.id
+           WHERE run.id IS NULL OR event.id IS NULL
+              OR run.run_kind <> 'scheduled'
+              OR NOT run.completed OR run.failure_class IS NOT NULL
+              OR run.result <> '[]'::jsonb
+              OR event.actor_subject <> 'system:price-synchronization'
+              OR event.action <> 'price.synchronize'
+              OR event.resource_type <> 'price_synchronization'
+              OR event.result <> 'succeeded'
+              OR event.service_api_name IS NOT NULL
+              OR event.resource_api_name IS NOT NULL
+           LIMIT 1"""
+    ).fetchone()
+    duplicate = connection.execute(
+        """SELECT 1 FROM router.activity_events
+           GROUP BY resource_id HAVING count(*) <> 1 LIMIT 1"""
+    ).fetchone()
+    return invalid is None and duplicate is None
 
 
 def _seed_fixture(
