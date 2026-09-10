@@ -464,10 +464,11 @@ def _overview_states(
         is True
     )
     _capture(browser, f"{width}-overview-loading", mobile=mobile, results=results)
-    browser.evaluate("""(() => {
+    browser.evaluate("""setTimeout(() => {
       shellFixture.hold=[];
       while(shellFixture.pending.length) shellFixture.finish(shellFixture.pending[0].name);
-    })()""")
+    }, 100)""")
+    proof._assert_overview_totals(browser, services=3, providers=1, provider_models=1)
     _wait(
         browser,
         """(() => {
@@ -730,6 +731,125 @@ def _configuration(
         proof._close_graph_inspector(browser)
 
 
+def _full_configuration_values() -> dict[str, object]:
+    """Supply several assignments so keyboard order does not imply Workflow."""
+    values = _shell_values()
+    models = [
+        {
+            "api_name": name,
+            "display_name": (
+                "Text model with a deliberately long name for responsive proof"
+                if name == "text-model"
+                else name
+            ),
+            "input_modalities": ["text"],
+            "output_modalities": ["text"],
+            "capabilities": ["streaming"],
+            "constraints": {},
+            "price_source": "manual",
+            "created_at": DATE,
+        }
+        for name in ("text-model", "embedding-model", "media-model")
+    ]
+    mappings = [
+        {
+            "api_name": name,
+            "provider_api_name": "fake-provider",
+            "model_api_name": model,
+            "provider_model_name": wire,
+            "enabled": True,
+            "input_modalities": ["text"],
+            "output_modalities": ["text"],
+            "capabilities": ["streaming"],
+            "reasoning_mappings": [],
+            "created_at": DATE,
+        }
+        for name, model, wire in (
+            ("failed-text", "text-model", "fake-error-transport-v1"),
+            ("interrupted-text", "text-model", "fake-stream-interruption-v1"),
+            ("text", "text-model", "fake-text-v1"),
+            ("embedding", "embedding-model", "fake-embedding-v1"),
+            ("media", "media-model", "fake-media-v1"),
+        )
+    ]
+    values.update(
+        providers=_page(
+            [
+                {
+                    "api_name": "fake-provider",
+                    "display_name": "Fake provider",
+                    "adapter": "fake",
+                    "enabled": True,
+                    "created_at": DATE,
+                }
+            ]
+        ),
+        models=_page(models),
+        providerModels=_page(mappings),
+        assignments=_page(
+            [
+                {
+                    "api_name": name,
+                    "display_name": name.title(),
+                    "definition_kind": "direct_chain",
+                    "defined_by_service_api_name": "alpha",
+                    "direct_chain": [
+                        {"provider_model_api_name": route} for route in routes
+                    ],
+                    "effective_chain": [
+                        {"provider_model_api_name": route} for route in routes
+                    ],
+                    "observed_requirements": ["text_input", "text_output"],
+                }
+                for name, routes in (
+                    ("default", ["text"]),
+                    ("embedding", ["embedding"]),
+                    ("workflow", ["failed-text", "text"]),
+                )
+            ]
+        ),
+    )
+    return values
+
+
+def _full_configuration_sequence(
+    browser: FixtureBrowser,
+    width: int,
+    *,
+    mobile: bool,
+    results: list[dict[str, object]],
+) -> None:
+    """Run the real configuration proof through its first provider-call boundary."""
+    browser.use("shell", values=_full_configuration_values())
+    original = proof._click_text
+
+    class ProviderCallBoundaryError(Exception):
+        """Stop before the controlled fixture's first provider call."""
+
+    def click(browser: FixtureBrowser, text_value: str, *, scope: str = "body") -> None:
+        if text_value == "Run operation":
+            raise ProviderCallBoundaryError
+        original(browser, text_value, scope=scope)
+
+    proof._click_text = click
+    try:
+        try:
+            proof._prove_configuration_graph(browser, mobile=mobile)
+        except ProviderCallBoundaryError:
+            _capture(
+                browser,
+                f"{width}-full-configuration-sequence",
+                mobile=mobile,
+                results=results,
+            )
+        else:
+            raise AssertionError(
+                "The configuration proof did not reach the provider-call boundary."
+            )
+    finally:
+        proof._click_text = original
+
+
 def _websocket_boundary(
     browser: FixtureBrowser, *, results: list[dict[str, object]]
 ) -> None:
@@ -895,6 +1015,55 @@ def _statistics(
     assert query["from"] == "2026-03-08T00:00:00Z"
     assert query["to"] == "2026-03-09T00:00:00Z"
     _capture(browser, f"{width}-statistics-dates", mobile=mobile, results=results)
+
+
+def _overview_rejections(
+    browser: FixtureBrowser, *, results: list[dict[str, object]]
+) -> None:
+    """Reject wrong, missing, and duplicate real-App totals without page content."""
+    mutations = {
+        "wrong": "card.querySelector('strong').textContent='31'",
+        "missing": "card.remove()",
+        "duplicate": "card.after(card.cloneNode(true))",
+    }
+    original = proof._wait_browser
+
+    def bounded_wait(browser: FixtureBrowser, expression: str, message: str) -> object:
+        return original(browser, expression, message, attempts=2)
+
+    for name, mutation in mutations.items():
+        browser.use("shell")
+        proof._navigate(browser, "/overview", "Overview")
+        proof._assert_overview_totals(
+            browser, services=3, providers=1, provider_models=1
+        )
+        browser.evaluate(
+            """(() => {
+          const card = [...document.querySelectorAll('[aria-label="Resource totals"] article')]
+            .find(item => item.querySelector('.od-stat-label').textContent === 'Services');
+        """
+            + mutation
+            + ";return true;})()"
+        )
+        proof._wait_browser = bounded_wait
+        try:
+            try:
+                proof._assert_overview_totals(
+                    browser, services=3, providers=1, provider_models=1
+                )
+            except AssertionError as failure:
+                if (
+                    str(failure)
+                    != "The Overview resource totals did not match the proof fixture"
+                ):
+                    raise AssertionError(
+                        "Overview failure context was not safe."
+                    ) from None
+                results.append({"overview_total": name, "rejected": True})
+            else:
+                raise AssertionError("An incorrect Overview total passed.")
+        finally:
+            proof._wait_browser = original
 
 
 def _legacy_rejections(
@@ -1106,6 +1275,9 @@ def run() -> None:
                 )
                 _shell_routes(browser, width, mobile=mobile, results=results)
                 _configuration(browser, width, mobile=mobile, results=results)
+                _full_configuration_sequence(
+                    browser, width, mobile=mobile, results=results
+                )
                 _creation(browser, width, mobile=mobile, doubled=False, results=results)
                 _creation(browser, width, mobile=mobile, doubled=True, results=results)
                 _oversized(browser, width, mobile=mobile, results=results)
@@ -1122,6 +1294,7 @@ def run() -> None:
                 },
             )
             _websocket_boundary(browser, results=results)
+            _overview_rejections(browser, results=results)
             _legacy_rejections(browser, results=results)
             assert browser.failures == []
             assert not browser._pending_interceptions, (

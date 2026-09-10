@@ -1951,6 +1951,12 @@ def _assert_accessibility_tree(browser: _Cdp, required_names: set[str]) -> None:
 def _prove_service_tree(browser: _Cdp, *, mobile: bool) -> None:
     """Prove the graph-only service and access interaction."""
     _navigate(browser, "/services", "Services")
+    _wait_browser(
+        browser,
+        "document.querySelectorAll('[data-service-api-name]').length === 3 && "
+        "document.querySelector('.od-graph-canvas')?.dataset.alignment === 'center'",
+        "The three-service proof tree did not finish loading and layout",
+    )
     _assert_layout(browser, mobile=mobile)
     tree = browser.evaluate(
         """(() => {
@@ -2100,6 +2106,12 @@ def _prove_configuration_graph(browser: _Cdp, *, mobile: bool) -> None:
           ) !== null;
         })()""",
         "The global configuration graph columns did not become ready",
+    )
+    _wait_browser(
+        browser,
+        "document.querySelectorAll('[data-node-id]').length >= 9 && "
+        "document.querySelectorAll('[data-node-id][tabindex=\"0\"]').length === 1",
+        "The proof configuration records did not finish loading",
     )
     initial = browser.evaluate(
         """(() => ({
@@ -2306,8 +2318,16 @@ def _prove_configuration_graph(browser: _Cdp, *, mobile: bool) -> None:
         "document.activeElement?.getAttribute('data-node-id')?.startsWith('rung:') ?? false",
         "The configuration board did not move to an exact assignment rung",
     )
+    # Keyboard traversal selects the first connected assignment in rendered order.
+    # Inspect the known workflow fallback explicitly; other assignments also exist.
+    browser.evaluate(
+        "document.querySelector(\"[data-node-id='rung:workflow:2']\")?.focus()"
+    )
     active_rung = browser.evaluate(
         "document.activeElement?.getAttribute('data-node-id') ?? ''"
+    )
+    assert active_rung == "rung:workflow:2", (
+        "The workflow fallback did not receive focus"
     )
     _press_key(browser, "Enter")
     _wait_browser(
@@ -2819,6 +2839,31 @@ def _prove_emulated_media(browser: _Cdp, *, mobile: bool) -> None:
     browser.command("Emulation.setEmulatedMedia", {"features": []})
 
 
+def _assert_overview_totals(
+    browser: _Cdp, *, services: int, providers: int, provider_models: int
+) -> None:
+    """Wait for confirmed resource totals, with no page content in failures."""
+    expected = {
+        "Services": str(services),
+        "Provider connections": str(providers),
+        "Provider-models": str(provider_models),
+    }
+    _wait_browser(
+        browser,
+        f"""(() => {{
+          const totals = document.querySelector("main [aria-label='Resource totals']");
+          const cards = [...(totals?.querySelectorAll('article') ?? [])];
+          return Object.entries({json.dumps(expected)}).every(([label, value]) => {{
+            const matches = cards.filter(card =>
+              card.querySelector('.od-stat-label')?.textContent?.trim() === label);
+            return matches.length === 1 &&
+              matches[0].querySelector('strong')?.textContent?.trim() === value;
+          }});
+        }})()""",
+        "The Overview resource totals did not match the proof fixture",
+    )
+
+
 def _prove_viewport(browser: _Cdp, *, width: int, mobile: bool) -> None:
     """Prove one complete responsive administrator viewport."""
     browser.command(
@@ -2833,10 +2878,7 @@ def _prove_viewport(browser: _Cdp, *, width: int, mobile: bool) -> None:
     browser.command("Emulation.setEmulatedMedia", {"features": []})
     _prove_route_and_state_matrix(browser, mobile=mobile)
     _navigate(browser, "/overview", "Overview")
-    overview = browser.evaluate("document.body.innerText")
-    assert "Services\n3" in str(overview)
-    assert "Provider connections\n1" in str(overview)
-    assert "Provider-models\n5" in str(overview)
+    _assert_overview_totals(browser, services=3, providers=1, provider_models=5)
     _assert_axe(browser)
     _prove_service_tree(browser, mobile=mobile)
     _prove_configuration_graph(browser, mobile=mobile)
