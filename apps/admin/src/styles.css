@@ -633,3 +633,7 @@ input:not(.od-form-control):focus {
     display: grid;
   }
 }
+
+.service-details-page {
+  padding-block: var(--od-space-lg);
+}

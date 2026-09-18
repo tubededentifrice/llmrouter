@@ -1537,23 +1537,26 @@ function useServiceContext(props: RouteProps, resource: RouteSources) {
         "")
       : "";
   const replaceService = useCallback(
-    (value: string) => {
+    (value: string, preserveTree = false) => {
       const next = new URLSearchParams(location.search);
       next.delete("service");
       if (value !== "") next.set("service", value);
       navigate(
         `${location.pathname}${next.size === 0 ? "" : `?${next.toString()}`}`,
         true,
+        preserveTree && location.treeRestore !== undefined
+          ? { treeRestore: { ...location.treeRestore } }
+          : {},
       );
     },
-    [location.pathname, location.search, navigate],
+    [location.pathname, location.search, location.treeRestore, navigate],
   );
   useEffect(() => {
     if (
       resource.confirmed.services &&
       (received !== selectedService || serviceCount > 1)
     )
-      replaceService(selectedService);
+      replaceService(selectedService, true);
   }, [
     received,
     replaceService,

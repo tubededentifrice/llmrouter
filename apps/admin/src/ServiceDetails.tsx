@@ -19,6 +19,8 @@ import {
   PageSurface,
   Panel,
   PanelHeader,
+  PanelBody,
+  SummaryFacts,
   SearchableSelect,
   StatePanel,
   TextControl,
@@ -428,9 +430,10 @@ export function ServiceDetails(props: ServiceDetailsProps) {
     </Button>
   );
   return (
-    <PageSurface className="administration-page">
+    <PageSurface className="administration-page service-details-page">
       <PageHeading
-        eyebrow={serviceApiName}
+        eyebrow={`Services / ${serviceApiName}`}
+        description="Manage service settings, workspaces, and API access."
         title={service?.display_name ?? "Service details"}
         actions={
           <>
@@ -488,101 +491,110 @@ export function ServiceDetails(props: ServiceDetailsProps) {
             childrenCount={children}
           />
           <Panel>
-            <form
-              ref={formRef}
-              aria-busy={busy}
-              onSubmit={(event) => {
-                event.preventDefault();
-                void save();
-              }}
-            >
-              <FormSection legend="Service details">
-                <TextControl
-                  label="Display name"
-                  value={draft?.displayName ?? service.display_name}
-                  maxLength={200}
-                  requirement="required"
-                  disabled={blocked || !fresh}
-                  onChange={(event) => {
-                    updateRead({
-                      draft: {
-                        displayName: event.currentTarget.value,
-                        parent:
-                          draft?.parent ??
-                          service.parent_service_api_name ??
-                          "",
-                      },
-                    });
-                  }}
-                />
-                {root ? (
-                  <GraphInspectorFacts>
-                    <GraphInspectorFact label="Parent" value="None" />
-                  </GraphInspectorFacts>
-                ) : (
-                  <SearchableSelect
-                    label="Parent service"
-                    value={
-                      draft?.parent ?? service.parent_service_api_name ?? ""
-                    }
-                    options={parentChoices(services ?? [], serviceApiName).map(
-                      (item) => ({
-                        label: item.display_name,
-                        description: item.api_name,
-                        value: item.api_name,
-                      }),
-                    )}
-                    disabled={blocked || !fresh || parentPhase !== "ready"}
-                    onChange={(parent) => {
+            <PanelBody>
+              <form
+                ref={formRef}
+                aria-busy={busy}
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void save();
+                }}
+              >
+                <FormSection
+                  legend="Service details"
+                  columns={2}
+                  description="Set the display name and the parent used for assignment inheritance."
+                >
+                  <TextControl
+                    label="Display name"
+                    help="Shown in the administration application. The API name stays the same."
+                    value={draft?.displayName ?? service.display_name}
+                    maxLength={200}
+                    requirement="required"
+                    disabled={blocked || !fresh}
+                    onChange={(event) => {
                       updateRead({
                         draft: {
-                          displayName:
-                            draft?.displayName ?? service.display_name,
-                          parent,
+                          displayName: event.currentTarget.value,
+                          parent:
+                            draft?.parent ??
+                            service.parent_service_api_name ??
+                            "",
                         },
                       });
                     }}
                   />
-                )}
-              </FormSection>
-              {parentPhase === "error" ? (
-                <InlineAlert
-                  title={
-                    root
-                      ? services === null
-                        ? "The child count is unavailable."
-                        : "The child count is stale."
-                      : "Parent options are unavailable."
-                  }
-                  tone="error"
-                >
-                  {parentError}{" "}
-                  <Button
-                    onClick={() => {
-                      void loadParents();
-                    }}
-                    variant="secondary"
+                  {root ? (
+                    <GraphInspectorFacts>
+                      <GraphInspectorFact label="Parent" value="None" />
+                    </GraphInspectorFacts>
+                  ) : (
+                    <SearchableSelect
+                      label="Parent service"
+                      help="Assignments are inherited from this service unless replaced locally."
+                      value={
+                        draft?.parent ?? service.parent_service_api_name ?? ""
+                      }
+                      options={parentChoices(
+                        services ?? [],
+                        serviceApiName,
+                      ).map((item) => ({
+                        label: item.display_name,
+                        description: item.api_name,
+                        value: item.api_name,
+                      }))}
+                      disabled={blocked || !fresh || parentPhase !== "ready"}
+                      onChange={(parent) => {
+                        updateRead({
+                          draft: {
+                            displayName:
+                              draft?.displayName ?? service.display_name,
+                            parent,
+                          },
+                        });
+                      }}
+                    />
+                  )}
+                </FormSection>
+                {parentPhase === "error" ? (
+                  <InlineAlert
+                    title={
+                      root
+                        ? services === null
+                          ? "The child count is unavailable."
+                          : "The child count is stale."
+                        : "Parent options are unavailable."
+                    }
+                    tone="error"
                   >
-                    {root ? "Retry child count" : "Retry parent options"}
+                    {parentError}{" "}
+                    <Button
+                      onClick={() => {
+                        void loadParents();
+                      }}
+                      variant="secondary"
+                    >
+                      {root ? "Retry child count" : "Retry parent options"}
+                    </Button>
+                  </InlineAlert>
+                ) : null}
+                {writeError !== null && !deleteOpen ? (
+                  <InlineAlert title="The service change failed." tone="error">
+                    {writeError} Correct the problem and try again.
+                  </InlineAlert>
+                ) : null}
+                <FormActions alignment="start">
+                  <Button
+                    type="submit"
+                    disabled={
+                      blocked || !fresh || (!root && parentPhase !== "ready")
+                    }
+                  >
+                    {busy ? "Saving changes…" : "Save changes"}
                   </Button>
-                </InlineAlert>
-              ) : null}
-              {writeError !== null && !deleteOpen ? (
-                <InlineAlert title="The service change failed." tone="error">
-                  {writeError} Correct the problem and try again.
-                </InlineAlert>
-              ) : null}
-              <FormActions alignment="start">
-                <Button
-                  type="submit"
-                  disabled={
-                    blocked || !fresh || (!root && parentPhase !== "ready")
-                  }
-                >
-                  {busy ? "Saving changes…" : "Save changes"}
-                </Button>
-              </FormActions>
-            </form>
+                </FormActions>
+              </form>
+            </PanelBody>
           </Panel>
         </>
       ) : null}
@@ -601,40 +613,42 @@ export function ServiceDetails(props: ServiceDetailsProps) {
       />
       {service !== null ? (
         <Panel>
-          <PanelHeader title="Delete service" />
-          {root ? (
-            <p>The permanent root service cannot be deleted.</p>
-          ) : (
-            <>
-              <p>
-                This action deletes the service, API keys, workspaces, local
-                assignments, logs, raw accounting, daily aggregates, media jobs,
-                and retained media. It keeps parent and child services.
-              </p>
-              {children > 0 ? (
-                <InlineAlert
-                  title="This service has child services."
-                  tone="warning"
-                >
-                  Move or delete each child before you delete this service.
-                </InlineAlert>
-              ) : null}
-              <Button
-                disabled={
-                  blocked || !fresh || parentPhase !== "ready" || children > 0
-                }
+          <PanelHeader title="Delete service" kicker="Permanent action" />
+          <PanelBody>
+            {root ? (
+              <p>The permanent root service cannot be deleted.</p>
+            ) : (
+              <>
+                <p>
+                  This action deletes the service, API keys, workspaces, local
+                  assignments, logs, raw accounting, daily aggregates, media
+                  jobs, and retained media. It keeps parent and child services.
+                </p>
+                {children > 0 ? (
+                  <InlineAlert
+                    title="This service has child services."
+                    tone="warning"
+                  >
+                    Move or delete each child before you delete this service.
+                  </InlineAlert>
+                ) : null}
+                <Button
+                  disabled={
+                    blocked || !fresh || parentPhase !== "ready" || children > 0
+                  }
 
-                variant="secondary"
-                onClick={(event) => {
-                  deleteRef.current = event.currentTarget;
-                  setWriteError(null);
-                  setDeleteOpen(true);
-                }}
-              >
-                Delete service
-              </Button>
-            </>
-          )}
+                  variant="secondary"
+                  onClick={(event) => {
+                    deleteRef.current = event.currentTarget;
+                    setWriteError(null);
+                    setDeleteOpen(true);
+                  }}
+                >
+                  Delete service
+                </Button>
+              </>
+            )}
+          </PanelBody>
         </Panel>
       ) : null}
       <ConfirmationDialog
@@ -686,31 +700,32 @@ function ServiceFacts({
 }) {
   return (
     <Panel aria-label="Service facts">
-      <GraphInspectorFacts>
-        <GraphInspectorFact label="API name" value={service.api_name} />
-        <GraphInspectorFact
-          label="Parent"
-          value={
-            root
-              ? "None"
-              : `${(services ?? []).find((item) => item.api_name === service.parent_service_api_name)?.display_name ?? service.parent_service_api_name ?? "Unavailable"} (${service.parent_service_api_name ?? "Unavailable"})`
-          }
+      <PanelBody>
+        <SummaryFacts
+          items={[
+            { label: "API name", value: <code>{service.api_name}</code> },
+            {
+              label: "Parent",
+              value: root
+                ? "None"
+                : `${(services ?? []).find((item) => item.api_name === service.parent_service_api_name)?.display_name ?? service.parent_service_api_name ?? "Unavailable"} (${service.parent_service_api_name ?? "Unavailable"})`,
+            },
+            {
+              label: "Created",
+              value: <DateTime value={service.created_at} />,
+            },
+            {
+              label: "Direct children",
+              value:
+                services !== null
+                  ? `${String(childrenCount)}${parentPhase === "error" ? " (stale)" : parentPhase === "loading" ? " (refreshing)" : ""}`
+                  : parentPhase === "loading"
+                    ? "Loading…"
+                    : "Unavailable",
+            },
+          ]}
         />
-        <GraphInspectorFact
-          label="Created"
-          value={<DateTime value={service.created_at} />}
-        />
-        <GraphInspectorFact
-          label="Direct children"
-          value={
-            services !== null
-              ? `${String(childrenCount)}${parentPhase === "error" ? " (stale)" : parentPhase === "loading" ? " (refreshing)" : ""}`
-              : parentPhase === "loading"
-                ? "Loading…"
-                : "Unavailable"
-          }
-        />
-      </GraphInspectorFacts>
+      </PanelBody>
     </Panel>
   );
 }

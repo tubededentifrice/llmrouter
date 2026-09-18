@@ -552,7 +552,8 @@ describe("service details and compact graph", () => {
         ).toHaveCount(0);
         await page.keyboard.press("Escape");
         const childCount = page
-          .locator(".od-graph-inspector-fact")
+          .getByRole("region", { name: "Service facts", exact: true })
+          .locator("dl > div")
           .filter({
             has: page.locator("dt", { hasText: /^Direct children$/ }),
           })

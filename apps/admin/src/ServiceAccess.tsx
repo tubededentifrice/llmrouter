@@ -10,10 +10,10 @@ import {
 import {
   Button,
   DateTime,
-  FormActions,
   EditableTable,
   Panel,
   PanelHeader,
+  PanelBody,
   SecretRevealPanel,
   StatePanel,
   TextControl,
@@ -285,143 +285,148 @@ function WorkspaceAccessSection({
     <Panel aria-label="Workspaces">
       <PanelHeader
         title="Workspaces"
+        description="Group requests and accounting by workspace."
         actions={
-          <Button
-            disabled={phase === "loading" || readBlocked}
-            onClick={() => {
-              void load();
-            }}
-            variant="secondary"
-          >
-            Refresh workspaces
-          </Button>
+          <>
+            <Button
+              disabled={phase === "loading" || readBlocked}
+              onClick={() => {
+                void load();
+              }}
+              variant="secondary"
+            >
+              Refresh workspaces
+            </Button>
+            <Button
+              disabled={workspaceDraft !== null || !writable}
+              onClick={() => {
+                update({
+                  workspaceDraft: {
+                    apiName: "",
+                    displayName: "",
+                    createdAt: "",
+                  },
+                });
+              }}
+              variant="secondary"
+            >
+              Create workspace
+            </Button>
+          </>
         }
       />
-      <Button
-        disabled={workspaceDraft !== null || !writable}
-        onClick={() => {
-          update({
-            workspaceDraft: {
-              apiName: "",
-              displayName: "",
-              createdAt: "",
-            },
-          });
-        }}
-        variant="secondary"
-      >
-        Create workspace
-      </Button>
-      <EditableTable
-        ariaLabel={`Workspaces for ${service.display_name}`}
-        columns={workspaceColumns}
-        density="compact"
-        deleteLabel="Delete"
-        getDeleteConfirmation={(row) => ({
-          title: `Delete workspace ${row.draft.apiName}?`,
-          description:
-            "This action deletes its logs, accounting, jobs, uploaded images, and retained generated media.",
-          confirmLabel: "Delete workspace",
-          impactStatement: `Workspace ${row.draft.apiName} will be deleted.`,
-        })}
-        minimumWidth="31rem"
-        {...(workspaceDraft === null
-          ? {}
-          : {
-              onCancel: () => {
-                update({ workspaceDraft: null });
-              },
-              onCreate: async (_rowId: string, draft: WorkspaceDraft) => {
-                if (!writable || !onMutationBegin())
-                  throw new Error(
-                    "Wait for the current service request to finish before you create a workspace.",
-                  );
-                try {
-                  const created = await client.createWorkspace(
-                    service.api_name,
-                    {
-                      api_name: draft.apiName.trim(),
-                      display_name: draft.displayName.trim(),
-                    },
-                    csrf,
-                  );
-                  if (!isCurrent()) return created.api_name;
-                  update((current) => ({
-                    workspaces: [
-                      ...current.workspaces,
-                      workspaceMetadata(created),
-                    ],
-                    workspaceDraft: null,
-                    workspacePhase: "ready",
-                  }));
-                  onNotice("success", "The workspace was created.");
-                  return created.api_name;
-                } catch (error) {
-                  const message = errorMessage(error);
-                  if (!isCurrent()) throw new Error(message);
-                  onNotice("error", message);
-                  throw new Error(message);
-                } finally {
-                  onMutationEnd();
-                }
-              },
-            })}
-        onDelete={async (rowId) => {
-          if (!writable || !onMutationBegin())
-            throw new Error(
-              "Wait for the current service request to finish before you delete a workspace.",
-            );
-          try {
-            // react-doctor-disable-next-line react-doctor/async-defer-await -- The next guard rejects a result after its route is no longer active.
-            await client.deleteWorkspace(service.api_name, rowId, csrf);
-            if (!isCurrent()) return;
+      <PanelBody>
+        <EditableTable
+          ariaLabel={`Workspaces for ${service.display_name}`}
+          columns={workspaceColumns}
+          density="compact"
+          deleteLabel="Delete"
+          getDeleteConfirmation={(row) => ({
+            title: `Delete workspace ${row.draft.apiName}?`,
+            description:
+              "This action deletes its logs, accounting, jobs, uploaded images, and retained generated media.",
+            confirmLabel: "Delete workspace",
+            impactStatement: `Workspace ${row.draft.apiName} will be deleted.`,
+          })}
+          minimumWidth="31rem"
+          {...(workspaceDraft === null
+            ? {}
+            : {
+                onCancel: () => {
+                  update({ workspaceDraft: null });
+                },
+                onCreate: async (_rowId: string, draft: WorkspaceDraft) => {
+                  if (!writable || !onMutationBegin())
+                    throw new Error(
+                      "Wait for the current service request to finish before you create a workspace.",
+                    );
+                  try {
+                    const created = await client.createWorkspace(
+                      service.api_name,
+                      {
+                        api_name: draft.apiName.trim(),
+                        display_name: draft.displayName.trim(),
+                      },
+                      csrf,
+                    );
+                    if (!isCurrent()) return created.api_name;
+                    update((current) => ({
+                      workspaces: [
+                        ...current.workspaces,
+                        workspaceMetadata(created),
+                      ],
+                      workspaceDraft: null,
+                      workspacePhase: "ready",
+                    }));
+                    onNotice("success", "The workspace was created.");
+                    return created.api_name;
+                  } catch (error) {
+                    const message = errorMessage(error);
+                    if (!isCurrent()) throw new Error(message);
+                    onNotice("error", message);
+                    throw new Error(message);
+                  } finally {
+                    onMutationEnd();
+                  }
+                },
+              })}
+          onDelete={async (rowId) => {
+            if (!writable || !onMutationBegin())
+              throw new Error(
+                "Wait for the current service request to finish before you delete a workspace.",
+              );
+            try {
+              // react-doctor-disable-next-line react-doctor/async-defer-await -- The next guard rejects a result after its route is no longer active.
+              await client.deleteWorkspace(service.api_name, rowId, csrf);
+              if (!isCurrent()) return;
+              update((current) => ({
+                workspaces: current.workspaces.filter(
+                  (workspace) => workspace.api_name !== rowId,
+                ),
+              }));
+              onNotice("success", "The workspace was deleted.");
+            } catch (error) {
+              const message = errorMessage(error);
+              if (!isCurrent()) throw new Error(message);
+              onNotice("error", message);
+              throw new Error(message);
+            } finally {
+              onMutationEnd();
+            }
+          }}
+          onDraftChange={(_rowId, patch) => {
             update((current) => ({
-              workspaces: current.workspaces.filter(
-                (workspace) => workspace.api_name !== rowId,
-              ),
+              workspaceDraft:
+                current.workspaceDraft === null
+                  ? null
+                  : { ...current.workspaceDraft, ...patch },
             }));
-            onNotice("success", "The workspace was deleted.");
-          } catch (error) {
-            const message = errorMessage(error);
-            if (!isCurrent()) throw new Error(message);
-            onNotice("error", message);
-            throw new Error(message);
-          } finally {
-            onMutationEnd();
-          }
-        }}
-        onDraftChange={(_rowId, patch) => {
-          update((current) => ({
-            workspaceDraft:
-              current.workspaceDraft === null
-                ? null
-                : { ...current.workspaceDraft, ...patch },
-          }));
-        }}
-        rows={rows.map((row) => ({
-          ...row,
-          locked: !writable,
-        }))}
-        saveLabel="Create"
-        saveMode="explicit"
-        state={tableState(
-          phase,
-          rows.length,
-          "Loading workspaces…",
-          "This service has no workspaces.",
-          phase === "stale"
-            ? "The workspace records are stale. Refresh workspaces before you make changes."
-            : "The workspaces are unavailable.",
-          load,
-        )}
-        validate={(row) => {
-          if (!row.isNew) return undefined;
-          if (row.draft.apiName.trim() === "") return "Enter an API name.";
-          if (row.draft.displayName.trim() === "")
-            return "Enter a display name.";
-          return undefined;
-        }}
-      />
+          }}
+          rows={rows.map((row) => ({
+            ...row,
+            locked: !writable,
+          }))}
+          saveLabel="Create"
+          saveMode="explicit"
+          state={tableState(
+            phase,
+            rows.length,
+            "Loading workspaces…",
+            "This service has no workspaces.",
+            phase === "stale"
+              ? "The workspace records are stale. Refresh workspaces before you make changes."
+              : "The workspaces are unavailable.",
+            load,
+          )}
+          validate={(row) => {
+            if (!row.isNew) return undefined;
+            if (row.draft.apiName.trim() === "") return "Enter an API name.";
+            if (row.draft.displayName.trim() === "")
+              return "Enter a display name.";
+            return undefined;
+          }}
+        />
+      </PanelBody>
     </Panel>
   );
 }
@@ -467,135 +472,141 @@ function KeyAccessSection({
 }) {
   return (
     <>
-      <FormActions alignment="start">
-        <Button
-          disabled={phase === "loading" || readBlocked}
-          onClick={() => {
-            void load();
-          }}
-          variant="secondary"
-        >
-          Refresh keys
-        </Button>
-      </FormActions>
-      <p>Backend-only bearer credentials with full service authority.</p>
-      <Button
-        disabled={keyDraft !== null || !writable || keyLifecycleActive}
-        onClick={() => {
-          update({
-            keyDraft: { name: "", createdAt: "", lastUsedAt: "" },
-          });
-        }}
-        variant="secondary"
-      >
-        Create key
-      </Button>
-      <EditableTable
-        ariaLabel={`Service API keys for ${service.display_name}`}
-        columns={keyColumns}
-        density="compact"
-        deleteLabel="Revoke"
-        getDeleteConfirmation={(row) => ({
-          title: `Revoke service API key ${row.draft.name}?`,
-          description:
-            "Each later request that uses this key will fail authentication.",
-          confirmLabel: "Revoke key",
-          impactStatement: `Key ${row.draft.name} will stop working.`,
-        })}
-        minimumWidth="31rem"
-        {...(keyDraft === null
-          ? {}
-          : {
-              onCancel: () => {
-                update({ keyDraft: null });
-              },
-              onCreate: async (_rowId: string, draft: KeyDraft) => {
-                if (!writable || !onMutationBegin())
-                  throw new Error(
-                    "Wait for the current service request to finish before you create a key.",
-                  );
-                try {
-                  if (!onKeyCreationBegin(service.api_name))
-                    throw new Error(
-                      "Copy and clear the current one-time key before you create another key.",
-                    );
-                  const created = await client.createKey(
-                    service.api_name,
-                    draft.name.trim(),
-                    csrf,
-                  );
-                  if (!isCurrent()) return created.key.id;
-                  update((current) => ({
-                    keys: [...current.keys, keyMetadata(created.key)],
-                    keyDraft: null,
-                    keyPhase: "ready",
-                  }));
-                  onKeyCreated(service.api_name, created.secret);
-                  onNotice("success", "The service API key was created.");
-                  return created.key.id;
-                } catch (error) {
-                  onKeyCreationFailed(service.api_name);
-                  const message = errorMessage(error);
-                  if (!isCurrent()) throw new Error(message);
-                  onNotice("error", message);
-                  throw new Error(message);
-                } finally {
-                  onMutationEnd();
-                }
-              },
-            })}
-        onDelete={async (rowId) => {
-          if (!writable || !onMutationBegin())
-            throw new Error(
-              "Wait for the current service request to finish before you revoke a key.",
-            );
-          try {
-            // react-doctor-disable-next-line react-doctor/async-defer-await -- The next guard rejects a result after its route is no longer active.
-            await client.revokeKey(service.api_name, rowId, csrf);
-            if (!isCurrent()) return;
-            update((current) => ({
-              keys: current.keys.filter((key) => key.id !== rowId),
-            }));
-            onNotice("success", "The service API key was revoked.");
-          } catch (error) {
-            const message = errorMessage(error);
-            if (!isCurrent()) throw new Error(message);
-            onNotice("error", message);
-            throw new Error(message);
-          } finally {
-            onMutationEnd();
-          }
-        }}
-        onDraftChange={(_rowId, patch) => {
-          update((current) => ({
-            keyDraft:
-              current.keyDraft === null
-                ? null
-                : { ...current.keyDraft, ...patch },
-          }));
-        }}
-        rows={rows.map((row) => ({
-          ...row,
-          locked: !writable,
-        }))}
-        saveLabel="Create"
-        saveMode="explicit"
-        state={tableState(
-          phase,
-          rows.length,
-          "Loading service API keys…",
-          "This service has no active API keys.",
-          phase === "stale"
-            ? "The key records are stale. Refresh keys before you make changes."
-            : "The service API keys are unavailable.",
-          load,
-        )}
-        validate={(row) =>
-          row.isNew && row.draft.name.trim() === ""
-            ? "Enter a key name."
-            : undefined
+      <PanelHeader
+        title="Service API keys"
+        description="Use these keys on your backend. Each key has full access to this service."
+        actions={
+          <>
+            <Button
+              disabled={phase === "loading" || readBlocked}
+              onClick={() => {
+                void load();
+              }}
+              variant="secondary"
+            >
+              Refresh keys
+            </Button>
+            <Button
+              disabled={keyDraft !== null || !writable || keyLifecycleActive}
+              onClick={() => {
+                update({
+                  keyDraft: { name: "", createdAt: "", lastUsedAt: "" },
+                });
+              }}
+            >
+              Create key
+            </Button>
+          </>
         }
       />
+      <PanelBody>
+        <EditableTable
+          ariaLabel={`Service API keys for ${service.display_name}`}
+          columns={keyColumns}
+          density="compact"
+          deleteLabel="Revoke"
+          getDeleteConfirmation={(row) => ({
+            title: `Revoke service API key ${row.draft.name}?`,
+            description:
+              "Each later request that uses this key will fail authentication.",
+            confirmLabel: "Revoke key",
+            impactStatement: `Key ${row.draft.name} will stop working.`,
+          })}
+          minimumWidth="31rem"
+          {...(keyDraft === null
+            ? {}
+            : {
+                onCancel: () => {
+                  update({ keyDraft: null });
+                },
+                onCreate: async (_rowId: string, draft: KeyDraft) => {
+                  if (!writable || !onMutationBegin())
+                    throw new Error(
+                      "Wait for the current service request to finish before you create a key.",
+                    );
+                  try {
+                    if (!onKeyCreationBegin(service.api_name))
+                      throw new Error(
+                        "Copy and clear the current one-time key before you create another key.",
+                      );
+                    const created = await client.createKey(
+                      service.api_name,
+                      draft.name.trim(),
+                      csrf,
+                    );
+                    if (!isCurrent()) return created.key.id;
+                    update((current) => ({
+                      keys: [...current.keys, keyMetadata(created.key)],
+                      keyDraft: null,
+                      keyPhase: "ready",
+                    }));
+                    onKeyCreated(service.api_name, created.secret);
+                    onNotice("success", "The service API key was created.");
+                    return created.key.id;
+                  } catch (error) {
+                    onKeyCreationFailed(service.api_name);
+                    const message = errorMessage(error);
+                    if (!isCurrent()) throw new Error(message);
+                    onNotice("error", message);
+                    throw new Error(message);
+                  } finally {
+                    onMutationEnd();
+                  }
+                },
+              })}
+          onDelete={async (rowId) => {
+            if (!writable || !onMutationBegin())
+              throw new Error(
+                "Wait for the current service request to finish before you revoke a key.",
+              );
+            try {
+              // react-doctor-disable-next-line react-doctor/async-defer-await -- The next guard rejects a result after its route is no longer active.
+              await client.revokeKey(service.api_name, rowId, csrf);
+              if (!isCurrent()) return;
+              update((current) => ({
+                keys: current.keys.filter((key) => key.id !== rowId),
+              }));
+              onNotice("success", "The service API key was revoked.");
+            } catch (error) {
+              const message = errorMessage(error);
+              if (!isCurrent()) throw new Error(message);
+              onNotice("error", message);
+              throw new Error(message);
+            } finally {
+              onMutationEnd();
+            }
+          }}
+          onDraftChange={(_rowId, patch) => {
+            update((current) => ({
+              keyDraft:
+                current.keyDraft === null
+                  ? null
+                  : { ...current.keyDraft, ...patch },
+            }));
+          }}
+          rows={rows.map((row) => ({
+            ...row,
+            locked: !writable,
+          }))}
+          saveLabel="Create"
+          saveMode="explicit"
+          state={tableState(
+            phase,
+            rows.length,
+            "Loading service API keys…",
+            "This service has no active API keys.",
+            phase === "stale"
+              ? "The key records are stale. Refresh keys before you make changes."
+              : "The service API keys are unavailable.",
+            load,
+          )}
+          validate={(row) =>
+            row.isNew && row.draft.name.trim() === ""
+              ? "Enter a key name."
+              : undefined
+          }
+        />
+      </PanelBody>
     </>
   );
 }
@@ -805,7 +816,7 @@ function ServiceAccessForRoute({
         />
       ) : null}
       <Panel aria-label="Service API keys">
-        <PanelHeader title="Service API keys" />
+        {!canRead ? <PanelHeader title="Service API keys" /> : null}
         {keyCreating ? (
           <StatePanel kind="loading" title="Creating the service API key">
             Keep this page open. The one-time secret will appear here.
