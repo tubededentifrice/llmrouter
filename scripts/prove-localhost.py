@@ -2099,6 +2099,13 @@ def _prove_service_tree(browser: _Cdp, *, mobile: bool) -> None:
     _assert_axe(browser)
 
 
+def _click_configuration_edit(browser: _Cdp, node_id: str) -> None:
+    """Open an explicit edit control without treating selection as editing."""
+    browser.evaluate(
+        f"document.querySelector({json.dumps(f'[data-node-id={node_id!r}]')})?.closest('.od-relationship-graph-node-item')?.querySelector('.od-relationship-graph-node-actions button')?.click()"
+    )
+
+
 def _prove_configuration_graph(browser: _Cdp, *, mobile: bool) -> None:
     """Prove global catalog, selected assignments, and contextual playground."""
     _navigate(browser, "/configuration", "LLM configuration")
@@ -2237,13 +2244,20 @@ def _prove_configuration_graph(browser: _Cdp, *, mobile: bool) -> None:
             f"document.querySelector({json.dumps(f'[data-node-id={node_id!r}]')})?.focus()"
         )
         _press_key(browser, key)
+        assert (
+            browser.evaluate(
+                "document.querySelector('.configuration-edit-dialog[open]') === null"
+            )
+            is True
+        )
+        _click_configuration_edit(browser, node_id)
         _wait_browser(
             browser,
-            "document.querySelector('.od-graph-inspector[open]') !== null",
+            "document.querySelector('.configuration-edit-dialog[open]') !== null",
             f"The {node_id} inspector did not open with {key}",
         )
         inspector_text = browser.evaluate(
-            "document.querySelector('.od-graph-inspector[open]')?.innerText ?? ''"
+            "document.querySelector('.configuration-edit-dialog[open]')?.innerText ?? ''"
         )
         assert isinstance(inspector_text, str)
         for fact in expected_facts:
@@ -2251,7 +2265,7 @@ def _prove_configuration_graph(browser: _Cdp, *, mobile: bool) -> None:
         _press_key(browser, "Escape")
         _wait_browser(
             browser,
-            f"document.activeElement?.getAttribute('data-node-id') === {json.dumps(node_id)}",
+            f"document.activeElement?.closest('.od-relationship-graph-node-item')?.querySelector('[data-node-id]')?.getAttribute('data-node-id') === {json.dumps(node_id)}",
             f"The {node_id} inspector did not restore focus",
         )
 
@@ -2343,13 +2357,20 @@ def _prove_configuration_graph(browser: _Cdp, *, mobile: bool) -> None:
         "The workflow fallback did not receive focus"
     )
     _press_key(browser, "Enter")
+    assert (
+        browser.evaluate(
+            "document.querySelector('.configuration-edit-dialog[open]') === null"
+        )
+        is True
+    )
+    _click_configuration_edit(browser, str(active_rung))
     _wait_browser(
         browser,
-        "(document.querySelector('.od-graph-inspector[open]')?.innerText ?? '').includes('Selected rung')",
+        "(document.querySelector('.configuration-edit-dialog[open]')?.innerText ?? '').includes('Selected rung')",
         "The assignment rung did not identify itself in the inspector",
     )
     assignment_inspector_text = browser.evaluate(
-        "document.querySelector('.od-graph-inspector[open]')?.innerText ?? ''"
+        "document.querySelector('.configuration-edit-dialog[open]')?.innerText ?? ''"
     )
     assert isinstance(assignment_inspector_text, str)
     for fact in (
@@ -2372,33 +2393,33 @@ def _prove_configuration_graph(browser: _Cdp, *, mobile: bool) -> None:
     _press_key(browser, "Escape")
     _wait_browser(
         browser,
-        f"document.activeElement?.getAttribute('data-node-id') === {json.dumps(active_rung)}",
+        f"document.activeElement?.closest('.od-relationship-graph-node-item')?.querySelector('[data-node-id]')?.getAttribute('data-node-id') === {json.dumps(active_rung)}",
         "The assignment inspector did not restore rung focus",
     )
 
     _click_text(browser, "Add canonical model", scope="[data-column-id='catalog']")
     _wait_browser(
         browser,
-        "(() => { const text = document.querySelector('.od-graph-inspector[open]')?.innerText ?? ''; "
+        "(() => { const text = document.querySelector('.configuration-edit-dialog[open]')?.innerText ?? ''; "
         "return text.includes('Add canonical model') && text.includes('Create from OpenRouter'); })()",
         "The model-create inspector did not open in the graph",
     )
-    _assert_dialog_layout(browser, ".od-graph-inspector[open]", mobile=mobile)
+    _assert_dialog_layout(browser, ".configuration-edit-dialog[open]", mobile=mobile)
     _press_key(browser, "Escape")
     _wait_browser(
         browser,
-        "document.querySelector('.od-graph-inspector[open]') === null",
+        "document.querySelector('.configuration-edit-dialog[open]') === null",
         "The model-create inspector did not close",
     )
 
-    _click_selector(browser, "[data-node-id='mapping:text']")
+    _click_configuration_edit(browser, "mapping:text")
     _wait_browser(
         browser,
-        "[...document.querySelectorAll('.od-graph-inspector[open] button')].some((item) => item.textContent?.trim() === 'Play exact route')",
+        "[...document.querySelectorAll('.configuration-edit-dialog[open] button')].some((item) => item.textContent?.trim() === 'Play exact route')",
         "The exact mapping inspector did not offer its playground",
     )
     route_inspector_text = browser.evaluate(
-        "document.querySelector('.od-graph-inspector[open]')?.innerText ?? ''"
+        "document.querySelector('.configuration-edit-dialog[open]')?.innerText ?? ''"
     )
     assert isinstance(route_inspector_text, str)
     for fact in (
@@ -2414,15 +2435,17 @@ def _prove_configuration_graph(browser: _Cdp, *, mobile: bool) -> None:
         "Enabled",
     ):
         assert fact in route_inspector_text
-    _click_text(browser, "Play exact route", scope=".od-graph-inspector[open]")
+    _click_text(browser, "Play exact route", scope=".configuration-edit-dialog[open]")
     _wait_browser(
         browser,
-        "document.querySelector('dialog.od-dialog[open]') !== null",
+        "document.querySelector('dialog.od-dialog[open]:not(.configuration-edit-dialog)') !== null",
         "The contextual playground did not open",
     )
-    _assert_dialog_layout(browser, "dialog.od-dialog[open]", mobile=mobile)
+    _assert_dialog_layout(
+        browser, "dialog.od-dialog[open]:not(.configuration-edit-dialog)", mobile=mobile
+    )
     modal_text = browser.evaluate(
-        "document.querySelector('dialog.od-dialog[open]')?.innerText ?? ''"
+        "document.querySelector('dialog.od-dialog[open]:not(.configuration-edit-dialog)')?.innerText ?? ''"
     )
     assert isinstance(modal_text, str)
     assert "exact provider-model" in modal_text.lower()
@@ -2435,15 +2458,19 @@ def _prove_configuration_graph(browser: _Cdp, *, mobile: bool) -> None:
         "#configuration-playground-input",
         "Run one contextual browser model proof.",
     )
-    _click_text(browser, "Run operation", scope="dialog.od-dialog[open]")
+    _click_text(
+        browser,
+        "Run operation",
+        scope="dialog.od-dialog[open]:not(.configuration-edit-dialog)",
+    )
     _wait_browser(
         browser,
-        "document.querySelector('dialog.od-dialog[open]')?.innerText.includes('Result ready')",
+        "document.querySelector('dialog.od-dialog[open]:not(.configuration-edit-dialog)')?.innerText.includes('Result ready')",
         "The contextual model call did not finish",
         attempts=400,
     )
     modal_text = browser.evaluate(
-        "document.querySelector('dialog.od-dialog[open]')?.innerText ?? ''"
+        "document.querySelector('dialog.od-dialog[open]:not(.configuration-edit-dialog)')?.innerText ?? ''"
     )
     assert isinstance(modal_text, str)
     for fact in (
@@ -2458,10 +2485,14 @@ def _prove_configuration_graph(browser: _Cdp, *, mobile: bool) -> None:
         assert fact.lower() in modal_text.lower()
 
     browser.evaluate("globalThis.__llmrouterProofMode = 'remove-text'")
-    _click_text(browser, "Refresh target", scope="dialog.od-dialog[open]")
+    _click_text(
+        browser,
+        "Refresh target",
+        scope="dialog.od-dialog[open]:not(.configuration-edit-dialog)",
+    )
     _wait_browser(
         browser,
-        "document.querySelector('dialog.od-dialog[open]')?.innerText.includes('Target unavailable')",
+        "document.querySelector('dialog.od-dialog[open]:not(.configuration-edit-dialog)')?.innerText.includes('Target unavailable')",
         "The open playground did not keep its unavailable target state",
     )
     preserved_input = browser.evaluate(
@@ -2469,14 +2500,14 @@ def _prove_configuration_graph(browser: _Cdp, *, mobile: bool) -> None:
     )
     assert preserved_input == "Run one contextual browser model proof."
     run_disabled = browser.evaluate(
-        "[...document.querySelectorAll('dialog.od-dialog[open] button')].find((item) => item.textContent?.trim() === 'Run operation')?.disabled"
+        "[...document.querySelectorAll('dialog.od-dialog[open]:not(.configuration-edit-dialog) button')].find((item) => item.textContent?.trim() === 'Run operation')?.disabled"
     )
     assert run_disabled is True
     browser.evaluate("globalThis.__llmrouterProofMode = 'normal'")
     _press_key(browser, "Escape")
     _wait_browser(
         browser,
-        "document.querySelector('dialog.od-dialog[open]') === null",
+        "document.querySelector('dialog.od-dialog[open]:not(.configuration-edit-dialog)') === null",
         "The playground did not close with Escape",
     )
     browser.command("Page.reload", {"ignoreCache": True})
@@ -2494,11 +2525,13 @@ def _prove_configuration_graph(browser: _Cdp, *, mobile: bool) -> None:
 
 def _close_graph_inspector(browser: _Cdp) -> None:
     """Close a graph inspector when one remains open."""
-    if browser.evaluate("document.querySelector('.od-graph-inspector[open]') !== null"):
+    if browser.evaluate(
+        "document.querySelector('.od-graph-inspector[open], .configuration-edit-dialog[open]') !== null"
+    ):
         _press_key(browser, "Escape")
         _wait_browser(
             browser,
-            "document.querySelector('.od-graph-inspector[open]') === null",
+            "document.querySelector('.od-graph-inspector[open], .configuration-edit-dialog[open]') === null",
             "The graph inspector did not close",
         )
 
@@ -2506,16 +2539,16 @@ def _close_graph_inspector(browser: _Cdp) -> None:
 def _open_exact_playground(browser: _Cdp, mapping: str) -> None:
     """Open one exact mapping playground from its graph node."""
     _close_graph_inspector(browser)
-    _click_selector(browser, f"[data-node-id='mapping:{mapping}']")
+    _click_configuration_edit(browser, f"mapping:{mapping}")
     _wait_browser(
         browser,
-        "[...document.querySelectorAll('.od-graph-inspector[open] button')].some((item) => item.textContent?.trim() === 'Play exact route')",
+        "[...document.querySelectorAll('.configuration-edit-dialog[open] button')].some((item) => item.textContent?.trim() === 'Play exact route')",
         f"The {mapping} mapping did not offer its playground",
     )
-    _click_text(browser, "Play exact route", scope=".od-graph-inspector[open]")
+    _click_text(browser, "Play exact route", scope=".configuration-edit-dialog[open]")
     _wait_browser(
         browser,
-        "document.querySelector('dialog.od-dialog[open]') !== null",
+        "document.querySelector('dialog.od-dialog[open]:not(.configuration-edit-dialog)') !== null",
         f"The {mapping} playground did not open",
     )
 
@@ -2524,24 +2557,28 @@ def _prove_other_playground_operations(browser: _Cdp) -> None:
     """Run embedding and each media kind through the contextual UI."""
     _open_exact_playground(browser, "embedding")
     _set_control(browser, "#configuration-playground-input", "one\ntwo")
-    _click_text(browser, "Run operation", scope="dialog.od-dialog[open]")
+    _click_text(
+        browser,
+        "Run operation",
+        scope="dialog.od-dialog[open]:not(.configuration-edit-dialog)",
+    )
     _wait_browser(
         browser,
-        "[...document.querySelectorAll('dialog.od-dialog[open] dl div')].some((item) => "
+        "[...document.querySelectorAll('dialog.od-dialog[open]:not(.configuration-edit-dialog) dl div')].some((item) => "
         "item.querySelector('dt')?.textContent?.trim() === 'Vectors' && "
         "item.querySelector('dd')?.textContent?.trim() === '2')",
         "The contextual embedding call did not show its vector result",
         attempts=400,
     )
     embedding_text = browser.evaluate(
-        "document.querySelector('dialog.od-dialog[open]')?.innerText ?? ''"
+        "document.querySelector('dialog.od-dialog[open]:not(.configuration-edit-dialog)')?.innerText ?? ''"
     )
     assert "dimensions\n3" in str(embedding_text).lower()
     assert "logical call" in str(embedding_text).lower()
     _press_key(browser, "Escape")
     _wait_browser(
         browser,
-        "document.querySelector('dialog.od-dialog[open]') === null",
+        "document.querySelector('dialog.od-dialog[open]:not(.configuration-edit-dialog)') === null",
         "The embedding playground did not close",
     )
 
@@ -2553,16 +2590,20 @@ def _prove_other_playground_operations(browser: _Cdp) -> None:
             "#configuration-playground-input",
             f"Create one contextual {kind} proof.",
         )
-        _click_text(browser, "Run operation", scope="dialog.od-dialog[open]")
+        _click_text(
+            browser,
+            "Run operation",
+            scope="dialog.od-dialog[open]:not(.configuration-edit-dialog)",
+        )
         _wait_browser(
             browser,
-            "document.querySelector('dialog.od-dialog[open]')?.innerText.includes('Result ready')",
+            "document.querySelector('dialog.od-dialog[open]:not(.configuration-edit-dialog)')?.innerText.includes('Result ready')",
             f"The contextual {kind} call did not finish",
             attempts=500,
         )
         media = browser.evaluate(
             f"""(() => {{
-              const dialog = document.querySelector("dialog.od-dialog[open]");
+              const dialog = document.querySelector("dialog.od-dialog[open]:not(.configuration-edit-dialog)");
               const output = dialog?.querySelector({json.dumps("img" if kind == "image" else kind)});
               return {{
                 output: output !== null,
@@ -2577,7 +2618,7 @@ def _prove_other_playground_operations(browser: _Cdp) -> None:
     _press_key(browser, "Escape")
     _wait_browser(
         browser,
-        "document.querySelector('dialog.od-dialog[open]') === null",
+        "document.querySelector('dialog.od-dialog[open]:not(.configuration-edit-dialog)') === null",
         "The media playground did not close",
     )
 

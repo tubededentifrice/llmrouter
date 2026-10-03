@@ -40,6 +40,7 @@ const names = {
     first: "Refresh services",
     host: ".od-graph-workspace",
     viewportSelector: ".od-graph-viewport",
+    editor: ".od-graph-inspector",
   },
   configuration: {
     heading: "LLM configuration",
@@ -47,6 +48,7 @@ const names = {
     first: "Service context",
     host: ".od-relationship-graph",
     viewportSelector: ".od-relationship-graph-viewport",
+    editor: "dialog.od-dialog[open]",
   },
 };
 let browser;
@@ -374,14 +376,27 @@ async function identity(page, route) {
   ).toBeFocused();
 }
 async function inspector(page, route) {
-  const opener =
+  const selection =
     route === "services"
       ? page.locator('[data-service-api-name="root"]')
       : page.locator(".od-relationship-graph-node").first();
-  await opener.focus();
+  await selection.focus();
   await page.keyboard.press("Space");
+  if (route === "configuration") {
+    await expect(page.locator("dialog[open]")).toHaveCount(0);
+    await expect(selection).toHaveAttribute("aria-pressed", "true");
+    const opener = selection
+      .locator("..")
+      .getByRole("button", { name: /^Edit / });
+    await opener.focus();
+    await page.keyboard.press("Space");
+    await expect(
+      page.locator(`${names[route].editor} [data-dialog-close]`),
+    ).toBeFocused();
+    return opener;
+  }
   await expect(page.locator(".od-graph-inspector h2")).toBeFocused();
-  return opener;
+  return selection;
 }
 async function toolbarReachable(page, route) {
   const controls = page
@@ -541,6 +556,15 @@ describe("compact configuration interactions", () => {
                 effective_chain: [{ provider_model_api_name: "route" }],
                 last_used_at: new Date(Date.now() - 7 * 86400000).toISOString(),
               },
+              {
+                api_name: "inherited",
+                display_name: "Inherited workflow",
+                definition_kind: "inherited_assignment",
+                defined_by_service_api_name: "child",
+                inherits_assignment_api_name: "workflow",
+                observed_requirements: [],
+                effective_chain: [{ provider_model_api_name: "route" }],
+              },
             ];
           });
           await reloadFixture(page);
@@ -575,6 +599,48 @@ describe("compact configuration interactions", () => {
           await expect(assignment).not.toContainText(
             "No observed requirements",
           );
+          await expect(
+            page.locator(
+              '[data-node-id="assignment:inherited"] .od-relationship-graph-node-tags',
+            ),
+          ).toContainText("↳ Workflow");
+          await expect(
+            page.locator(
+              '[data-node-id="assignment:inherited"] [title^="Inherits "]',
+            ),
+          ).toHaveCount(1);
+          const routeRow = page.locator('[data-node-id="mapping:route"]');
+          const routeName = await routeRow.locator("strong").boundingBox();
+          const providerName = await routeRow
+            .locator(".od-relationship-graph-node-detail")
+            .boundingBox();
+          if (width !== 1100)
+            expect(Math.abs(routeName.y - providerName.y)).toBeLessThan(5);
+          await expect(
+            page.locator(
+              '[data-node-id="model:model"] .od-relationship-graph-node-detail',
+            ),
+          ).toHaveCount(0);
+          await expect(
+            page.locator(
+              '[data-node-id="rung:workflow:1"] .od-relationship-graph-node-heading',
+            ),
+          ).not.toContainText("Primary");
+          const heading = await assignment
+            .locator(".od-relationship-graph-node-heading")
+            .boundingBox();
+          const time = await assignment
+            .locator(".od-relationship-graph-node-tags")
+            .boundingBox();
+          near(
+            time.x + time.width,
+            heading.x + heading.width,
+            "last-used tag right edge",
+          );
+          if (width === 1440) {
+            const name = await assignment.locator("strong").boundingBox();
+            expect(Math.abs(time.y - name.y)).toBeLessThan(5);
+          }
           const search = page.getByRole("searchbox", {
             name: "Search configuration",
             exact: true,
@@ -611,9 +677,46 @@ describe("compact configuration interactions", () => {
           await expect(
             page.locator('[data-node-id="mapping:route"]'),
           ).toHaveCount(1);
-          await page.locator(".od-graph-inspector h2").focus();
-          await page.keyboard.press("Escape");
+          await expect(page.locator("dialog[open]")).toHaveCount(0);
           await expect(assignment).toBeFocused();
+          await page.keyboard.press("Tab");
+          const assignmentEdit = assignment
+            .locator("..")
+            .getByRole("button", { name: /^Edit assignment / });
+          await expect(assignmentEdit).toBeFocused();
+          await page.keyboard.press("Enter");
+          const editDialog = page.locator(".configuration-edit-dialog[open]");
+          await expect(editDialog).toBeVisible();
+          await editDialog
+            .getByRole("textbox", { name: "Display name", exact: true })
+            .fill("Unsaved workflow");
+          await page.keyboard.press("Escape");
+          const confirmation = page.getByRole("dialog", {
+            name: "Discard assignment changes?",
+            exact: true,
+          });
+          await expect(confirmation).toBeVisible();
+          await confirmation
+            .getByRole("button", { name: "Cancel", exact: true })
+            .click();
+          await expect(
+            editDialog.getByRole("textbox", {
+              name: "Display name",
+              exact: true,
+            }),
+          ).toHaveValue("Unsaved workflow");
+          await page.keyboard.press("Escape");
+          await confirmation
+            .getByRole("textbox", {
+              name: "Enter the impact statement to continue",
+              exact: true,
+            })
+            .fill("discard unsaved assignment changes for service child");
+          await confirmation
+            .getByRole("button", { name: "Discard changes", exact: true })
+            .click();
+          await expect(editDialog).toHaveCount(0);
+          await expect(assignmentEdit).toBeFocused();
           await search.fill("spare");
           await expect(search).toBeFocused();
           await expect(
@@ -722,10 +825,10 @@ describe("full-height edge-to-edge graph pages", () => {
             }
             const opener = await inspector(page, route);
             await evidenceFor(page, route, `${width}-${route}-inspector`);
-            if (width === 390) {
+            if (width === 390 || route === "configuration") {
               expect(
                 await page
-                  .locator(".od-graph-inspector")
+                  .locator(names[route].editor)
                   .evaluate((e) => e.matches(":modal")),
               ).toBe(true);
               for (let i = 0; i < 18; i++) {
@@ -733,16 +836,26 @@ describe("full-height edge-to-edge graph pages", () => {
                 expect(
                   await page.evaluate(
                     () =>
-                      !!document.activeElement.closest(".od-graph-inspector"),
+                      !!document.activeElement.closest(
+                        ".od-graph-inspector, dialog.od-dialog[open]",
+                      ),
                   ),
                 ).toBe(true);
               }
               await page
-                .getByRole("button", { name: "Navigation", exact: true })
+                .locator(
+                  width === 390
+                    ? ".od-application-mobile-navigation button"
+                    : ".od-application-sidebar a",
+                )
+                .first()
                 .evaluate((e) => e.focus());
               expect(
                 await page.evaluate(
-                  () => !!document.activeElement.closest(".od-graph-inspector"),
+                  () =>
+                    !!document.activeElement.closest(
+                      ".od-graph-inspector, dialog.od-dialog[open]",
+                    ),
                 ),
               ).toBe(true);
               expect(
@@ -750,13 +863,15 @@ describe("full-height edge-to-edge graph pages", () => {
                   () =>
                     document
                       .elementFromPoint(1, 1)
-                      ?.closest(".od-graph-inspector") !== null,
+                      ?.closest(
+                        ".od-graph-inspector, dialog.od-dialog[open]",
+                      ) !== null,
                 ),
               ).toBe(true);
             } else await toolbarReachable(page, route);
-            await page.locator(".od-graph-inspector h2").focus();
+            await page.locator(`${names[route].editor} h2`).focus();
             await page.keyboard.press("Escape");
-            await expect(page.locator(".od-graph-inspector")).toHaveCount(0);
+            await expect(page.locator(names[route].editor)).toHaveCount(0);
             await expect(opener).toBeFocused();
             await oversized(page, route);
             await evidenceFor(page, route, `${width}-${route}-oversized`);

@@ -65,7 +65,7 @@ inherited sources. Selecting a service MUST NOT create a service-owned copy or
 allowlist of a provider, model, mapping, credential, capability, or price.
 
 Changing the selected service MUST replace only the assignment column. It MUST
-close an open assignment inspector or assignment playground. It MUST NOT
+close an open assignment edit modal or assignment playground. It MUST NOT
 silently discard an unsubmitted service-assignment form. It MUST let the
 administrator cancel the service change or confirm that the form will close.
 A response for the previously selected service MUST NOT replace data for the
@@ -80,10 +80,10 @@ The board MUST use these exact visible forms:
 
 | Record | Primary text | Secondary text |
 | --- | --- | --- |
-| Provider connection | provider `display_name` | `Provider ID: {api_name} · Adapter: {adapter label}` |
-| Canonical model | model `display_name` | `Model ID: {api_name}` |
-| Provider route | provider `display_name` | `Route ID: {api_name} · Wire model: {provider_model_name}` |
-| Assignment | assignment `display_name` | `Assignment ID: {api_name}` |
+| Provider connection | provider `display_name` | adapter label |
+| Canonical model | model `display_name` | right-aligned capability tags |
+| Provider route | wire model name | provider name on the same line when space permits |
+| Assignment | assignment `display_name` | right-aligned last-used and inheritance tags |
 
 The adapter labels MUST be `OpenAI`, `OpenAI-compatible`, `OpenRouter`,
 `Custom`, `WaveSpeed`, `Ollama`, `Local embeddings`, and `Fake` for their
@@ -95,12 +95,13 @@ provider-model mapping. An inspector and technical help MAY also state
 `mapping`, an adapter type, or `canonical model` as its primary name.
 
 Each canonical model MUST be one compound card. Its header MUST show the
-canonical-model name, model identity, and applicable capability labels. A
-nested group labelled `Provider routes` MUST contain every provider route that
-names that canonical model. The board MUST NOT repeat the canonical model as a
-peer node for each provider route. Selecting the card header MUST open the
-canonical-model inspector. Selecting one nested route row MUST open that exact
-provider-route inspector.
+canonical-model name and applicable capability tags. Technical IDs MUST remain
+in the edit modal and accessible relationship descriptions. A nested group
+labelled `Provider routes` MUST contain every provider route that names that
+canonical model. The board MUST NOT repeat the canonical model as a peer node
+for each provider route. Selecting the card header or a nested route row MUST
+only select it. Its separate edit icon MUST open the exact canonical-model or
+provider-route modal.
 
 The model header MUST use the user-facing capability labels `Text input`,
 `Image input`, `Text output`, `Structured JSON`, `Embeddings`, `Image output`,
@@ -111,25 +112,28 @@ modalities, capabilities, or constraints in the row or its expanded details.
 It MUST NOT imply that the route has a capability that it removed.
 
 Each assignment MUST be one compound card. Its header MUST show the assignment
-name, assignment identity, definition source, last-used time, and observed call
+name, a right-aligned last-used tag, and a compact inheritance source tag when
+applicable. Its edit modal MUST show technical identity and observed call
 requirements. Its ordered effective chain MUST contain one rung for each exact
-provider route. Position 1 MUST have the visible relationship label `Primary`.
-Each later position MUST have `Fallback {position}`, where position starts at
-2. Each rung MUST show the route's provider display name, canonical-model
-display name, provider-route identity, and current route state. It MUST connect
-to the exact nested provider-route row, not to the canonical-model card as a
-whole. One route MAY connect to more than one assignment or position.
+provider route. Position 1 MUST have the accessible relationship label
+`Primary`. Each later position MUST have the accessible label `Fallback
+{position}`, where position starts at 2. These labels MUST NOT appear as
+visible row text. Each rung MUST show the model and provider display names on
+the same line when space permits. The edit modal MUST show the provider-route
+identity and route state. It MUST connect to the exact nested provider-route
+row, not to the canonical-model card as a whole. One route MAY connect to more
+than one assignment or position.
 
-The last-use text MUST be `Last used: {time}` when `last_used_at` is available.
-It MUST be `Last used: Never` when `last_used_at` is not available. Observed
-requirements MUST use the same user-facing labels as the corresponding model
-modalities and capabilities. An empty list MUST show
-`No observed requirements.`
+The last-used tag MUST follow the
+[compact board rule](04-authentication-administration-and-shared-ui.md#compact-configuration-board).
+Observed requirements in the edit modal MUST use the same user-facing labels
+as the corresponding model modalities and capabilities. An empty list in the
+modal MUST show `No observed requirements.`
 
-The visible provider-to-route relationship label MUST be `Provides`. The
-visible route-to-assignment labels MUST be `Primary` and `Fallback {position}`.
-The provider connector's accessible name MUST be
-`{provider display_name} (Provider ID: {provider.api_name}) provides Route ID:
+The accessible provider-to-route relationship label MUST be `Provides`. The
+accessible route-to-assignment labels MUST be `Primary` and `Fallback
+{position}`. The provider connector's accessible name MUST be `{provider
+display_name} (Provider ID: {provider.api_name}) provides Route ID:
 {provider_model.api_name} for {model display_name} (Model ID:
 {model.api_name})`. The assignment connector's accessible name MUST be
 `{relationship label}: Route ID: {provider_model.api_name} for {assignment
@@ -166,7 +170,7 @@ A canonical model MUST show `Disabled` when its stored enablement is off. An
 enabled canonical model MUST show `Ready` when at least one nested provider
 route is enabled and available. It MUST show `Unavailable` when it has no such
 route. `Ready` and `Unavailable` are board summaries. `Disabled` is stored
-configuration. The canonical-model inspector MUST show the stored enablement
+configuration. The canonical-model edit modal MUST show the stored enablement
 control.
 
 An assignment MUST show `Ready` when its effective chain has at least one
@@ -186,7 +190,7 @@ MUST show `Partial`. It MUST keep known route states visible, and it MUST NOT
 change a model or assignment summary to `Unavailable` until it has the complete
 records for that summary.
 
-An assignment card MUST use these exact source labels:
+An assignment edit modal and accessible description MUST use these exact source labels:
 
 - `Local definition` for a definition stored on the selected service;
 - `Inherited from {service display_name} ({service api_name})` when the
@@ -195,15 +199,15 @@ An assignment card MUST use these exact source labels:
   selected definition names another assignment;
 - `Implicit root default` for the empty implicit root `default`.
 
-The card MUST show `Local definition`, `Inherited from ...`, or
-`Implicit root default` as its definition source. It MUST also show
-`Inherits ...` when that definition names another assignment. The card MUST
-show the resolved effective rungs after these labels. It MUST NOT merge parent
-and child chains. An inherited card and its rungs MUST identify inherited state
-with the word `Inherited`. They MUST NOT use only color. An administrator MUST
-be able to inspect the source service or inherited assignment from this
-context. The board MUST NOT invent a local definition when it presents
-inherited state.
+The edit modal MUST show `Local definition`, `Inherited from ...`, or
+`Implicit root default` as its definition source. It MUST also show `Inherits
+...` when that definition names another assignment. The card MUST show a
+compact source tag for inheritance and the resolved effective rungs. It MUST
+NOT merge parent and child chains. An inherited card and its rungs MUST
+identify inherited state with the word `Inherited`. They MUST NOT use only
+color. An administrator MUST be able to inspect the source service or
+inherited assignment from this context. The board MUST NOT invent a local
+definition when it presents inherited state.
 
 These board states present current stored configuration and readiness. They
 MUST NOT add a lifecycle state other than the provider, canonical-model, and
@@ -228,16 +232,12 @@ its effective route rows, canonical-model cards, and providers. A connected
 record that is not a direct match MUST show the label `Context`. Search MUST
 NOT remove a route row from its canonical-model card or change fallback order.
 
-Applying search or a filter MUST keep focus and selection when the selected
-control remains in the result. If the selected control is not in the result,
-the board MUST move focus and selection to the first direct match in rendered
-order and announce the result count. If the complete result has no match, it
-MUST move focus to `Clear search` and announce the no-result message. If the
-loaded partial result has no match, it MUST move focus to the first available
-`Load more` action in column order and announce the partial-result message.
-Clearing search MUST restore focus and selection to the prior selected control
-when that record still exists. Otherwise, it MUST move focus and selection to
-the first available control.
+Typing in search MUST keep input focus and the prior selection, including when
+no record matches. The board MUST announce the result count or no-result
+message. Clearing search MUST keep input focus and restore the prior selection
+filter when the selected record still exists. Search MUST NOT select a result
+or open an edit modal. Selection and focus after record removal MUST follow
+the shared unavailable-record rule.
 
 After all applicable records are loaded, the no-result message MUST be
 `No configuration matches this search.` Its action MUST be `Clear search`.
@@ -330,12 +330,13 @@ route-to-rung connectors, long-name wrapping, local scrolling, no page-level
 horizontal overflow, inspector focus return, and unchanged relationships
 after search and service changes.
 
-Keyboard tests MUST cover the one board tab stop, every arrow-key direction,
-Home, End, Enter, Space, Escape, `/`, an unavailable target, search results,
-and focus after a referenced record disappears. Accessibility tests MUST check
-semantic controls, headings and groups, accessible names with state and
-relationships, visible focus, live announcements, text alternatives for
-state, connector treatment, reading order, and no duplicate record list.
+Keyboard tests MUST cover the board selection tab stop, its explicit edit
+action, every arrow-key direction, Home, End, Enter, Space, Escape, `/`, an
+unavailable target, search results, and focus after a referenced record
+disappears. Accessibility tests MUST check semantic controls, headings and
+groups, accessible names with state and relationships, visible focus, live
+announcements, text alternatives for state, connector treatment, reading
+order, and no duplicate record list.
 
 ## Provider connections and credentials
 
@@ -494,7 +495,7 @@ administrator select the applicable existing global provider connections for
 new mappings. One confirmation MUST create the selected canonical model and
 provider-model mappings in one database transaction. A validation, duplicate,
 catalog, or storage failure MUST create none of them. Imported values MUST
-remain editable through the same board inspectors after creation.
+remain editable through the same board edit modals after creation.
 
 Catalog import through this create workflow MUST create new records only. An
 existing proposed canonical model or provider-model mapping MUST block

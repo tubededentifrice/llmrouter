@@ -712,7 +712,16 @@ def _configuration(
         browser.evaluate(f"document.documentElement.style.fontSize='{size}px'")
         _settle(browser)
         _click(browser, '[data-node-id="provider:provider"]')
-        _wait(browser, "document.querySelector('.od-graph-inspector[open]')!==null")
+        assert (
+            browser.evaluate(
+                "document.querySelector('.configuration-edit-dialog[open]')===null"
+            )
+            is True
+        )
+        proof._click_configuration_edit(browser, "provider:provider")
+        _wait(
+            browser, "document.querySelector('.configuration-edit-dialog[open]')!==null"
+        )
         _capture(
             browser,
             f"{width}-configuration-inspector-{size}",

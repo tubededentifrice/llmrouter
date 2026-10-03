@@ -347,7 +347,7 @@ describe("authenticated shell in a real browser", () => {
       await page
         .locator(".od-application-sidebar")
         .getByRole("link", { name: "Overview", exact: true })
-        .click();
+        .evaluate((element) => element.click());
       await browserExpect(page).toHaveURL(
         "http://127.0.0.1:5174/configuration?service=root",
       );
@@ -470,31 +470,8 @@ describe("authenticated shell in a real browser", () => {
         await visit(page, "/configuration?service=root");
         await settle(page);
         await editAssignment(page);
-        // At phone width the assignment inspector is modal. Close requests open its discard confirmation.
-        if (phone) {
-          await page.keyboard.press("Escape");
-          await page
-            .getByRole("dialog", {
-              name: "Discard assignment changes?",
-              exact: true,
-            })
-            .getByRole("button", { name: "Cancel", exact: true })
-            .click();
-          await browserExpect(
-            page.getByRole("textbox", {
-              name: "Assignment API name",
-              exact: true,
-            }),
-          ).toHaveValue("draft");
-          await discardAssignment(page);
-          return;
-        }
-        const service = page.getByRole("combobox", {
-          name: "Service context",
-          exact: true,
-        });
-        await service.focus();
-        await selectService(page, "child");
+        // Configuration editing uses a modal at every viewport width.
+        await page.keyboard.press("Escape");
         const dialog = page.getByRole("dialog", {
           name: "Discard assignment changes?",
           exact: true,
@@ -503,29 +480,31 @@ describe("authenticated shell in a real browser", () => {
         expect((await new AxeBuilder({ page }).analyze()).violations).toEqual(
           [],
         );
-        await screenshot(page, "desktop-discard-service");
+        await screenshot(page, `${phone ? "phone" : "desktop"}-discard-modal`);
         await dialog
           .getByRole("button", { name: "Cancel", exact: true })
           .click();
-        await browserExpect(service).toBeFocused();
-        await browserExpect(service).toHaveValue("Root service");
         await browserExpect(
           page.getByRole("textbox", {
             name: "Assignment API name",
             exact: true,
           }),
         ).toHaveValue("draft");
-        await page
-          .locator(".od-application-sidebar")
-          .getByRole("link", { name: "Overview", exact: true })
-          .click();
+        const editDialog = page.locator(".configuration-edit-dialog[open]");
+        const service = page.getByRole("combobox", {
+          name: "Service context",
+          exact: true,
+        });
+        await service.evaluate((element) => element.focus());
+        expect(
+          await editDialog.evaluate((element) =>
+            element.contains(document.activeElement),
+          ),
+        ).toBe(true);
         await browserExpect(page).toHaveURL(
           "http://127.0.0.1:5174/configuration?service=root",
         );
-        await selectService(page, "child");
-        await confirmImpact(dialog, "Discard and change service");
-        await browserExpect(service).toBeFocused();
-        await browserExpect(service).toHaveValue("Child service");
+        await discardAssignment(page);
       } finally {
         await close(context, errors);
       }

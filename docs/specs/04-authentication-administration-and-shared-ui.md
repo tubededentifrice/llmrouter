@@ -567,16 +567,17 @@ scrolling region. A contextual action in a graph's roving focus group MUST stay
 with its selected control and MAY be inside the labelled graph viewport.
 
 The service tree MUST use nodes and inspectors as its graph interaction
-surface. Service management outside the graph MUST follow
-[Services, workspaces, and assignments](01-services-workspaces-and-assignments.md#service-details-route).
-The three-column configuration board MUST use compound cards, nested rows, and
-inspectors as its complete interaction surface. A graph or board
-toolbar MUST NOT show a visible surface title such as `Service tree` or repeat
-the page title. The programmatic page name and the graph or board accessible
-name MUST provide the necessary context. A tree that is smaller than its
-viewport MUST be centered in the available graph stage. A larger tree MUST
-keep its layout origin and MUST be reachable with bounded graph-viewport
-scrolling.
+surface. Service management outside the graph MUST follow [Services,
+workspaces, and
+assignments](01-services-workspaces-and-assignments.md#service-details-route).
+The three-column configuration board MUST use compound cards, nested rows,
+selection controls, and shared add and edit modals as its complete interaction
+surface. A graph or board toolbar MUST NOT show a visible surface title such
+as `Service tree` or repeat the page title. The programmatic page name and the
+graph or board accessible name MUST provide the necessary context. A tree that
+is smaller than its viewport MUST be centered in the available graph stage. A
+larger tree MUST keep its layout origin and MUST be reachable with bounded
+graph-viewport scrolling.
 
 Each actionable node, compound-card header, nested row, and assignment rung
 MUST be a semantic control in the browser accessibility tree. Its accessible
@@ -589,16 +590,20 @@ application MUST NOT render a duplicate service, provider, model, route, or
 assignment table or list. The nodes and rows MUST provide the complete
 accessible record and action surface.
 
-Each graph or board MUST have one active keyboard tab stop. When no inspector
-or modal is open, Tab MUST enter at the selected control, or at the first
-control when there is no selection, and the next Tab MUST leave the surface.
-In the service tree, Up and Down MUST move through the visible nodes, Right
-MUST move to the first child, Left MUST move to the parent, and Home and End
-MUST move to the first and last visible nodes. If the tree permits branch
-collapse, Right MUST first expand a collapsed node and Left MUST first collapse
-an expanded node. The selected-node child-service action MUST join this roving
-focus order only as specified in
-[Services, workspaces, and assignments](01-services-workspaces-and-assignments.md#contextual-child-service-creation).
+Each graph or board MUST have one active keyboard tab stop for selection. The
+configuration board MUST also expose the selected control's separate edit
+button in the Tab order. When no inspector or modal is open, Tab MUST enter at
+the selected control, or at the first control when there is no selection. In
+the configuration board, the next Tab MUST move to that selected control's
+edit button when available. The following Tab MUST leave the board. In other
+graphs, the next Tab MUST leave the selection surface. In the service tree, Up
+and Down MUST move through the visible nodes, Right MUST move to the first
+child, Left MUST move to the parent, and Home and End MUST move to the first
+and last visible nodes. If the tree permits branch collapse, Right MUST first
+expand a collapsed node and Left MUST first collapse an expanded node. The
+selected-node child-service action MUST join this roving focus order only as
+specified in [Services, workspaces, and
+assignments](01-services-workspaces-and-assignments.md#contextual-child-service-creation).
 That action MUST NOT add a second graph Tab stop.
 
 In the configuration board, Up and Down MUST move through every visible
@@ -614,13 +619,14 @@ the first and last visible actionable control in the current column.
 
 A key that has no valid target MUST keep focus on the current control. A focus
 change MUST scroll the focused control into the labelled local viewport. The
-service-node keyboard behavior MUST follow
-[Services, workspaces, and assignments](01-services-workspaces-and-assignments.md#compact-selected-service-inspector).
-For each other graph or board control, Enter or Space MUST open the same
-inspector or modal as a pointer action. An assignment rung action MUST open its
-assignment inspector and identify that rung. Escape MUST close the inspector or
-modal and return focus to the opening control. If that control no longer exists,
-focus MUST follow the unavailable-record rule below.
+service-node keyboard behavior MUST follow [Services, workspaces, and
+assignments](01-services-workspaces-and-assignments.md#compact-selected-service-inspector).
+In the configuration board, Enter or Space on a record control MUST only
+select it, as a pointer action does. A separate edit icon button MUST open the
+shared edit modal. An assignment rung edit action MUST identify that rung.
+Other graph controls retain their specified inspector behavior. Escape MUST
+close the inspector or modal and return focus to the opening control. If that
+control no longer exists, focus MUST follow the unavailable-record rule below.
 
 The graph or board MUST expose selected, expanded, inherited, disabled, empty,
 loading, error, partial, and unavailable state without color alone. A refresh
@@ -644,23 +650,29 @@ assignment, service, credential, capability, or mutation type.
 The configuration toolbar MUST use the graph background and border treatment.
 The service context MUST use the shared searchable dropdown. The graph search
 MUST use the remaining toolbar width. Its clear action MUST stay on one line.
-Creation actions MUST use small labelled icon buttons. A model inspector MUST
+Creation and edit actions MUST use small labelled icon buttons. All configuration
+add and edit forms MUST use the shared modal Dialog. A model edit modal MUST
 provide its contextual route-creation action; the board MUST NOT repeat that
 action below each model card.
 
 The middle column MUST show one card per canonical model with its provider
 routes as compact nested rows. Model capabilities and input and output
-modalities MUST be tags on that card. They MUST NOT define model groups.
-The card MUST show the model name and technical identity. A route row MUST
-show its wire model and provider, without repeating the model's capability
-list.
+modalities MUST be tags on that card. They MUST NOT define model groups. The
+card MUST show the model name and right-aligned capability tags. It MUST NOT
+show the model ID. A route row MUST show its wire model and provider on one
+line when space permits, without repeating the model's capability list.
 
 An assignment card MUST show its name, ordered model and provider chain, and
-one last-used tag. The tag MUST show relative time, such as `7 days ago`, and
-its information tooltip MUST say `Last used on ...` with the full date. An
-unused assignment MUST show `Never used`. Definition source, observed
-requirements, and technical IDs MUST remain in the inspector and accessible
-relationship descriptions. Corrective errors MUST remain visible on the card.
+one right-aligned last-used tag on the name line when space permits. The tag
+MUST show relative time, such as `7 days ago`, and its information tooltip
+MUST say `Last used on ...` with the full date. An unused assignment MUST show
+`Never used`. Inherited assignments MUST show a compact source tag with the
+service or referenced assignment name and a full source tooltip. Observed
+requirements and technical IDs MUST remain in the edit modal and accessible
+relationship descriptions. Each chain row MUST show the model and provider on
+one line when space permits. It MUST NOT show `Primary` or `Fallback` text.
+Responsive layouts MAY wrap names and tags. Corrective errors MUST remain
+visible on the card.
 
 Selection MUST hide unrelated items outside the selected column and place
 the selected card first in its column. An assignment selection MUST retain its
@@ -684,8 +696,7 @@ from stored relationships. These controls MUST be selectable:
 - an assignment rung, which selects one ordered assignment candidate link in
   the effective assignment.
 
-An assignment rung is a relationship control. Its accessible name and visible
-content MUST identify the assignment, the provider route, its one-based
+An assignment rung is a relationship control. Its accessible name MUST identify the assignment, the provider route, its one-based
 fallback position, and whether the link is `Direct` or `Inherited`. `Direct`
 means that the candidate link is in a direct-chain definition on the selected
 service. `Inherited` means that the rung comes through an assignment-name
@@ -703,11 +714,12 @@ empty-state message MUST NOT become a selectable graph item. An action in one
 of these regions MAY keep its normal independent control.
 
 Pointer click, pointer tap, and touch tap on a selectable control MUST select
-that control and open the same inspector as Enter or Space. The assignment
-inspector MUST identify a selected rung and its fallback position. A visible
-inspector action MUST provide the pointer and touch equivalent of each
-available keyboard command. The application MUST NOT require a long press,
-double tap, context menu, hover, or precise selection of a connector stroke.
+that control only, as Enter or Space does. Its separate right-aligned edit
+icon button MUST open a shared modal. The assignment edit modal MUST identify
+a selected rung and its fallback position. A visible modal action MUST provide
+the pointer and touch equivalent of each available keyboard command. The
+application MUST NOT require a long press, double tap, context menu, hover, or
+precise selection of a connector stroke.
 
 OpenDLE UI MUST extend the current host-neutral `RelationshipGraph` API with
 these package-root exports:
@@ -1103,11 +1115,13 @@ fork that reusable behavior in this repository.
 
 The Router configuration board MUST use the exact domain content, state,
 relationships, search behavior, empty states, and focused verification in
-[Providers, models, prices, and configuration](02-providers-models-prices-and-configuration.md#fixed-configuration-board).
-Selecting a provider, canonical model, provider route, or assignment MUST open
-its details and applicable actions without navigation. Create actions MUST use
-the current column and selected control as context so the form does not ask for
-known references.
+[Providers, models, prices, and
+configuration](02-providers-models-prices-and-configuration.md#fixed-configuration-board).
+Selecting a provider, canonical model, provider route, or assignment MUST only
+select the control and filter connected records. Its edit button MUST open its
+details and applicable actions in a shared modal without navigation. Create
+actions MUST use the current column and selected control as context so the
+form does not ask for known references.
 
 OpenDLE UI component tests MUST cover compound-group semantics, nested-row
 connector endpoints, shared routes, the one-tab-stop model, all specified

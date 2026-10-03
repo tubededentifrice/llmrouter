@@ -432,7 +432,7 @@ describe("configuration graph composition", () => {
     expect(markup).toContain(">Assignments<");
     expect(markup).toContain("Select a service to view assignments.");
     expect(markup).toContain("OpenRouter main");
-    expect(markup).toContain(
+    expect(markup).not.toContain(
       'class="od-relationship-graph-node-detail">reasoning-model',
     );
     expect(markup).toContain("Route ID: openrouter-reasoning");
@@ -747,7 +747,7 @@ describe("configuration graph composition", () => {
     expect(markup).toContain(
       'class="od-relationship-graph-node-detail">OpenRouter',
     );
-    expect(markup).toContain(
+    expect(markup).not.toContain(
       'class="od-relationship-graph-node-detail">reasoning-model',
     );
     expect(markup).toContain(">vendor/model<");
@@ -756,8 +756,8 @@ describe("configuration graph composition", () => {
     );
     expect(markup).toContain('data-node-id="rung:workflow:1"');
     expect(markup).toContain('data-node-id="rung:workflow:2"');
-    expect(markup).toContain("Primary · OpenRouter main");
-    expect(markup).toContain("Fallback 2 · Local proof");
+    expect(markup).not.toContain("Primary · OpenRouter main");
+    expect(markup).not.toContain("Fallback 2 · Local proof");
     expect(markup).toContain('title="Last used on ');
     expect(markup).toContain("(2026-08-29T12:00:00Z)");
     expect(markup).not.toContain("No observed requirements.");

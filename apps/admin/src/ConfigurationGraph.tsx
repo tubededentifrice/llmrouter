@@ -20,7 +20,7 @@ import {
   InlineAlert,
   Icon,
   IconButton,
-  GraphInspector,
+  Dialog,
   GraphInspectorFact,
   GraphInspectorFacts,
   GraphInspectorNotice,
@@ -1425,7 +1425,6 @@ function useConfigurationController({
             {
               id,
               label: model.display_name,
-              detail: model.api_name,
               tags: capabilityLabels.map((label) => ({ label })),
               searchText: [
                 model.api_name,
@@ -1455,7 +1454,7 @@ function useConfigurationController({
                 return {
                   id: configurationNodeId.mapping(route.api_name),
                   label: route.provider_model_name,
-                  detail:
+                  inlineDetail:
                     provider?.display_name ??
                     `Unavailable provider: ${route.provider_api_name}`,
                   content: routeState.content,
@@ -1651,7 +1650,24 @@ function useConfigurationController({
         return {
           id,
           label: assignment.display_name,
-          tags: lastUsedTag(assignment.last_used_at),
+          tags: [
+            ...lastUsedTag(assignment.last_used_at),
+            ...(assignment.inherits_assignment_api_name
+              ? [
+                  {
+                    label: `↳ ${assignmentByName.get(assignment.inherits_assignment_api_name)?.display_name ?? assignment.inherits_assignment_api_name}`,
+                    description: inheritanceLabel ?? "Inherited assignment",
+                  },
+                ]
+              : !local
+                ? [
+                    {
+                      label: `↳ ${serviceByName.get(assignment.defined_by_service_api_name ?? "")?.display_name ?? "Root"}`,
+                      description: sourceLabel,
+                    },
+                  ]
+                : []),
+          ],
           content: [
             sourceUnavailable ? sourceLabel : null,
             inheritedAssignmentUnavailable ? inheritanceLabel : null,
@@ -1713,7 +1729,7 @@ function useConfigurationController({
               label:
                 routeModel?.display_name ??
                 `Unavailable route: ${candidate.provider_model_api_name}`,
-              detail: `${positionLabel} · ${provider?.display_name ?? "Unavailable provider"}`,
+              inlineDetail: provider?.display_name ?? "Unavailable provider",
               content: [
                 mismatch ? "Does not meet observed requirements" : null,
                 routeState?.content,
@@ -1735,6 +1751,51 @@ function useConfigurationController({
         };
       }),
     },
+  ];
+
+  function withEditActions(
+    column: RelationshipGraphColumn,
+  ): RelationshipGraphColumn {
+    return {
+      ...column,
+      nodes: column.nodes.map((node) => {
+        function withEdit(item: typeof node, group?: typeof node): typeof node {
+          const identity = parseConfigurationNodeId(item.id);
+          if (identity === null) return item;
+          const label =
+            identity.kind === "rung"
+              ? `Edit ${group?.label ?? identity.apiName} route ${String(identity.position)}`
+              : `Edit ${identity.kind === "mapping" ? "provider route" : identity.kind} ${item.label}`;
+          return {
+            ...item,
+            actions: (
+              <ConfigurationEditControl
+                label={label}
+                context={{
+                  column,
+                  node: item,
+                  ...(group && "rows" in group ? { group } : {}),
+                }}
+                pending={pending}
+                selected={selectedNodeId === item.id}
+                onEdit={activate}
+              />
+            ),
+          };
+        }
+        return "rows" in node
+          ? {
+              ...withEdit(node),
+              rows: node.rows.map((row) => withEdit(row, node)),
+            }
+          : withEdit(node);
+      }),
+    };
+  }
+  const editableColumns: typeof columns = [
+    withEditActions(columns[0]),
+    withEditActions(columns[1]),
+    withEditActions(columns[2]),
   ];
 
   const relationships = projection.relationships.flatMap((relationship) => {
@@ -2361,9 +2422,8 @@ function useConfigurationController({
     );
 
   return {
-    activate,
     auxiliaryInspector,
-    columns,
+    columns: editableColumns,
     deleteRecord,
     deleteTarget,
     globalPhase,
@@ -2472,7 +2532,6 @@ function useConfigurationController({
 
 export function ConfigurationGraph(props: ConfigurationGraphProps) {
   const {
-    activate,
     auxiliaryInspector,
     cancelDeleteTarget,
     columns,
@@ -2517,7 +2576,6 @@ export function ConfigurationGraph(props: ConfigurationGraphProps) {
             </>
           ) : undefined
         }
-        auxiliaryInspector={auxiliaryInspector}
         columns={
           globalPhase === "loading" && !hasSafeRecords
             ? [
@@ -2533,10 +2591,8 @@ export function ConfigurationGraph(props: ConfigurationGraphProps) {
             ? graphState
             : emptyCatalogState
         }
-        inspector={selectedNodeInspector}
         noResultsDescription="Change the search or restore the complete configuration board."
         noResultsTitle="No configuration matches this search."
-        onNodeActivate={activate}
         onSelectionChange={onSelectionChange}
         relationships={relationships}
         partialNoResultsDescription="Load more records or change the search to continue."
@@ -2545,6 +2601,7 @@ export function ConfigurationGraph(props: ConfigurationGraphProps) {
         searchLabel="Search configuration"
         selectedNodeId={selectedNodeId}
       />
+      {auxiliaryInspector ?? selectedNodeInspector}
       <ConfirmationDialog
         confirmLabel={
           deleteTarget?.kind === "draft"
@@ -2727,8 +2784,12 @@ function ProviderInspector({
       </>
     );
   return (
-    <GraphInspector
-      activationKey={`${inspector.kind}:${inspector.apiName ?? "new"}`}
+    <Dialog
+      className="configuration-edit-dialog"
+      open
+      size="wide"
+      closeDisabled={context.pending}
+      key={`${inspector.kind}:${inspector.apiName ?? "new"}`}
       actions={actions}
       eyebrow="Global provider connection"
       onClose={closeInspector}
@@ -2931,7 +2992,7 @@ function ProviderInspector({
           ))}
         </GraphInspectorRows>
       </GraphInspectorSection>
-    </GraphInspector>
+    </Dialog>
   );
 }
 
@@ -3067,8 +3128,12 @@ function ModelInspector({
       </>
     );
   return (
-    <GraphInspector
-      activationKey={`${inspector.kind}:${inspector.apiName ?? "new"}`}
+    <Dialog
+      className="configuration-edit-dialog"
+      open
+      size="wide"
+      closeDisabled={context.pending}
+      key={`${inspector.kind}:${inspector.apiName ?? "new"}`}
       actions={actions}
       eyebrow="Global canonical model"
       onClose={closeInspector}
@@ -3174,7 +3239,7 @@ function ModelInspector({
           )}
         </GraphInspectorSection>
       )}
-    </GraphInspector>
+    </Dialog>
   );
 }
 
@@ -3484,8 +3549,12 @@ function MappingInspector({
       </>
     );
   return (
-    <GraphInspector
-      activationKey={`${inspector.kind}:${inspector.apiName ?? "new"}`}
+    <Dialog
+      className="configuration-edit-dialog"
+      open
+      size="wide"
+      closeDisabled={context.pending}
+      key={`${inspector.kind}:${inspector.apiName ?? "new"}`}
       actions={actions}
       eyebrow="Global provider route"
       onClose={closeInspector}
@@ -3618,7 +3687,7 @@ function MappingInspector({
           Save provider route
         </Button>
       </form>
-    </GraphInspector>
+    </Dialog>
   );
 }
 
@@ -3978,8 +4047,12 @@ function AssignmentInspector({
       </>
     );
   return (
-    <GraphInspector
-      activationKey={`${inspector.kind}:${inspector.apiName ?? "new"}:${String(inspector.rungPosition ?? "header")}`}
+    <Dialog
+      className="configuration-edit-dialog"
+      open
+      size="wide"
+      closeDisabled={context.pending}
+      key={`${inspector.kind}:${inspector.apiName ?? "new"}:${String(inspector.rungPosition ?? "header")}`}
       actions={actions}
       eyebrow={
         selectedService === ""
@@ -4235,7 +4308,7 @@ function AssignmentInspector({
           </form>
         </>
       )}
-    </GraphInspector>
+    </Dialog>
   );
 }
 
@@ -4494,3 +4567,29 @@ function OpenRouterPreview({
 }
 
 export type { ConfigurationGraphProps };
+function ConfigurationEditControl({
+  context,
+  label,
+  onEdit,
+  pending,
+  selected,
+}: {
+  readonly context: Omit<RelationshipGraphNodeContext, "trigger">;
+  readonly label: string;
+  readonly onEdit: (context: RelationshipGraphNodeContext) => void;
+  readonly pending: boolean;
+  readonly selected: boolean;
+}) {
+  return (
+    <IconButton
+      aria-label={label}
+      title={label}
+      icon={<Icon name="edit" />}
+      disabled={pending}
+      tabIndex={selected ? 0 : -1}
+      onClick={(event) => {
+        onEdit({ ...context, trigger: event.currentTarget });
+      }}
+    />
+  );
+}
