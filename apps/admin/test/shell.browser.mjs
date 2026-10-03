@@ -126,7 +126,10 @@ async function settle(page) {
 async function navigate(page, label, phone) {
   if (phone) {
     await page.getByRole("button", { name: "Navigation", exact: true }).click();
-    const dialog = page.getByRole("dialog");
+    const dialog = page.getByRole("dialog", {
+      name: "LLM Router",
+      exact: true,
+    });
     await browserExpect(
       dialog.getByRole("link", { name: "Overview", exact: true }),
     ).toBeFocused();
@@ -327,6 +330,18 @@ describe("authenticated shell in a real browser", () => {
         name: "Service context",
         exact: true,
       });
+      await page.evaluate(() => {
+        const fixture = window.shellFixture;
+        fixture.values.assignments.items.push({
+          api_name: "source",
+          display_name: "Source assignment",
+          definition_kind: "direct_chain",
+          defined_by_service_api_name: "root",
+          effective_chain: [{ provider_model_api_name: "route" }],
+          direct_chain: [{ provider_model_api_name: "route" }],
+          observed_requirements: [],
+        });
+      });
       await selectService(page, "root");
       await settle(page);
       await editAssignment(page);
@@ -334,11 +349,14 @@ describe("authenticated shell in a real browser", () => {
         .getByRole("combobox", { name: "Definition", exact: true })
         .selectOption("inherit");
       await page
-        .getByRole("textbox", { name: "Inherited assignment", exact: true })
+        .getByRole("combobox", { name: "Inherited assignment", exact: true })
         .fill("source");
       await page
+        .locator(".od-searchable-select-listbox")
+        .selectOption("source");
+      await page
         .getByRole("button", {
-          name: "Save selected service assignment",
+          name: "Save assignment",
           exact: true,
         })
         .click();

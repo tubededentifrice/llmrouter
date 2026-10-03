@@ -653,22 +653,47 @@ MUST use the remaining toolbar width. Its clear action MUST stay on one line.
 Creation and edit actions MUST use small labelled icon buttons. All configuration
 add and edit forms MUST use the shared modal Dialog. A model edit modal MUST
 provide its contextual route-creation action; the board MUST NOT repeat that
-action below each model card.
+action below each model card. Form dialogs MUST show editable controls before
+read-only details. Related fields MUST use a responsive shared form grid.
+Save and Cancel MUST remain in the fixed modal footer. Technical facts MUST
+remain available in a shared details disclosure. Required fields MUST remain
+visible. Context actions and destructive actions MUST be separate from Save.
+
+The assignment fallback editor MUST use the shared compact ordered-choice
+list. Each route MUST show its position, wire model name, and provider name.
+A searchable add control MUST add the selected route directly and exclude
+routes already in the chain. Reorder and remove actions MUST use small icon
+buttons. Reordering MUST support drag, keyboard, and explicit move actions.
+The editor MUST NOT use table headers, pagination, or empty route rows.
 
 The middle column MUST show one card per canonical model with its provider
 routes as compact nested rows. Model capabilities and input and output
-modalities MUST be tags on that card. They MUST NOT define model groups. The
+modalities MUST be tags on that card. `Tool calling`, `Streaming`, `Reasoning`,
+and `Structured JSON` MUST remain in edit forms and search data, but MUST NOT
+appear as graph tags. They MUST NOT define model groups. The
 card MUST show the model name and right-aligned capability tags. It MUST NOT
-show the model ID. A route row MUST show its wire model and provider on one
-line when space permits, without repeating the model's capability list.
+show the model ID. Capability tags MUST use consistent colors: blue for Text,
+violet for Image, teal for Audio, coral for Video, and
+amber for Embeddings. Input tags MUST
+show a direction icon before the name; output tags MUST show it after the name.
+Their accessible names MUST retain the full direction. Clicking a tag MUST
+filter models, routes, providers, and assignments by that capability. A narrowed
+route MUST be tested against its own capabilities. Clicking the active tag or
+its toolbar clear action MUST remove the capability filter. Search MUST stay
+within an active capability filter. A route row MUST show its wire model and
+provider on one line when space permits, without repeating the model's capability list.
 
 An assignment card MUST show its name, ordered model and provider chain, and
 one right-aligned last-used tag on the name line when space permits. The tag
 MUST show relative time, such as `7 days ago`, and its information tooltip
 MUST say `Last used on ...` with the full date. An unused assignment MUST show
-`Never used`. Inherited assignments MUST show a compact source tag with the
-service or referenced assignment name and a full source tooltip. Observed
-requirements and technical IDs MUST remain in the edit modal and accessible
+`Never used`. Assignment-name inheritance MUST use nested rows inside the
+source card as defined in the
+[configuration record rule](02-providers-models-prices-and-configuration.md#records-and-technical-identities).
+Each inherited row MUST select and edit its own assignment. Its selection and
+search matches MUST retain the source chain and its exact routes. Service
+inheritance MUST show a compact service source tag and a full source tooltip.
+Observed requirements and technical IDs MUST remain in the edit modal and accessible
 relationship descriptions. Each chain row MUST show the model and provider on
 one line when space permits. It MUST NOT show `Primary` or `Fallback` text.
 Responsive layouts MAY wrap names and tags. Corrective errors MUST remain
@@ -678,9 +703,11 @@ Selection MUST hide unrelated items outside the selected column and place
 the selected card first in its column. An assignment selection MUST retain its
 exact provider routes, their model cards, and their providers. The assignment
 column MUST remain available to select another assignment. `Show all` MUST
-clear the filter through the normal unsaved-change guard. Search MUST inspect
-the complete catalog and temporarily remove the selection filter. Search MUST
-keep selection and input focus. OpenDLE UI MUST own the compact layout, tag
+clear the selection filter through the normal unsaved-change guard. Clicking
+empty graph background MUST clear selection through the same guard. Clicking
+another control MUST select that control. Search MUST inspect
+the complete available catalog and temporarily remove the selection filter.
+Search MUST keep selection and input focus. OpenDLE UI MUST own the compact layout, tag
 presentation, and optional selection filter; Router MUST supply its records.
 
 ### Selectable configuration controls and commands

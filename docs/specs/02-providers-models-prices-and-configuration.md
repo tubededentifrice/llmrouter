@@ -103,18 +103,24 @@ for each provider route. Selecting the card header or a nested route row MUST
 only select it. Its separate edit icon MUST open the exact canonical-model or
 provider-route modal.
 
-The model header MUST use the user-facing capability labels `Text input`,
-`Image input`, `Text output`, `Structured JSON`, `Embeddings`, `Image output`,
-`Video output`, `Audio output`, `Tool calling`, `Streaming`, and `Reasoning`
-for the corresponding native values. It MUST show only applicable labels. A
+The model header MUST use the capability tags defined in the
+[compact board rule](04-authentication-administration-and-shared-ui.md#compact-configuration-board).
+It MUST show only applicable tags. A
 provider route that narrows the canonical model MUST identify the narrowed
 modalities, capabilities, or constraints in the row or its expanded details.
 It MUST NOT imply that the route has a capability that it removed.
 
-Each assignment MUST be one compound card. Its header MUST show the assignment
-name, a right-aligned last-used tag, and a compact inheritance source tag when
-applicable. Its edit modal MUST show technical identity and observed call
-requirements. Its ordered effective chain MUST contain one rung for each exact
+Each assignment that does not name another assignment MUST be one compound
+card.
+An assignment that names another assignment MUST appear as an inherited row
+inside the source assignment card, after the source chain. A chain of assignment
+references MUST resolve to one source card. It MUST NOT repeat the source model
+rows or connectors. Each header or inherited row MUST show the assignment name
+and a right-aligned last-used tag. A definition from an ancestor service MUST
+also show a compact service source tag. A missing source or cycle MUST keep the
+assignment visible as a separate unavailable card. Each assignment edit modal
+MUST show technical identity and observed call
+requirements. The source card ordered effective chain MUST contain one rung for each exact
 provider route. Position 1 MUST have the accessible relationship label
 `Primary`. Each later position MUST have the accessible label `Fallback
 {position}`, where position starts at 2. These labels MUST NOT appear as
@@ -201,11 +207,13 @@ An assignment edit modal and accessible description MUST use these exact source 
 
 The edit modal MUST show `Local definition`, `Inherited from ...`, or
 `Implicit root default` as its definition source. It MUST also show `Inherits
-...` when that definition names another assignment. The card MUST show a
-compact source tag for inheritance and the resolved effective rungs. It MUST
-NOT merge parent and child chains. An inherited card and its rungs MUST
-identify inherited state with the word `Inherited`. They MUST NOT use only
-color. An administrator MUST be able to inspect the source service or
+...` when that definition names another assignment. The board MUST use the
+inherited-row presentation defined above for
+assignment-name references and a source tag for service inheritance. It MUST
+NOT merge parent and child chains. The inherited rows MUST have an accessible
+`Inherited assignments` group label and a branch icon. Inherited service cards
+and their rungs MUST identify inherited state with the word `Inherited` in
+their accessible descriptions. They MUST NOT use only color. An administrator MUST be able to inspect the source service or
 inherited assignment from this context. The board MUST NOT invent a local
 definition when it presents inherited state.
 

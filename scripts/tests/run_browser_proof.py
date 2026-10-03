@@ -693,7 +693,7 @@ def _configuration(
     mobile: bool,
     results: list[dict[str, object]],
 ) -> None:
-    """Use the current graph-local context and refresh controls."""
+    """Check service context, page reload, and responsive edit forms."""
     browser.use("shell")
     proof._navigate(browser, "/configuration", "LLM configuration")
     proof._assert_route_controls(browser)
@@ -722,6 +722,7 @@ def _configuration(
         _wait(
             browser, "document.querySelector('.configuration-edit-dialog[open]')!==null"
         )
+        proof._assert_configuration_form(browser, mobile=mobile)
         _capture(
             browser,
             f"{width}-configuration-inspector-{size}",

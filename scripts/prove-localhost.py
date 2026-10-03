@@ -1629,6 +1629,52 @@ def _click_text(browser: _Cdp, text_value: str, *, scope: str = "body") -> None:
     assert clicked is True, text_value
 
 
+def _open_disclosure(browser: _Cdp, text_value: str, *, scope: str) -> None:
+    """Open one visible review section through its native summary control."""
+    opened = browser.evaluate(
+        f"""(() => {{
+          const scope = document.querySelector({json.dumps(scope)});
+          if (!(scope instanceof HTMLElement)) return false;
+          const summary = [...scope.querySelectorAll('summary')].find(
+            (item) => item.textContent?.trim() === {json.dumps(text_value)}
+          );
+          if (!(summary instanceof HTMLElement) || !summary.getClientRects().length) return false;
+          if (!summary.parentElement.open) summary.click();
+          return summary.parentElement.open;
+        }})()"""
+    )
+    assert opened is True, text_value
+
+
+def _assert_configuration_form(browser: _Cdp, *, mobile: bool) -> None:
+    """Check first-field focus and the fixed native form submission action."""
+    value = browser.evaluate(
+        """(() => {
+          const dialog = document.querySelector('.configuration-edit-dialog[open]');
+          if (!dialog) return null;
+          const focus = dialog.querySelector('[data-dialog-initial-focus]');
+          const submit = dialog.querySelector('.od-dialog-actions button[type="submit"]');
+          return {
+            appearance: dialog.dataset.appearance,
+            focus: focus === document.activeElement,
+            editable: focus?.matches('input:not([readonly]),select,textarea') ?? false,
+            form: submit?.form?.id ?? null,
+            insideBody: dialog.querySelector('.od-dialog-body')?.contains(submit) ?? true,
+            collapsed: [...dialog.querySelectorAll('.od-advanced-fields')].every((item) => !item.open)
+          };
+        })()"""
+    )
+    assert isinstance(value, dict)
+    assert value["appearance"] == "form"
+    assert value["focus"] is True
+    assert value["editable"] is True
+    assert isinstance(value["form"], str)
+    assert value["form"]
+    assert value["insideBody"] is False
+    assert value["collapsed"] is True
+    _assert_dialog_layout(browser, ".configuration-edit-dialog[open]", mobile=mobile)
+
+
 def _set_service_context(browser: _Cdp, value: str) -> None:
     """Select a service through the shared searchable dropdown."""
     _click_selector(browser, ".od-graph-toolbar input[role='combobox']")
@@ -2256,6 +2302,14 @@ def _prove_configuration_graph(browser: _Cdp, *, mobile: bool) -> None:
             "document.querySelector('.configuration-edit-dialog[open]') !== null",
             f"The {node_id} inspector did not open with {key}",
         )
+        _assert_configuration_form(browser, mobile=mobile)
+        _open_disclosure(
+            browser,
+            "Current provider details"
+            if node_id.startswith("provider:")
+            else "Current model details",
+            scope=".configuration-edit-dialog[open]",
+        )
         inspector_text = browser.evaluate(
             "document.querySelector('.configuration-edit-dialog[open]')?.innerText ?? ''"
         )
@@ -2366,6 +2420,15 @@ def _prove_configuration_graph(browser: _Cdp, *, mobile: bool) -> None:
     _click_configuration_edit(browser, str(active_rung))
     _wait_browser(
         browser,
+        "document.querySelector('.configuration-edit-dialog[open]') !== null",
+        "The assignment form did not open",
+    )
+    _assert_configuration_form(browser, mobile=mobile)
+    _open_disclosure(
+        browser, "Assignment details", scope=".configuration-edit-dialog[open]"
+    )
+    _wait_browser(
+        browser,
         "(document.querySelector('.configuration-edit-dialog[open]')?.innerText ?? '').includes('Selected rung')",
         "The assignment rung did not identify itself in the inspector",
     )
@@ -2401,10 +2464,19 @@ def _prove_configuration_graph(browser: _Cdp, *, mobile: bool) -> None:
     _wait_browser(
         browser,
         "(() => { const text = document.querySelector('.configuration-edit-dialog[open]')?.innerText ?? ''; "
-        "return text.includes('Add canonical model') && text.includes('Create from OpenRouter'); })()",
+        "return text.includes('Add canonical model') && text.includes('Import from OpenRouter'); })()",
         "The model-create inspector did not open in the graph",
     )
-    _assert_dialog_layout(browser, ".configuration-edit-dialog[open]", mobile=mobile)
+    _assert_configuration_form(browser, mobile=mobile)
+    _open_disclosure(
+        browser, "Import from OpenRouter", scope=".configuration-edit-dialog[open]"
+    )
+    assert (
+        browser.evaluate(
+            "document.querySelector('.configuration-edit-dialog[open] input[maxlength=\"512\"]') !== null"
+        )
+        is True
+    )
     _press_key(browser, "Escape")
     _wait_browser(
         browser,
@@ -2415,8 +2487,12 @@ def _prove_configuration_graph(browser: _Cdp, *, mobile: bool) -> None:
     _click_configuration_edit(browser, "mapping:text")
     _wait_browser(
         browser,
-        "[...document.querySelectorAll('.configuration-edit-dialog[open] button')].some((item) => item.textContent?.trim() === 'Play exact route')",
+        "[...document.querySelectorAll('.configuration-edit-dialog[open] button')].some((item) => item.getAttribute('aria-label') === 'Play route')",
         "The exact mapping inspector did not offer its playground",
+    )
+    _assert_configuration_form(browser, mobile=mobile)
+    _open_disclosure(
+        browser, "Current route details", scope=".configuration-edit-dialog[open]"
     )
     route_inspector_text = browser.evaluate(
         "document.querySelector('.configuration-edit-dialog[open]')?.innerText ?? ''"
@@ -2435,7 +2511,7 @@ def _prove_configuration_graph(browser: _Cdp, *, mobile: bool) -> None:
         "Enabled",
     ):
         assert fact in route_inspector_text
-    _click_text(browser, "Play exact route", scope=".configuration-edit-dialog[open]")
+    _click_text(browser, "Play route", scope=".configuration-edit-dialog[open]")
     _wait_browser(
         browser,
         "document.querySelector('dialog.od-dialog[open]:not(.configuration-edit-dialog)') !== null",
@@ -2542,10 +2618,10 @@ def _open_exact_playground(browser: _Cdp, mapping: str) -> None:
     _click_configuration_edit(browser, f"mapping:{mapping}")
     _wait_browser(
         browser,
-        "[...document.querySelectorAll('.configuration-edit-dialog[open] button')].some((item) => item.textContent?.trim() === 'Play exact route')",
+        "[...document.querySelectorAll('.configuration-edit-dialog[open] button')].some((item) => item.getAttribute('aria-label') === 'Play route')",
         f"The {mapping} mapping did not offer its playground",
     )
-    _click_text(browser, "Play exact route", scope=".configuration-edit-dialog[open]")
+    _click_text(browser, "Play route", scope=".configuration-edit-dialog[open]")
     _wait_browser(
         browser,
         "document.querySelector('dialog.od-dialog[open]:not(.configuration-edit-dialog)') !== null",

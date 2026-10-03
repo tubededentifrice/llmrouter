@@ -25,6 +25,10 @@ export interface ConfigurationGraphProjection {
   readonly providerIds: readonly string[];
   readonly catalogIds: readonly string[];
   readonly assignmentIds: readonly string[];
+  readonly assignmentGroups: readonly {
+    readonly sourceId: string;
+    readonly inheritedIds: readonly string[];
+  }[];
   readonly relationships: readonly {
     readonly id: string;
     readonly sourceId: string;
@@ -68,6 +72,23 @@ export function parseConfigurationNodeId(
     kind,
     apiName: value.slice(separator + 1),
   };
+}
+
+/** Missing sources and cycles stay separate so partial records remain visible. */
+export function assignmentChainSource(
+  assignment: Assignment,
+  assignmentsByName: ReadonlyMap<string, Assignment>,
+): Assignment {
+  const visited = new Set<string>();
+  let source = assignment;
+  while (source.inherits_assignment_api_name) {
+    if (visited.has(source.api_name)) return assignment;
+    visited.add(source.api_name);
+    const parent = assignmentsByName.get(source.inherits_assignment_api_name);
+    if (!parent) return assignment;
+    source = parent;
+  }
+  return source;
 }
 
 export function projectConfigurationGraph(
@@ -115,7 +136,28 @@ export function projectConfigurationGraph(
   const assignmentIds = sortedAssignments.map((item) =>
     configurationNodeId.assignment(item.api_name),
   );
-  const rungIds = sortedAssignments.flatMap((assignment) =>
+  const assignmentsByName = new Map(
+    sortedAssignments.map((item) => [item.api_name, item]),
+  );
+  const sources = new Map<string, Assignment>();
+  const inheritedIds = new Map<string, string[]>();
+  for (const assignment of sortedAssignments) {
+    const source = assignmentChainSource(assignment, assignmentsByName);
+    sources.set(source.api_name, source);
+    if (source.api_name !== assignment.api_name) {
+      const children = inheritedIds.get(source.api_name) ?? [];
+      children.push(configurationNodeId.assignment(assignment.api_name));
+      inheritedIds.set(source.api_name, children);
+    }
+  }
+  const chainAssignments = sortedAssignments.filter((item) =>
+    sources.has(item.api_name),
+  );
+  const assignmentGroups = chainAssignments.map((source) => ({
+    sourceId: configurationNodeId.assignment(source.api_name),
+    inheritedIds: inheritedIds.get(source.api_name) ?? [],
+  }));
+  const rungIds = chainAssignments.flatMap((assignment) =>
     assignment.effective_chain.map((_, index) =>
       configurationNodeId.rung(assignment.api_name, index + 1),
     ),
@@ -132,7 +174,7 @@ export function projectConfigurationGraph(
       sourceId: configurationNodeId.provider(mapping.provider_api_name),
       targetId: configurationNodeId.mapping(mapping.api_name),
     })),
-    ...sortedAssignments.flatMap((assignment) =>
+    ...chainAssignments.flatMap((assignment) =>
       assignment.effective_chain.map((candidate, index) => ({
         id: `mapping-assignment:${candidate.provider_model_api_name}:${assignment.api_name}:${String(index)}`,
         sourceId: configurationNodeId.mapping(
@@ -145,7 +187,13 @@ export function projectConfigurationGraph(
     (relationship) =>
       nodeIds.has(relationship.sourceId) && nodeIds.has(relationship.targetId),
   );
-  return { providerIds, catalogIds, assignmentIds, relationships };
+  return {
+    providerIds,
+    catalogIds,
+    assignmentIds,
+    assignmentGroups,
+    relationships,
+  };
 }
 
 export interface AdapterFieldPolicy {

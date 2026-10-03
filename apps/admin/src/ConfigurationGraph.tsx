@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useReducer,
   useRef,
@@ -12,10 +13,17 @@ import {
   type SubmitEvent,
 } from "react";
 import {
+  AdvancedFieldsDisclosure,
+  FormControls,
+  FormField,
+  FormGrid,
+  FormSection,
+  SearchableSelect,
   Button,
+  CapabilityTag,
   CheckboxControl,
   ConfirmationDialog,
-  EditableTable,
+  OrderedChoiceList,
   FormActions,
   InlineAlert,
   Icon,
@@ -34,7 +42,6 @@ import {
   SwitchControl,
   TextareaControl,
   TextControl,
-  type EditableTableColumn,
   type EditableTableRow,
   type RelationshipGraphColumn,
   type RelationshipGraphNodeContext,
@@ -59,6 +66,7 @@ import {
 } from "./api.ts";
 import {
   adapterFieldPolicy,
+  assignmentChainSource,
   discardDeletedRecord,
   discardConfirmedRecord,
   excludeDeletedRecords,
@@ -80,6 +88,11 @@ import {
   configuredPriceValue,
   parseManualPrice,
 } from "./formContracts.ts";
+import {
+  configurationCapabilities,
+  modelCapabilityKeys,
+  modelHasCapability,
+} from "./configurationCapabilities.ts";
 import { PlaygroundModal } from "./PlaygroundModal.tsx";
 import {
   assignmentPlaygroundTarget,
@@ -873,6 +886,9 @@ function useConfigurationController({
     setSelectedNodeId,
     resetAssignmentInspector,
   } = useConfigurationViewState();
+  const [capabilityFilter, setCapabilityFilter] = useState<
+    keyof typeof configurationCapabilities | null
+  >(null);
   const [inspectorError, setInspectorError] = useState<string | null>(null);
   const [confirmedGlobal, setConfirmedGlobal] =
     useState<ConfirmedGlobalRecords>({
@@ -1237,6 +1253,27 @@ function useConfigurationController({
     });
   }
 
+  function toggleCapabilityFilter(
+    capability: keyof typeof configurationCapabilities,
+  ) {
+    if (pendingRef.current || assignmentDirty) return;
+    setCapabilityFilter((current) =>
+      current === capability ? null : capability,
+    );
+    setSelectedNodeId(null);
+  }
+
+  function capabilityTags(model: Model | ProviderModel) {
+    return modelCapabilityKeys(model).map((capability) => ({
+      ...configurationCapabilities[capability],
+      description: `Filter by ${requirementLabels[capability]}`,
+      pressed: capabilityFilter === capability,
+      onClick: () => {
+        toggleCapabilityFilter(capability);
+      },
+    }));
+  }
+
   const assignmentEmptyMessage =
     selectedService === ""
       ? "Select a service to view assignments."
@@ -1425,7 +1462,7 @@ function useConfigurationController({
             {
               id,
               label: model.display_name,
-              tags: capabilityLabels.map((label) => ({ label })),
+              tags: capabilityTags(model),
               searchText: [
                 model.api_name,
                 ...capabilityLabels,
@@ -1454,6 +1491,11 @@ function useConfigurationController({
                 return {
                   id: configurationNodeId.mapping(route.api_name),
                   label: route.provider_model_name,
+                  tags:
+                    modelCapabilityKeys(route).length !==
+                    modelCapabilityKeys(model).length
+                      ? capabilityTags(route)
+                      : undefined,
                   inlineDetail:
                     provider?.display_name ??
                     `Unavailable provider: ${route.provider_api_name}`,
@@ -1608,7 +1650,9 @@ function useConfigurationController({
         const inheritedAssignmentUnavailable =
           assignment.inherits_assignment_api_name !== null &&
           assignment.inherits_assignment_api_name !== undefined &&
-          !assignmentByName.has(assignment.inherits_assignment_api_name);
+          (!assignmentByName.has(assignment.inherits_assignment_api_name) ||
+            assignmentChainSource(assignment, assignmentByName).api_name ===
+              assignment.api_name);
         const rungReferenceUnavailable = assignment.effective_chain.some(
           (candidate) => {
             const route = mappingByName.get(candidate.provider_model_api_name);
@@ -1753,6 +1797,138 @@ function useConfigurationController({
     },
   ];
 
+  const assignmentNodeById = new Map(
+    columns[2].nodes.map((node) => [node.id, node]),
+  );
+  const groupedAssignments: RelationshipGraphColumn = {
+    ...columns[2],
+    nodes: projection.assignmentGroups.flatMap(({ sourceId, inheritedIds }) => {
+      const source = assignmentNodeById.get(sourceId);
+      if (!source || !("rows" in source)) return [];
+      return [
+        {
+          ...source,
+          relatedRowsLabel: "Inherited assignments",
+          relatedRows: inheritedIds.flatMap((id) => {
+            const child = assignmentNodeById.get(id);
+            const record = assignmentByName.get(id.slice("assignment:".length));
+            if (!child || !record) return [];
+            const mismatch = record.effective_chain.some((candidate) => {
+              const route = mappingByName.get(
+                candidate.provider_model_api_name,
+              );
+              return (
+                route &&
+                record.observed_requirements.some(
+                  (requirement) => !routeMeetsRequirement(route, requirement),
+                )
+              );
+            });
+            return [
+              {
+                id: child.id,
+                label: child.label,
+                tags: [
+                  ...lastUsedTag(record.last_used_at),
+                  ...(record.defined_by_service_api_name !== selectedService
+                    ? [
+                        {
+                          label: `↳ ${serviceByName.get(record.defined_by_service_api_name ?? "")?.display_name ?? "Root"}`,
+                          description: assignmentSourceLabel(
+                            record,
+                            selectedService,
+                            serviceByName,
+                          ),
+                        },
+                      ]
+                    : []),
+                ],
+                state: child.state,
+                stateLabel: child.stateLabel,
+                content: mismatch ? (
+                  <>
+                    {child.content}
+                    {child.content ? " · " : null}Does not meet observed
+                    requirements
+                  </>
+                ) : (
+                  child.content
+                ),
+                searchText: child.searchText,
+                pathSourceId: sourceId,
+              },
+            ];
+          }),
+        },
+      ];
+    }),
+  };
+
+  const capabilityNodeIds =
+    capabilityFilter === null ? null : new Set<string>();
+  if (capabilityNodeIds && capabilityFilter) {
+    for (const model of visibleModels)
+      if (modelHasCapability(model, capabilityFilter))
+        capabilityNodeIds.add(configurationNodeId.model(model.api_name));
+    for (const route of visibleMappings) {
+      if (!modelHasCapability(route, capabilityFilter)) continue;
+      capabilityNodeIds.add(configurationNodeId.mapping(route.api_name));
+      capabilityNodeIds.add(configurationNodeId.model(route.model_api_name));
+      capabilityNodeIds.add(
+        configurationNodeId.provider(route.provider_api_name),
+      );
+    }
+    for (const assignment of visibleAssignments) {
+      assignment.effective_chain.forEach((candidate, index) => {
+        if (
+          !capabilityNodeIds.has(
+            configurationNodeId.mapping(candidate.provider_model_api_name),
+          )
+        )
+          return;
+        capabilityNodeIds.add(
+          configurationNodeId.assignment(assignment.api_name),
+        );
+        capabilityNodeIds.add(
+          configurationNodeId.rung(assignment.api_name, index + 1),
+        );
+      });
+    }
+  }
+
+  function filterCapabilities(
+    column: RelationshipGraphColumn,
+  ): RelationshipGraphColumn {
+    if (!capabilityNodeIds) return column;
+    const nodes: RelationshipGraphColumn["nodes"] = column.nodes.flatMap(
+      (node) => {
+        if (!("rows" in node))
+          return capabilityNodeIds.has(node.id) ? [node] : [];
+        const rows = node.rows.filter((row) => capabilityNodeIds.has(row.id));
+        const relatedRows = node.relatedRows?.filter((row) =>
+          capabilityNodeIds.has(row.id),
+        );
+        return capabilityNodeIds.has(node.id) ||
+          rows.length ||
+          relatedRows?.length
+          ? [{ ...node, rows, relatedRows }]
+          : [];
+      },
+    );
+    return {
+      ...column,
+      nodes,
+      countLabel: String(
+        nodes.length +
+          nodes.reduce(
+            (count, node) =>
+              count + ("rows" in node ? (node.relatedRows?.length ?? 0) : 0),
+            0,
+          ),
+      ),
+    };
+  }
+
   function withEditActions(
     column: RelationshipGraphColumn,
   ): RelationshipGraphColumn {
@@ -1787,18 +1963,25 @@ function useConfigurationController({
           ? {
               ...withEdit(node),
               rows: node.rows.map((row) => withEdit(row, node)),
+              relatedRows: node.relatedRows?.map((row) => withEdit(row, node)),
             }
           : withEdit(node);
       }),
     };
   }
   const editableColumns: typeof columns = [
-    withEditActions(columns[0]),
-    withEditActions(columns[1]),
-    withEditActions(columns[2]),
+    withEditActions(filterCapabilities(columns[0])),
+    withEditActions(filterCapabilities(columns[1])),
+    withEditActions(filterCapabilities(groupedAssignments)),
   ];
 
   const relationships = projection.relationships.flatMap((relationship) => {
+    if (
+      capabilityNodeIds &&
+      (!capabilityNodeIds.has(relationship.sourceId) ||
+        !capabilityNodeIds.has(relationship.targetId))
+    )
+      return [];
     const source = parseConfigurationNodeId(relationship.sourceId);
     const target = parseConfigurationNodeId(relationship.targetId);
     if (source?.kind === "provider" && target?.kind === "mapping") {
@@ -1851,9 +2034,7 @@ function useConfigurationController({
     const endpoint = formValue(form, "endpoint");
     const credential = formValue(form, "credential_api_name");
     if (policy.endpoint === "required" && endpoint === "") {
-      reportInspectorError(
-        "Enter the required custom endpoint in Advanced settings.",
-      );
+      reportInspectorError("Enter the required custom endpoint.");
       return;
     }
     if (policy.credential === "required" && credential === "") {
@@ -2423,11 +2604,35 @@ function useConfigurationController({
 
   return {
     auxiliaryInspector,
+    capabilityFilterControl:
+      capabilityFilter === null ? null : (
+        <>
+          <CapabilityTag
+            {...configurationCapabilities[capabilityFilter]}
+            description={`Clear ${requirementLabels[capabilityFilter]} filter`}
+            pressed
+            onClick={() => {
+              toggleCapabilityFilter(capabilityFilter);
+            }}
+          />
+          <IconButton
+            aria-label="Clear capability filter"
+            title="Clear capability filter"
+            icon={<Icon name="close" />}
+            onClick={() => {
+              toggleCapabilityFilter(capabilityFilter);
+            }}
+          />
+        </>
+      ),
     columns: editableColumns,
     deleteRecord,
     deleteTarget,
     globalPhase,
-    emptyCatalogState,
+    emptyCatalogState:
+      capabilityFilter === null
+        ? emptyCatalogState
+        : `No configuration matches ${requirementLabels[capabilityFilter]}.`,
     onRefreshGlobal,
     pending,
     playground:
@@ -2534,6 +2739,7 @@ export function ConfigurationGraph(props: ConfigurationGraphProps) {
   const {
     auxiliaryInspector,
     cancelDeleteTarget,
+    capabilityFilterControl,
     columns,
     deleteRecord,
     deleteTarget,
@@ -2597,7 +2803,15 @@ export function ConfigurationGraph(props: ConfigurationGraphProps) {
         relationships={relationships}
         partialNoResultsDescription="Load more records or change the search to continue."
         partialNoResultsTitle="No matches in loaded records."
-        {...(props.toolbar === undefined ? {} : { toolbar: props.toolbar })}
+        toolbar={{
+          leading: props.toolbar?.leading,
+          actions: (
+            <>
+              {capabilityFilterControl}
+              {props.toolbar?.actions}
+            </>
+          ),
+        }}
         searchLabel="Search configuration"
         selectedNodeId={selectedNodeId}
       />
@@ -2754,7 +2968,10 @@ function ProviderInspector({
   const actions =
     provider === undefined ? undefined : (
       <>
-        <Button
+        <IconButton
+          aria-label="Add route"
+          title="Add route"
+          icon={<Icon name="plus" />}
           disabled={pending}
           onClick={() => {
             setInspectorError(null);
@@ -2764,10 +2981,7 @@ function ProviderInspector({
               providerApiName: provider.api_name,
             });
           }}
-          variant="secondary"
-        >
-          Add provider route for this provider
-        </Button>
+        />
         <Button
           disabled={pending}
           onClick={() => {
@@ -2787,103 +3001,107 @@ function ProviderInspector({
     <Dialog
       className="configuration-edit-dialog"
       open
-      size="wide"
+      appearance="form"
       closeDisabled={context.pending}
       key={`${inspector.kind}:${inspector.apiName ?? "new"}`}
-      actions={actions}
+      actions={
+        <FormActions secondaryActions={actions}>
+          <Button disabled={pending} onClick={closeInspector} variant="quiet">
+            Cancel
+          </Button>
+          <Button
+            disabled={pending}
+            form="configuration-provider-form"
+            type="submit"
+          >
+            {pending ? "Saving…" : "Save provider"}
+          </Button>
+        </FormActions>
+      }
       eyebrow="Global provider connection"
       onClose={closeInspector}
       returnFocusRef={returnFocusRef}
       title={provider?.display_name ?? "Add provider"}
     >
       <InspectorWriteError message={inspectorError} />
-      {provider === undefined
-        ? null
-        : recordFacts([
-            ["Provider ID", provider.api_name],
-            ["Adapter", adapterLabels[provider.adapter]],
-            ["Endpoint", provider.endpoint ?? "Router standard endpoint"],
-            ["Credential", provider.credential_api_name ?? "None"],
-            ["State", boardState?.stateLabel ?? "Unavailable"],
-            ...(boardState?.content === undefined
-              ? []
-              : [["Corrective action", boardState.content] as const]),
-          ])}
       <form
         className="configuration-form"
+        id="configuration-provider-form"
         onSubmit={(event) => void saveProvider(event)}
       >
-        <TextControl
-          label="API name"
-          name="api_name"
-          onChange={(event) => {
-            updateFields({ apiName: event.currentTarget.value });
-          }}
-          readOnly={provider !== undefined}
-          requirement="required"
-          value={apiName}
-        />
-        <TextControl
-          label="Display name"
-          name="display_name"
-          onChange={(event) => {
-            updateFields({ displayName: event.currentTarget.value });
-          }}
-          requirement="required"
-          value={displayName}
-        />
-        <SelectControl
-          label="Adapter"
-          name="adapter"
-          onChange={(event) => {
-            const next = event.currentTarget.value as ProviderAdapter;
-            updateFields({
-              selectedAdapter: next,
-              selectedCredential: "",
-              selectedEndpoint: "",
-            });
-          }}
-          value={selectedAdapter}
-        >
-          {providerAdapters.map((item) => (
-            <option key={item} value={item}>
-              {adapterLabels[item]}
-            </option>
-          ))}
-        </SelectControl>
-        {fieldPolicy.credential === "none" ? (
-          <p className="field-note">This adapter does not use a credential.</p>
-        ) : (
+        <FormControls disabled={pending}>
+          <FormGrid>
+            <TextControl
+              label="API name"
+              data-dialog-initial-focus={
+                provider === undefined ? "" : undefined
+              }
+              name="api_name"
+              onChange={(event) => {
+                updateFields({ apiName: event.currentTarget.value });
+              }}
+              readOnly={provider !== undefined}
+              requirement="required"
+              value={apiName}
+            />
+            <TextControl
+              label="Display name"
+              data-dialog-initial-focus={
+                provider !== undefined ? "" : undefined
+              }
+              name="display_name"
+              onChange={(event) => {
+                updateFields({ displayName: event.currentTarget.value });
+              }}
+              requirement="required"
+              value={displayName}
+            />
+          </FormGrid>
           <SelectControl
-            label="Applicable credential"
-            name="credential_api_name"
+            label="Adapter"
+            name="adapter"
             onChange={(event) => {
-              updateFields({ selectedCredential: event.currentTarget.value });
+              const next = event.currentTarget.value as ProviderAdapter;
+              updateFields({
+                selectedAdapter: next,
+                selectedCredential: "",
+                selectedEndpoint: "",
+              });
             }}
-            required={fieldPolicy.credential === "required"}
-            value={selectedCredential}
+            value={selectedAdapter}
           >
-            <option value="">
-              {fieldPolicy.credential === "required"
-                ? "Select credential"
-                : "No credential"}
-            </option>
-            {credentials.map((item) => (
-              <option key={item.api_name}>{item.api_name}</option>
+            {providerAdapters.map((item) => (
+              <option key={item} value={item}>
+                {adapterLabels[item]}
+              </option>
             ))}
           </SelectControl>
-        )}
-        <details className="configuration-advanced">
-          <summary>Advanced settings and review</summary>
-          <p>
-            {fieldPolicy.endpoint === "inferred"
-              ? "The Router will use the registered standard endpoint and safe adapter defaults."
-              : "This adapter has no registered standard endpoint. Review the explicit endpoint before save."}
-          </p>
+          {fieldPolicy.credential === "none" ? null : (
+            <SelectControl
+              label="Applicable credential"
+              name="credential_api_name"
+              onChange={(event) => {
+                updateFields({ selectedCredential: event.currentTarget.value });
+              }}
+              required={fieldPolicy.credential === "required"}
+              value={selectedCredential}
+            >
+              <option value="">
+                {fieldPolicy.credential === "required"
+                  ? "Select credential"
+                  : "No credential"}
+              </option>
+              {credentials.map((item) => (
+                <option key={item.api_name} value={item.api_name}>
+                  {item.api_name}
+                </option>
+              ))}
+            </SelectControl>
+          )}
           {fieldPolicy.endpoint === "required" ? (
-            <label>
-              Custom endpoint
+            <FormField label="Custom endpoint" requirement="required">
               <input
+                className="od-form-control od-text-control-input"
                 name="endpoint"
                 onChange={(event) => {
                   updateFields({ selectedEndpoint: event.currentTarget.value });
@@ -2893,7 +3111,7 @@ function ProviderInspector({
                 type="url"
                 value={selectedEndpoint}
               />
-            </label>
+            </FormField>
           ) : null}
           <SwitchControl
             checked={selectedEnabled}
@@ -2903,40 +3121,49 @@ function ProviderInspector({
               updateFields({ selectedEnabled: event.currentTarget.checked });
             }}
           />
-          {recordFacts([
-            [
-              "Adapter",
-              provider === undefined || provider.adapter === selectedAdapter
-                ? adapterLabels[selectedAdapter]
-                : `${adapterLabels[provider.adapter]} → ${adapterLabels[selectedAdapter]}`,
-            ],
-            [
-              "Endpoint after save",
-              fieldPolicy.endpoint === "inferred"
-                ? "Registered standard endpoint and safe defaults"
-                : selectedEndpoint || "Required before save",
-            ],
-            [
-              "Credential after save",
-              fieldPolicy.credential === "none"
-                ? "None; this adapter does not accept one"
-                : selectedCredential ||
-                  (fieldPolicy.credential === "required"
-                    ? "Required before save"
-                    : "None"),
-            ],
-            ["State after save", selectedEnabled ? "Enabled" : "Disabled"],
-          ])}
-        </details>
-        <Button disabled={pending} type="submit">
-          {pending ? "Saving…" : "Review and save provider"}
-        </Button>
+          <AdvancedFieldsDisclosure summary="Review changes">
+            {recordFacts([
+              [
+                "Adapter",
+                provider === undefined || provider.adapter === selectedAdapter
+                  ? adapterLabels[selectedAdapter]
+                  : `${adapterLabels[provider.adapter]} → ${adapterLabels[selectedAdapter]}`,
+              ],
+              [
+                "Endpoint after save",
+                fieldPolicy.endpoint === "inferred"
+                  ? "Registered standard endpoint and safe defaults"
+                  : selectedEndpoint || "Required before save",
+              ],
+              [
+                "Credential after save",
+                fieldPolicy.credential === "none"
+                  ? "None; this adapter does not accept one"
+                  : selectedCredential ||
+                    (fieldPolicy.credential === "required"
+                      ? "Required before save"
+                      : "None"),
+              ],
+              ["State after save", selectedEnabled ? "Enabled" : "Disabled"],
+            ])}
+          </AdvancedFieldsDisclosure>
+        </FormControls>
       </form>
-      <GraphInspectorSection title="Write-only credential">
-        <p>
-          Create or replace one encrypted credential. The Router never returns
-          its secret.
-        </p>
+      {provider === undefined ? null : (
+        <AdvancedFieldsDisclosure summary="Current provider details">
+          {recordFacts([
+            ["Provider ID", provider.api_name],
+            ["Adapter", adapterLabels[provider.adapter]],
+            ["Endpoint", provider.endpoint ?? "Router standard endpoint"],
+            ["Credential", provider.credential_api_name ?? "None"],
+            ["State", boardState?.stateLabel ?? "Unavailable"],
+            ...(boardState?.content === undefined
+              ? []
+              : [["Corrective action", boardState.content] as const]),
+          ])}
+        </AdvancedFieldsDisclosure>
+      )}
+      <AdvancedFieldsDisclosure summary="Manage credentials">
         <form
           className="configuration-form"
           onReset={() => {
@@ -2944,28 +3171,30 @@ function ProviderInspector({
           }}
           onSubmit={(event) => void saveCredential(event)}
         >
-          <TextControl
-            autoComplete="off"
-            label="Credential API name"
-            name="credential_api_name"
-            onChange={(event) => {
-              updateFields({ credentialApiName: event.currentTarget.value });
-            }}
-            requirement="required"
-            value={credentialApiName}
-          />
-          <label>
-            New secret
-            <input
-              autoComplete="new-password"
-              name="secret"
-              required
-              type="password"
+          <FormControls disabled={pending}>
+            <TextControl
+              autoComplete="off"
+              label="Credential API name"
+              name="credential_api_name"
+              onChange={(event) => {
+                updateFields({ credentialApiName: event.currentTarget.value });
+              }}
+              requirement="required"
+              value={credentialApiName}
             />
-          </label>
-          <Button disabled={pending} type="submit">
-            Save credential
-          </Button>
+            <FormField label="New secret" requirement="required">
+              <input
+                autoComplete="new-password"
+                className="od-form-control od-text-control-input"
+                name="secret"
+                required
+                type="password"
+              />
+            </FormField>
+            <Button disabled={pending} type="submit">
+              Save credential
+            </Button>
+          </FormControls>
         </form>
         <GraphInspectorRows>
           {credentials.map((credential) => (
@@ -2991,7 +3220,7 @@ function ProviderInspector({
             />
           ))}
         </GraphInspectorRows>
-      </GraphInspectorSection>
+      </AdvancedFieldsDisclosure>
     </Dialog>
   );
 }
@@ -3063,7 +3292,10 @@ function ModelInspector({
   const actions =
     model === undefined ? undefined : (
       <>
-        <Button
+        <IconButton
+          aria-label="Add route"
+          title="Add route"
+          icon={<Icon name="plus" />}
           disabled={pending}
           onClick={() => {
             setInspectorError(null);
@@ -3073,11 +3305,11 @@ function ModelInspector({
               modelApiName: model.api_name,
             });
           }}
-          variant="secondary"
-        >
-          Add provider route for this model
-        </Button>
-        <Button
+        />
+        <IconButton
+          aria-label="Sync prices"
+          title="Sync prices"
+          icon={<Icon name="refresh" />}
           disabled={pending || applicableMappings.length === 0}
           onClick={() => {
             setInspectorError(null);
@@ -3108,10 +3340,7 @@ function ModelInspector({
                 finishPending();
               });
           }}
-          variant="secondary"
-        >
-          Synchronize applicable prices
-        </Button>
+        />
         <Button
           disabled={pending}
           onClick={() => {
@@ -3131,97 +3360,99 @@ function ModelInspector({
     <Dialog
       className="configuration-edit-dialog"
       open
-      size="wide"
+      appearance="form"
       closeDisabled={context.pending}
       key={`${inspector.kind}:${inspector.apiName ?? "new"}`}
-      actions={actions}
+      actions={
+        <FormActions secondaryActions={actions}>
+          <Button disabled={pending} onClick={closeInspector} variant="quiet">
+            Cancel
+          </Button>
+          <Button
+            disabled={pending}
+            form="configuration-model-form"
+            type="submit"
+          >
+            {pending ? "Saving…" : "Save model"}
+          </Button>
+        </FormActions>
+      }
       eyebrow="Global canonical model"
       onClose={closeInspector}
       returnFocusRef={returnFocusRef}
       title={model?.display_name ?? "Add canonical model"}
     >
       <InspectorWriteError message={inspectorError} />
-      {model === undefined
-        ? null
-        : recordFacts([
+      <form
+        className="configuration-form"
+        id="configuration-model-form"
+        onSubmit={(event) => void saveModel(event)}
+      >
+        <FormControls disabled={pending}>
+          <FormGrid>
+            <TextControl
+              label="API name"
+              data-dialog-initial-focus={model === undefined ? "" : undefined}
+              name="api_name"
+              onChange={(event) => {
+                updateModelFields({ apiName: event.currentTarget.value });
+              }}
+              readOnly={model !== undefined}
+              requirement="required"
+              value={apiName}
+            />
+            <TextControl
+              label="Display name"
+              data-dialog-initial-focus={model !== undefined ? "" : undefined}
+              name="display_name"
+              onChange={(event) => {
+                updateModelFields({ displayName: event.currentTarget.value });
+              }}
+              requirement="required"
+              value={displayName}
+            />
+          </FormGrid>
+          <ConfigurationCapabilityFields
+            inputModalities={inputModalities}
+            outputModalities={outputModalities}
+            capabilities={capabilities}
+            onChange={updateModelFields}
+            requiredModalities
+          />
+          <ModelAdvancedFields model={model} />
+        </FormControls>
+      </form>
+      {model === undefined ? null : (
+        <AdvancedFieldsDisclosure summary="Current model details">
+          {recordFacts([
             ["Model ID", model.api_name],
             ["Capabilities", modelCapabilityLabels(model).join(", ") || "None"],
             ["Price source", model.price_source ?? "Manual"],
           ])}
-      <form
-        className="configuration-form"
-        onSubmit={(event) => void saveModel(event)}
-      >
-        <TextControl
-          label="API name"
-          name="api_name"
-          onChange={(event) => {
-            updateModelFields({ apiName: event.currentTarget.value });
-          }}
-          readOnly={model !== undefined}
-          requirement="required"
-          value={apiName}
-        />
-        <TextControl
-          label="Display name"
-          name="display_name"
-          onChange={(event) => {
-            updateModelFields({ displayName: event.currentTarget.value });
-          }}
-          requirement="required"
-          value={displayName}
-        />
-        <TextControl
-          label="Input modalities"
-          name="input_modalities"
-          onChange={(event) => {
-            updateModelFields({ inputModalities: event.currentTarget.value });
-          }}
-          requirement="required"
-          value={inputModalities}
-        />
-        <TextControl
-          label="Output modalities"
-          name="output_modalities"
-          onChange={(event) => {
-            updateModelFields({ outputModalities: event.currentTarget.value });
-          }}
-          requirement="required"
-          value={outputModalities}
-        />
-        <TextControl
-          label="Capabilities"
-          name="capabilities"
-          onChange={(event) => {
-            updateModelFields({ capabilities: event.currentTarget.value });
-          }}
-          value={capabilities}
-        />
-        <ModelAdvancedFields model={model} />
-        <Button disabled={pending} type="submit">
-          Save canonical model
-        </Button>
-      </form>
+        </AdvancedFieldsDisclosure>
+      )}
       {model !== undefined ? null : (
-        <GraphInspectorSection title="Create from OpenRouter">
+        <AdvancedFieldsDisclosure summary="Import from OpenRouter">
           <form
             className="configuration-form"
             onSubmit={(event) => void previewOpenRouter(event)}
           >
-            <TextControl
-              label="Exact model ID or supported OpenRouter URL"
-              maxLength={512}
-              onChange={(event) => {
-                setImportInput(event.currentTarget.value);
-                setImportPreview(null);
-                setSelectedImportProviders(new Set());
-              }}
-              requirement="required"
-              value={importInput}
-            />
-            <Button disabled={pending} type="submit">
-              Preview OpenRouter model
-            </Button>
+            <FormControls disabled={pending}>
+              <TextControl
+                label="Exact model ID or supported OpenRouter URL"
+                maxLength={512}
+                onChange={(event) => {
+                  setImportInput(event.currentTarget.value);
+                  setImportPreview(null);
+                  setSelectedImportProviders(new Set());
+                }}
+                requirement="required"
+                value={importInput}
+              />
+              <Button disabled={pending} type="submit">
+                Preview OpenRouter model
+              </Button>
+            </FormControls>
           </form>
           {importPreview === null ? null : (
             <OpenRouterPreview
@@ -3237,9 +3468,103 @@ function ModelInspector({
               setSelectedProviders={setSelectedImportProviders}
             />
           )}
-        </GraphInspectorSection>
+        </AdvancedFieldsDisclosure>
       )}
     </Dialog>
+  );
+}
+
+function ConfigurationCapabilityFields({
+  inputModalities,
+  outputModalities,
+  capabilities,
+  onChange,
+  requiredModalities = false,
+}: {
+  readonly inputModalities: string;
+  readonly outputModalities: string;
+  readonly capabilities: string;
+  readonly onChange: (
+    patch: Partial<{
+      inputModalities: string;
+      outputModalities: string;
+      capabilities: string;
+    }>,
+  ) => void;
+  readonly requiredModalities?: boolean;
+}) {
+  const groups = [
+    {
+      key: "inputModalities",
+      name: "input_modalities",
+      label: "Input",
+      value: inputModalities,
+      options: [
+        ["text", "Text"],
+        ["image", "Image"],
+      ],
+    },
+    {
+      key: "outputModalities",
+      name: "output_modalities",
+      label: "Output",
+      value: outputModalities,
+      options: [
+        ["text", "Text"],
+        ["structured_json", "Structured JSON"],
+        ["embedding", "Embedding"],
+        ["image", "Image"],
+        ["video", "Video"],
+        ["audio", "Audio"],
+      ],
+    },
+    {
+      key: "capabilities",
+      name: "capabilities",
+      label: "Capabilities",
+      value: capabilities,
+      options: [
+        ["tool_calling", "Tool calling"],
+        ["streaming", "Streaming"],
+        ["reasoning", "Reasoning"],
+      ],
+    },
+  ] as const;
+  return (
+    <>
+      {groups.map((group) => {
+        const selected = commaValues(group.value);
+        return (
+          <FormSection
+            columns={2}
+            key={group.key}
+            legend={group.label}
+            variant="plain"
+          >
+            <input name={group.name} type="hidden" value={group.value} />
+            {group.options.map(([value, label], index) => (
+              <CheckboxControl
+                checked={selected.includes(value)}
+                key={value}
+                label={label}
+                required={
+                  requiredModalities &&
+                  group.key !== "capabilities" &&
+                  selected.length === 0 &&
+                  index === 0
+                }
+                onChange={(event) => {
+                  const next = event.currentTarget.checked
+                    ? [...selected, value]
+                    : selected.filter((item) => item !== value);
+                  onChange({ [group.key]: next.join(", ") });
+                }}
+              />
+            ))}
+          </FormSection>
+        );
+      })}
+    </>
   );
 }
 
@@ -3286,124 +3611,215 @@ function ModelAdvancedFields({ model }: { readonly model: Model | undefined }) {
     setValues((current) => ({ ...current, [key]: value }));
   };
   return (
-    <details className="configuration-advanced">
-      <summary>Constraints and price source</summary>
-      <NumberControl
-        label="Maximum context tokens"
-        min={1}
-        name="max_context_tokens"
-        onChange={(event) => {
-          setTextValue(
-            "maxContextTokens",
-            event.currentTarget.value === ""
-              ? ""
-              : event.currentTarget.valueAsNumber,
-          );
+    <AdvancedFieldsDisclosure summary="Constraints and price source">
+      <FormGrid>
+        <NumberControl
+          label="Maximum context tokens"
+          min={1}
+          name="max_context_tokens"
+          onChange={(event) => {
+            setTextValue(
+              "maxContextTokens",
+              event.currentTarget.value === ""
+                ? ""
+                : event.currentTarget.valueAsNumber,
+            );
+          }}
+          value={values.maxContextTokens}
+        />
+        <NumberControl
+          label="Maximum output tokens"
+          min={1}
+          name="max_output_tokens"
+          onChange={(event) => {
+            setTextValue(
+              "maxOutputTokens",
+              event.currentTarget.value === ""
+                ? ""
+                : event.currentTarget.valueAsNumber,
+            );
+          }}
+          value={values.maxOutputTokens}
+        />
+        <TextControl
+          label="Embedding dimensions"
+          name="embedding_dimensions"
+          onChange={(event) => {
+            setTextValue("embeddingDimensions", event.currentTarget.value);
+          }}
+          placeholder="768, 1536"
+          value={values.embeddingDimensions}
+        />
+        <NumberControl
+          label="Maximum input images"
+          min={1}
+          name="max_input_images"
+          onChange={(event) => {
+            setTextValue(
+              "maxInputImages",
+              event.currentTarget.value === ""
+                ? ""
+                : event.currentTarget.valueAsNumber,
+            );
+          }}
+          value={values.maxInputImages}
+        />
+        <NumberControl
+          label="Maximum input image bytes"
+          min={1}
+          name="max_input_image_bytes"
+          onChange={(event) => {
+            setTextValue(
+              "maxInputImageBytes",
+              event.currentTarget.value === ""
+                ? ""
+                : event.currentTarget.valueAsNumber,
+            );
+          }}
+          value={values.maxInputImageBytes}
+        />
+        <NumberControl
+          label="Maximum output duration seconds"
+          min={1}
+          name="max_output_duration_seconds"
+          onChange={(event) => {
+            setTextValue(
+              "maxOutputDurationSeconds",
+              event.currentTarget.value === ""
+                ? ""
+                : event.currentTarget.valueAsNumber,
+            );
+          }}
+          value={values.maxOutputDurationSeconds}
+        />
+        <TextControl
+          label="Price source"
+          name="price_source"
+          onChange={(event) => {
+            setTextValue("priceSource", event.currentTarget.value);
+          }}
+          value={values.priceSource}
+        />
+        <TextControl
+          label="Source model identifier"
+          name="price_lookup_key"
+          onChange={(event) => {
+            setTextValue("priceLookupKey", event.currentTarget.value);
+          }}
+          value={values.priceLookupKey}
+        />
+        <TextControl
+          label="Manual price currency"
+          maxLength={3}
+          name="currency"
+          onChange={(event) => {
+            setTextValue("currency", event.currentTarget.value);
+          }}
+          placeholder="USD"
+          value={values.currency}
+        />
+        <TextareaControl
+          label="Manual typed unit prices"
+          name="unit_prices"
+          onChange={(event) => {
+            setTextValue("unitPrices", event.currentTarget.value);
+          }}
+          placeholder="input_token=0.001, output_token=0.002"
+          rows={3}
+          value={values.unitPrices}
+        />
+      </FormGrid>
+    </AdvancedFieldsDisclosure>
+  );
+}
+
+function MappingInspectorActions({
+  context,
+  mapping,
+}: {
+  readonly context: ConfigurationInspectorContext;
+  readonly mapping: ProviderModel;
+}) {
+  const {
+    pending,
+    beginPending,
+    finishPending,
+    client,
+    csrf,
+    onRefreshGlobal,
+    onNotice,
+    setInspectorError,
+    setDeleteTarget,
+    openPlayground,
+    providerModels,
+    providers,
+    models,
+  } = context;
+  const playgroundTarget = mappingPlaygroundTarget(
+    mapping.api_name,
+    providerModels,
+    providers,
+    models,
+  );
+  return (
+    <>
+      <IconButton
+        aria-label="Sync price"
+        title="Sync price"
+        icon={<Icon name="refresh" />}
+        disabled={pending}
+        onClick={() => {
+          setInspectorError(null);
+          if (!beginPending()) return;
+          void client
+            .synchronizePrices([mapping.api_name], csrf)
+            .then(async (result) => {
+              await onRefreshGlobal();
+              const item = result.items[0];
+              const message =
+                item?.message ??
+                `Price synchronization: ${item?.outcome ?? "no result"}.`;
+              if (item?.outcome === "failed") setInspectorError(message);
+              onNotice(
+                item?.outcome === "failed" ? "error" : "success",
+                message,
+              );
+            })
+            .catch((error: unknown) => {
+              const message = errorMessage(error);
+              setInspectorError(message);
+              onNotice("error", message);
+            })
+            .finally(() => {
+              finishPending();
+            });
         }}
-        value={values.maxContextTokens}
       />
-      <NumberControl
-        label="Maximum output tokens"
-        min={1}
-        name="max_output_tokens"
-        onChange={(event) => {
-          setTextValue(
-            "maxOutputTokens",
-            event.currentTarget.value === ""
-              ? ""
-              : event.currentTarget.valueAsNumber,
-          );
+      <Button
+        disabled={pending}
+        onClick={() => {
+          setDeleteTarget({
+            kind: "mapping",
+            apiName: mapping.api_name,
+            impact: `delete provider-model mapping ${mapping.api_name}`,
+          });
         }}
-        value={values.maxOutputTokens}
-      />
-      <TextControl
-        label="Embedding dimensions"
-        name="embedding_dimensions"
-        onChange={(event) => {
-          setTextValue("embeddingDimensions", event.currentTarget.value);
-        }}
-        placeholder="768, 1536"
-        value={values.embeddingDimensions}
-      />
-      <NumberControl
-        label="Maximum input images"
-        min={1}
-        name="max_input_images"
-        onChange={(event) => {
-          setTextValue(
-            "maxInputImages",
-            event.currentTarget.value === ""
-              ? ""
-              : event.currentTarget.valueAsNumber,
-          );
-        }}
-        value={values.maxInputImages}
-      />
-      <NumberControl
-        label="Maximum input image bytes"
-        min={1}
-        name="max_input_image_bytes"
-        onChange={(event) => {
-          setTextValue(
-            "maxInputImageBytes",
-            event.currentTarget.value === ""
-              ? ""
-              : event.currentTarget.valueAsNumber,
-          );
-        }}
-        value={values.maxInputImageBytes}
-      />
-      <NumberControl
-        label="Maximum output duration seconds"
-        min={1}
-        name="max_output_duration_seconds"
-        onChange={(event) => {
-          setTextValue(
-            "maxOutputDurationSeconds",
-            event.currentTarget.value === ""
-              ? ""
-              : event.currentTarget.valueAsNumber,
-          );
-        }}
-        value={values.maxOutputDurationSeconds}
-      />
-      <TextControl
-        label="Price source"
-        name="price_source"
-        onChange={(event) => {
-          setTextValue("priceSource", event.currentTarget.value);
-        }}
-        value={values.priceSource}
-      />
-      <TextControl
-        label="Source model identifier"
-        name="price_lookup_key"
-        onChange={(event) => {
-          setTextValue("priceLookupKey", event.currentTarget.value);
-        }}
-        value={values.priceLookupKey}
-      />
-      <TextControl
-        label="Manual price currency"
-        maxLength={3}
-        name="currency"
-        onChange={(event) => {
-          setTextValue("currency", event.currentTarget.value);
-        }}
-        placeholder="USD"
-        value={values.currency}
-      />
-      <TextareaControl
-        label="Manual typed unit prices"
-        name="unit_prices"
-        onChange={(event) => {
-          setTextValue("unitPrices", event.currentTarget.value);
-        }}
-        placeholder="input_token=0.001, output_token=0.002"
-        rows={3}
-        value={values.unitPrices}
-      />
-    </details>
+        variant="quiet"
+      >
+        Delete route
+      </Button>
+      {playgroundTarget === null ? null : (
+        <IconButton
+          aria-label="Play route"
+          title="Play route"
+          icon={<Icon name="spark" />}
+          disabled={pending}
+          onClick={(event) => {
+            openPlayground(playgroundTarget, event.currentTarget);
+          }}
+        />
+      )}
+    </>
   );
 }
 
@@ -3422,17 +3838,7 @@ function MappingInspector({
     providers,
     models,
     pending,
-    beginPending,
-    finishPending,
-    client,
-    csrf,
-    onRefreshGlobal,
-    onNotice,
-    setInspectorError,
-    setDeleteTarget,
     mappingByName,
-    openPlayground,
-    providerModels,
   } = context;
   const mapping =
     inspector.apiName === null
@@ -3478,84 +3884,31 @@ function MappingInspector({
               ),
           mappingModel !== undefined,
         );
-  const playgroundTarget =
-    mapping === undefined
-      ? null
-      : mappingPlaygroundTarget(
-          mapping.api_name,
-          providerModels,
-          providers,
-          models,
-        );
   const actions =
     mapping === undefined ? undefined : (
-      <>
-        <Button
-          disabled={pending}
-          onClick={() => {
-            setInspectorError(null);
-            if (!beginPending()) return;
-            void client
-              .synchronizePrices([mapping.api_name], csrf)
-              .then(async (result) => {
-                await onRefreshGlobal();
-                const item = result.items[0];
-                const message =
-                  item?.message ??
-                  `Price synchronization: ${item?.outcome ?? "no result"}.`;
-                if (item?.outcome === "failed") setInspectorError(message);
-                onNotice(
-                  item?.outcome === "failed" ? "error" : "success",
-                  message,
-                );
-              })
-              .catch((error: unknown) => {
-                const message = errorMessage(error);
-                setInspectorError(message);
-                onNotice("error", message);
-              })
-              .finally(() => {
-                finishPending();
-              });
-          }}
-          variant="secondary"
-        >
-          Synchronize price
-        </Button>
-        <Button
-          disabled={pending}
-          onClick={() => {
-            setDeleteTarget({
-              kind: "mapping",
-              apiName: mapping.api_name,
-              impact: `delete provider-model mapping ${mapping.api_name}`,
-            });
-          }}
-          variant="quiet"
-        >
-          Delete provider route
-        </Button>
-        {playgroundTarget === null ? null : (
-          <Button
-            disabled={pending}
-            onClick={(event) => {
-              openPlayground(playgroundTarget, event.currentTarget);
-            }}
-            variant="quiet"
-          >
-            Play exact route
-          </Button>
-        )}
-      </>
+      <MappingInspectorActions context={context} mapping={mapping} />
     );
   return (
     <Dialog
       className="configuration-edit-dialog"
       open
-      size="wide"
+      appearance="form"
       closeDisabled={context.pending}
       key={`${inspector.kind}:${inspector.apiName ?? "new"}`}
-      actions={actions}
+      actions={
+        <FormActions secondaryActions={actions}>
+          <Button disabled={pending} onClick={closeInspector} variant="quiet">
+            Cancel
+          </Button>
+          <Button
+            disabled={pending}
+            form="configuration-mapping-form"
+            type="submit"
+          >
+            {pending ? "Saving…" : "Save route"}
+          </Button>
+        </FormActions>
+      }
       eyebrow="Global provider route"
       onClose={closeInspector}
       returnFocusRef={returnFocusRef}
@@ -3567,9 +3920,132 @@ function MappingInspector({
       }
     >
       <InspectorWriteError message={inspectorError} />
-      {mapping === undefined
-        ? null
-        : recordFacts([
+      <form
+        className="configuration-form"
+        id="configuration-mapping-form"
+        onSubmit={(event) => void saveMapping(event)}
+      >
+        <FormControls disabled={pending}>
+          <FormGrid>
+            <TextControl
+              label="Route API name"
+              data-dialog-initial-focus={mapping === undefined ? "" : undefined}
+              name="api_name"
+              onChange={(event) => {
+                updateMappingFields({ apiName: event.currentTarget.value });
+              }}
+              readOnly={mapping !== undefined}
+              requirement="required"
+              value={apiName}
+            />
+            {mapping === undefined &&
+            inspector.providerApiName !== undefined ? (
+              <>
+                <input
+                  name="provider_api_name"
+                  readOnly
+                  type="hidden"
+                  value={inspector.providerApiName}
+                />
+                <FormField label="Provider">
+                  <input
+                    className="od-form-control od-text-control-input"
+                    readOnly
+                    value={
+                      providers.find(
+                        (item) => item.api_name === inspector.providerApiName,
+                      )?.display_name ?? inspector.providerApiName
+                    }
+                  />
+                </FormField>
+              </>
+            ) : (
+              <SelectControl
+                label="Provider"
+                name="provider_api_name"
+                onChange={(event) => {
+                  updateMappingFields({
+                    providerApiName: event.currentTarget.value,
+                  });
+                }}
+                requirement="required"
+                value={providerApiName}
+              >
+                <option value="">Select provider</option>
+                {providers.map((item) => (
+                  <option key={item.api_name} value={item.api_name}>
+                    {item.display_name}
+                  </option>
+                ))}
+              </SelectControl>
+            )}
+            {mapping === undefined && inspector.modelApiName !== undefined ? (
+              <>
+                <input
+                  name="model_api_name"
+                  readOnly
+                  type="hidden"
+                  value={inspector.modelApiName}
+                />
+                <FormField label="Canonical model">
+                  <input
+                    className="od-form-control od-text-control-input"
+                    readOnly
+                    value={
+                      models.find(
+                        (item) => item.api_name === inspector.modelApiName,
+                      )?.display_name ?? inspector.modelApiName
+                    }
+                  />
+                </FormField>
+              </>
+            ) : (
+              <SelectControl
+                label="Canonical model"
+                name="model_api_name"
+                onChange={(event) => {
+                  updateMappingFields({
+                    modelApiName: event.currentTarget.value,
+                  });
+                }}
+                requirement="required"
+                value={modelApiName}
+              >
+                <option value="">Select model</option>
+                {models.map((item) => (
+                  <option key={item.api_name} value={item.api_name}>
+                    {item.display_name}
+                  </option>
+                ))}
+              </SelectControl>
+            )}
+            <TextControl
+              label="Provider wire model"
+              data-dialog-initial-focus={mapping !== undefined ? "" : undefined}
+              name="provider_model_name"
+              onChange={(event) => {
+                updateMappingFields({
+                  providerModelName: event.currentTarget.value,
+                });
+              }}
+              requirement="required"
+              value={providerModelName}
+            />
+          </FormGrid>
+          <SwitchControl
+            checked={enabled}
+            label="Enabled"
+            name="enabled"
+            onChange={(event) => {
+              updateMappingFields({ enabled: event.currentTarget.checked });
+            }}
+          />
+          <MappingAdvancedFields mapping={mapping} />
+        </FormControls>
+      </form>
+      {mapping === undefined ? null : (
+        <AdvancedFieldsDisclosure summary="Current route details">
+          {recordFacts([
             ["Route ID", mapping.api_name],
             [
               "Provider",
@@ -3595,98 +4071,8 @@ function MappingInspector({
                 : `${mapping.effective_price.currency} · ${String(mapping.effective_price.unit_prices.length)} typed units`,
             ],
           ])}
-      <form
-        className="configuration-form"
-        onSubmit={(event) => void saveMapping(event)}
-      >
-        <TextControl
-          label="Route API name"
-          name="api_name"
-          onChange={(event) => {
-            updateMappingFields({ apiName: event.currentTarget.value });
-          }}
-          readOnly={mapping !== undefined}
-          requirement="required"
-          value={apiName}
-        />
-        {mapping === undefined && inspector.providerApiName !== undefined ? (
-          <>
-            <input
-              name="provider_api_name"
-              readOnly
-              type="hidden"
-              value={inspector.providerApiName}
-            />
-            {recordFacts([["Provider", inspector.providerApiName]])}
-          </>
-        ) : (
-          <SelectControl
-            label="Provider"
-            name="provider_api_name"
-            onChange={(event) => {
-              updateMappingFields({
-                providerApiName: event.currentTarget.value,
-              });
-            }}
-            requirement="required"
-            value={providerApiName}
-          >
-            <option value="">Select provider</option>
-            {providers.map((item) => (
-              <option key={item.api_name}>{item.api_name}</option>
-            ))}
-          </SelectControl>
-        )}
-        {mapping === undefined && inspector.modelApiName !== undefined ? (
-          <>
-            <input
-              name="model_api_name"
-              readOnly
-              type="hidden"
-              value={inspector.modelApiName}
-            />
-            {recordFacts([["Canonical model", inspector.modelApiName]])}
-          </>
-        ) : (
-          <SelectControl
-            label="Canonical model"
-            name="model_api_name"
-            onChange={(event) => {
-              updateMappingFields({ modelApiName: event.currentTarget.value });
-            }}
-            requirement="required"
-            value={modelApiName}
-          >
-            <option value="">Select model</option>
-            {models.map((item) => (
-              <option key={item.api_name}>{item.api_name}</option>
-            ))}
-          </SelectControl>
-        )}
-        <TextControl
-          label="Provider wire model"
-          name="provider_model_name"
-          onChange={(event) => {
-            updateMappingFields({
-              providerModelName: event.currentTarget.value,
-            });
-          }}
-          requirement="required"
-          value={providerModelName}
-        />
-        <SwitchControl
-          checked={enabled}
-          label="Enabled"
-          name="enabled"
-          onChange={(event) => {
-            updateMappingFields({ enabled: event.currentTarget.checked });
-          }}
-        />
-        <MappingAdvancedFields mapping={mapping} />
-        <Button disabled={pending} type="submit">
-          Save provider route
-        </Button>
-      </form>
+        </AdvancedFieldsDisclosure>
+      )}
     </Dialog>
   );
 }
@@ -3729,160 +4115,145 @@ function MappingAdvancedFields({
     setValues((current) => ({ ...current, [key]: value }));
   };
   return (
-    <details className="configuration-advanced">
-      <summary>Capabilities, reasoning, and price</summary>
+    <AdvancedFieldsDisclosure summary="Capabilities, reasoning, and price">
       <p>
         Empty capability fields use the canonical model. Enter values only to
         narrow this provider route.
       </p>
-      <TextControl
-        label="Input modalities"
-        name="input_modalities"
-        onChange={(event) => {
-          setValue("inputModalities", event.currentTarget.value);
+      <ConfigurationCapabilityFields
+        inputModalities={values.inputModalities}
+        outputModalities={values.outputModalities}
+        capabilities={values.capabilities}
+        onChange={(patch) => {
+          setValues((current) => ({ ...current, ...patch }));
         }}
-        value={values.inputModalities}
       />
-      <TextControl
-        label="Output modalities"
-        name="output_modalities"
-        onChange={(event) => {
-          setValue("outputModalities", event.currentTarget.value);
-        }}
-        value={values.outputModalities}
-      />
-      <TextControl
-        label="Capabilities"
-        name="capabilities"
-        onChange={(event) => {
-          setValue("capabilities", event.currentTarget.value);
-        }}
-        value={values.capabilities}
-      />
-      <TextControl
-        label="Reasoning mappings"
-        name="reasoning_mappings"
-        onChange={(event) => {
-          setValue("reasoningMappings", event.currentTarget.value);
-        }}
-        placeholder="none=disabled, high=high"
-        value={values.reasoningMappings}
-      />
-      <NumberControl
-        label="Maximum context tokens"
-        min={1}
-        name="max_context_tokens"
-        onChange={(event) => {
-          setValue(
-            "maxContextTokens",
-            event.currentTarget.value === ""
-              ? ""
-              : event.currentTarget.valueAsNumber,
-          );
-        }}
-        value={values.maxContextTokens}
-      />
-      <NumberControl
-        label="Maximum output tokens"
-        min={1}
-        name="max_output_tokens"
-        onChange={(event) => {
-          setValue(
-            "maxOutputTokens",
-            event.currentTarget.value === ""
-              ? ""
-              : event.currentTarget.valueAsNumber,
-          );
-        }}
-        value={values.maxOutputTokens}
-      />
-      <TextControl
-        label="Embedding dimensions"
-        name="embedding_dimensions"
-        onChange={(event) => {
-          setValue("embeddingDimensions", event.currentTarget.value);
-        }}
-        value={values.embeddingDimensions}
-      />
-      <NumberControl
-        label="Maximum input images"
-        min={1}
-        name="max_input_images"
-        onChange={(event) => {
-          setValue(
-            "maxInputImages",
-            event.currentTarget.value === ""
-              ? ""
-              : event.currentTarget.valueAsNumber,
-          );
-        }}
-        value={values.maxInputImages}
-      />
-      <NumberControl
-        label="Maximum input image bytes"
-        min={1}
-        name="max_input_image_bytes"
-        onChange={(event) => {
-          setValue(
-            "maxInputImageBytes",
-            event.currentTarget.value === ""
-              ? ""
-              : event.currentTarget.valueAsNumber,
-          );
-        }}
-        value={values.maxInputImageBytes}
-      />
-      <NumberControl
-        label="Maximum output duration seconds"
-        min={1}
-        name="max_output_duration_seconds"
-        onChange={(event) => {
-          setValue(
-            "maxOutputDurationSeconds",
-            event.currentTarget.value === ""
-              ? ""
-              : event.currentTarget.valueAsNumber,
-          );
-        }}
-        value={values.maxOutputDurationSeconds}
-      />
-      <TextControl
-        label="Price source"
-        name="price_source"
-        onChange={(event) => {
-          setValue("priceSource", event.currentTarget.value);
-        }}
-        value={values.priceSource}
-      />
-      <TextControl
-        label="Source model identifier"
-        name="price_lookup_key"
-        onChange={(event) => {
-          setValue("priceLookupKey", event.currentTarget.value);
-        }}
-        value={values.priceLookupKey}
-      />
-      <TextControl
-        label="Manual price currency"
-        maxLength={3}
-        name="currency"
-        onChange={(event) => {
-          setValue("currency", event.currentTarget.value);
-        }}
-        placeholder="USD"
-        value={values.currency}
-      />
-      <TextareaControl
-        label="Manual typed unit prices"
-        name="unit_prices"
-        onChange={(event) => {
-          setValue("unitPrices", event.currentTarget.value);
-        }}
-        placeholder="input_token=0.001, output_token=0.002"
-        rows={3}
-        value={values.unitPrices}
-      />
-    </details>
+      <FormGrid>
+        <TextControl
+          label="Reasoning mappings"
+          name="reasoning_mappings"
+          onChange={(event) => {
+            setValue("reasoningMappings", event.currentTarget.value);
+          }}
+          placeholder="none=disabled, high=high"
+          value={values.reasoningMappings}
+        />
+        <NumberControl
+          label="Maximum context tokens"
+          min={1}
+          name="max_context_tokens"
+          onChange={(event) => {
+            setValue(
+              "maxContextTokens",
+              event.currentTarget.value === ""
+                ? ""
+                : event.currentTarget.valueAsNumber,
+            );
+          }}
+          value={values.maxContextTokens}
+        />
+        <NumberControl
+          label="Maximum output tokens"
+          min={1}
+          name="max_output_tokens"
+          onChange={(event) => {
+            setValue(
+              "maxOutputTokens",
+              event.currentTarget.value === ""
+                ? ""
+                : event.currentTarget.valueAsNumber,
+            );
+          }}
+          value={values.maxOutputTokens}
+        />
+        <TextControl
+          label="Embedding dimensions"
+          name="embedding_dimensions"
+          onChange={(event) => {
+            setValue("embeddingDimensions", event.currentTarget.value);
+          }}
+          value={values.embeddingDimensions}
+        />
+        <NumberControl
+          label="Maximum input images"
+          min={1}
+          name="max_input_images"
+          onChange={(event) => {
+            setValue(
+              "maxInputImages",
+              event.currentTarget.value === ""
+                ? ""
+                : event.currentTarget.valueAsNumber,
+            );
+          }}
+          value={values.maxInputImages}
+        />
+        <NumberControl
+          label="Maximum input image bytes"
+          min={1}
+          name="max_input_image_bytes"
+          onChange={(event) => {
+            setValue(
+              "maxInputImageBytes",
+              event.currentTarget.value === ""
+                ? ""
+                : event.currentTarget.valueAsNumber,
+            );
+          }}
+          value={values.maxInputImageBytes}
+        />
+        <NumberControl
+          label="Maximum output duration seconds"
+          min={1}
+          name="max_output_duration_seconds"
+          onChange={(event) => {
+            setValue(
+              "maxOutputDurationSeconds",
+              event.currentTarget.value === ""
+                ? ""
+                : event.currentTarget.valueAsNumber,
+            );
+          }}
+          value={values.maxOutputDurationSeconds}
+        />
+        <TextControl
+          label="Price source"
+          name="price_source"
+          onChange={(event) => {
+            setValue("priceSource", event.currentTarget.value);
+          }}
+          value={values.priceSource}
+        />
+        <TextControl
+          label="Source model identifier"
+          name="price_lookup_key"
+          onChange={(event) => {
+            setValue("priceLookupKey", event.currentTarget.value);
+          }}
+          value={values.priceLookupKey}
+        />
+        <TextControl
+          label="Manual price currency"
+          maxLength={3}
+          name="currency"
+          onChange={(event) => {
+            setValue("currency", event.currentTarget.value);
+          }}
+          placeholder="USD"
+          value={values.currency}
+        />
+        <TextareaControl
+          label="Manual typed unit prices"
+          name="unit_prices"
+          onChange={(event) => {
+            setValue("unitPrices", event.currentTarget.value);
+          }}
+          placeholder="input_token=0.001, output_token=0.002"
+          rows={3}
+          value={values.unitPrices}
+        />
+      </FormGrid>
+    </AdvancedFieldsDisclosure>
   );
 }
 
@@ -4034,15 +4405,15 @@ function AssignmentInspector({
           </Button>
         ) : null}
         {playgroundTarget === null ? null : (
-          <Button
+          <IconButton
+            aria-label="Play assignment"
+            title="Play assignment"
+            icon={<Icon name="spark" />}
             disabled={pending}
             onClick={(event) => {
               openPlayground(playgroundTarget, event.currentTarget);
             }}
-            variant="quiet"
-          >
-            Play assignment
-          </Button>
+          />
         )}
       </>
     );
@@ -4050,10 +4421,45 @@ function AssignmentInspector({
     <Dialog
       className="configuration-edit-dialog"
       open
-      size="wide"
+      appearance="form"
       closeDisabled={context.pending}
       key={`${inspector.kind}:${inspector.apiName ?? "new"}:${String(inspector.rungPosition ?? "header")}`}
-      actions={actions}
+      actions={
+        <FormActions
+          secondaryActions={
+            <>
+              {actions}
+              {assignmentDirty ? (
+                <Button
+                  disabled={pending}
+                  onClick={() => {
+                    setDeleteTarget({
+                      kind: "draft",
+                      apiName: assignment?.api_name ?? "new assignment",
+                      impact: `discard unsaved assignment changes for service ${selectedService}`,
+                    });
+                  }}
+                  type="button"
+                  variant="quiet"
+                >
+                  Discard changes
+                </Button>
+              ) : null}
+            </>
+          }
+        >
+          <Button disabled={pending} onClick={closeInspector} variant="quiet">
+            Cancel
+          </Button>
+          <Button
+            disabled={pending || selectedService === ""}
+            form="configuration-assignment-form"
+            type="submit"
+          >
+            {pending ? "Saving…" : "Save assignment"}
+          </Button>
+        </FormActions>
+      }
       eyebrow={
         selectedService === ""
           ? "Select a service"
@@ -4071,241 +4477,251 @@ function AssignmentInspector({
         </StatePanel>
       ) : (
         <>
-          {assignment === undefined ? null : (
-            <>
-              {recordFacts([
-                ["Assignment ID", assignment.api_name],
-                ...(inspector.rungPosition === undefined
-                  ? []
-                  : [
-                      [
-                        "Selected rung",
-                        assignmentPositionLabel(inspector.rungPosition),
-                      ] as const,
-                      [
-                        "Selected route",
-                        selectedCandidate?.provider_model_api_name ??
-                          "Unavailable",
-                      ] as const,
-                      [
-                        "Provider",
-                        selectedRoute === undefined
-                          ? "Unavailable"
-                          : selectedProvider === undefined
-                            ? `Unavailable provider: ${selectedRoute.provider_api_name}`
-                            : `${selectedProvider.display_name} (Provider ID: ${selectedProvider.api_name})`,
-                      ] as const,
-                      [
-                        "Canonical model",
-                        selectedRoute === undefined
-                          ? "Unavailable"
-                          : selectedModel === undefined
-                            ? `Unavailable model: ${selectedRoute.model_api_name}`
-                            : `${selectedModel.display_name} (Model ID: ${selectedModel.api_name})`,
-                      ] as const,
-                      [
-                        "Route state",
-                        [
-                          selectedRouteState?.stateLabel ?? "Unavailable",
-                          selectedRouteState?.content,
-                        ]
-                          .filter(Boolean)
-                          .join(" · "),
-                      ] as const,
-                    ]),
-                [
-                  "Definition",
-                  assignmentDefinitionLabels[assignment.definition_kind],
-                ],
-                ["Definition source", sourceLabel ?? "Implicit root default"],
-                [
-                  "Effective chain",
-                  assignment.effective_chain
-                    .map((item) => item.provider_model_api_name)
-                    .join(" → ") || "Empty",
-                ],
-                ["Inherited assignment", inheritanceLabel ?? "None"],
-                ["Last used", assignment.last_used_at ?? "Never"],
-                [
-                  "Observed",
-                  assignment.observed_requirements
-                    .map((item) => requirementLabels[item])
-                    .join(", ") || "No observed requirements.",
-                ],
-              ])}
-              {sourceService === undefined ? null : (
-                <details className="configuration-advanced">
-                  <summary>Inspect source service</summary>
-                  {recordFacts([
-                    ["Service ID", sourceService.api_name],
-                    ["Display name", sourceService.display_name],
-                    [
-                      "Parent service",
-                      sourceService.parent_service_api_name ?? "None",
-                    ],
-                    ["Created", sourceService.created_at],
-                  ])}
-                </details>
-              )}
-              {inheritedAssignment === undefined ? null : (
-                <details className="configuration-advanced">
-                  <summary>Inspect inherited assignment</summary>
-                  {recordFacts([
-                    ["Assignment ID", inheritedAssignment.api_name],
-                    ["Display name", inheritedAssignment.display_name],
-                    [
-                      "Definition source",
-                      assignmentSourceLabel(
-                        inheritedAssignment,
-                        selectedService,
-                        serviceByName,
-                      ),
-                    ],
-                    [
-                      "Effective chain",
-                      inheritedAssignment.effective_chain
-                        .map((item) => item.provider_model_api_name)
-                        .join(" → ") || "Empty",
-                    ],
-                    ["Last used", inheritedAssignment.last_used_at ?? "Never"],
-                  ])}
-                </details>
-              )}
-              {assignment.observed_requirements.length === 0 ? null : (
-                <GraphInspectorSection
-                  count={assignment.observed_requirements.length}
-                  title="Observed requirements"
-                >
-                  <p>
-                    Remove a stale observation only after you confirm its exact
-                    assignment impact.
-                  </p>
-                  <GraphInspectorRows>
-                    {assignment.observed_requirements.map((requirement) => (
-                      <GraphInspectorRow
-                        actions={
-                          <Button
-                            disabled={pending}
-                            onClick={() => {
-                              setDeleteTarget({
-                                kind: "requirement",
-                                apiName: assignment.api_name,
-                                requirement,
-                                impact: `remove observed requirement ${requirement} from assignment ${assignment.api_name} for service ${selectedService}`,
-                              });
-                            }}
-                            variant="quiet"
-                          >
-                            Remove
-                          </Button>
-                        }
-                        key={requirement}
-                        label={requirementLabels[requirement]}
-                      />
-                    ))}
-                  </GraphInspectorRows>
-                </GraphInspectorSection>
-              )}
-            </>
-          )}
           <form
             className="configuration-form"
+            id="configuration-assignment-form"
             onChange={markAssignmentDirty}
             onSubmit={(event) => void saveAssignment(event)}
           >
-            <TextControl
-              label="Assignment API name"
-              name="api_name"
-              onChange={(event) => {
-                updateAssignmentFields({ apiName: event.currentTarget.value });
-              }}
-              readOnly={assignment !== undefined}
-              requirement="required"
-              value={apiName}
-            />
-            <TextControl
-              label="Display name"
-              name="display_name"
-              onChange={(event) => {
-                updateAssignmentFields({
-                  displayName: event.currentTarget.value,
-                });
-              }}
-              value={displayName}
-            />
-            <SelectControl
-              label="Definition"
-              name="definition_kind"
-              onChange={(event) => {
-                updateAssignmentFields({
-                  definitionMode: event.currentTarget.value,
-                });
-                markAssignmentDirty();
-              }}
-              value={definitionMode}
-            >
-              <option value="direct">Ordered direct chain</option>
-              <option value="inherit">Inherit another assignment</option>
-            </SelectControl>
-            {definitionMode === "inherit" ? (
-              <TextControl
-                label="Inherited assignment"
-                name="inherits_assignment_api_name"
-                onChange={(event) => {
-                  updateAssignmentFields({
-                    inheritedAssignmentName: event.currentTarget.value,
-                  });
-                }}
-                requirement="required"
-                value={inheritedAssignmentName}
-              />
-            ) : null}
-            <SelectControl
-              label="Reasoning level"
-              name="reasoning_level"
-              onChange={(event) => {
-                updateAssignmentFields({
-                  reasoningLevel: event.currentTarget.value,
-                });
-              }}
-              value={reasoningLevel}
-            >
-              <option value="">Model default</option>
-              <option>none</option>
-              <option>low</option>
-              <option>medium</option>
-              <option>high</option>
-            </SelectControl>
-            {definitionMode === "direct" ? (
-              <AssignmentChainEditor
-                onDirty={markAssignmentDirty}
-                providerModels={providerModels}
-                rows={chainRows}
-                setRows={setChainRows}
-              />
-            ) : null}
-            <FormActions alignment="start">
-              <Button disabled={pending} type="submit">
-                Save selected service assignment
-              </Button>
-              {assignmentDirty ? (
-                <Button
-                  disabled={pending}
-                  onClick={() => {
-                    setDeleteTarget({
-                      kind: "draft",
-                      apiName: assignment?.api_name ?? "new assignment",
-                      impact: `discard unsaved assignment changes for service ${selectedService}`,
+            <FormControls disabled={pending}>
+              <FormGrid>
+                <TextControl
+                  label="Assignment API name"
+                  data-dialog-initial-focus={
+                    assignment === undefined ? "" : undefined
+                  }
+                  name="api_name"
+                  onChange={(event) => {
+                    updateAssignmentFields({
+                      apiName: event.currentTarget.value,
                     });
                   }}
-                  type="button"
-                  variant="quiet"
+                  readOnly={assignment !== undefined}
+                  requirement="required"
+                  value={apiName}
+                />
+                <TextControl
+                  label="Display name"
+                  data-dialog-initial-focus={
+                    assignment !== undefined ? "" : undefined
+                  }
+                  name="display_name"
+                  onChange={(event) => {
+                    updateAssignmentFields({
+                      displayName: event.currentTarget.value,
+                    });
+                  }}
+                  value={displayName}
+                />
+                <SelectControl
+                  label="Definition"
+                  name="definition_kind"
+                  onChange={(event) => {
+                    updateAssignmentFields({
+                      definitionMode: event.currentTarget.value,
+                    });
+                    markAssignmentDirty();
+                  }}
+                  value={definitionMode}
                 >
-                  Discard changes
-                </Button>
+                  <option value="direct">Ordered direct chain</option>
+                  <option value="inherit">Inherit another assignment</option>
+                </SelectControl>
+                {definitionMode === "inherit" ? (
+                  <SearchableSelect
+                    label="Inherited assignment"
+                    name="inherits_assignment_api_name"
+                    onChange={(value) => {
+                      updateAssignmentFields({
+                        inheritedAssignmentName: value,
+                      });
+                      markAssignmentDirty();
+                    }}
+                    options={[...assignmentByName.values()].flatMap((item) =>
+                      item.api_name === apiName
+                        ? []
+                        : [
+                            {
+                              value: item.api_name,
+                              label: item.display_name,
+                              searchText: item.api_name,
+                            },
+                          ],
+                    )}
+                    requirement="required"
+                    value={inheritedAssignmentName}
+                  />
+                ) : null}
+                <SelectControl
+                  label="Reasoning level"
+                  name="reasoning_level"
+                  onChange={(event) => {
+                    updateAssignmentFields({
+                      reasoningLevel: event.currentTarget.value,
+                    });
+                  }}
+                  value={reasoningLevel}
+                >
+                  <option value="">Model default</option>
+                  <option>none</option>
+                  <option>low</option>
+                  <option>medium</option>
+                  <option>high</option>
+                </SelectControl>
+              </FormGrid>
+              {definitionMode === "direct" ? (
+                <AssignmentChainEditor
+                  modelByName={modelByName}
+                  pending={pending}
+                  onDirty={markAssignmentDirty}
+                  providerModels={providerModels}
+                  providerByName={providerByName}
+                  rows={chainRows}
+                  setRows={setChainRows}
+                />
               ) : null}
-            </FormActions>
+            </FormControls>
           </form>
+          {assignment === undefined ? null : (
+            <AdvancedFieldsDisclosure summary="Assignment details">
+              <>
+                {recordFacts([
+                  ["Assignment ID", assignment.api_name],
+                  ...(inspector.rungPosition === undefined
+                    ? []
+                    : [
+                        [
+                          "Selected rung",
+                          assignmentPositionLabel(inspector.rungPosition),
+                        ] as const,
+                        [
+                          "Selected route",
+                          selectedCandidate?.provider_model_api_name ??
+                            "Unavailable",
+                        ] as const,
+                        [
+                          "Provider",
+                          selectedRoute === undefined
+                            ? "Unavailable"
+                            : selectedProvider === undefined
+                              ? `Unavailable provider: ${selectedRoute.provider_api_name}`
+                              : `${selectedProvider.display_name} (Provider ID: ${selectedProvider.api_name})`,
+                        ] as const,
+                        [
+                          "Canonical model",
+                          selectedRoute === undefined
+                            ? "Unavailable"
+                            : selectedModel === undefined
+                              ? `Unavailable model: ${selectedRoute.model_api_name}`
+                              : `${selectedModel.display_name} (Model ID: ${selectedModel.api_name})`,
+                        ] as const,
+                        [
+                          "Route state",
+                          [
+                            selectedRouteState?.stateLabel ?? "Unavailable",
+                            selectedRouteState?.content,
+                          ]
+                            .filter(Boolean)
+                            .join(" · "),
+                        ] as const,
+                      ]),
+                  [
+                    "Definition",
+                    assignmentDefinitionLabels[assignment.definition_kind],
+                  ],
+                  ["Definition source", sourceLabel ?? "Implicit root default"],
+                  [
+                    "Effective chain",
+                    assignment.effective_chain
+                      .map((item) => item.provider_model_api_name)
+                      .join(" → ") || "Empty",
+                  ],
+                  ["Inherited assignment", inheritanceLabel ?? "None"],
+                  ["Last used", assignment.last_used_at ?? "Never"],
+                  [
+                    "Observed",
+                    assignment.observed_requirements
+                      .map((item) => requirementLabels[item])
+                      .join(", ") || "No observed requirements.",
+                  ],
+                ])}
+                {sourceService === undefined ? null : (
+                  <AdvancedFieldsDisclosure summary="Inspect source service">
+                    {recordFacts([
+                      ["Service ID", sourceService.api_name],
+                      ["Display name", sourceService.display_name],
+                      [
+                        "Parent service",
+                        sourceService.parent_service_api_name ?? "None",
+                      ],
+                      ["Created", sourceService.created_at],
+                    ])}
+                  </AdvancedFieldsDisclosure>
+                )}
+                {inheritedAssignment === undefined ? null : (
+                  <AdvancedFieldsDisclosure summary="Inspect inherited assignment">
+                    {recordFacts([
+                      ["Assignment ID", inheritedAssignment.api_name],
+                      ["Display name", inheritedAssignment.display_name],
+                      [
+                        "Definition source",
+                        assignmentSourceLabel(
+                          inheritedAssignment,
+                          selectedService,
+                          serviceByName,
+                        ),
+                      ],
+                      [
+                        "Effective chain",
+                        inheritedAssignment.effective_chain
+                          .map((item) => item.provider_model_api_name)
+                          .join(" → ") || "Empty",
+                      ],
+                      [
+                        "Last used",
+                        inheritedAssignment.last_used_at ?? "Never",
+                      ],
+                    ])}
+                  </AdvancedFieldsDisclosure>
+                )}
+                {assignment.observed_requirements.length === 0 ? null : (
+                  <GraphInspectorSection
+                    count={assignment.observed_requirements.length}
+                    title="Observed requirements"
+                  >
+                    <p>
+                      Remove a stale observation only after you confirm its
+                      exact assignment impact.
+                    </p>
+                    <GraphInspectorRows>
+                      {assignment.observed_requirements.map((requirement) => (
+                        <GraphInspectorRow
+                          actions={
+                            <Button
+                              disabled={pending}
+                              onClick={() => {
+                                setDeleteTarget({
+                                  kind: "requirement",
+                                  apiName: assignment.api_name,
+                                  requirement,
+                                  impact: `remove observed requirement ${requirement} from assignment ${assignment.api_name} for service ${selectedService}`,
+                                });
+                              }}
+                              variant="quiet"
+                            >
+                              Remove
+                            </Button>
+                          }
+                          key={requirement}
+                          label={requirementLabels[requirement]}
+                        />
+                      ))}
+                    </GraphInspectorRows>
+                  </GraphInspectorSection>
+                )}
+              </>
+            </AdvancedFieldsDisclosure>
+          )}
         </>
       )}
     </Dialog>
@@ -4315,104 +4731,87 @@ function AssignmentInspector({
 function AssignmentChainEditor({
   onDirty,
   providerModels,
+  providerByName,
+  modelByName,
+  pending,
   rows,
   setRows,
 }: {
   readonly onDirty: () => void;
   readonly providerModels: readonly ProviderModel[];
+  readonly providerByName: ReadonlyMap<string, Provider>;
+  readonly modelByName: ReadonlyMap<string, Model>;
+  readonly pending: boolean;
   readonly rows: readonly EditableTableRow<ChainDraft>[];
   readonly setRows: Dispatch<
     SetStateAction<readonly EditableTableRow<ChainDraft>[]>
   >;
 }) {
-  const nextRowIdRef = useRef(rows.length);
-  const columns: readonly EditableTableColumn<ChainDraft>[] = [
-    {
-      key: "mapping",
-      header: "Provider route",
-      renderRead: ({ row, update }) => (
-        <SelectControl
-          className="editable-table-form-control"
-          label={
-            <span className="od-visually-hidden">
-              {row.label} provider route
-            </span>
-          }
-          onChange={(event) => {
-            update({ providerModel: event.currentTarget.value });
-            onDirty();
-          }}
-          value={row.draft.providerModel}
-        >
-          <option value="">Select provider route</option>
-          {providerModels.map((item) => (
-            <option disabled={!item.enabled} key={item.api_name}>
-              {item.api_name}
-            </option>
-          ))}
-        </SelectControl>
-      ),
-      renderEdit: ({ row }) => row.draft.providerModel,
-    },
-  ];
+  const newRowIdPrefix = useId();
+  const nextRowIdRef = useRef(0);
+  const routes = new Map(
+    providerModels.map((route) => [route.api_name, route]),
+  );
   return (
-    <section className="configuration-chain-editor">
-      <h3>Ordered fallback chain</h3>
-      <EditableTable
-        ariaLabel="Ordered assignment provider-route chain"
-        columns={columns}
-        density="compact"
-        onDelete={(rowId) => {
-          setRows((current) =>
-            orderChainRows(current.filter((row) => row.id !== rowId)),
-          );
-          onDirty();
-        }}
-        onDraftChange={(rowId, patch) => {
-          setRows((current) =>
-            current.map((row) =>
-              row.id === rowId
-                ? { ...row, draft: { ...row.draft, ...patch } }
-                : row,
-            ),
-          );
-        }}
-        reorder={{
-          onReorder: ({ orderedRows }) => {
-            setRows(orderChainRows(orderedRows));
-            onDirty();
-          },
-        }}
-        rows={rows}
-        state={
-          rows.length === 0
-            ? {
-                kind: "empty",
-                message: "No direct candidates. Add the first provider route.",
-              }
-            : { kind: "ready" }
-        }
-      />
-      <Button
-        disabled={rows.length >= 16}
-        onClick={() => {
+    <FormSection legend="Fallback chain" variant="plain">
+      <OrderedChoiceList
+        label="Ordered assignment provider-route chain"
+        addLabel="Add provider route"
+        addPlaceholder="Search provider or model"
+        disabled={pending}
+        maxItems={16}
+        options={providerModels.map((route) => ({
+          value: route.api_name,
+          label: `${route.provider_model_name} · ${providerByName.get(route.provider_api_name)?.display_name ?? route.provider_api_name}`,
+          searchText: `${route.api_name} ${modelByName.get(route.model_api_name)?.display_name ?? route.model_api_name}`,
+          disabled: !route.enabled,
+        }))}
+        items={rows.map((row) => {
+          const route = routes.get(row.draft.providerModel);
+          return {
+            id: row.id,
+            value: row.draft.providerModel,
+            label:
+              route?.provider_model_name ??
+              `Unavailable route: ${row.draft.providerModel}`,
+            ...(route
+              ? {
+                  detail: `${providerByName.get(route.provider_api_name)?.display_name ?? route.provider_api_name}${route.enabled ? "" : " · Disabled"}`,
+                }
+              : {}),
+          };
+        })}
+        onAdd={(value) => {
           nextRowIdRef.current += 1;
           setRows((current) => [
             ...current,
             {
-              id: `chain:new:${String(nextRowIdRef.current)}`,
+              id: `chain:${newRowIdPrefix}:${String(nextRowIdRef.current)}`,
               label: assignmentPositionLabel(current.length + 1),
-              draft: { providerModel: "" },
+              draft: { providerModel: value },
             },
           ]);
           onDirty();
         }}
-        type="button"
-        variant="secondary"
-      >
-        Add fallback
-      </Button>
-    </section>
+        onRemove={(id) => {
+          setRows((current) =>
+            orderChainRows(current.filter((row) => row.id !== id)),
+          );
+          onDirty();
+        }}
+        onReorder={(ids) => {
+          setRows((current) =>
+            orderChainRows(
+              ids.flatMap((id) => {
+                const row = current.find((item) => item.id === id);
+                return row ? [row] : [];
+              }),
+            ),
+          );
+          onDirty();
+        }}
+      />
+    </FormSection>
   );
 }
 

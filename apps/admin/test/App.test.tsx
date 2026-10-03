@@ -211,7 +211,7 @@ describe("accepted administration composition", () => {
     expect(configuration).toContain('searchLabel="Search configuration"');
     expect(application).not.toContain("key={selectedService}");
     expect(application).toContain("assignmentPending");
-    expect(configuration).toContain("Play exact route");
+    expect(configuration).toContain('aria-label="Play route"');
     expect(configuration).toContain("Play assignment");
     expect(configuration).toContain("<PlaygroundModal");
     expect(configuration).toContain(

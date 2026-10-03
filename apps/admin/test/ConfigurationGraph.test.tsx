@@ -394,15 +394,14 @@ describe("configuration graph composition", () => {
     ])
       expect(source).toContain(control);
     expect(source).not.toMatch(/<(?:select|textarea)\b/);
-    expect(source.match(/<input\b/g)).toHaveLength(4);
-    expect(source.match(/type="hidden"/g)).toHaveLength(2);
+    const nativeInputs = source.match(/<input[\s\S]*?\/>/g) ?? [];
+    for (const input of nativeInputs)
+      expect(input).toMatch(/type="(?:hidden|url|password)"|readOnly/);
     expect(source.match(/type="url"/g)).toHaveLength(1);
     expect(source.match(/type="password"/g)).toHaveLength(1);
+    expect(source).toContain("OrderedChoiceList");
     expect(source).toMatch(
-      /editable-table-form-control[\s\S]*?od-visually-hidden[\s\S]*?provider route/,
-    );
-    expect(source).toMatch(
-      /Write-only credential[\s\S]*?onReset[\s\S]*?credentialApiName: ""/,
+      /Manage credentials[\s\S]*?onReset[\s\S]*?credentialApiName: ""/,
     );
     expect(styles).not.toMatch(/input,\nselect,\ntextarea\s*\{\n\s*width:/);
     expect(styles).not.toContain(".checkbox-field");
@@ -653,7 +652,9 @@ describe("configuration graph composition", () => {
       />,
     );
     expect(markup).toContain("Disabled");
-    expect(markup.match(/data-state="disabled"/g)).toHaveLength(2);
+    expect(
+      markup.match(/data-node-id="[^"]*"[^>]*data-state="disabled"/g),
+    ).toHaveLength(2);
   });
 
   it("renders compound cards, exact identities, rungs, and relationships", () => {
@@ -751,9 +752,10 @@ describe("configuration graph composition", () => {
       'class="od-relationship-graph-node-detail">reasoning-model',
     );
     expect(markup).toContain(">vendor/model<");
-    expect(markup).toContain(
-      'class="od-relationship-graph-node-tags"><span>Text input</span><span>Text output</span><span>Reasoning</span><span>Streaming</span>',
-    );
+    expect(markup).toContain('aria-label="Filter by Text input"');
+    expect(markup).toContain('aria-label="Filter by Text output"');
+    expect(markup).toContain('data-direction="input" data-tone="blue"');
+    expect(markup).toContain('data-direction="output" data-tone="blue"');
     expect(markup).toContain('data-node-id="rung:workflow:1"');
     expect(markup).toContain('data-node-id="rung:workflow:2"');
     expect(markup).not.toContain("Primary · OpenRouter main");

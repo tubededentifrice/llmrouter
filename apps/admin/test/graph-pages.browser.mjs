@@ -391,7 +391,7 @@ async function inspector(page, route) {
     await opener.focus();
     await page.keyboard.press("Space");
     await expect(
-      page.locator(`${names[route].editor} [data-dialog-close]`),
+      page.locator(`${names[route].editor} [data-dialog-initial-focus]`),
     ).toBeFocused();
     return opener;
   }
@@ -580,34 +580,50 @@ describe("compact configuration interactions", () => {
           );
           await expect(models).toHaveCount(2);
           await expect(
-            page.locator(
-              '[data-node-id="model:model"] .od-relationship-graph-node-tags > span',
-            ),
-          ).toHaveText([
-            "Text input",
-            "Image input",
-            "Text output",
-            "Image output",
-            "Streaming",
-          ]);
+            page
+              .locator('[data-node-id="model:model"]')
+              .locator("..")
+              .locator(".od-capability-tag"),
+          ).toHaveText(["Text", "Image", "Text", "Image"]);
+          const imageInputTag = page
+            .locator('[data-node-id="model:model"]')
+            .locator("..")
+            .getByRole("button", {
+              name: "Filter by Image input",
+              exact: true,
+            });
+          await expect(imageInputTag).toHaveAttribute("data-tone", "violet");
+          await expect(imageInputTag).toHaveAttribute(
+            "data-direction",
+            "input",
+          );
           const assignment = page.locator(
             '[data-node-id="assignment:workflow"]',
           );
           await expect(
             assignment.locator('[title^="Last used on "]'),
-          ).toHaveText("7 days ago ⓘ");
+          ).toHaveText(/7 days ago\s*ⓘ/);
           await expect(assignment).not.toContainText(
             "No observed requirements",
           );
+          const sourceCard = page.locator(
+            '[data-group-id="assignment:workflow"]',
+          );
+          const inherited = sourceCard.locator(
+            '[data-node-id="assignment:inherited"]',
+          );
+          await expect(inherited).toBeVisible();
           await expect(
-            page.locator(
-              '[data-node-id="assignment:inherited"] .od-relationship-graph-node-tags',
-            ),
-          ).toContainText("↳ Workflow");
+            sourceCard.locator(".od-relationship-graph-related-rows"),
+          ).toContainText("Inherited workflow");
           await expect(
-            page.locator(
-              '[data-node-id="assignment:inherited"] [title^="Inherits "]',
-            ),
+            page.locator('[data-group-id="assignment:inherited"]'),
+          ).toHaveCount(0);
+          await expect(
+            page.locator('[data-node-id="rung:inherited:1"]'),
+          ).toHaveCount(0);
+          await expect(
+            sourceCard.locator('[data-node-id^="rung:"]'),
           ).toHaveCount(1);
           const routeRow = page.locator('[data-node-id="mapping:route"]');
           const routeName = await routeRow.locator("strong").boundingBox();
@@ -666,6 +682,69 @@ describe("compact configuration interactions", () => {
           await expect(search).toBeFocused();
           await search.fill("");
           await expect(search).toBeFocused();
+          await imageInputTag.click();
+          await expect(models).toHaveCount(1);
+          await expect(
+            page.locator('[data-node-id="mapping:route"]'),
+          ).toHaveCount(0);
+          await expect(
+            page.locator('[data-node-id="provider:spare-provider"]'),
+          ).toHaveCount(0);
+          await expect(page.locator("dialog[open]")).toHaveCount(0);
+          await expect(imageInputTag).toHaveAttribute("aria-pressed", "true");
+          await page
+            .getByRole("button", {
+              name: "Clear capability filter",
+              exact: true,
+            })
+            .click();
+          await expect(models).toHaveCount(2);
+          await routeRow.click();
+          await expect(inherited).toBeVisible();
+          await inherited.click();
+          await expect(inherited).toHaveAttribute("aria-pressed", "true");
+          await expect(
+            page.locator('[data-node-id="mapping:route"]'),
+          ).toHaveCount(1);
+          await expect(
+            page.locator('[data-node-id="mapping:spare-route"]'),
+          ).toHaveCount(0);
+          const inheritedEdit = inherited.locator("..").getByRole("button", {
+            name: "Edit assignment Inherited workflow",
+            exact: true,
+          });
+          await inheritedEdit.click();
+          await expect(
+            page
+              .locator(".configuration-edit-dialog[open]")
+              .getByRole("heading", {
+                name: "Inherited workflow",
+                exact: true,
+              }),
+          ).toBeVisible();
+          await page.keyboard.press("Escape");
+          await expect(
+            page.locator(".configuration-edit-dialog[open]"),
+          ).toHaveCount(0);
+          await expect(inheritedEdit).toBeFocused();
+          await inherited.focus();
+          await page.keyboard.press("ArrowLeft");
+          await expect(
+            page.locator('[data-node-id="mapping:route"]'),
+          ).toBeFocused();
+          await page
+            .locator(".od-relationship-graph-viewport")
+            .click({ position: { x: 3, y: 3 } });
+          await expect(inherited).toHaveAttribute("aria-pressed", "false");
+          await expect(models).toHaveCount(2);
+          await search.fill("inherited workflow");
+          await expect(
+            page.locator('[data-node-id="rung:workflow:1"]'),
+          ).toHaveCount(1);
+          await expect(
+            page.locator('[data-node-id="mapping:route"]'),
+          ).toHaveCount(1);
+          await search.fill("");
           await assignment.click();
           await expect(models).toHaveCount(1);
           await expect(
