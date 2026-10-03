@@ -13,7 +13,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-import httpx
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from opendle import (
@@ -22,14 +21,12 @@ from opendle import (
 from opendle import (
     OidcClientAuthenticationMethod,
     OidcError,
-    OidcProtocolError,
-    OidcResponseLimitError,
-    OidcTransportResponse,
     validate_canonical_token,
 )
 from opendle import (
     OidcMetadata as SharedOidcMetadata,
 )
+from opendle.oidc_httpx import HttpxOidcTransport
 
 from llmrouter_backend.config import Settings
 from llmrouter_backend.errors import ApiError, authentication_required
@@ -37,11 +34,12 @@ from llmrouter_backend.errors import ApiError, authentication_required
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    import httpx
+
 _CONTROL_ASSOCIATED_DATA = b"llmrouter-administrator-control-v1"
 _TOKEN_BYTES = 32
 _OIDC_TIMEOUT_SECONDS = 10.0
 _MAXIMUM_OIDC_DOCUMENT_BYTES = 1_000_000
-_MAXIMUM_OIDC_RESPONSE_HEADERS = 100
 _RETURN_PATH = re.compile(r"^/(?:[A-Za-z0-9_?&=.-][A-Za-z0-9/_?&=.-]*)?$")
 
 
@@ -177,65 +175,6 @@ class OidcIdentity:
     display_name: str
 
 
-class _HttpxOidcTransport:
-    """Adapt the Router HTTPX transport to the shared OIDC client."""
-
-    def __init__(self, transport: httpx.BaseTransport | None) -> None:
-        self._transport = transport
-
-    def request(
-        self,
-        method: str,
-        url: str,
-        headers: Mapping[str, str],
-        body: bytes | None,
-        timeout: float,
-    ) -> OidcTransportResponse:
-        """Read one bounded response without redirects or environment trust."""
-        with (
-            httpx.Client(
-                timeout=timeout,
-                follow_redirects=False,
-                transport=self._transport,
-                trust_env=False,
-            ) as client,
-            client.stream(method, url, headers=headers, content=body) as response,
-        ):
-            if len(response.headers.multi_items()) > _MAXIMUM_OIDC_RESPONSE_HEADERS:
-                message = "The OpenID Connect response has too many headers."
-                raise OidcResponseLimitError(message)
-            lengths = response.headers.get_list("content-length")
-            if len(lengths) > 1 or (
-                lengths
-                and (
-                    not lengths[0].isascii()
-                    or not lengths[0].isdecimal()
-                    or int(lengths[0]) > _MAXIMUM_OIDC_DOCUMENT_BYTES
-                )
-            ):
-                message = "The OpenID Connect response length is invalid."
-                raise OidcProtocolError(message)
-            if (
-                len(response.headers.get_list("content-type")) > 1
-                or len(response.headers.get_list("content-encoding")) > 1
-            ):
-                message = "The OpenID Connect response headers are invalid."
-                raise OidcProtocolError(message)
-            content = bytearray()
-            for chunk in response.iter_bytes():
-                if len(content) + len(chunk) > _MAXIMUM_OIDC_DOCUMENT_BYTES:
-                    message = (
-                        "The OpenID Connect response exceeds the document byte bound."
-                    )
-                    raise OidcResponseLimitError(message)
-                content.extend(chunk)
-            return OidcTransportResponse(
-                status=response.status_code,
-                headers=dict(response.headers.items()),
-                body=bytes(content),
-            )
-
-
 class OidcClient:
     """Complete OIDC authorization-code and PKCE client."""
 
@@ -259,7 +198,10 @@ class OidcClient:
                 ),
                 timeout=_OIDC_TIMEOUT_SECONDS,
                 maximum_document_bytes=_MAXIMUM_OIDC_DOCUMENT_BYTES,
-                transport=_HttpxOidcTransport(transport),
+                transport=HttpxOidcTransport(
+                    transport=transport,
+                    maximum_response_bytes=_MAXIMUM_OIDC_DOCUMENT_BYTES,
+                ),
             )
         except TypeError, ValueError:
             raise authentication_required() from None

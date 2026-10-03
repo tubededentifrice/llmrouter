@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import psycopg
 import pytest
@@ -21,7 +21,11 @@ from llmrouter_backend.security import ControlKeys
 from psycopg.rows import dict_row
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from types import ModuleType
+    from uuid import UUID
+
+    from psycopg.rows import RowFactory
 
 ROOT = Path(__file__).resolve().parents[4]
 
@@ -419,16 +423,26 @@ def test_seed_serializes_with_real_startup_maintenance(
     with psycopg.connect(database_url, row_factory=dict_row) as connection:
         migrate(connection)
 
-    class PausedConnection(psycopg.Connection):
+    class PausedConnection(psycopg.Connection[dict[str, object]]):
         def commit(self) -> None:
             if scheduler_first:
                 ready.set()
                 assert release.wait(5), "The seed did not wait for maintenance."
             super().commit()
 
-    def connect_maintenance(*args: object, **kwargs: object) -> psycopg.Connection:
+    def connect_maintenance(
+        conninfo: str,
+        *,
+        connect_timeout: int,
+        row_factory: RowFactory[dict[str, object]],
+        options: str,
+    ) -> psycopg.Connection[dict[str, object]]:
         return PausedConnection.connect(
-            *args, **kwargs, application_name="proof-maintenance"
+            conninfo,
+            connect_timeout=connect_timeout,
+            row_factory=row_factory,
+            options=options,
+            application_name="proof-maintenance",
         )
 
     def run_maintenance() -> None:
@@ -439,13 +453,21 @@ def test_seed_serializes_with_real_startup_maintenance(
             now=datetime(2026, 9, 1, 2, 56, tzinfo=UTC),
         )
 
-    fixture_writer = proof._seed_fixture  # noqa: SLF001
+    fixture_writer = cast(
+        "Callable[[psycopg.Connection[dict[str, object]], ControlKeys, UUID], "
+        "tuple[str, str, str, str]]",
+        proof._seed_fixture,  # noqa: SLF001
+    )
 
-    def paused_fixture(*args: object) -> tuple[str, str, str, str]:
+    def paused_fixture(
+        connection: psycopg.Connection[dict[str, object]],
+        controls: ControlKeys,
+        root_id: UUID,
+    ) -> tuple[str, str, str, str]:
         if not scheduler_first:
             ready.set()
             assert release.wait(5), "Maintenance did not wait for the seed."
-        return fixture_writer(*args)
+        return fixture_writer(connection, controls, root_id)
 
     monkeypatch.setattr(proof, "_seed_fixture", paused_fixture)
 

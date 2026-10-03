@@ -32,6 +32,7 @@ import {
   Panel,
   PanelHeader,
   SessionCard,
+  SignInCard,
   SessionPage,
   SelectControl,
   ShellErrorBoundary,
@@ -295,26 +296,16 @@ function SignIn({
   readonly client: AdministrationClient;
   readonly expired: boolean;
 }) {
-  const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<string | null>(null);
   async function signIn() {
-    setBusy(true);
-    setFailure(null);
-    try {
-      globalThis.location.assign(await client.startSession(safeReturnPath()));
-    } catch (error) {
-      setFailure(errorMessage(error));
-      setBusy(false);
-    }
+    globalThis.location.assign(await client.startSession(safeReturnPath()));
   }
   return (
     <SessionPage>
-      <SessionCard
-        actions={
-          <Button disabled={busy} onClick={() => void signIn()}>
-            {busy ? "Opening Pocket ID…" : "Continue with Pocket ID"}
-          </Button>
-        }
+      <SignInCard
+        actionLabel="Continue with Pocket ID"
+        pendingLabel="Opening Pocket ID…"
+        onSignIn={signIn}
+        errorMessage={errorMessage}
         description={
           expired
             ? "Your local administrator session expired. Sign in again."
@@ -324,7 +315,6 @@ function SignIn({
         footer="A Pocket ID account does not give Router access. The subject must be on the deployment allowlist."
         icon={<Icon name="shield" size={25} />}
         title={expired ? "Your session expired" : "Administrator sign-in"}
-        feedback={failure === null ? null : <p role="alert">{failure}</p>}
       />
     </SessionPage>
   );

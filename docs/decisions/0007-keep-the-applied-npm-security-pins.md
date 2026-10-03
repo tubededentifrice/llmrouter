@@ -11,7 +11,7 @@ contain applicable security fixes.
 
 ## Decision
 
-Keep exact npm overrides for `brace-expansion` 5.0.9 and `nanoid` 5.1.16.
+Keep exact npm overrides for `brace-expansion` 5.0.12 and `nanoid` 5.1.16.
 Keep the machine-checked dependency exception list empty and keep the complete
 npm lock audit active.
 
@@ -24,6 +24,9 @@ npm lock audit active.
 
 The lock file has explicit compatible security versions. Normal dependency-age
 rules stay active for future changes.
+
+On 2026-10-03, `brace-expansion` changed to 5.0.12 for the newer denial-of-service
+fixes. The existing React Doctor CLI and rules stay in use.
 
 ## Review conditions
 

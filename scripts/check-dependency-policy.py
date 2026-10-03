@@ -26,7 +26,7 @@ SHARED_NODE_DEPENDENCIES = {
     SHARED_UI_PACKAGE: SHARED_UI_SPEC,
     "@opendle/dev-tools": "git+https://github.com/opendle/opendle-lib.git#main",
 }
-CUTOFF = "2026-07-30T06:00:00Z"
+CUTOFF = "2026-09-19T00:00:00Z"
 MINIMUM_RELEASE_AGE = timedelta(days=14)
 APPROVED_PYTHON_OVERRIDES = {
     "cryptography": {
@@ -45,7 +45,7 @@ APPROVED_NPM_EXCEPTION_DOCUMENT: dict[str, Any] = {
     "exceptions": [],
 }
 APPROVED_NPM_OVERRIDES = {
-    "brace-expansion": "5.0.9",
+    "brace-expansion": "5.0.12",
     "nanoid": "5.1.16",
 }
 

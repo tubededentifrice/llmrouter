@@ -38,8 +38,18 @@ def logs_context(
 
     class FixedDatetime(datetime):
         @classmethod
-        def now(cls, tz: tzinfo | None = None) -> datetime:
-            return NOW.replace(tzinfo=None) if tz is None else NOW.astimezone(tz)
+        def now(cls, tz: tzinfo | None = None) -> FixedDatetime:
+            value = NOW.replace(tzinfo=None) if tz is None else NOW.astimezone(tz)
+            return cls(
+                value.year,
+                value.month,
+                value.day,
+                value.hour,
+                value.minute,
+                value.second,
+                value.microsecond,
+                tzinfo=value.tzinfo,
+            )
 
     monkeypatch.setattr("llmrouter_backend.diagnostics.datetime", FixedDatetime)
     # Resolve only this database's unqualified clock calls to a fixed instant.
@@ -70,10 +80,9 @@ def logs_context(
         assert real_before <= real_clock[0] <= datetime.now(tz=UTC)
     # The administrator database on the same server keeps normal resolution.
     with psycopg.connect(os.environ["LLMROUTER_TEST_DATABASE_URL"]) as connection:
-        assert (
-            "logs_test_clock"
-            not in connection.execute("SHOW search_path").fetchone()[0]
-        )
+        search_path = connection.execute("SHOW search_path").fetchone()
+        assert search_path is not None
+        assert "logs_test_clock" not in search_path[0]
         other_clock = connection.execute("SELECT statement_timestamp()").fetchone()
         assert other_clock is not None
         assert real_before <= other_clock[0] <= datetime.now(tz=UTC)
@@ -291,6 +300,7 @@ def test_logs_filters_keep_the_same_cursor_walk(
     # Put nonmatching records on both sides of the page boundary. Their larger
     # tied IDs expose a dropped filter on either the first or the later page.
     controls = [(NOW - timedelta(seconds=1)), (NOW - timedelta(seconds=35))]
+    excluded_actors: list[tuple[str | None, str | None]]
     if filters == {"call_actor": "administrator"}:
         excluded_actors = [(None, None)]
     elif filters == {"call_actor": "service"}:
