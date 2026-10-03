@@ -1,3 +1,4 @@
+import { selectService, reloadFixture } from "./browserControls.mjs";
 // Run: node apps/admin/test/graph-pages.browser.mjs
 /* global window, document, innerWidth, innerHeight, getComputedStyle, requestAnimationFrame */
 // Controlled real-App localhost reads. No live write, session, or provider call.
@@ -385,7 +386,7 @@ async function inspector(page, route) {
 async function toolbarReachable(page, route) {
   const controls = page
     .locator(`${names[route].host} > .od-graph-toolbar`)
-    .locator("button, input, select");
+    .locator("button, input, select:not(.od-searchable-select-listbox)");
   for (const control of await controls.all()) {
     if (!(await control.isVisible())) continue;
     await control.focus();
@@ -440,15 +441,11 @@ async function oversized(page, route) {
       };
     }
   }, route);
-  await page
-    .getByRole("button", {
-      name:
-        names[route].first === "Service context"
-          ? "Refresh configuration"
-          : "Refresh services",
-      exact: true,
-    })
-    .click();
+  if (route === "configuration") await reloadFixture(page);
+  else
+    await page
+      .getByRole("button", { name: "Refresh services", exact: true })
+      .click();
   await settle(page);
   if (route === "configuration") {
     // A deliberately oversized board fixture tests viewport containment at each size.
@@ -486,6 +483,200 @@ async function oversized(page, route) {
     0, 0,
   ]);
 }
+
+describe("compact configuration interactions", () => {
+  for (const [width, height] of sizes) {
+    it(
+      `${width}: search focus, tags, exact selection, service search, and reload`,
+      { timeout: 30000 },
+      async () => {
+        const { page, context, errors } = await open(
+          width,
+          height,
+          "configuration",
+          { path: "/configuration?service=child" },
+        );
+        try {
+          await settle(page);
+          await page.evaluate(() => {
+            const f = window.shellFixture;
+            const provider = f.values.providers.items[0];
+            const model = f.values.models.items[0];
+            const route = {
+              ...f.values.providerModels.items[0],
+              cooldown: null,
+            };
+            f.values.providers.items.push({
+              ...provider,
+              api_name: "spare-provider",
+              display_name: "Spare provider",
+            });
+            f.values.models.items[0] = {
+              ...model,
+              input_modalities: ["text", "image"],
+              output_modalities: ["text", "image"],
+            };
+            f.values.models.items.push({
+              ...model,
+              api_name: "spare-model",
+              display_name: "Spare model",
+            });
+            f.values.providerModels.items = [
+              route,
+              {
+                ...route,
+                api_name: "spare-route",
+                model_api_name: "spare-model",
+                provider_api_name: "spare-provider",
+              },
+            ];
+            f.values.assignments.items = [
+              {
+                api_name: "workflow",
+                display_name: "Workflow",
+                definition_kind: "direct_chain",
+                defined_by_service_api_name: "child",
+                observed_requirements: [],
+                direct_chain: [{ provider_model_api_name: "route" }],
+                effective_chain: [{ provider_model_api_name: "route" }],
+                last_used_at: new Date(Date.now() - 7 * 86400000).toISOString(),
+              },
+            ];
+          });
+          await reloadFixture(page);
+          await settle(page);
+          await expect(
+            page.getByRole("button", {
+              name: "Refresh configuration",
+              exact: true,
+            }),
+          ).toHaveCount(0);
+          const models = page.locator(
+            '[data-column-id="catalog"] [data-node-kind="group"]',
+          );
+          await expect(models).toHaveCount(2);
+          await expect(
+            page.locator(
+              '[data-node-id="model:model"] .od-relationship-graph-node-tags > span',
+            ),
+          ).toHaveText([
+            "Text input",
+            "Image input",
+            "Text output",
+            "Image output",
+            "Streaming",
+          ]);
+          const assignment = page.locator(
+            '[data-node-id="assignment:workflow"]',
+          );
+          await expect(
+            assignment.locator('[title^="Last used on "]'),
+          ).toHaveText("7 days ago ⓘ");
+          await expect(assignment).not.toContainText(
+            "No observed requirements",
+          );
+          const search = page.getByRole("searchbox", {
+            name: "Search configuration",
+            exact: true,
+          });
+          await search.focus();
+          for (const char of "zzzz") {
+            await search.press(char);
+            await expect(search).toBeFocused();
+          }
+          await expect(
+            page
+              .locator(".od-relationship-graph-empty")
+              .getByText("No configuration matches this search.", {
+                exact: true,
+              }),
+          ).toBeVisible();
+          await page
+            .getByRole("button", { name: "Clear search", exact: true })
+            .first()
+            .click();
+          await expect(search).toBeFocused();
+          await search.pressSequentially("fixture");
+          await expect(search).toBeFocused();
+          await search.fill("");
+          await expect(search).toBeFocused();
+          await assignment.click();
+          await expect(models).toHaveCount(1);
+          await expect(
+            page.locator('[data-node-id="mapping:spare-route"]'),
+          ).toHaveCount(0);
+          await expect(
+            page.locator('[data-node-id="provider:spare-provider"]'),
+          ).toHaveCount(0);
+          await expect(
+            page.locator('[data-node-id="mapping:route"]'),
+          ).toHaveCount(1);
+          await page.locator(".od-graph-inspector h2").focus();
+          await page.keyboard.press("Escape");
+          await expect(assignment).toBeFocused();
+          await search.fill("spare");
+          await expect(search).toBeFocused();
+          await expect(
+            page.locator('[data-node-id="model:spare-model"]'),
+          ).toHaveCount(1);
+          await search.fill("");
+          await expect(search).toBeFocused();
+          await expect(assignment).toHaveAttribute("aria-pressed", "true");
+          await expect(models).toHaveCount(1);
+          await page
+            .getByRole("button", { name: "Show all", exact: true })
+            .click();
+          await expect(models).toHaveCount(2);
+          const service = page.getByRole("combobox", {
+            name: "Service context",
+            exact: true,
+          });
+          await service.fill("root");
+          await expect(
+            page.locator(".od-searchable-select-listbox option"),
+          ).toHaveCount(1);
+          await service.press("Enter");
+          await expect(page).toHaveURL(
+            "http://127.0.0.1:5174/configuration?service=root",
+          );
+          await settle(page);
+          await expect(models).toHaveCount(2);
+          await evidenceFor(
+            page,
+            "configuration",
+            `${width}-configuration-compact`,
+          );
+          await page.evaluate(() => {
+            window.shellFixture.values.providers.items[0].display_name =
+              "Changed provider";
+          });
+          await reloadFixture(page);
+          await settle(page);
+          await expect(
+            page.locator('[data-node-id="provider:provider"]'),
+          ).toContainText("Changed provider");
+          await expect(service).toHaveValue("Root service");
+          expect(
+            await page.evaluate(() =>
+              window.shellFixture.calls.map((call) => call.name),
+            ),
+          ).toEqual(
+            expect.arrayContaining([
+              "services",
+              "providers",
+              "models",
+              "providerModels",
+              "credentials",
+              "assignments",
+            ]),
+          );
+        } finally {
+          await close(context, errors);
+        }
+      },
+    );
+  }
+});
 
 describe("full-height edge-to-edge graph pages", () => {
   for (const [width, height] of sizes)
@@ -636,15 +827,17 @@ describe("full-height edge-to-edge graph pages", () => {
               name: `Refresh ${route}`,
               exact: true,
             });
-            await refresh.click();
+            if (route === "configuration") await reloadFixture(page);
+            else await refresh.click();
             await settle(page);
-            await expect(refresh).toBeFocused();
+            if (route === "services") await expect(refresh).toBeFocused();
             await evidenceFor(page, route, `${width}-${route}-stale`);
-            await expect(
-              page.locator(
-                `${names[route].viewportSelector} button[tabindex="0"]`,
-              ),
-            ).toHaveCount(1);
+            if (route === "services")
+              await expect(
+                page.locator(
+                  `${names[route].viewportSelector} button[tabindex="0"]`,
+                ),
+              ).toHaveCount(1);
             await page.evaluate(() => {
               document.documentElement.style.fontSize = "32px";
             });
@@ -672,7 +865,8 @@ describe("full-height edge-to-edge graph pages", () => {
                     page: { has_more: false },
                   };
               });
-              await refresh.click();
+              if (route === "configuration") await reloadFixture(page);
+              else await refresh.click();
               await settle(page);
               await evidenceFor(page, route, `${width}-${route}-empty`);
               await expect(
@@ -699,7 +893,8 @@ describe("full-height edge-to-edge graph pages", () => {
                   (s) => s.api_name !== "root",
                 );
               });
-              await refresh.click();
+              if (route === "configuration") await reloadFixture(page);
+              else await refresh.click();
               await settle(page);
               await expect(
                 page.locator('[data-service-api-name="root"]'),
@@ -795,9 +990,7 @@ describe("full-height edge-to-edge graph pages", () => {
             document.documentElement.style.fontSize = "16px";
             window.shellFixture.fail = ["assignments"];
           });
-          await page
-            .getByRole("combobox", { name: "Service context", exact: true })
-            .selectOption("root");
+          await selectService(page, "root");
           await settle(page);
           await expect(
             page.getByText("Assignments are stale or unavailable.", {
@@ -818,8 +1011,8 @@ describe("full-height edge-to-edge graph pages", () => {
             `${width}-configuration-assignment-failure-text200`,
           );
           await reachable(
-            page.getByRole("button", {
-              name: "Refresh configuration",
+            page.getByRole("combobox", {
+              name: "Service context",
               exact: true,
             }),
           );

@@ -208,9 +208,9 @@ def _seed(
         ).fetchall()
         for table in tables:
             connection.execute(
-                psycopg.sql.SQL("LOCK TABLE router.{} IN SHARE ROW EXCLUSIVE MODE").format(
-                    psycopg.sql.Identifier(str(table["tablename"]))
-                )
+                psycopg.sql.SQL(
+                    "LOCK TABLE router.{} IN SHARE ROW EXCLUSIVE MODE"
+                ).format(psycopg.sql.Identifier(str(table["tablename"])))
             )
         if not _seed_has_only_empty_scheduled_runs(connection):
             raise SystemExit(
@@ -1451,11 +1451,11 @@ def _assert_route_controls(browser: _Cdp) -> None:
           const main = document.querySelector('main');
           const button = (text) => [...main.querySelectorAll('button')].find(e => e.textContent.trim() === text);
           const route = location.pathname;
-          const refresh = { '/overview':'Refresh overview', '/services':'Refresh services', '/configuration':'Refresh configuration', '/logs':'Refresh Logs', '/operations':'Refresh operations' }[route];
+          const refresh = { '/overview':'Refresh overview', '/services':'Refresh services', '/logs':'Refresh Logs', '/operations':'Refresh operations' }[route];
           if (refresh && !button(refresh)) return false;
           if (route === '/configuration') {
-            const context = main.querySelector("select[aria-label='Service context']");
-            if (!context || !context.closest('.od-graph-toolbar') || context.options[0]?.text !== 'All services') return false;
+            const context = main.querySelector("input[role='combobox']");
+            if (!context || !context.closest('.od-graph-toolbar') || !context.labels?.[0]?.textContent.includes('Service context') || button('Refresh configuration')) return false;
           }
           if (route === '/services' && [...main.querySelectorAll('.od-graph-toolbar button')].some(e => /create|new service/i.test(e.textContent))) return false;
           if (route === '/logs' && (!main.querySelector("[aria-label='Logs filters']") || !main.querySelector("[aria-label='Logs']") || /Detailed request logs|Load logs/.test(main.innerText))) return false;
@@ -1619,7 +1619,7 @@ def _click_text(browser: _Cdp, text_value: str, *, scope: str = "body") -> None:
           const scope = document.querySelector({json.dumps(scope)});
           if (!(scope instanceof HTMLElement)) return false;
           const target = [...scope.querySelectorAll("button")].find(
-            (item) => (item.textContent ?? "").trim() === {json.dumps(text_value)}
+            (item) => (item.textContent ?? "").trim() === {json.dumps(text_value)} || item.getAttribute("aria-label") === {json.dumps(text_value)}
           );
           if (!(target instanceof HTMLButtonElement)) return false;
           target.click();
@@ -1627,6 +1627,17 @@ def _click_text(browser: _Cdp, text_value: str, *, scope: str = "body") -> None:
         }})()"""
     )
     assert clicked is True, text_value
+
+
+def _set_service_context(browser: _Cdp, value: str) -> None:
+    """Select a service through the shared searchable dropdown."""
+    _click_selector(browser, ".od-graph-toolbar input[role='combobox']")
+    _wait_browser(
+        browser,
+        "document.querySelector('.od-searchable-select-listbox') !== null",
+        "The service options did not open",
+    )
+    _set_control(browser, ".od-searchable-select-listbox", value)
 
 
 def _set_control(browser: _Cdp, selector: str, value: str) -> None:
@@ -2119,7 +2130,7 @@ def _prove_configuration_graph(browser: _Cdp, *, mobile: bool) -> None:
             .map((item) => item.textContent?.trim()),
           assignmentDisabled:
             [...document.querySelectorAll("button")]
-              .find((item) => item.textContent?.trim() === "Add assignment")?.disabled,
+              .find((item) => item.getAttribute("aria-label") === "Add assignment")?.disabled,
           tabStops: document.querySelectorAll("[data-node-id][tabindex='0']").length,
           pageText: document.body.innerText
         }))()"""
@@ -2157,7 +2168,7 @@ def _prove_configuration_graph(browser: _Cdp, *, mobile: bool) -> None:
         "The graph did not restore its complete result",
     )
 
-    _set_control(browser, "select[aria-label='Service context']", "alpha")
+    _set_service_context(browser, "alpha")
     _wait_browser(
         browser,
         "document.querySelector(\"[data-node-id='assignment:workflow']\") !== null",
@@ -2243,6 +2254,8 @@ def _prove_configuration_graph(browser: _Cdp, *, mobile: bool) -> None:
             f"document.activeElement?.getAttribute('data-node-id') === {json.dumps(node_id)}",
             f"The {node_id} inspector did not restore focus",
         )
+
+    _click_text(browser, "Show all")
 
     _set_control(
         browser,
@@ -2466,7 +2479,7 @@ def _prove_configuration_graph(browser: _Cdp, *, mobile: bool) -> None:
         "document.querySelector('dialog.od-dialog[open]') === null",
         "The playground did not close with Escape",
     )
-    _click_text(browser, "Refresh configuration")
+    browser.command("Page.reload", {"ignoreCache": True})
     _wait_browser(
         browser,
         "document.querySelector(\"[data-node-id='mapping:text']\") !== null",
@@ -2791,27 +2804,10 @@ def _prove_route_and_state_matrix(browser: _Cdp, *, mobile: bool) -> None:
         "No providers are configured.",
     )
     _assert_layout(browser, mobile=mobile)
-    _navigate(browser, "/configuration", "LLM configuration")
-    _wait_browser(
-        browser,
-        "document.querySelector(\"[aria-label='LLM configuration relationships']\") !== null && "
-        "[...document.querySelectorAll('.od-graph-toolbar button')].some("
-        "(item) => item.textContent?.trim() === 'Refresh configuration' && !item.disabled)",
-        "The current configuration graph was not ready for its failed refresh proof",
-    )
-    browser.evaluate("globalThis.__llmrouterProofMode = 'error'")
-    _click_text(browser, "Refresh configuration", scope=".od-graph-toolbar")
-    _wait_browser(
-        browser,
-        "document.querySelector(\"[role='alert']\")?.textContent?.includes('Injected proof failure.') === true && "
-        "document.querySelector(\"[data-node-id='provider:fake-provider']\") !== null && "
-        "(document.querySelector(\"[data-column-id='providers']\")?.innerText ?? '').includes('Unable to load Providers.') && "
-        "[...document.querySelectorAll(\"[data-column-id='providers'] button\")].some("
-        "(item) => item.textContent?.trim() === 'Retry')",
-        "A failed refresh did not retain and label the current configuration graph",
-    )
-    browser.evaluate("globalThis.__llmrouterProofMode = 'normal'")
+    _navigate(browser, "/configuration?proof_mode=error", "Unable to load Providers.")
+    _assert_route_controls(browser)
     _assert_layout(browser, mobile=mobile)
+    _navigate(browser, "/configuration", "LLM configuration")
 
 
 def _prove_emulated_media(browser: _Cdp, *, mobile: bool) -> None:

@@ -639,36 +639,29 @@ def _configuration_states(
         browser, f"{width}-configuration-retry-ready", mobile=mobile, results=results
     )
 
-    browser.evaluate("shellFixture.fail=['providers']")
-    proof._click_text(browser, "Refresh configuration", scope=".od-graph-toolbar")
+    browser.use("shell", boot={"fail": ["providers"]})
+    proof._navigate(browser, "/configuration", "Unable to load Providers.")
     _wait(
         browser,
-        """document.querySelector('[data-column-id=providers]')?.innerText.includes('Unable to load Providers.') &&
-      document.querySelector('[data-node-id="provider:provider"]')!==null &&
-      document.querySelector('[data-node-id="model:model"]')!==null &&
-      document.querySelector('main')?.innerText.includes('Provider connections is stale.') &&
-      document.querySelector('main')?.innerText.includes('The Router could not complete the operation. Try again.') &&
-      !document.querySelector('main')?.innerText.includes('Controlled providers failure.')""",
+        "document.querySelector('[data-node-id=\"model:model\"]')!==null && "
+        "document.querySelector('main')?.innerText.includes('Provider connections is unavailable.')",
     )
+    proof._assert_route_controls(browser)
     _capture(
-        browser, f"{width}-configuration-stale-error", mobile=mobile, results=results
+        browser, f"{width}-configuration-reload-error", mobile=mobile, results=results
     )
     browser.evaluate("shellFixture.fail=[]")
     proof._click_text(browser, "Retry", scope="[data-column-id=providers]")
     _wait(
-        browser,
-        """document.querySelector('[data-node-id="provider:provider"]')!==null &&
-      !document.querySelector('main')?.innerText.includes('Provider connections is stale.') &&
-      !document.querySelector('main')?.innerText.includes('The Router could not complete the operation. Try again.') &&
-      !document.querySelector('[data-column-id=providers]')?.innerText.includes('Unable to load Providers.')""",
+        browser, "document.querySelector('[data-node-id=\"provider:provider\"]')!==null"
     )
     assert (
         browser.evaluate("shellFixture.calls.filter(c=>c.name==='providers').length")
-        == 4
+        == 2
     )
     _capture(
         browser,
-        f"{width}-configuration-stale-retry-ready",
+        f"{width}-configuration-reload-retry-ready",
         mobile=mobile,
         results=results,
     )
@@ -704,17 +697,15 @@ def _configuration(
     browser.use("shell")
     proof._navigate(browser, "/configuration", "LLM configuration")
     proof._assert_route_controls(browser)
-    proof._set_control(browser, "select[aria-label='Service context']", "alpha")
+    proof._set_service_context(browser, "alpha")
     _wait(
         browser,
         "location.search==='?service=alpha' && shellFixture.calls.some(c=>c.name==='assignments' && c.args[0]==='alpha')",
     )
-    previous = browser.evaluate(
-        "shellFixture.calls.filter(c=>c.name==='providers').length"
-    )
-    proof._click_text(browser, "Refresh configuration", scope=".od-graph-toolbar")
+    browser.command("Page.reload", {"ignoreCache": True})
     _wait(
-        browser, f"shellFixture.calls.filter(c=>c.name==='providers').length>{previous}"
+        browser,
+        "location.search==='?service=alpha' && shellFixture.calls.some(c=>c.name==='assignments' && c.args[0]==='alpha')",
     )
     _capture(browser, f"{width}-configuration-context", mobile=mobile, results=results)
     for size in (16, 32):
@@ -1138,7 +1129,7 @@ def _legacy_route_rejections(
         (
             "/configuration",
             "configuration-context",
-            "document.querySelector('select[aria-label=\"Service context\"]').options[0].text='Select a service'",
+            "document.querySelector('.od-graph-toolbar input[role=combobox]').remove()",
         ),
     ):
         browser.use("shell")

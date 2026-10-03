@@ -1,3 +1,4 @@
+import { selectService, reloadFixture } from "./browserControls.mjs";
 // Run: node apps/admin/test/administration-content.browser.mjs
 /* global window, document, innerWidth, Blob, URL */
 // Real App, installed shared UI, existing controlled client fixture, loopback only.
@@ -610,7 +611,7 @@ async function mediaSetup(page) {
         })),
       };
   });
-  await button(page, "Refresh configuration").click();
+  await reloadFixture(page);
   await settle(page);
   await node(page, "mapping:route");
   await button(page, "Play exact route").click();
@@ -669,9 +670,7 @@ scene("configuration-context-discard", "/configuration", {
     await page
       .getByRole("textbox", { name: "Assignment API name", exact: true })
       .fill("draft");
-    await page
-      .getByRole("combobox", { name: "Service context", exact: true })
-      .selectOption("child");
+    await selectService(page, "child");
     await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 });
     const confirmation = page.getByRole("dialog", {
       name: "Discard assignment changes?",
@@ -775,7 +774,7 @@ scene("configuration-partial", "/configuration", {
         next_cursor: "more",
       };
     });
-    await button(page, "Refresh configuration").click();
+    await reloadFixture(page);
     await settle(page);
   },
 });

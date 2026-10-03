@@ -34,7 +34,7 @@ import {
   SessionCard,
   SignInCard,
   SessionPage,
-  SelectControl,
+  SearchableSelect,
   ShellErrorBoundary,
   SkipLink,
   StatCard,
@@ -1853,8 +1853,6 @@ function ConfigurationRoute(props: RouteProps) {
       }),
     [assignmentPending, notify, registerNavigationGuard],
   );
-  const refresh = () =>
-    Promise.all([resource.load(), assignments.load()]).then(() => undefined);
   return (
     <AuthenticatedAdministration
       {...props}
@@ -1909,30 +1907,25 @@ function ConfigurationRoute(props: RouteProps) {
           services={resource.data.services}
           toolbar={{
             leading: (
-              <SelectControl
-                aria-label="Service context"
+              <SearchableSelect
                 label="Service context"
                 disabled={assignmentPending}
-                onChange={(event) => {
-                  selectService(event.currentTarget.value, event.currentTarget);
-                }}
+                options={[
+                  { value: "", label: "All services" },
+                  ...resource.data.services.map((service) => ({
+                    value: service.api_name,
+                    label: service.display_name,
+                    searchText: service.api_name,
+                  })),
+                ]}
                 value={selectedService}
-              >
-                <option value="">All services</option>
-                {resource.data.services.map((service) => (
-                  <option key={service.api_name} value={service.api_name}>
-                    {service.display_name}
-                  </option>
-                ))}
-              </SelectControl>
-            ),
-            actions: (
-              <RefreshAction
-                label="Refresh configuration"
-                pending={
-                  resource.pending || assignments.pending || assignmentPending
-                }
-                onRefresh={refresh}
+                onChange={(value) => {
+                  const trigger = document.querySelector(
+                    '.od-relationship-graph-toolbar input[role="combobox"]',
+                  );
+                  if (trigger instanceof HTMLElement)
+                    selectService(value, trigger);
+                }}
               />
             ),
           }}

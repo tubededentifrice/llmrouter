@@ -10,7 +10,8 @@ and the full-height and edge-to-edge graph-page amendments were accepted on
 2026-08-30. The wrapped-toolbar placement and extreme-title scrolling
 amendments were accepted on 2026-09-08. The
 [inspector fit decision](../decisions/0010-keep-inspector-controls-reachable.md)
-records the reasons and consequences.
+records the reasons and consequences. The compact configuration-board and
+search-focus amendments were accepted on 2026-10-03.
 
 ## Service API keys
 
@@ -148,7 +149,7 @@ use this ownership:
 | `/overview` | None | `Refresh overview` in the page-heading action region reloads only dashboard summaries. |
 | `/services` | The selected graph node and its route-local `service` query | `Refresh services` in the graph-wide action region reloads the service tree. |
 | `/services/{serviceApiName}` | The route service; no selector | The page and its sections own their existing load, retry, and refresh actions. |
-| `/configuration` | `Service context` in the graph toolbar; its empty value is `All services` | `Refresh configuration` in the graph-wide action region reloads the global catalog and the selected service's assignments. |
+| `/configuration` | Searchable `Service context` in the graph toolbar; its empty value is `All services` | Browser reload loads the global catalog and the selected service's assignments. There is no `Refresh configuration` button. |
 | `/logs` | Its local Logs filters only; no general service context | `Refresh Logs` and the existing Logs retry actions remain in the Logs view. |
 | `/statistics` | Its local statistics service filter; no general service context | Submitting its local statistics filters reruns the report; no separate shell refresh exists. |
 | `/operations` | None | `Refresh operations` in the page-heading action region reloads the health, retention, cooldown, and activity data; section retry and activity actions remain local. |
@@ -638,6 +639,38 @@ accept host-supplied records, relationships, labels, actions, and state. It
 MUST NOT contain a Router provider, canonical-model, provider-route,
 assignment, service, credential, capability, or mutation type.
 
+### Compact configuration board
+
+The configuration toolbar MUST use the graph background and border treatment.
+The service context MUST use the shared searchable dropdown. The graph search
+MUST use the remaining toolbar width. Its clear action MUST stay on one line.
+Creation actions MUST use small labelled icon buttons. A model inspector MUST
+provide its contextual route-creation action; the board MUST NOT repeat that
+action below each model card.
+
+The middle column MUST show one card per canonical model with its provider
+routes as compact nested rows. Model capabilities and input and output
+modalities MUST be tags on that card. They MUST NOT define model groups.
+The card MUST show the model name and technical identity. A route row MUST
+show its wire model and provider, without repeating the model's capability
+list.
+
+An assignment card MUST show its name, ordered model and provider chain, and
+one last-used tag. The tag MUST show relative time, such as `7 days ago`, and
+its information tooltip MUST say `Last used on ...` with the full date. An
+unused assignment MUST show `Never used`. Definition source, observed
+requirements, and technical IDs MUST remain in the inspector and accessible
+relationship descriptions. Corrective errors MUST remain visible on the card.
+
+Selection MUST hide unrelated items outside the selected column and place
+the selected card first in its column. An assignment selection MUST retain its
+exact provider routes, their model cards, and their providers. The assignment
+column MUST remain available to select another assignment. `Show all` MUST
+clear the filter through the normal unsaved-change guard. Search MUST inspect
+the complete catalog and temporarily remove the selection filter. Search MUST
+keep selection and input focus. OpenDLE UI MUST own the compact layout, tag
+presentation, and optional selection filter; Router MUST supply its records.
+
 ### Selectable configuration controls and commands
 
 The configuration board MUST use its compound controls to separate resources
@@ -881,7 +914,7 @@ Selected, focused, pending, enabled, disabled, unavailable, inherited, and
 direct state MUST each have a visible shape, border, icon, text, or state label
 when it applies. Color, an accessible name, `aria-selected`, `aria-pressed`, or
 `aria-keyshortcuts` alone is not sufficient. Each available inspector action
-MUST show its command key. An inherited item MUST show its source. An
+MUST show its command key. An inherited item MUST show its source in its inspector. An
 unavailable item MUST show its corrective reason. A pending item MUST show the
 operation in progress and MUST not look enabled for another action.
 
@@ -976,11 +1009,12 @@ Adding, removing, or changing `toolbar` or either host slot MUST NOT reset the
 effective query, graph selection, or search origin.
 
 The clear action MUST be available for a non-empty effective query and MUST
-request the empty value. After the effective query becomes empty, the graph
-MUST restore focus and selection to the control that was selected before
-search when it still exists. Otherwise, it MUST move focus and selection to the
-first available graph control. When the graph has no control, it MUST clear
-selection and focus the graph-owned search. A slash key MUST focus the
+request the empty value. Typing, an empty result, and a change to the result
+MUST keep focus in the search input when that input has focus. Search MUST NOT
+select a result or open an inspector. Clearing the query MUST keep the prior
+selection when that record still exists and MUST return focus to the search
+input. Deleting the query with the keyboard MUST also keep input focus.
+A slash key MUST focus the
 graph-owned search unless the event was prevented or started in an editable
 control. When focus is in one of several relationship graphs, that graph MUST
 own slash. When no graph contains focus, the first relationship graph in

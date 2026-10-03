@@ -18,6 +18,8 @@ import {
   EditableTable,
   FormActions,
   InlineAlert,
+  Icon,
+  IconButton,
   GraphInspector,
   GraphInspectorFact,
   GraphInspectorFacts,
@@ -425,6 +427,24 @@ function modelCapabilityLabels(
     labels.push(label);
   }
   return labels;
+}
+
+function lastUsedTag(value: string | null | undefined) {
+  if (!value) return [{ label: "Never used" }];
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return [];
+  const days = Math.max(0, Math.floor((Date.now() - timestamp) / 86_400_000));
+  return [
+    {
+      label:
+        days === 0
+          ? "Today"
+          : days === 1
+            ? "1 day ago"
+            : `${String(days)} days ago`,
+      description: `Last used on ${new Date(timestamp).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })} (${value})`,
+    },
+  ];
 }
 
 interface BoardState {
@@ -1236,18 +1256,18 @@ function useConfigurationController({
     {
       id: "providers",
       label: "Providers",
-      countLabel: `${String(visibleProviders.length)} providers`,
+      countLabel: String(visibleProviders.length),
       actions: (
         <span className="configuration-column-actions">
-          <Button
+          <IconButton
+            aria-label="Add provider"
+            title="Add provider"
+            icon={<Icon name="plus" />}
             disabled={pending}
             onClick={(event) => {
               openCreate("provider", event.currentTarget);
             }}
-            variant="secondary"
-          >
-            Add provider
-          </Button>
+          />
           {effectiveProviderPhase === "error" ? (
             <>
               <span>Unable to load Providers.</span>
@@ -1294,7 +1314,7 @@ function useConfigurationController({
         return {
           id,
           label: provider.display_name,
-          detail: `Provider ID: ${provider.api_name} · Adapter: ${adapterLabels[provider.adapter]}`,
+          detail: adapterLabels[provider.adapter],
           searchText: [
             provider.api_name,
             provider.adapter,
@@ -1312,27 +1332,27 @@ function useConfigurationController({
     {
       id: "catalog",
       label: "Canonical models",
-      countLabel: `${String(visibleModels.length)} models · ${String(visibleMappings.length)} routes`,
+      countLabel: String(visibleModels.length),
       actions: (
         <span className="configuration-column-actions">
-          <Button
+          <IconButton
+            aria-label="Add canonical model"
+            title="Add canonical model"
+            icon={<Icon name="plus" />}
             disabled={pending}
             onClick={(event) => {
               openCreate("model", event.currentTarget);
             }}
-            variant="secondary"
-          >
-            Add canonical model
-          </Button>
-          <Button
+          />
+          <IconButton
+            aria-label="Add provider route"
+            title="Add provider route"
+            icon={<Icon name="layers" />}
             disabled={pending}
             onClick={(event) => {
               openCreate("mapping", event.currentTarget);
             }}
-            variant="secondary"
-          >
-            Add provider route
-          </Button>
+          />
           {effectiveCatalogPhase === "error" ? (
             <>
               <span>Unable to load Canonical models.</span>
@@ -1405,8 +1425,8 @@ function useConfigurationController({
             {
               id,
               label: model.display_name,
-              detail: `Model ID: ${model.api_name}`,
-              content: capabilityLabels.join(" · "),
+              detail: model.api_name,
+              tags: capabilityLabels.map((label) => ({ label })),
               searchText: [
                 model.api_name,
                 ...capabilityLabels,
@@ -1416,33 +1436,16 @@ function useConfigurationController({
               stateLabel: modelStateLabel,
               rowsLabel: "Provider routes",
               rowsEmptyState: "No provider routes.",
-              rowsActions: (
-                <span className="configuration-column-actions">
-                  <Button
-                    disabled={pending}
-                    onClick={(event) => {
-                      requestInspectorTransition({
-                        inspector: {
-                          kind: "mapping",
-                          apiName: null,
-                          modelApiName: model.api_name,
-                        },
-                        selectedNodeId: null,
-                        trigger: event.currentTarget,
-                      });
-                    }}
-                    variant="secondary"
-                  >
-                    Add provider route
-                  </Button>
-                  {hasUnavailableProvider ? (
-                    <ReferenceRetryAction
-                      onRetry={onRefreshGlobal}
-                      pending={pending}
-                    />
-                  ) : null}
-                </span>
-              ),
+              ...(hasUnavailableProvider
+                ? {
+                    rowsActions: (
+                      <ReferenceRetryAction
+                        onRetry={onRefreshGlobal}
+                        pending={pending}
+                      />
+                    ),
+                  }
+                : {}),
               rows: routes.map((route) => {
                 const provider = providerByName.get(route.provider_api_name);
                 const routeState = routeStates.get(route.api_name);
@@ -1451,13 +1454,11 @@ function useConfigurationController({
                 const routeCapabilities = modelCapabilityLabels(route);
                 return {
                   id: configurationNodeId.mapping(route.api_name),
-                  label:
+                  label: route.provider_model_name,
+                  detail:
                     provider?.display_name ??
                     `Unavailable provider: ${route.provider_api_name}`,
-                  detail: `Route ID: ${route.api_name} · Wire model: ${route.provider_model_name}`,
-                  content: [routeCapabilities.join(" · "), routeState.content]
-                    .filter(Boolean)
-                    .join(" · "),
+                  content: routeState.content,
                   searchText: [
                     route.api_name,
                     route.model_api_name,
@@ -1527,20 +1528,20 @@ function useConfigurationController({
             ? "Loading"
             : assignmentPhase === "error"
               ? "Unavailable"
-              : `${String(visibleAssignments.length)} effective`,
+              : String(visibleAssignments.length),
       actions: (
         <span className="configuration-column-actions">
-          <Button
+          <IconButton
+            aria-label="Add assignment"
+            title="Add assignment"
+            icon={<Icon name="plus" />}
             disabled={
               pending || selectedService === "" || assignmentPhase === "loading"
             }
             onClick={(event) => {
               openCreate("assignment", event.currentTarget);
             }}
-            variant="secondary"
-          >
-            Add assignment
-          </Button>
+          />
           {assignmentPhase === "error" && selectedService !== "" ? (
             <>
               <span>Unable to load Assignments.</span>
@@ -1650,12 +1651,10 @@ function useConfigurationController({
         return {
           id,
           label: assignment.display_name,
-          detail: `Assignment ID: ${assignment.api_name}`,
+          tags: lastUsedTag(assignment.last_used_at),
           content: [
-            sourceLabel,
-            inheritanceLabel,
-            `Last used: ${assignment.last_used_at ?? "Never"}`,
-            requirementLabel,
+            sourceUnavailable ? sourceLabel : null,
+            inheritedAssignmentUnavailable ? inheritanceLabel : null,
           ]
             .filter(Boolean)
             .join(" · "),
@@ -1711,14 +1710,11 @@ function useConfigurationController({
               );
             return {
               id: configurationNodeId.rung(assignment.api_name, position),
-              label: positionLabel,
-              detail:
-                route === undefined
-                  ? `Unavailable route: ${candidate.provider_model_api_name}`
-                  : `${provider?.display_name ?? `Unavailable provider: ${route.provider_api_name}`} · ${routeModel?.display_name ?? `Unavailable model: ${route.model_api_name}`}`,
+              label:
+                routeModel?.display_name ??
+                `Unavailable route: ${candidate.provider_model_api_name}`,
+              detail: `${positionLabel} · ${provider?.display_name ?? "Unavailable provider"}`,
               content: [
-                route === undefined ? null : `Route ID: ${route.api_name}`,
-                local ? null : "Inherited",
                 mismatch ? "Does not meet observed requirements" : null,
                 routeState?.content,
               ]
@@ -1733,12 +1729,7 @@ function useConfigurationController({
                 local ? "Local" : "Inherited",
               ],
               state: routeState?.state ?? ("unavailable" as const),
-              stateLabel: [
-                routeState?.stateLabel ?? "Unavailable",
-                local ? null : "Inherited",
-              ]
-                .filter(Boolean)
-                .join(" · "),
+              stateLabel: routeState?.stateLabel ?? "Unavailable",
             };
           }),
         };
@@ -2459,13 +2450,12 @@ function useConfigurationController({
           setSelectedNodeId(nodeId);
         return;
       }
-      setSelectedNodeId(null);
-      if (inspector?.apiName === null) return;
-      setInspector(null);
-      if (inspector?.kind === "assignment") {
-        setAssignmentDirty(false);
-        onAssignmentDirtyChange(false);
-      }
+      if (pendingRef.current) return;
+      requestInspectorTransition({
+        inspector: null,
+        selectedNodeId: null,
+        trigger: null,
+      });
     },
     cancelDeleteTarget: () => {
       pendingInspectorTransitionRef.current = null;
@@ -2509,6 +2499,8 @@ export function ConfigurationGraph(props: ConfigurationGraphProps) {
         aria-label="Configuration graph workspace"
         viewportLabel="LLM configuration relationships"
         fullPage
+        compact
+        filterToSelection
         viewportContent={
           props.stateContent !== undefined ||
           globalPhase === "partial" ||

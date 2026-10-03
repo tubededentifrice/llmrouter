@@ -22,8 +22,22 @@ export interface ShellFixture {
 declare global {
   interface Window {
     shellFixture: ShellFixture;
-    shellBoot: { hold: string[]; fail: string[]; signedOut: boolean };
+    shellBoot: {
+      hold: string[];
+      fail: string[];
+      signedOut: boolean;
+      values?: Record<string, unknown>;
+    };
   }
+}
+
+const reloadState = sessionStorage.getItem("shell-fixture-reload");
+if (reloadState) {
+  window.shellBoot = {
+    ...window.shellBoot,
+    ...(JSON.parse(reloadState) as typeof window.shellBoot),
+  };
+  sessionStorage.removeItem("shell-fixture-reload");
 }
 
 const date = "2026-08-25T00:00:00Z";
@@ -132,6 +146,7 @@ const fixture: ShellFixture = {
     workspaces: page([]),
     keys: page([]),
     logout: undefined,
+    ...window.shellBoot.values,
   },
   finish(name, fail = false, service) {
     const index = fixture.pending.findIndex(

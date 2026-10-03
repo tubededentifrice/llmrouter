@@ -432,7 +432,9 @@ describe("configuration graph composition", () => {
     expect(markup).toContain(">Assignments<");
     expect(markup).toContain("Select a service to view assignments.");
     expect(markup).toContain("OpenRouter main");
-    expect(markup).toContain("Model ID: reasoning-model");
+    expect(markup).toContain(
+      'class="od-relationship-graph-node-detail">reasoning-model',
+    );
     expect(markup).toContain("Route ID: openrouter-reasoning");
     expect(markup.match(/tabindex="0"/g)).toHaveLength(1);
     expect(markup).not.toContain("ServiceAssignmentGraph");
@@ -743,24 +745,22 @@ describe("configuration graph composition", () => {
     expect(markup).toContain('data-node-id="mapping:local-reasoning"');
     expect(markup).toContain("Provider routes");
     expect(markup).toContain(
-      "Provider ID: openrouter-main · Adapter: OpenRouter",
-    );
-    expect(markup).toContain("Model ID: reasoning-model");
-    expect(markup).toContain(
-      "Route ID: openrouter-reasoning · Wire model: vendor/model",
+      'class="od-relationship-graph-node-detail">OpenRouter',
     );
     expect(markup).toContain(
-      "Text input · Text output · Reasoning · Streaming",
+      'class="od-relationship-graph-node-detail">reasoning-model',
+    );
+    expect(markup).toContain(">vendor/model<");
+    expect(markup).toContain(
+      'class="od-relationship-graph-node-tags"><span>Text input</span><span>Text output</span><span>Reasoning</span><span>Streaming</span>',
     );
     expect(markup).toContain('data-node-id="rung:workflow:1"');
     expect(markup).toContain('data-node-id="rung:workflow:2"');
-    expect(markup).toContain(">Primary<");
-    expect(markup).toContain(">Fallback 2<");
-    expect(markup).toContain("Local definition");
-    expect(markup).toContain("Inherited from Root service (root)");
-    expect(markup).toContain("Implicit root default");
-    expect(markup).toContain("Last used: 2026-08-29T12:00:00Z");
-    expect(markup).toContain("No observed requirements.");
+    expect(markup).toContain("Primary · OpenRouter main");
+    expect(markup).toContain("Fallback 2 · Local proof");
+    expect(markup).toContain('title="Last used on ');
+    expect(markup).toContain("(2026-08-29T12:00:00Z)");
+    expect(markup).not.toContain("No observed requirements.");
     expect(markup).toContain("Does not meet observed requirements");
     expect(markup).toContain(
       "OpenRouter main (Provider ID: openrouter-main) provides Route ID: openrouter-reasoning for Reasoning model (Model ID: reasoning-model)",

@@ -1,3 +1,4 @@
+import { selectService } from "./browserControls.mjs";
 // Run: node apps/admin/test/shell.browser.mjs
 /* global window, document, innerWidth, sessionStorage, getComputedStyle */
 // The real App uses controlled client calls. No server session or provider is used.
@@ -326,7 +327,7 @@ describe("authenticated shell in a real browser", () => {
         name: "Service context",
         exact: true,
       });
-      await service.selectOption("root");
+      await selectService(page, "root");
       await settle(page);
       await editAssignment(page);
       await page
@@ -410,15 +411,11 @@ describe("authenticated shell in a real browser", () => {
         await settle(page);
         await assignmentValues(page);
         await changeFixture(page, { hold: ["assignments"] });
-        const service = page.getByRole("combobox", {
-          name: "Service context",
-          exact: true,
-        });
-        await service.selectOption("root");
+        await selectService(page, "root");
         await browserExpect
           .poll(() => page.evaluate(() => window.shellFixture.pending.length))
           .toBe(1);
-        await service.selectOption("child");
+        await selectService(page, "child");
         await browserExpect
           .poll(() => page.evaluate(() => window.shellFixture.pending.length))
           .toBe(2);
@@ -444,12 +441,12 @@ describe("authenticated shell in a real browser", () => {
         name: "Service context",
         exact: true,
       });
-      await service.selectOption("root");
+      await selectService(page, "root");
       await browserExpect(
         page.locator('[data-node-id="assignment:root-assignment"]'),
       ).toBeVisible();
       await changeFixture(page, { fail: ["assignments"] });
-      await service.selectOption("child");
+      await selectService(page, "child");
       await browserExpect(
         page.getByText("Assignments are stale or unavailable.", {
           exact: true,
@@ -458,7 +455,7 @@ describe("authenticated shell in a real browser", () => {
       await browserExpect(
         page.locator('[data-node-id="assignment:root-assignment"]'),
       ).toHaveCount(0);
-      await browserExpect(service).toHaveValue("child");
+      await browserExpect(service).toHaveValue("Child service");
     } finally {
       await close(context, errors);
     }
@@ -497,7 +494,7 @@ describe("authenticated shell in a real browser", () => {
           exact: true,
         });
         await service.focus();
-        await service.selectOption("child");
+        await selectService(page, "child");
         const dialog = page.getByRole("dialog", {
           name: "Discard assignment changes?",
           exact: true,
@@ -511,7 +508,7 @@ describe("authenticated shell in a real browser", () => {
           .getByRole("button", { name: "Cancel", exact: true })
           .click();
         await browserExpect(service).toBeFocused();
-        await browserExpect(service).toHaveValue("root");
+        await browserExpect(service).toHaveValue("Root service");
         await browserExpect(
           page.getByRole("textbox", {
             name: "Assignment API name",
@@ -525,10 +522,10 @@ describe("authenticated shell in a real browser", () => {
         await browserExpect(page).toHaveURL(
           "http://127.0.0.1:5174/configuration?service=root",
         );
-        await service.selectOption("child");
+        await selectService(page, "child");
         await confirmImpact(dialog, "Discard and change service");
         await browserExpect(service).toBeFocused();
-        await browserExpect(service).toHaveValue("child");
+        await browserExpect(service).toHaveValue("Child service");
       } finally {
         await close(context, errors);
       }
@@ -544,9 +541,7 @@ describe("authenticated shell in a real browser", () => {
         await visit(page, "/overview");
         await navigate(page, "LLM configuration", phone);
         await settle(page);
-        await page
-          .getByRole("combobox", { name: "Service context", exact: true })
-          .selectOption("root");
+        await selectService(page, "root");
         await settle(page);
         await editAssignment(page);
         await page.goBack();
@@ -628,15 +623,12 @@ describe("authenticated shell in a real browser", () => {
       await close(context, errors);
     }
   }, 20_000);
-  it("audit: preserves initial Services and configuration refresh focus", async () => {
+  it("audit: preserves initial Services refresh focus", async () => {
     const { context, page, errors } = await open(1440, 1000, {
       hold: catalogMethods,
     });
     try {
-      for (const [path, label] of [
-        ["/services", "Refresh services"],
-        ["/configuration", "Refresh configuration"],
-      ]) {
+      for (const [path, label] of [["/services", "Refresh services"]]) {
         await visit(page, path);
         const refresh = page.getByRole("button", { name: label, exact: true });
         await refresh.focus();
@@ -699,7 +691,6 @@ describe("authenticated shell in a real browser", () => {
       try {
         for (const [path, action, retry] of [
           ["services", "Refresh services", "Retry services"],
-          ["configuration", "Refresh configuration", "Retry configuration"],
           ["operations", "Refresh operations", "Retry operations"],
         ]) {
           await visit(page, `/${path}`);
@@ -879,7 +870,7 @@ describe("authenticated shell in a real browser", () => {
           await navigate(page, labels[index] ?? "", phone);
           await settle(page);
           await browserExpect(page).toHaveURL(
-            `http://127.0.0.1:5174/${routes[index] ?? ""}`,
+            `http://127.0.0.1:5174/${routes[index] ?? ""}${["services", "configuration"].includes(routes[index]) ? "?service=root" : ""}`,
           );
           await shellGeometry(page, phone, height);
           expect((await new AxeBuilder({ page }).analyze()).violations).toEqual(
@@ -900,7 +891,7 @@ describe("authenticated shell in a real browser", () => {
           name: "Service context",
           exact: true,
         });
-        await browserExpect(service).toHaveValue("root");
+        await browserExpect(service).toHaveValue("Root service");
         await navigate(page, "Services", phone);
         await browserExpect(page).toHaveURL(
           "http://127.0.0.1:5174/services?service=root",
@@ -915,24 +906,24 @@ describe("authenticated shell in a real browser", () => {
           );
         }
         await navigate(page, "LLM configuration", phone);
-        await browserExpect(service).toHaveValue("root");
+        await browserExpect(service).toHaveValue("Root service");
         await navigate(page, "Logs", phone);
         await browserExpect(page).toHaveURL("http://127.0.0.1:5174/logs");
         await page.goBack();
-        await browserExpect(service).toHaveValue("root");
+        await browserExpect(service).toHaveValue("Root service");
         await page.goForward();
         await browserExpect(page).toHaveURL("http://127.0.0.1:5174/logs");
         // Service-details route content belongs to the later details task.
         await navigate(page, "LLM configuration", phone);
-        await browserExpect(service).toHaveValue("");
-        await service.selectOption("root");
-        await service.selectOption("");
+        await browserExpect(service).toHaveValue("All services");
+        await selectService(page, "root");
+        await selectService(page, "");
         await browserExpect(page).toHaveURL(
           "http://127.0.0.1:5174/configuration",
         );
         await visit(page, "/configuration?service=missing");
         await settle(page);
-        await browserExpect(service).toHaveValue("");
+        await browserExpect(service).toHaveValue("All services");
         await browserExpect(page).toHaveURL(
           "http://127.0.0.1:5174/configuration",
         );
@@ -948,7 +939,7 @@ describe("authenticated shell in a real browser", () => {
           const canvas = document.createElement("canvas");
           const context = canvas.getContext("2d");
           context.font = style.font;
-          const firstWord = select.selectedOptions[0].text.split(/\s+/)[0];
+          const firstWord = select.value.split(/\s+/)[0];
           return {
             // Reserve one font-size for the native select arrow.
             available:
@@ -973,10 +964,7 @@ describe("authenticated shell in a real browser", () => {
         ).toBeFocused();
         await page.keyboard.press("Tab");
         await browserExpect(
-          page.getByRole("button", {
-            name: "Refresh configuration",
-            exact: true,
-          }),
+          page.getByRole("button", { name: "Add provider", exact: true }),
         ).toBeFocused();
         expect(
           await page.evaluate(
@@ -1050,11 +1038,6 @@ describe("authenticated shell in a real browser", () => {
     try {
       for (const [path, action, methods] of [
         ["/services", "Refresh services", ["services"]],
-        [
-          "/configuration?service=root",
-          "Refresh configuration",
-          catalogMethods,
-        ],
         [
           "/operations",
           "Refresh operations",
