@@ -1,5 +1,5 @@
 // Run: node apps/admin/test/configuration-forms.browser.mjs
-/* global window, innerWidth, innerHeight */
+/* global window, document, innerWidth, innerHeight */
 // The real App uses a controlled localhost client. No session, server write, or provider call.
 import { existsSync } from "node:fs";
 import { reloadFixture } from "./browserControls.mjs";
@@ -137,9 +137,9 @@ const cases = [
     add: "Add provider route",
     id: "mapping:route",
     title: "Fixture provider",
-    identity: "Route API name",
-    focus: "Provider wire model",
-    save: "Save route",
+    identity: "API name",
+    focus: "Model API name",
+    save: "Save Provider-Model",
   },
   {
     kind: "assignment",
@@ -704,26 +704,44 @@ for (const [width, height] of [
           await expect(action.locator("svg")).toHaveCount(1);
           expect(await action.textContent()).toBe("");
         }
-        await list
-          .getByRole("button", { name: "Move wire/third up", exact: true })
-          .click();
-        await expect(rows.locator("strong")).toHaveText([
-          "fixture/model",
-          "wire/third",
-          "wire/alternate",
-        ]);
         const handle = list.getByRole("button", {
           name: "Reorder wire/third",
           exact: true,
         });
-        await handle.focus();
-        await page.keyboard.press("ArrowUp");
+        await handle.scrollIntoViewIfNeeded();
+        const from = await handle.boundingBox();
+        const target = await rows.first().boundingBox();
+        await page.mouse.move(
+          from.x + from.width / 2,
+          from.y + from.height / 2,
+        );
+        await page.mouse.down();
+        await page.mouse.move(target.x + 16, target.y + target.height / 2, {
+          steps: 16,
+        });
+        await expect(rows.first()).toHaveAttribute("data-drop-target", "true");
+        await page.mouse.up();
         await expect(rows.locator("strong")).toHaveText([
           "wire/third",
           "fixture/model",
           "wire/alternate",
         ]);
+        await handle.focus();
+        await page.keyboard.press("ArrowDown");
+        await expect(rows.locator("strong")).toHaveText([
+          "fixture/model",
+          "wire/third",
+          "wire/alternate",
+        ]);
         await expect(handle).toBeFocused();
+        await list
+          .getByRole("button", { name: "Move wire/third up", exact: true })
+          .click();
+        await expect(rows.locator("strong")).toHaveText([
+          "wire/third",
+          "fixture/model",
+          "wire/alternate",
+        ]);
         await list
           .getByRole("button", { name: "Remove fixture/model", exact: true })
           .click();
@@ -732,10 +750,22 @@ for (const [width, height] of [
           "wire/alternate",
         ]);
         // Keep remaining draft rows when the chain editor is mounted again.
-        const definition = dialog.getByLabel("Definition", { exact: true });
-        await definition.selectOption("inherit");
+        await dialog
+          .getByRole("button", { name: "Inherit from…", exact: true })
+          .click();
+        const inheritedChoice = dialog.getByRole("combobox", {
+          name: "Inherit from",
+          exact: true,
+        });
+        await inheritedChoice.fill("Default");
+        await dialog
+          .locator(".od-searchable-select-listbox")
+          .selectOption("default");
         await expect(list).toHaveCount(0);
-        await definition.selectOption("direct");
+        await expect(inheritedChoice).toHaveCount(0);
+        await dialog
+          .getByRole("button", { name: "Stop inheriting", exact: true })
+          .click();
         await expect(rows.locator("strong")).toHaveText([
           "wire/third",
           "wire/alternate",
@@ -796,15 +826,342 @@ for (const [width, height] of [
         await finish(context, errors);
       }
     });
+    it("requirement additions and removals filter routes by every selected requirement", async () => {
+      const { context, page, errors } = await open(width, height);
+      try {
+        await page.evaluate(() => {
+          const fixture = window.shellFixture;
+          const route = fixture.values.providerModels.items[0];
+          fixture.values.providerModels.items.push(
+            {
+              ...route,
+              api_name: "image-only",
+              provider_model_name: "wire/image",
+              input_modalities: ["text", "image"],
+            },
+            {
+              ...route,
+              api_name: "reasoning-only",
+              provider_model_name: "wire/reasoning",
+              capabilities: ["streaming", "reasoning"],
+            },
+            {
+              ...route,
+              api_name: "both-requirements",
+              provider_model_name: "wire/both",
+              input_modalities: ["text", "image"],
+              capabilities: ["streaming", "reasoning"],
+            },
+          );
+        });
+        await reloadFixture(page);
+        const dialog = await edit(page, cases[3], false);
+        await dialog
+          .locator("summary", { hasText: "Assignment details" })
+          .click();
+        const requirements = dialog.getByRole("group", {
+          name: "Requirements",
+          exact: true,
+        });
+        const image = requirements.getByRole("checkbox", {
+          name: "Image input",
+          exact: true,
+        });
+        const reasoning = requirements.getByRole("checkbox", {
+          name: "Reasoning",
+          exact: true,
+        });
+        await requirements.getByText("Image input", { exact: true }).click();
+        await expect(image).toBeChecked();
+        await expect
+          .poll(() =>
+            page.evaluate(() =>
+              window.shellFixture.calls
+                .filter((call) => call.name === "addRequirement")
+                .map((call) => call.args),
+            ),
+          )
+          .toEqual([["child", "workflow", "image_input", "synthetic-csrf"]]);
+        const add = dialog.getByRole("combobox", {
+          name: "Add provider route",
+          exact: true,
+        });
+        await add.click();
+        const choices = dialog.locator(".od-searchable-select-listbox");
+        await expect(
+          choices.getByRole("option", {
+            name: "wire/image · Fixture provider",
+            exact: true,
+          }),
+        ).toHaveCount(1);
+        await expect(
+          choices.getByRole("option", {
+            name: "wire/both · Fixture provider",
+            exact: true,
+          }),
+        ).toHaveCount(1);
+        await expect(
+          choices.getByRole("option", {
+            name: "wire/reasoning · Fixture provider",
+            exact: true,
+          }),
+        ).toHaveCount(0);
+        await page.keyboard.press("Escape");
+        await requirements.getByText("Reasoning", { exact: true }).click();
+        await expect(reasoning).toBeChecked();
+        await add.click();
+        await expect(choices.getByRole("option")).toHaveCount(1);
+        await expect(
+          choices.getByRole("option", {
+            name: "wire/both · Fixture provider",
+            exact: true,
+          }),
+        ).toHaveCount(1);
+        await page.keyboard.press("Escape");
+        await requirements.getByText("Image input", { exact: true }).click();
+        await expect(image).not.toBeChecked();
+        await expect
+          .poll(() =>
+            page.evaluate(() =>
+              window.shellFixture.calls
+                .filter((call) => call.name === "removeRequirement")
+                .map((call) => call.args),
+            ),
+          )
+          .toEqual([["child", "workflow", "image_input", "synthetic-csrf"]]);
+        await add.click();
+        await expect(
+          choices.getByRole("option", {
+            name: "wire/reasoning · Fixture provider",
+            exact: true,
+          }),
+        ).toHaveCount(1);
+        await expect(
+          choices.getByRole("option", {
+            name: "wire/both · Fixture provider",
+            exact: true,
+          }),
+        ).toHaveCount(1);
+        await expect(
+          choices.getByRole("option", {
+            name: "wire/image · Fixture provider",
+            exact: true,
+          }),
+        ).toHaveCount(0);
+        await page.keyboard.press("Escape");
+        await expect(
+          dialog.locator(".od-ordered-choice-item strong"),
+        ).toHaveText("fixture/model");
+        await expect(
+          dialog.getByRole("button", { name: "Discard changes", exact: true }),
+        ).toHaveCount(0);
+      } finally {
+        await finish(context, errors);
+      }
+    });
+    for (const item of [cases[1], cases[2]]) {
+      it(`${item.kind} reasoning controls submit explicit strategy, level, and provider values`, async () => {
+        const { context, page, errors } = await open(width, height);
+        try {
+          const dialog = await edit(page, item, false);
+          await dialog
+            .getByLabel("How to pass reasoning", { exact: true })
+            .selectOption("nested_effort");
+          await dialog
+            .getByLabel("Default reasoning level", { exact: true })
+            .selectOption("high");
+          if (item.kind === "mapping") {
+            await dialog
+              .getByText("Provider reasoning values", { exact: true })
+              .click();
+            await dialog
+              .getByLabel("None provider value", { exact: true })
+              .fill("disabled");
+            expect(errors).toEqual([]);
+            await dialog
+              .getByLabel("High provider value", { exact: true })
+              .fill("deep");
+            await expect(
+              dialog.getByRole("textbox", { name: "API name", exact: true }),
+            ).toHaveCount(0);
+            await expect(
+              dialog.getByLabel("Model", { exact: true }),
+            ).toHaveCount(0);
+          }
+          const method =
+            item.kind === "model" ? "putModel" : "putProviderModel";
+          await page.evaluate((method) => {
+            window.shellFixture.values[method] = {};
+            window.shellFixture.hold.push(method);
+          }, method);
+          await dialog
+            .getByRole("button", { name: item.save, exact: true })
+            .click();
+          await expect
+            .poll(() =>
+              page.evaluate(
+                (method) =>
+                  window.shellFixture.calls.find((call) => call.name === method)
+                    ?.args[1],
+                method,
+              ),
+            )
+            .toMatchObject({
+              reasoning_strategy: "nested_effort",
+              default_reasoning_level: "high",
+              ...(item.kind === "mapping"
+                ? {
+                    api_name: "route",
+                    model_api_name: "model",
+                    reasoning_mappings: [
+                      { level: "none", provider_value: "disabled" },
+                      { level: "low", provider_value: "low" },
+                      { level: "medium", provider_value: "medium" },
+                      { level: "high", provider_value: "deep" },
+                    ],
+                  }
+                : {}),
+            });
+        } finally {
+          await finish(context, errors);
+        }
+      });
+    }
+    it("route dropdown scrolls in the modal without clipping or page overflow", async () => {
+      const { context, page, errors } = await open(width, height);
+      try {
+        await page.evaluate(() => {
+          const fixture = window.shellFixture;
+          const route = fixture.values.providerModels.items[0];
+          for (let index = 0; index < 25; index += 1)
+            fixture.values.providerModels.items.push({
+              ...route,
+              api_name: `scroll-${index}`,
+              provider_model_name: `wire/scroll-${String(index).padStart(2, "0")}`,
+            });
+        });
+        await reloadFixture(page);
+        const dialog = await edit(page, cases[3], false);
+        const add = dialog.getByRole("combobox", {
+          name: "Add provider route",
+          exact: true,
+        });
+        await add.scrollIntoViewIfNeeded();
+        await add.click();
+        const choices = dialog.locator(".od-searchable-select-listbox");
+        await expect(choices).toBeVisible();
+        const bounds = await choices.boundingBox();
+        expect(bounds.x).toBeGreaterThanOrEqual(0);
+        expect(bounds.y).toBeGreaterThanOrEqual(0);
+        expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
+        expect(bounds.y + bounds.height).toBeLessThanOrEqual(height);
+        const before = await choices.evaluate((element) => ({
+          scrollHeight: element.scrollHeight,
+          clientHeight: element.clientHeight,
+          scrollTop: element.scrollTop,
+        }));
+        expect(before.scrollHeight).toBeGreaterThan(before.clientHeight);
+        await page.mouse.move(
+          bounds.x + bounds.width / 2,
+          bounds.y + bounds.height / 2,
+        );
+        await page.mouse.wheel(0, 600);
+        await expect
+          .poll(() => choices.evaluate((element) => element.scrollTop))
+          .toBeGreaterThan(before.scrollTop);
+        expect(
+          await choices.evaluate((element) => {
+            const box = element.getBoundingClientRect();
+            const hit = document.elementFromPoint(
+              box.x + box.width / 2,
+              box.y + box.height / 2,
+            );
+            return hit === element || element.contains(hit);
+          }),
+        ).toBe(true);
+        await add.fill("scroll-24");
+        await expect(choices.getByRole("option")).toHaveCount(1);
+        await choices
+          .getByRole("option", {
+            name: "wire/scroll-24 · Fixture provider",
+            exact: true,
+          })
+          .click();
+        await expect(
+          dialog.locator(".od-ordered-choice-item strong"),
+        ).toHaveText(["fixture/model", "wire/scroll-24"]);
+        await expect(choices).toHaveCount(0);
+        expect(
+          await page.evaluate(
+            () => document.documentElement.scrollWidth <= innerWidth,
+          ),
+        ).toBe(true);
+        await page.screenshot({
+          path: resolve(evidence, `${width}-dropdown-scroll.png`),
+        });
+      } finally {
+        await finish(context, errors);
+      }
+    });
+    it("assignment save closes the modal and discard needs no typed statement", async () => {
+      const { context, page, errors } = await open(width, height);
+      try {
+        let dialog = await edit(page, cases[3], false);
+        await expect(
+          dialog.getByRole("textbox", {
+            name: "Assignment API name",
+            exact: true,
+          }),
+        ).toHaveCount(0);
+        await expect(dialog.locator('input[name="api_name"]')).toHaveAttribute(
+          "type",
+          "hidden",
+        );
+        await dialog
+          .getByLabel("Display name", { exact: true })
+          .fill("Saved workflow");
+        await page.evaluate(() => {
+          window.shellFixture.values.putAssignment = {
+            ...window.shellFixture.values.assignments.items.find(
+              (item) => item.api_name === "workflow",
+            ),
+            display_name: "Saved workflow",
+          };
+        });
+        await dialog
+          .getByRole("button", { name: "Save assignment", exact: true })
+          .click();
+        await expect(dialog).toHaveCount(0);
+        dialog = await edit(page, cases[3], false);
+        await dialog
+          .getByLabel("Display name", { exact: true })
+          .fill("Discard this workflow");
+        await dialog
+          .getByRole("button", { name: "Cancel", exact: true })
+          .click();
+        const confirm = page.getByRole("dialog", {
+          name: "Discard assignment changes?",
+          exact: true,
+        });
+        await expect(confirm).toBeVisible();
+        await expect(confirm.getByRole("textbox")).toHaveCount(0);
+        await confirm
+          .getByRole("button", { name: "Discard changes", exact: true })
+          .click();
+        await expect(dialog).toHaveCount(0);
+      } finally {
+        await finish(context, errors);
+      }
+    });
     it("searchable inheritance submits the selected assignment API name", async () => {
       const { context, page, errors } = await open(width, height);
       try {
         const dialog = await edit(page, cases[3], false);
         await dialog
-          .getByLabel("Definition", { exact: true })
-          .selectOption("inherit");
+          .getByRole("button", { name: "Inherit from…", exact: true })
+          .click();
         const inherited = dialog.getByRole("combobox", {
-          name: "Inherited assignment",
+          name: "Inherit from",
           exact: true,
         });
         await inherited.fill("Default");
@@ -819,7 +1176,16 @@ for (const [width, height] of [
           options.getByRole("option", { name: "Workflow", exact: true }),
         ).toHaveCount(0);
         await options.selectOption("default");
-        await expect(inherited).toHaveValue("Default assignment");
+        await expect(inherited).toHaveCount(0);
+        await expect(
+          dialog.getByText("Inherits from", { exact: false }),
+        ).toHaveText("Inherits from Default assignment");
+        await dialog
+          .getByRole("button", { name: "Change", exact: true })
+          .click();
+        await expect(inherited).toBeVisible();
+        await inherited.fill("Default");
+        await options.selectOption("default");
         await page.evaluate(() => {
           window.shellFixture.hold.push("putAssignment");
         });

@@ -25,6 +25,9 @@ OutputModality = Literal[
     "text", "structured_json", "embedding", "image", "video", "audio"
 ]
 ModelCapability = Literal["tool_calling", "streaming", "reasoning"]
+ReasoningStrategy = Literal[
+    "auto", "none", "effort", "nested_effort", "thinking_type", "system_token", "native"
+]
 ReasoningLevel = Literal["none", "low", "medium", "high"]
 OpenRouterSupportedConstraint = Literal[
     "maximum_output_tokens",
@@ -372,6 +375,8 @@ class ModelWrite(ClosedModel):
     output_modalities: list[OutputModality] = Field(min_length=1, max_length=6)
     capabilities: list[ModelCapability] = Field(max_length=3)
     constraints: ModelConstraints | None = None
+    reasoning_strategy: ReasoningStrategy = "auto"
+    default_reasoning_level: ReasoningLevel | None = None
     price_source: str | None = Field(default=None, min_length=1, max_length=500)
     price_lookup_key: str | None = Field(default=None, min_length=1, max_length=500)
     manual_price: Price | None = None
@@ -386,6 +391,8 @@ class Model(ClosedModel):
     output_modalities: list[OutputModality]
     capabilities: list[ModelCapability]
     constraints: ModelConstraints | None = None
+    reasoning_strategy: ReasoningStrategy = "auto"
+    default_reasoning_level: ReasoningLevel | None = None
     price_source: str | None = None
     price_lookup_key: str | None = None
     current_price: Price | None = None
@@ -418,6 +425,8 @@ class ProviderModelWrite(ClosedModel):
     reasoning_mappings: list[ReasoningMapping] | None = Field(
         default=None, max_length=4
     )
+    reasoning_strategy: ReasoningStrategy | None = None
+    default_reasoning_level: ReasoningLevel | None = None
     price_source: str | None = Field(default=None, min_length=1, max_length=500)
     price_lookup_key: str | None = Field(default=None, min_length=1, max_length=500)
     manual_price: Price | None = None
@@ -443,6 +452,10 @@ class ProviderModel(ClosedModel):
     capabilities: list[ModelCapability]
     constraints: ModelConstraints | None = None
     reasoning_mappings: list[ReasoningMapping]
+    configured_reasoning_strategy: ReasoningStrategy | None = None
+    configured_default_reasoning_level: ReasoningLevel | None = None
+    reasoning_strategy: ReasoningStrategy = "auto"
+    default_reasoning_level: ReasoningLevel | None = None
     configured_price_source: str | None = None
     configured_price_lookup_key: str | None = None
     configured_manual_price: Price | None = None

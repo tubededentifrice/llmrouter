@@ -3,7 +3,7 @@ info:
   title: LLM Router native API
   version: 1.0.0
   description: Provider-neutral service and global administration contract.
-x-contract-policy-sha256: aad32561fed375270bf99ad55b5eef87fd5a97e67b61bd20b028fa628ce02ab9
+x-contract-policy-sha256: e25e891e6e2e5968a954c4b15de4841039c8cb845f9185b666de580098492a2b
 servers:
   - url: /
 paths:
@@ -955,6 +955,19 @@ paths:
       - $ref: "#/components/parameters/ServiceApiName"
       - $ref: "#/components/parameters/AssignmentApiName"
       - $ref: "#/components/parameters/ObservedRequirement"
+    put:
+      operationId: adminAddObservedAssignmentRequirement
+      summary: Add one observed requirement to a service assignment.
+      security:
+        - administratorSession: []
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/Origin"
+      responses:
+        "204":
+          description: Observed requirement added.
+        default:
+          $ref: "#/components/responses/ErrorResponse"
     delete:
       operationId: adminRemoveObservedAssignmentRequirement
       summary: Remove one observed requirement from a service assignment.
@@ -3750,6 +3763,10 @@ components:
           type: integer
           minimum: 1
           maximum: 86400
+    ReasoningStrategy:
+      type: string
+      enum: [auto, none, effort, nested_effort, thinking_type, system_token, native]
+      description: Structured reasoning transport strategy. Auto uses the adapter default. Native uses the native chat switch.
     ReasoningMapping:
       type: object
       additionalProperties: false
@@ -3792,6 +3809,14 @@ components:
           uniqueItems: true
           items:
             $ref: "#/components/schemas/ModelCapability"
+        reasoning_strategy:
+          $ref: "#/components/schemas/ReasoningStrategy"
+          default: auto
+        default_reasoning_level:
+          anyOf:
+            - $ref: "#/components/schemas/ReasoningLevel"
+            - type: "null"
+          description: Default common level for reasoning-capable routes. Omit or use null for medium.
         constraints:
           $ref: "#/components/schemas/ModelConstraints"
         price_source:
@@ -3828,6 +3853,14 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ModelCapability"
+        reasoning_strategy:
+          $ref: "#/components/schemas/ReasoningStrategy"
+          default: auto
+        default_reasoning_level:
+          anyOf:
+            - $ref: "#/components/schemas/ReasoningLevel"
+            - type: "null"
+          description: Default common level for reasoning-capable routes. Omit or use null for medium.
         constraints:
           $ref: "#/components/schemas/ModelConstraints"
         price_source:
@@ -3884,6 +3917,16 @@ components:
           uniqueItems: true
           items:
             $ref: "#/components/schemas/ModelCapability"
+        reasoning_strategy:
+          anyOf:
+            - $ref: "#/components/schemas/ReasoningStrategy"
+            - type: "null"
+          description: Omit or use null to inherit the canonical model strategy. Auto explicitly selects the adapter default.
+        default_reasoning_level:
+          anyOf:
+            - $ref: "#/components/schemas/ReasoningLevel"
+            - type: "null"
+          description: Omit or use null to inherit the canonical model default. An unset default uses medium on reasoning-capable routes.
         constraints:
           $ref: "#/components/schemas/ModelConstraints"
         reasoning_mappings:
@@ -3940,6 +3983,24 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ModelCapability"
+        reasoning_strategy:
+          $ref: "#/components/schemas/ReasoningStrategy"
+          description: The effective strategy after canonical model inheritance. Auto selects the adapter default.
+        default_reasoning_level:
+          anyOf:
+            - $ref: "#/components/schemas/ReasoningLevel"
+            - type: "null"
+          description: The effective default after canonical model inheritance. An unset default uses medium on reasoning-capable routes.
+        configured_reasoning_strategy:
+          anyOf:
+            - $ref: "#/components/schemas/ReasoningStrategy"
+            - type: "null"
+          description: The stored route override. Null means canonical model inheritance.
+        configured_default_reasoning_level:
+          anyOf:
+            - $ref: "#/components/schemas/ReasoningLevel"
+            - type: "null"
+          description: The stored route override. Null means canonical model inheritance.
         constraints:
           $ref: "#/components/schemas/ModelConstraints"
         reasoning_mappings:

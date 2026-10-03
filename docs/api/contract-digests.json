@@ -2,7 +2,7 @@
   "artifacts": [
     {
       "path": "docs/api/README.md",
-      "sha256": "a5d934fa27ed909eb3fefff0d589ae1ca9f18d548c479e66d8ed4a1972e2513f"
+      "sha256": "c4c1888a60d7a0e2c6986c2022fb200b9dfeffc871043bf1574fb098af91b1e6"
     },
     {
       "path": "docs/api/errors.md",
@@ -10,7 +10,7 @@
     },
     {
       "path": "docs/api/openapi.yaml",
-      "sha256": "ffb4961ed5458b028aadebcb4f68ddee6b3424ac1e1e8f22992d2c7856b62ac4"
+      "sha256": "877a689bd866bf875763fd74d8e56e32e6b14ca0025e7e5b065fc0cabe26c7a4"
     },
     {
       "path": "docs/api/stream-protocol.md",
@@ -96,7 +96,7 @@
     "MediaJobRequest": "096f0e5a0a1f391f5e07d74c8bea1281425794290ccd3e5496cb6b948f332bd9",
     "MediaJobState": "497b521c8c0f0195a8798e361e1e20f8a132f7e91a29d6f2508d58243f175827",
     "MediaKind": "a8282119b65ce61770f51f4116d1060bed2e4c4ccd5b0004f88acbba0c689a5a",
-    "Model": "42a5830b8a58f7533bd2a72f892cfc41ca08d7bf54fbeecafe6f28e1bfac6697",
+    "Model": "eae6dcdec0673c4ae808d8fc014cf3146e0423c898c26ff3952be426c3c8588c",
     "ModelCallRequest": "f610f8fc9830710885c0c4482d911899e3ed9957f8eb7d43ca299b6bdb159a7a",
     "ModelCallResult": "029646e5d93e0c3c112a28661407e1345e12024f7f8d9393aa372317cc0d26b9",
     "ModelCapability": "b3ac3d69a2cecc7252fbd1bf9f19fd34b1a0306b5ee1d56dd383c79df0b08993",
@@ -110,7 +110,7 @@
     "ModelMessage": "63fcf4b336b575d85954707ae1eddc380ce19817fc405c89ff98844f8b4b26b2",
     "ModelPage": "6248e8fa3e15a0ae81888f631f3e736ec542745c7a8ebe530769cbb348bacda7",
     "ModelSelector": "4f3def8c5c514d84df24e8d38d787e4cdaf39ff9d7b6b3a2c6043e887014d716",
-    "ModelWrite": "7faff018404f431c13d7f52bf88262dbf6f7a4491dacd6e1c2d04214af2d19b8",
+    "ModelWrite": "923a32db62f3beba5763611f0b114cf1a33ec7be91fb800732621135b4f5c359",
     "ObservedRequirement": "0aac267ed3f8a359af57a98fbc37099e7a6e9d36cb2966389a2e5f6042f3e18d",
     "OpaqueId": "52ba84a4bbf396ba7a35cd1190963c82865bfd272f0b6020865087e04c5283d5",
     "OpenRouterImportConflict": "c821a90471f8d9923fe7235d2ece01bbdf68a92fb5a5aadc4dddb8bb4ae277fe",
@@ -131,14 +131,15 @@
     "PriceSyncResult": "b0036f98544c9f7e1b2b9b05820adea692f34c51ba43b9c2c7260b531d2ed972",
     "Provider": "5d82b658d3802c60477a866181edf9f5aec9cb23eefbaa79484f74f607983448",
     "ProviderAdapter": "cbca31991bb0e5160af376d388747122beaba730d5d0b575c0d01013834a8f45",
-    "ProviderModel": "53a4c7dd125d93836d9974e26a02ae98ebbcb8e9556b1c14baefa22e8b6a3e42",
+    "ProviderModel": "7ab50a8f0c434c9787fc74dcc1a0e15fe4012248a79163e9a5b125987a9fa8bc",
     "ProviderModelCandidate": "e82a86157f91b6406ac115e2a78660742468aad0b6e71943a566c4f5db8d4ed2",
     "ProviderModelPage": "26a66da9d2716b3ea64b6ee0f75d18f9e8b15d1f6d8a701184adf128978102de",
-    "ProviderModelWrite": "138168a3309ab501a2741ac7613a947d3d1ff9d5f2d241664017aa843f461965",
+    "ProviderModelWrite": "6ae77f5bc67ba475dd3b4a2469b279da39f7762372f0a16f2e373b9d62506279",
     "ProviderPage": "6bd8ef41fa82d1504c8d6df645102805023ce129d1cd6890bfa9dc2936acb55d",
     "ProviderWrite": "73b3a676b571605f7f688d3dc71d187228c61794397f1ae65757d2969d94e54f",
     "ReasoningLevel": "88f58729acbf1fa41460a38739c1a4a2826899e2a1aa58d2758415f3c47c2d71",
     "ReasoningMapping": "e3e9b0b2a65b0edaf55997d2ae278237b2418c4c2616fee73f1b71a87e8f9896",
+    "ReasoningStrategy": "6e16557c5d433a55a22dc8c26b0b6e76b769b53c34ac48f1a0004372473eea40",
     "RequestAttempt": "f1db5fb895feab8aa062e1d60115148d1ad7ee9aba929a715901fe3ae8835107",
     "RequestLog": "f368c9d6404e6fd712d960b6ec2d159f6ae8ae2ea7d629ee5030c4ae104e1f47",
     "RequestLogPage": "39444b1ca63390f6c67321868d590b96cbf49a0a2357df98729cf03042794507",
@@ -184,6 +185,6 @@
   },
   "contract_set": "llmrouter-v1",
   "generator_version": 3,
-  "source_sha256": "ffb4961ed5458b028aadebcb4f68ddee6b3424ac1e1e8f22992d2c7856b62ac4",
+  "source_sha256": "877a689bd866bf875763fd74d8e56e32e6b14ca0025e7e5b065fc0cabe26c7a4",
   "version": "1.0.0"
 }

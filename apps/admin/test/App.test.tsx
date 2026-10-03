@@ -67,6 +67,7 @@ function client(): AdministrationClient {
     assignments: vi.fn().mockResolvedValue(emptyPage),
     putAssignment: vi.fn(),
     deleteAssignment: vi.fn(),
+    addRequirement: vi.fn(),
     removeRequirement: vi.fn(),
     providers: vi.fn().mockResolvedValue(emptyPage),
     createProvider: vi.fn(),

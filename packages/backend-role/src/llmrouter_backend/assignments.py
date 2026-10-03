@@ -225,6 +225,38 @@ def delete_assignment(
     return cast("uuid.UUID", row["id"])
 
 
+def add_observed_requirement(
+    connection: Connection[Any],
+    *,
+    service_id: uuid.UUID,
+    api_name: str,
+    observed_requirement: str,
+) -> uuid.UUID:
+    """Add one service-scoped item without changing its last-used time."""
+    if observed_requirement not in _OBSERVED_REQUIREMENTS:
+        raise invalid_request(
+            "observed_requirement", "The observed requirement is not supported."
+        )
+    _lock_writes(connection)
+    resolved = resolve_assignment(connection, service_id=service_id, api_name=api_name)
+    if resolved is None:
+        raise not_found("assignment")
+    connection.execute(
+        """INSERT INTO router.assignment_usage
+               (service_id, api_name, observed_requirements, last_used_at)
+           VALUES (%s, %s, ARRAY[%s]::text[], NULL)
+           ON CONFLICT (service_id, api_name) DO UPDATE SET
+               observed_requirements = ARRAY(
+                   SELECT DISTINCT item FROM unnest(
+                       assignment_usage.observed_requirements ||
+                       EXCLUDED.observed_requirements
+                   ) AS item ORDER BY item
+               )""",
+        (service_id, api_name, observed_requirement),
+    )
+    return resolved.definition_id or _activity_resource_id(service_id, api_name)
+
+
 def remove_observed_requirement(
     connection: Connection[Any],
     *,

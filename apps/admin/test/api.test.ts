@@ -597,6 +597,40 @@ describe("native administration client", () => {
     expect(received?.credentials).toBe("same-origin");
   });
 
+  it("adds and removes scoped observed requirements with browser write headers", async () => {
+    const calls: { path: string; init: RequestInit | undefined }[] = [];
+    const client = createAdministrationClient(
+      vi.fn((input: string | URL | Request, init?: RequestInit) => {
+        calls.push({ path: url(input), init });
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }),
+    );
+    await client.addRequirement(
+      "child",
+      "workflow/main",
+      "image_input",
+      "session-csrf",
+    );
+    await client.removeRequirement(
+      "child",
+      "workflow/main",
+      "image_input",
+      "session-csrf",
+    );
+    expect(calls.map((call) => call.path)).toEqual([
+      "/v1/admin/services/child/assignments/workflow%2Fmain/observed-requirements/image_input",
+      "/v1/admin/services/child/assignments/workflow%2Fmain/observed-requirements/image_input",
+    ]);
+    expect(calls.map((call) => call.init?.method)).toEqual(["PUT", "DELETE"]);
+    for (const call of calls) {
+      expect(call.init?.credentials).toBe("same-origin");
+      expect(new Headers(call.init?.headers).get("X-CSRF-Token")).toBe(
+        "session-csrf",
+      );
+      expect(call.init?.body).toBeUndefined();
+    }
+  });
+
   it("sends a closed assignment replacement body", async () => {
     let body = "";
     const client = createAdministrationClient(

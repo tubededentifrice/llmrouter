@@ -659,6 +659,31 @@ Save and Cancel MUST remain in the fixed modal footer. Technical facts MUST
 remain available in a shared details disclosure. Required fields MUST remain
 visible. Context actions and destructive actions MUST be separate from Save.
 
+A configuration form MUST use its record type as its short context label:
+`Model` or `Provider-Model`. An assignment edit form MUST show the assignment
+API name in the header, without an API-name field. Its main fields MUST be the
+display name and reasoning level override. Contextual playground actions MUST
+be in the header. Provider-Model edits MUST NOT offer price synchronization,
+model reassignment, or a route API-name control. The wire model field MUST be
+labelled `Model API name`. Creation MUST retain the required record identities.
+
+Assignment inheritance MUST use `Inherit from…`, `Change`, and `Stop inheriting`
+actions with a searchable source picker. The form MUST NOT have a definition
+mode dropdown. Stopping inheritance MUST retain an existing direct draft or
+copy the selected inherited chain when there is no direct draft. Assignment
+details MUST NOT repeat fields or the chain from the main form. Requirements
+MUST use compact shared checkbox chips that support addition and removal.
+The route picker MUST only offer routes that meet every assignment requirement.
+Existing unsuitable routes MUST stay visible for removal. Requirement edits
+MUST preserve the last-used date and selected service scope.
+
+Dropdown options MUST stay above the dialog body and footer without adding
+scroll height. Drag reordering MUST work inside a modal with mouse, pen, and
+touch. A checked switch MUST have a visible selected state. A discard
+confirmation MUST NOT require typed text. Typed confirmation MUST be limited
+to high-risk actions such as credential replacement. A successful assignment
+save MUST close the modal without a success message below its actions.
+
 The assignment fallback editor MUST use the shared compact ordered-choice
 list. Each route MUST show its position, wire model name, and provider name.
 A searchable add control MUST add the selected route directly and exclude

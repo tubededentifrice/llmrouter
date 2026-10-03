@@ -1830,6 +1830,37 @@ def create_app(  # noqa: PLR0915 - One factory owns the native HTTP map.
         )
         return Response(status_code=HTTPStatus.NO_CONTENT)
 
+    @application.put(
+        "/v1/admin/services/{service_api_name}/assignments/{assignment_api_name}/observed-requirements/{observed_requirement}",
+        status_code=HTTPStatus.NO_CONTENT,
+    )
+    def admin_add_observed_assignment_requirement(
+        service_api_name: ApiNamePath,
+        assignment_api_name: AssignmentNamePath,
+        observed_requirement: ObservedRequirementPath,
+        request: Request,
+        actor: AdministratorActor = Depends(administrator_actor),
+        database: psycopg.Connection[Any] = Depends(connection),
+        controls: ControlKeys = Depends(control_keys),
+    ) -> Response:
+        _require_browser_write(request, actor, controls)
+        selected_service_id = service_id(database, service_api_name)
+        assignments.configuration_change(
+            database,
+            actor_subject=actor.activity_subject,
+            service_id=selected_service_id,
+            service_api_name=service_api_name,
+            action="assignment.observed_requirement.add",
+            assignment_api_name=assignment_api_name,
+            operation=lambda: assignments.add_observed_requirement(
+                database,
+                service_id=selected_service_id,
+                api_name=assignment_api_name,
+                observed_requirement=observed_requirement,
+            ),
+        )
+        return Response(status_code=HTTPStatus.NO_CONTENT)
+
     @application.delete(
         "/v1/admin/services/{service_api_name}/assignments/{assignment_api_name}/observed-requirements/{observed_requirement}",
         status_code=HTTPStatus.NO_CONTENT,

@@ -349,7 +349,7 @@ describe("configuration graph composition", () => {
     for (const primitive of [
       "GraphInspectorFacts",
       "GraphInspectorFact",
-      "GraphInspectorSection",
+      "CheckboxChipGroup",
       "GraphInspectorRows",
       "GraphInspectorRow",
       "GraphInspectorNotice",

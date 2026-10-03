@@ -431,13 +431,44 @@ candidate remains.
 ## Reasoning
 
 An assignment MAY set one reasoning level for its complete effective fallback
-chain. Supported common values MUST include reasoning disabled and at least
-one enabled level. A reasoning-capable model MUST default to reasoning enabled
-when the assignment has no setting.
+chain. Common values are `none`, `low`, `medium`, and `high`. An assignment
+level MUST take precedence over a provider-model default. The
+provider-model default MUST take precedence over the canonical model default.
+An unset default MUST use `medium` on a reasoning-capable route. A route without
+reasoning MUST treat `none` as no reasoning control and MUST reject enabled
+levels. Configuration validation MUST reject an enabled default on a record
+without reasoning support.
 
-Each provider-model mapping MUST define how each supported common reasoning
-value maps to the provider request. Configuration validation MUST reject an
-assignment level that one selected candidate cannot map.
+Each canonical model MUST define `reasoning_strategy`, which defaults to
+`auto`, and MAY define `default_reasoning_level`. A provider-model mapping MAY
+replace each field. Null or omitted mapping fields MUST inherit the canonical
+model value. The administrator response MUST expose both configured overrides
+and effective values. Replacing the canonical model MUST validate all current
+mapping overrides.
+
+Each provider-model mapping MUST define all common level mappings. The mapped
+provider value MUST be used by effort strategies. The `none` common level MAY
+map to an endpoint's minimum supported effort. Assignment validation MUST
+reject a level that one selected candidate cannot map.
+
+The supported structured strategies are:
+
+- `auto`: Use the adapter's established default transport.
+- `none`: Send no reasoning parameter or system instruction.
+- `effort`: Send the mapped value in `reasoning_effort`.
+- `nested_effort`: Send the mapped value in `reasoning.effort`.
+- `thinking_type`: Send `thinking.type` as `disabled` for `none`, or `enabled`
+  for the other common levels.
+- `system_token`: Add `<|think|>` once at the start of the system message for
+  enabled levels. For `none`, remove a leading token and add the direct-answer
+  instruction once. A request without a system message MUST receive one.
+- `native`: Send the mapped native chat `think` value. Mapped `true` and `false`
+  MUST be JSON booleans. Other mapped values MUST remain strings. This strategy
+  MUST be available only on the native chat adapter.
+
+Strategies MUST apply to buffered and streamed text calls. They MUST preserve
+user, assistant, image, and tool messages and MUST NOT change stored prompts.
+Adapter defaults MUST remain compatible with existing configuration.
 
 ## Price authority
 

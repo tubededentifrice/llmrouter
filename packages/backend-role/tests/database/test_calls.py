@@ -1134,7 +1134,8 @@ def test_admission_atomically_freezes_route_price_and_credential(
             )
             connection.execute(
                 """UPDATE router.canonical_models
-                   SET manual_price = %s::jsonb WHERE api_name = 'text'""",
+                   SET manual_price = %s::jsonb, reasoning_strategy = 'nested_effort'
+                   WHERE api_name = 'text'""",
                 (json.dumps(replacement_price),),
             )
             connection.execute(
@@ -1161,6 +1162,7 @@ def test_admission_atomically_freezes_route_price_and_credential(
     assert result.provider_model_api_name == "text-a"
     assert result.cost == Decimal("0.25")
     assert adapter.requests[0].route.provider_model_name == "text-a"
+    assert adapter.requests[0].route.reasoning_strategy == "auto"
     assert adapter.requests[0].credential == "provider-secret-control"
     with psycopg.connect(call_context.database_url, row_factory=dict_row) as connection:
         current = connection.execute(

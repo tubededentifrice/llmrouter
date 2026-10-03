@@ -132,6 +132,8 @@ const fixture: ShellFixture = {
       secret: "synthetic-one-time-fixture-key",
     },
     putAssignment: {},
+    addRequirement: undefined,
+    removeRequirement: undefined,
     health: {
       status: "healthy",
       checked_at: date,

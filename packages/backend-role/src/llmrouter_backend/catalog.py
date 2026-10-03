@@ -34,6 +34,7 @@ from llmrouter_backend.models import (
     ProviderModelWrite,
     ProviderWrite,
     ReasoningLevel,
+    ReasoningStrategy,
 )
 from llmrouter_backend.store import AdministratorActor, record_activity
 
@@ -280,6 +281,7 @@ class ProviderRoute:
     constraints: ModelConstraints
     reasoning_level: ReasoningLevel | None
     provider_reasoning_value: str | None
+    reasoning_strategy: ReasoningStrategy = "auto"
 
 
 def resolve_credential(
@@ -487,8 +489,9 @@ def create_model(connection: Connection[Any], value: ModelWrite) -> dict[str, An
     row = connection.execute(
         """INSERT INTO router.canonical_models
                (api_name, display_name, input_modalities, output_modalities,
-                capabilities, constraints, price_source, price_lookup_key, manual_price)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                capabilities, constraints, price_source, price_lookup_key, manual_price,
+                reasoning_strategy, default_reasoning_level)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
            RETURNING *""",
         _model_parameters(value),
     ).fetchone()
@@ -519,7 +522,8 @@ def replace_model(
                    THEN synchronized_price ELSE NULL END,
                display_name = %s, input_modalities = %s, output_modalities = %s,
                capabilities = %s, constraints = %s, price_source = %s,
-               price_lookup_key = %s, manual_price = %s
+               price_lookup_key = %s, manual_price = %s,
+               reasoning_strategy = %s, default_reasoning_level = %s
            WHERE api_name = %s RETURNING *""",
         (
             value.price_source,
@@ -579,8 +583,9 @@ def create_provider_model(
         """INSERT INTO router.provider_models
                (api_name, provider_id, model_id, provider_model_name, enabled,
                 input_modalities, output_modalities, capabilities, constraints,
-                reasoning_mappings, price_source, price_lookup_key, manual_price)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                reasoning_mappings, price_source, price_lookup_key, manual_price,
+                reasoning_strategy, default_reasoning_level)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
            RETURNING id""",
         normalized,
     ).fetchone()
@@ -616,7 +621,8 @@ def replace_provider_model(
                provider_id = %s, model_id = %s, provider_model_name = %s,
                enabled = %s, input_modalities = %s, output_modalities = %s,
                capabilities = %s, constraints = %s, reasoning_mappings = %s,
-               price_source = %s, price_lookup_key = %s, manual_price = %s
+               price_source = %s, price_lookup_key = %s, manual_price = %s,
+               reasoning_strategy = %s, default_reasoning_level = %s
            WHERE api_name = %s RETURNING id""",
         (value.price_source, value.price_lookup_key, *normalized[1:], api_name),
     ).fetchone()
@@ -774,11 +780,14 @@ def resolve_provider_route(
                   mapping.input_modalities, mapping.output_modalities,
                   mapping.capabilities, mapping.constraints,
                   mapping.reasoning_mappings,
+                  COALESCE(mapping.reasoning_strategy, model.reasoning_strategy) AS reasoning_strategy,
+                  COALESCE(mapping.default_reasoning_level, model.default_reasoning_level) AS default_reasoning_level,
                   provider.api_name AS provider_connection_api_name,
                   provider.adapter, provider.endpoint,
                   credential.api_name AS credential_api_name
            FROM router.provider_models AS mapping
            JOIN router.provider_connections AS provider ON provider.id = mapping.provider_id
+           JOIN router.canonical_models AS model ON model.id = mapping.model_id
            LEFT JOIN router.provider_credentials AS credential ON credential.id = provider.credential_id
            WHERE mapping.api_name = %s AND mapping.enabled AND provider.enabled""",
         (api_name,),
@@ -800,7 +809,7 @@ def resolve_provider_route(
     }
     selected_level = reasoning_level
     if "reasoning" in row["capabilities"] and selected_level is None:
-        selected_level = "medium"
+        selected_level = row["default_reasoning_level"] or "medium"
     if "reasoning" not in row["capabilities"] and selected_level == "none":
         selected_level = None
     if selected_level is not None and selected_level not in mapping:
@@ -815,6 +824,7 @@ def resolve_provider_route(
         constraints=ModelConstraints.model_validate(row["constraints"]),
         reasoning_level=selected_level,
         provider_reasoning_value=mapping.get(selected_level),
+        reasoning_strategy=row["reasoning_strategy"],
     )
 
 
@@ -869,10 +879,12 @@ def validate_assignment_reasoning(
         )
     for api_name in provider_model_api_names:
         row = connection.execute(
-            """SELECT mapping.capabilities, mapping.reasoning_mappings
+            """SELECT mapping.capabilities, mapping.reasoning_mappings,
+                      COALESCE(mapping.default_reasoning_level, model.default_reasoning_level) AS default_reasoning_level
                FROM router.provider_models AS mapping
                JOIN router.provider_connections AS provider
                  ON provider.id = mapping.provider_id
+               JOIN router.canonical_models AS model ON model.id = mapping.model_id
                WHERE mapping.api_name = %s AND mapping.enabled AND provider.enabled""",
             (api_name,),
         ).fetchone()
@@ -885,7 +897,7 @@ def validate_assignment_reasoning(
         mapping = {item["level"] for item in row["reasoning_mappings"]}
         selected = reasoning_level
         if selected is None and "reasoning" in row["capabilities"]:
-            selected = "medium"
+            selected = row["default_reasoning_level"] or "medium"
         if selected == "none" and "reasoning" not in row["capabilities"]:
             selected = None
         if selected is not None and selected not in mapping:
@@ -1050,6 +1062,9 @@ def _validate_model(value: ModelWrite) -> None:
         else {},
     )
     _validate_capability_applicability(value.output_modalities, value.capabilities)
+    _validate_reasoning_control(
+        value.capabilities, value.reasoning_strategy, value.default_reasoning_level
+    )
     _validate_price_source(value.price_source, value.price_lookup_key)
     _validate_price_authority(value.price_source, value.manual_price)
     _validate_price(
@@ -1161,6 +1176,12 @@ def _normalized_provider_model(
         canonical=model,
         reasoning=reasoning,
     )
+    _validate_reasoning_control(
+        capabilities,
+        value.reasoning_strategy or model["reasoning_strategy"],
+        value.default_reasoning_level,
+        provider["adapter"],
+    )
     if provider["adapter"] == "local_embeddings" and (
         value.provider_model_name != LOCAL_EMBEDDING_MODEL
         or inputs != ["text"]
@@ -1194,6 +1215,8 @@ def _normalized_provider_model(
         value.price_source,
         value.price_lookup_key,
         Jsonb(manual_price) if manual_price is not None else None,
+        value.reasoning_strategy,
+        value.default_reasoning_level,
     )
 
 
@@ -1257,6 +1280,25 @@ def _validate_mapping_values(
 def _validate_constraints(value: ModelConstraints | None) -> None:
     if value and value.embedding_dimensions:
         _unique(value.embedding_dimensions, "embedding_dimensions")
+
+
+def _validate_reasoning_control(
+    capabilities: Sequence[str],
+    strategy: str,
+    default_level: str | None,
+    adapter: str | None = None,
+) -> None:
+    if "reasoning" not in capabilities:
+        if default_level not in {None, "none"}:
+            raise invalid_request(
+                "default_reasoning_level", "This model does not support reasoning."
+            )
+        return
+    if strategy == "native" and adapter not in {None, "ollama"}:
+        raise invalid_request(
+            "reasoning_strategy",
+            "The native reasoning switch requires a native adapter.",
+        )
 
 
 def _validate_capability_applicability(
@@ -1409,6 +1451,8 @@ def _model_parameters(value: ModelWrite) -> tuple[Any, ...]:
         value.price_source,
         value.price_lookup_key,
         Jsonb(price) if price is not None else None,
+        value.reasoning_strategy,
+        value.default_reasoning_level,
     )
 
 
@@ -1426,6 +1470,10 @@ _PROVIDER_MODEL_SELECT = """SELECT mapping.api_name,
     mapping.provider_model_name, mapping.enabled, mapping.input_modalities,
     mapping.output_modalities, mapping.capabilities, mapping.constraints,
     mapping.reasoning_mappings,
+    mapping.reasoning_strategy AS configured_reasoning_strategy,
+    mapping.default_reasoning_level AS configured_default_reasoning_level,
+    COALESCE(mapping.reasoning_strategy, model.reasoning_strategy) AS reasoning_strategy,
+    COALESCE(mapping.default_reasoning_level, model.default_reasoning_level) AS default_reasoning_level,
     mapping.price_source AS configured_price_source,
     mapping.price_lookup_key AS configured_price_lookup_key,
     mapping.manual_price AS configured_manual_price,
@@ -1446,7 +1494,8 @@ _PROVIDER_MODEL_WRITE_SELECT = """SELECT mapping.api_name,
     provider.api_name AS provider_api_name, model.api_name AS model_api_name,
     mapping.provider_model_name, mapping.enabled, mapping.input_modalities,
     mapping.output_modalities, mapping.capabilities, mapping.constraints,
-    mapping.reasoning_mappings, mapping.price_source, mapping.price_lookup_key,
+    mapping.reasoning_mappings, mapping.reasoning_strategy, mapping.default_reasoning_level,
+    mapping.price_source, mapping.price_lookup_key,
     mapping.manual_price
 FROM router.provider_models AS mapping
 JOIN router.provider_connections AS provider ON provider.id = mapping.provider_id

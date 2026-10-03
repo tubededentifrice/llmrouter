@@ -13,6 +13,10 @@ from urllib.parse import urlsplit
 
 import httpx
 from opendle import CallFailurePhase
+from opendle.reasoning import (
+    reasoning_parameters,
+    reasoning_system_text,
+)
 
 from llmrouter_backend.accounting import UsageAmount
 from llmrouter_backend.calls import (
@@ -345,14 +349,36 @@ def _openai_request(request: ProviderAttemptRequest) -> bytes:
     output_format = native.get("output_format")
     if output_format is not None:
         value["response_format"] = _openai_output_format(output_format)
-    if request.route.provider_reasoning_value is not None:
-        if request.route.adapter == "openrouter":
-            value["reasoning"] = {
-                "effort": request.route.provider_reasoning_value,
-            }
-        else:
-            value["reasoning_effort"] = request.route.provider_reasoning_value
+    _apply_reasoning(value, request)
     return _dump_request(value)
+
+
+def _apply_reasoning(value: dict[str, object], request: ProviderAttemptRequest) -> None:
+    level = request.route.reasoning_level
+    provider_value = request.route.provider_reasoning_value
+    if level is None or provider_value is None:
+        return
+    strategy = request.route.reasoning_strategy
+    if strategy == "auto":
+        strategy = (
+            "native"
+            if request.route.adapter == "ollama"
+            else "nested_effort"
+            if request.route.adapter == "openrouter"
+            else "effort"
+        )
+    value.update(reasoning_parameters(strategy, level, provider_value))
+    if strategy != "system_token":
+        return
+    messages = cast("list[dict[str, object]]", value["messages"])
+    for message in messages:
+        if message.get("role") == "system":
+            content = message.get("content")
+            if not isinstance(content, str):
+                raise ValueError
+            message["content"] = reasoning_system_text(content, level)
+            return
+    messages.insert(0, {"role": "system", "content": reasoning_system_text("", level)})
 
 
 def _openai_messages(
@@ -530,8 +556,7 @@ def _ollama_request(request: ProviderAttemptRequest) -> bytes:
         if not isinstance(schema, dict):
             raise ValueError
         value["format"] = schema
-    if request.route.provider_reasoning_value is not None:
-        value["think"] = request.route.provider_reasoning_value
+    _apply_reasoning(value, request)
     return _dump_request(value)
 
 

@@ -5,6 +5,14 @@ export type OutputModality =
   "text" | "structured_json" | "embedding" | "image" | "video" | "audio";
 export type ModelCapability = "tool_calling" | "streaming" | "reasoning";
 export type ReasoningLevel = "none" | "low" | "medium" | "high";
+export type ReasoningStrategy =
+  | "auto"
+  | "none"
+  | "effort"
+  | "nested_effort"
+  | "thinking_type"
+  | "system_token"
+  | "native";
 export type UsageUnit =
   | "input_token"
   | "output_token"
@@ -176,6 +184,8 @@ export interface ModelWrite {
   readonly input_modalities: readonly InputModality[];
   readonly output_modalities: readonly OutputModality[];
   readonly capabilities: readonly ModelCapability[];
+  readonly reasoning_strategy?: ReasoningStrategy;
+  readonly default_reasoning_level?: ReasoningLevel | null;
   readonly constraints?: ModelConstraints | null;
   readonly price_source?: string | null;
   readonly price_lookup_key?: string | null;
@@ -204,6 +214,8 @@ export interface ProviderModelWrite {
   readonly capabilities?: readonly ModelCapability[] | null;
   readonly constraints?: ModelConstraints | null;
   readonly reasoning_mappings?: readonly ReasoningMapping[] | null;
+  readonly reasoning_strategy?: ReasoningStrategy | null;
+  readonly default_reasoning_level?: ReasoningLevel | null;
   readonly price_source?: string | null;
   readonly price_lookup_key?: string | null;
   readonly manual_price?: Price | null;
@@ -219,6 +231,10 @@ export interface ProviderModel {
   readonly capabilities: readonly ModelCapability[];
   readonly constraints?: ModelConstraints | null;
   readonly reasoning_mappings: readonly ReasoningMapping[];
+  readonly configured_reasoning_strategy?: ReasoningStrategy | null;
+  readonly configured_default_reasoning_level?: ReasoningLevel | null;
+  readonly reasoning_strategy?: ReasoningStrategy;
+  readonly default_reasoning_level?: ReasoningLevel | null;
   readonly configured_price_source?: string | null;
   readonly configured_price_lookup_key?: string | null;
   readonly configured_manual_price?: Price | null;
@@ -1906,6 +1922,12 @@ export interface AdministrationClient {
     csrf: string,
   ): Promise<Assignment>;
   deleteAssignment(service: string, name: string, csrf: string): Promise<void>;
+  addRequirement(
+    service: string,
+    name: string,
+    requirement: ObservedRequirement,
+    csrf: string,
+  ): Promise<void>;
   removeRequirement(
     service: string,
     name: string,
@@ -2711,6 +2733,12 @@ export function createAdministrationClient(
       write(
         `/v1/admin/services/${encode(service)}/assignments/${encode(name)}`,
         "DELETE",
+        csrf,
+      ),
+    addRequirement: (service, name, requirement, csrf) =>
+      write(
+        `/v1/admin/services/${encode(service)}/assignments/${encode(name)}/observed-requirements/${encode(requirement)}`,
+        "PUT",
         csrf,
       ),
     removeRequirement: (service, name, requirement, csrf) =>

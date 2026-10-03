@@ -47,6 +47,7 @@ operations:
   adminListAssignments: {actor: administrator, permission: administrator.unrestricted}
   adminGetAssignment: {actor: administrator, permission: administrator.unrestricted}
   adminPutAssignment: {actor: administrator, permission: administrator.unrestricted}
+  adminAddObservedAssignmentRequirement: {actor: administrator, permission: administrator.unrestricted}
   adminRemoveObservedAssignmentRequirement: {actor: administrator, permission: administrator.unrestricted}
   adminListProviders: {actor: administrator, permission: administrator.unrestricted}
   adminCreateProvider: {actor: administrator, permission: administrator.unrestricted}

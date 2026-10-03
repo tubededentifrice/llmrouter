@@ -18,6 +18,8 @@ direct assignment chain replaces its inherited chain. The Router tries each
 eligible candidate at most once for one call. It does not retry one candidate.
 An assignment reports its observed call requirements. A service or global
 administrator can remove an observed requirement that is no longer applicable.
+A global administrator can also add one observed requirement to an assignment
+for one selected service. This operation does not change the last-used time.
 
 Global administrators use the protected browser session. Each administrator
 has one unrestricted authority. The contract does not define administrator

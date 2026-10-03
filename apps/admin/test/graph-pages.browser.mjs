@@ -785,12 +785,12 @@ describe("compact configuration interactions", () => {
             }),
           ).toHaveValue("Unsaved workflow");
           await page.keyboard.press("Escape");
-          await confirmation
-            .getByRole("textbox", {
+          await expect(
+            confirmation.getByRole("textbox", {
               name: "Enter the impact statement to continue",
               exact: true,
-            })
-            .fill("discard unsaved assignment changes for service child");
+            }),
+          ).toHaveCount(0);
           await confirmation
             .getByRole("button", { name: "Discard changes", exact: true })
             .click();

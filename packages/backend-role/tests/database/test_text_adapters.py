@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
     from llmrouter_backend.adapters.text import OpenAIAdapterName
+    from llmrouter_backend.models import ReasoningLevel, ReasoningStrategy
 
 _SECRET = "provider-control-placeholder"  # noqa: S105  # nosec B105
 _OPENAI_UNITS = frozenset(
@@ -903,7 +904,7 @@ def test_ollama_maps_native_buffered_and_streaming_calls() -> None:
         SuccessCase("stream_text", ("text_delta", "text_delta"), _OLLAMA_UNITS),
         priced_usage_units=_OLLAMA_UNITS,
     )
-    assert requests[0]["think"] == "true"
+    assert requests[0]["think"] is True
     assert requests[0]["stream"] is False
     assert requests[1]["stream"] is True
     prior = cast("list[dict[str, object]]", requests[0]["messages"])[0]
@@ -1099,3 +1100,106 @@ def test_removed_provider_and_compatibility_surfaces_are_not_registered() -> Non
         "openai-compatible api",
     ):
         assert removed not in serialized
+
+
+@pytest.mark.parametrize("streaming", [False, True], ids=["buffered", "stream"])
+@pytest.mark.parametrize(
+    ("strategy", "level", "mapped", "expected"),
+    [
+        ("none", "high", "xhigh", {}),
+        ("effort", "none", "minimal", {"reasoning_effort": "minimal"}),
+        ("nested_effort", "high", "xhigh", {"reasoning": {"effort": "xhigh"}}),
+        ("thinking_type", "none", "low", {"thinking": {"type": "disabled"}}),
+        ("thinking_type", "medium", "normal", {"thinking": {"type": "enabled"}}),
+        ("system_token", "high", "high", {}),
+        ("system_token", "none", "low", {}),
+    ],
+)
+def test_configured_reasoning_transport_preserves_messages(
+    strategy: ReasoningStrategy,
+    level: ReasoningLevel,
+    mapped: str,
+    expected: dict[str, object],
+    *,
+    streaming: bool,
+) -> None:
+    """Both text modes use the selected strategy and keep input content intact."""
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        if streaming:
+            chunks = [
+                {
+                    "choices": [
+                        {"delta": {"content": "Answer"}, "finish_reason": "stop"}
+                    ]
+                },
+                {"choices": [], "usage": _usage()},
+            ]
+            wire = (
+                b"".join(
+                    b"data: " + json.dumps(item).encode() + b"\n\n" for item in chunks
+                )
+                + b"data: [DONE]\n\n"
+            )
+            return httpx.Response(
+                200, content=wire, headers={"Content-Type": "text/event-stream"}
+            )
+        return httpx.Response(200, json=_completion())
+
+    request = _request(reasoning=mapped, streaming=streaming)
+    request = replace(
+        request,
+        route=replace(
+            request.route, reasoning_strategy=strategy, reasoning_level=level
+        ),
+    )
+    capture = asyncio.run(capture_attempt(_adapter(handler), request))
+    assert capture.failure is None
+    for key in ("reasoning_effort", "reasoning", "thinking", "think"):
+        if key in expected:
+            assert captured[key] == expected[key]
+        else:
+            assert key not in captured
+    messages = cast("list[dict[str, object]]", captured["messages"])
+    assert messages[1] == {
+        "role": "user",
+        "content": [{"type": "text", "text": "Hello."}],
+    }
+    if strategy == "system_token":
+        assert messages[0]["content"] == (
+            "Follow the request.\n\nDo not think or reason. Answer directly."
+            if level == "none"
+            else "<|think|>\nFollow the request."
+        )
+    else:
+        assert messages[0]["content"] == "Follow the request."
+    assert "<|think|>" not in request.request_json
+
+
+def test_system_token_creates_a_system_message_when_missing() -> None:
+    """A configured token does not replace the first user message."""
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(200, json=_completion())
+
+    request = _request(
+        reasoning="high",
+        body={
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "Hello."}]}
+            ]
+        },
+    )
+    request = replace(
+        request, route=replace(request.route, reasoning_strategy="system_token")
+    )
+    assert asyncio.run(capture_attempt(_adapter(handler), request)).failure is None
+    messages = cast("list[dict[str, object]]", captured["messages"])
+    assert messages == [
+        {"role": "system", "content": "<|think|>"},
+        {"role": "user", "content": [{"type": "text", "text": "Hello."}]},
+    ]

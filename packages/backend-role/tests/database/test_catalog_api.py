@@ -1770,6 +1770,7 @@ def test_openrouter_preview_maps_complete_safe_native_proposal_without_writes(
         "input_modalities": ["text", "image"],
         "output_modalities": ["text", "image", "structured_json"],
         "capabilities": ["tool_calling", "streaming", "reasoning"],
+        "reasoning_strategy": "auto",
         "constraints": {
             "max_context_tokens": 131072,
             "max_output_tokens": 8192,
@@ -2703,3 +2704,177 @@ def test_concurrent_openrouter_confirmation_has_one_complete_winner(
         assert connection.execute(
             "SELECT count(*) FROM router.provider_models"
         ).fetchone() == (1,)
+
+
+def test_reasoning_defaults_and_transport_overrides_are_persistent(
+    catalog_database: str, catalog_settings: Settings
+) -> None:
+    """Route controls inherit live model defaults and preserve explicit overrides."""
+    context = CatalogContext(catalog_database, catalog_settings)
+    provider = context.client.post(
+        "/v1/admin/providers",
+        headers=context.write_headers,
+        json={
+            "api_name": "fake",
+            "display_name": "Fake",
+            "adapter": "fake",
+            "enabled": True,
+        },
+    )
+    assert provider.status_code == HTTPStatus.CREATED
+    model = {
+        "api_name": "thinking",
+        "display_name": "Thinking",
+        "input_modalities": ["text"],
+        "output_modalities": ["text"],
+        "capabilities": ["reasoning"],
+        "reasoning_strategy": "thinking_type",
+        "default_reasoning_level": "low",
+    }
+    result = context.client.post(
+        "/v1/admin/models", headers=context.write_headers, json=model
+    )
+    assert result.status_code == HTTPStatus.CREATED
+    assert result.json()["reasoning_strategy"] == "thinking_type"
+    route = {
+        "api_name": "thinking-route",
+        "provider_api_name": "fake",
+        "model_api_name": "thinking",
+        "provider_model_name": "wire",
+        "enabled": True,
+        "reasoning_mappings": [
+            {"level": level, "provider_value": value}
+            for level, value in [
+                ("none", "minimal"),
+                ("low", "low"),
+                ("medium", "normal"),
+                ("high", "xhigh"),
+            ]
+        ],
+    }
+    result = context.client.post(
+        "/v1/admin/provider-models", headers=context.write_headers, json=route
+    )
+    assert result.status_code == HTTPStatus.CREATED
+    assert result.json()["reasoning_strategy"] == "thinking_type"
+    assert result.json()["default_reasoning_level"] == "low"
+    assert result.json().get("configured_reasoning_strategy") is None
+    with psycopg.connect(catalog_database, row_factory=dict_row) as connection:
+        selected = resolve_provider_route(
+            connection,
+            "thinking-route",
+            required_inputs=frozenset({"text"}),
+            required_output="text",
+            required_capabilities=frozenset(),
+            reasoning_level=None,
+        )
+        assert selected.reasoning_level == "low"
+        assert selected.provider_reasoning_value == "low"
+        assert selected.reasoning_strategy == "thinking_type"
+        explicit = resolve_provider_route(
+            connection,
+            "thinking-route",
+            required_inputs=frozenset({"text"}),
+            required_output="text",
+            required_capabilities=frozenset(),
+            reasoning_level="none",
+        )
+        assert explicit.reasoning_level == "none"
+        assert explicit.provider_reasoning_value == "minimal"
+        validate_assignment_reasoning(connection, ["thinking-route"], None)
+    override = {
+        **route,
+        "reasoning_strategy": "effort",
+        "default_reasoning_level": "high",
+    }
+    result = context.client.put(
+        "/v1/admin/provider-models/thinking-route",
+        headers=context.write_headers,
+        json=override,
+    )
+    assert result.status_code == HTTPStatus.OK
+    assert result.json()["configured_reasoning_strategy"] == "effort"
+    assert result.json()["configured_default_reasoning_level"] == "high"
+    changed = {
+        **model,
+        "reasoning_strategy": "nested_effort",
+        "default_reasoning_level": "none",
+    }
+    assert (
+        context.client.put(
+            "/v1/admin/models/thinking", headers=context.write_headers, json=changed
+        ).status_code
+        == HTTPStatus.OK
+    )
+    result = context.client.get(
+        "/v1/admin/provider-models/thinking-route", headers=context.read_headers
+    )
+    assert result.json()["reasoning_strategy"] == "effort"
+    assert result.json()["default_reasoning_level"] == "high"
+    result = context.client.put(
+        "/v1/admin/provider-models/thinking-route",
+        headers=context.write_headers,
+        json={**route, "reasoning_strategy": None, "default_reasoning_level": None},
+    )
+    assert result.status_code == HTTPStatus.OK
+    assert result.json()["reasoning_strategy"] == "nested_effort"
+    assert result.json()["default_reasoning_level"] == "none"
+    result = context.client.put(
+        "/v1/admin/provider-models/thinking-route",
+        headers=context.write_headers,
+        json={**route, "reasoning_strategy": "auto"},
+    )
+    assert result.status_code == HTTPStatus.OK
+    assert result.json()["reasoning_strategy"] == "auto"
+    invalid = context.client.put(
+        "/v1/admin/provider-models/thinking-route",
+        headers=context.write_headers,
+        json={**route, "reasoning_strategy": "native"},
+    )
+    assert invalid.status_code == HTTPStatus.BAD_REQUEST
+    result = context.client.get(
+        "/v1/admin/provider-models/thinking-route", headers=context.read_headers
+    )
+    assert result.json()["reasoning_strategy"] == "auto"
+    invalid_model = context.client.post(
+        "/v1/admin/models",
+        headers=context.write_headers,
+        json={
+            **model,
+            "api_name": "not-reasoning",
+            "capabilities": [],
+            "default_reasoning_level": "high",
+        },
+    )
+    assert invalid_model.status_code == HTTPStatus.BAD_REQUEST
+    invalid_strategy = context.client.put(
+        "/v1/admin/models/thinking",
+        headers=context.write_headers,
+        json={**model, "reasoning_strategy": "raw_body"},
+    )
+    assert invalid_strategy.status_code == HTTPStatus.BAD_REQUEST
+
+
+def test_reasoning_migration_keeps_existing_records(database_url: str) -> None:
+    """An existing deployment gets adapter defaults without a data reset."""
+    with psycopg.connect(database_url, row_factory=dict_row) as connection:
+        migrate(connection, target=2)
+        connection.execute("""INSERT INTO router.canonical_models
+            (api_name, display_name, input_modalities, output_modalities, capabilities)
+            VALUES ('existing', 'Existing', ARRAY['text'], ARRAY['text'],
+                    ARRAY['reasoning'])""")
+        migrate(connection)
+        row = connection.execute(
+            """SELECT api_name, reasoning_strategy, default_reasoning_level
+               FROM router.canonical_models"""
+        ).fetchone()
+        assert row == {
+            "api_name": "existing",
+            "reasoning_strategy": "auto",
+            "default_reasoning_level": None,
+        }
+        migrate(connection, target=2)
+        assert connection.execute(
+            "SELECT api_name FROM router.canonical_models"
+        ).fetchone() == {"api_name": "existing"}
+        migrate(connection)

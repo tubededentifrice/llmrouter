@@ -625,7 +625,12 @@ validation, even when no eligible candidate completes the call.
 
 Each assignment MUST store the union of call capabilities and modalities that
 validated calls requested. A global or service administrator MUST be able to
-remove an observed item. Runtime candidate filtering MUST use the current
+remove an observed item. A global administrator MAY also add an observed item
+for one selected service and assignment. Adding an item MUST preserve the
+last-used time and MUST NOT create a local definition. An unused assignment
+MUST keep no last-used time. Repeating the addition MUST keep each item once.
+Each addition MUST use the administrator browser-write controls and record
+one basic activity event. Runtime candidate filtering MUST use the current
 call's actual requirements. It MUST NOT use the stored union as the call
 filter.
 

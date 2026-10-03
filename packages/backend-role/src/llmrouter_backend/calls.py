@@ -1520,6 +1520,9 @@ class CallExecutor:
                 provider_reasoning_value=cast(
                     "str | None", document.get("provider_reasoning_value")
                 ),
+                reasoning_strategy=cast(
+                    "Any", document.get("reasoning_strategy", "auto")
+                ),
             )
             price_document = cast("dict[str, object]", document["price"])
             unit_documents = cast("list[dict[str, str]]", price_document["unit_prices"])
@@ -2327,6 +2330,7 @@ def _selection_snapshot(
                 ),
                 "reasoning_level": candidate.route.reasoning_level,
                 "provider_reasoning_value": (candidate.route.provider_reasoning_value),
+                "reasoning_strategy": candidate.route.reasoning_strategy,
                 "price": {
                     "currency": candidate.price.currency,
                     "unit_prices": [

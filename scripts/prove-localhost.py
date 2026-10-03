@@ -2429,26 +2429,21 @@ def _prove_configuration_graph(browser: _Cdp, *, mobile: bool) -> None:
     )
     _wait_browser(
         browser,
-        "(document.querySelector('.configuration-edit-dialog[open]')?.innerText ?? '').includes('Selected rung')",
-        "The assignment rung did not identify itself in the inspector",
+        "(document.querySelector('.configuration-edit-dialog[open]')?.innerText ?? '').includes('Selected model')",
+        "The selected model did not appear in assignment details",
     )
     assignment_inspector_text = browser.evaluate(
         "document.querySelector('.configuration-edit-dialog[open]')?.innerText ?? ''"
     )
     assert isinstance(assignment_inspector_text, str)
     for fact in (
-        "Assignment ID",
-        "workflow",
-        "Selected route",
-        "text",
+        "Last used",
+        "Selected model",
         "Provider",
         "Fake provider",
-        "Canonical model",
         "Text model",
-        "Route state",
+        "State",
         "Enabled",
-        "Definition source",
-        "Local definition",
         "Text input",
         "Text output",
     ):
@@ -2503,9 +2498,9 @@ def _prove_configuration_graph(browser: _Cdp, *, mobile: bool) -> None:
         "text",
         "Provider",
         "Fake provider",
-        "Canonical model",
+        "Model",
         "Text model",
-        "Provider wire model",
+        "Model API name",
         "fake-text-v1",
         "State",
         "Enabled",

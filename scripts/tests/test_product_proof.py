@@ -127,7 +127,7 @@ def test_live_proof_covers_sdk_harness_and_native_operation_families() -> None:
         '"modelVisible": True',
         '"retryVisible": True',
         '"wholePageFailure": False',
-        "A failed refresh did not retain and label the current configuration graph",
+        "The graph did not restore the mapping after refresh",
         'mode === "remove-text"',
         "Target unavailable",
         "Refresh target",

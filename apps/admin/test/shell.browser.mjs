@@ -240,12 +240,12 @@ async function discardAssignment(page) {
   );
 }
 async function confirmImpact(dialog, label) {
-  await dialog
-    .getByRole("textbox", {
-      name: "Enter the impact statement to continue",
-      exact: true,
-    })
-    .fill(
+  const confirmation = dialog.getByRole("textbox", {
+    name: "Enter the impact statement to continue",
+    exact: true,
+  });
+  if (await confirmation.count())
+    await confirmation.fill(
       await dialog
         .locator(".od-confirmation-dialog-impact strong")
         .textContent(),
@@ -346,10 +346,10 @@ describe("authenticated shell in a real browser", () => {
       await settle(page);
       await editAssignment(page);
       await page
-        .getByRole("combobox", { name: "Definition", exact: true })
-        .selectOption("inherit");
+        .getByRole("button", { name: "Inherit from…", exact: true })
+        .click();
       await page
-        .getByRole("combobox", { name: "Inherited assignment", exact: true })
+        .getByRole("combobox", { name: "Inherit from", exact: true })
         .fill("source");
       await page
         .locator(".od-searchable-select-listbox")

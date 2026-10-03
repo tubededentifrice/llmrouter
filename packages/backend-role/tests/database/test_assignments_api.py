@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import hashlib
 import threading
 from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
@@ -1235,3 +1236,132 @@ def _seed_catalog(connection: psycopg.Connection[Any]) -> None:
            SET constraints = '{"embedding_dimensions":[3]}'::jsonb
            WHERE api_name = 'embedding'"""
     )
+
+
+def test_administrator_requirement_union_preserves_use_and_service_scope(
+    assignment_context: AssignmentContext,
+) -> None:
+    """Add, repeat, and remove scoped requirements without recording a call."""
+    context = assignment_context
+    client = context.client
+    assert (
+        client.put(
+            "/v1/assignments/shared",
+            json={"direct_chain": [{"provider_model_api_name": "text-one"}]},
+            headers=context.service_headers("branch"),
+        ).status_code
+        == HTTPStatus.OK
+    )
+    prefix = "/v1/admin/services/child/assignments/shared/observed-requirements"
+    path = f"{prefix}/image_input"
+    assert (
+        client.put(path, headers=context.service_headers("child")).status_code
+        == HTTPStatus.UNAUTHORIZED
+    )
+    assert (
+        client.put(path, headers=context.admin_read_headers).status_code
+        == HTTPStatus.FORBIDDEN
+    )
+    wrong_origin = {**context.admin_headers, "Origin": "https://untrusted.example"}
+    assert client.put(path, headers=wrong_origin).status_code == HTTPStatus.FORBIDDEN
+    assert (
+        client.put(path, headers=context.admin_headers).status_code
+        == HTTPStatus.NO_CONTENT
+    )
+    assert (
+        client.put(path, headers=context.admin_headers).status_code
+        == HTTPStatus.NO_CONTENT
+    )
+    child = client.get(
+        "/v1/assignments/shared", headers=context.service_headers("child")
+    ).json()
+    assert child["observed_requirements"] == ["image_input"]
+    assert "last_used_at" not in child
+    assert child["defined_by_service_api_name"] == "branch"
+    parent = client.get(
+        "/v1/assignments/shared", headers=context.service_headers("branch")
+    ).json()
+    assert parent["observed_requirements"] == []
+    assert "last_used_at" not in parent
+    with psycopg.connect(context.database_url, row_factory=dict_row) as connection:
+        connection.execute(
+            """UPDATE router.assignment_usage
+               SET last_used_at = '2026-09-01T12:00:00Z',
+                   observed_requirements = ARRAY['image_input', 'text_input']
+               WHERE service_id =
+                   (SELECT id FROM router.services WHERE api_name = 'child')
+                 AND api_name = 'shared'"""
+        )
+    before = client.get(
+        "/v1/assignments/shared", headers=context.service_headers("child")
+    ).json()
+    assert (
+        client.put(f"{prefix}/reasoning", headers=context.admin_headers).status_code
+        == HTTPStatus.NO_CONTENT
+    )
+    after = client.get(
+        "/v1/assignments/shared", headers=context.service_headers("child")
+    ).json()
+    assert after["observed_requirements"] == ["image_input", "reasoning", "text_input"]
+    assert after["last_used_at"] == before["last_used_at"]
+    assert (
+        client.delete(path, headers=context.admin_headers).status_code
+        == HTTPStatus.NO_CONTENT
+    )
+    removed = client.get(
+        "/v1/assignments/shared", headers=context.service_headers("child")
+    ).json()
+    assert removed["observed_requirements"] == ["reasoning", "text_input"]
+    assert removed["last_used_at"] == before["last_used_at"]
+    assert (
+        client.put(f"{prefix}/unsupported", headers=context.admin_headers).status_code
+        == HTTPStatus.BAD_REQUEST
+    )
+    assert (
+        client.put(
+            "/v1/admin/services/child/assignments/absent/observed-requirements/reasoning",
+            headers=context.admin_headers,
+        ).status_code
+        == HTTPStatus.NOT_FOUND
+    )
+    with psycopg.connect(context.database_url, row_factory=dict_row) as connection:
+        events = connection.execute(
+            """SELECT actor_subject, service_api_name, resource_api_name, result
+               FROM router.activity_events
+               WHERE action = 'assignment.observed_requirement.add'
+               ORDER BY occurred_at, id"""
+        ).fetchall()
+    assert len(events) == 4
+    actor = (
+        "oidc:"
+        + hashlib.sha256(b"https://identity.example.test\0administrator").hexdigest()
+    )
+    assert all(event["actor_subject"] == actor for event in events)
+    assert all(event["service_api_name"] == "child" for event in events)
+    assert sum(event["result"] == "succeeded" for event in events) == 3
+    assert events[-1]["result"] == "failed"
+
+
+def test_manual_requirements_on_unused_default_keep_data_during_unsafe_rollback(
+    assignment_context: AssignmentContext,
+) -> None:
+    """Do not invent a use date or discard observations to restore an old schema."""
+    context = assignment_context
+    path = (
+        "/v1/admin/services/child/assignments/default/observed-requirements/reasoning"
+    )
+    assert (
+        context.client.put(path, headers=context.admin_headers).status_code
+        == HTTPStatus.NO_CONTENT
+    )
+    with (
+        psycopg.connect(context.database_url, autocommit=True) as connection,
+        pytest.raises(psycopg.errors.NotNullViolation),
+    ):
+        migrate(connection, target=3)
+    current = context.client.get(
+        "/v1/assignments/default", headers=context.service_headers("child")
+    ).json()
+    assert current["definition_kind"] == "implicit"
+    assert current["observed_requirements"] == ["reasoning"]
+    assert "last_used_at" not in current
