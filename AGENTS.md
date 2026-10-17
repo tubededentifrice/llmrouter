@@ -142,7 +142,8 @@ needs a user decision and an architecture decision record.
 
 Use `uv` for all Python environments, dependency changes, locking, commands,
 and tools. Do not use `pip`, `pipx`, Poetry, or a manually created virtual
-environment.
+environment. Do not require a specific `uv` version in project settings,
+checks, or CI.
 
 Keep each public contract versioned and product-neutral.
 SDKs, shared components, and administration interfaces must not weaken service

@@ -10,12 +10,6 @@ fi
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repository_root}"
 
-uv_version="$(uv --version)"
-if [[ "${uv_version}" != "uv 0.12.0" && "${uv_version}" != "uv 0.12.0 "* ]]; then
-  echo "uv 0.12.0 is required." >&2
-  exit 1
-fi
-
 python_targets=(
   packages
   scripts/check-dependency-policy.py

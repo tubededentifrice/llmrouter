@@ -275,10 +275,6 @@ def _python_style_fixture(tmp_path: Path, source: str) -> tuple[Path, dict[str, 
     uv.write_text(
         """#!/usr/bin/env bash
 set -euo pipefail
-if [[ "${1:-}" == "--version" ]]; then
-  echo "uv 0.12.0"
-  exit 0
-fi
 if [[ "${1:-}" == "run" ]]; then
   shift
   exec "$@"

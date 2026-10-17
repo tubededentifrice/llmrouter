@@ -20,7 +20,6 @@ dev = [
 package = false
 exclude-newer = "2026-09-19T00:00:00Z"
 exclude-newer-package = { cryptography = "2026-08-09T00:00:00Z" }
-required-version = "==0.12.0"
 
 [tool.uv.workspace]
 members = ["packages/backend-role"]

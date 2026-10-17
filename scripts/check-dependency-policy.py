@@ -38,7 +38,6 @@ APPROVED_PYTHON_OVERRIDES = {
 NODE_VERSION = "24.17.0"
 NPM_VERSION = "11.18.0"
 PYTHON_VERSION = "3.14.6"
-UV_VERSION = "0.12.0"
 APPROVED_NPM_EXCEPTION_DOCUMENT: dict[str, Any] = {
     "approved_at": None,
     "decision": None,
@@ -151,10 +150,6 @@ def check_root_policy() -> list[str]:
             uv_policy, list(backend.get("project", {}).get("dependencies", []))
         )
     )
-    if uv_policy.get("required-version") != f"=={UV_VERSION}":
-        errors.append(
-            f"pyproject.toml: tool.uv.required-version must be =={UV_VERSION}"
-        )
 
     package = json.loads(Path("package.json").read_text(encoding="utf-8"))
     if package.get("packageManager") != f"npm@{NPM_VERSION}":

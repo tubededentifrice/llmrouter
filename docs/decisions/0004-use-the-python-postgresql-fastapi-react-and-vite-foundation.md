@@ -21,6 +21,11 @@ Use `uv` for Python environments and dependency work. Pin exact eligible
 versions under repository policy. This choice does not create separate runtime
 roles or a TypeScript SDK requirement.
 
+As approved by the user on 2026-10-17, do not require a specific `uv` version
+in project settings, checks, or CI. Host tool updates must remain usable from
+the project directory. CI installs the current stable `uv` release; dependency
+pins, release-age checks, and immutable container references still apply.
+
 ## Alternatives
 
 - A second backend language increases shared-library and operation work.

@@ -107,6 +107,10 @@ Revoke the session after the browser check:
 ./scripts/local-development.sh clear-test-session
 ```
 
+Use `uv` for Python work. The project does not require a specific `uv`
+version. CI installs the current stable release. Dependency versions remain
+fixed by the manifests and lockfile.
+
 Repository checks use:
 
 ```bash
