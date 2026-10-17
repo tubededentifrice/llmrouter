@@ -286,7 +286,7 @@ The content inventory MUST cover these retained routes:
 | Path                         | View                           | Content that the inventory MUST check                                    |
 | ---------------------------- | ------------------------------ | ------------------------------------------------------------------------ |
 | `/overview`                  | overview dashboard             | totals, health, cooldown summaries, and local refresh states              |
-| `/services`                  | service administration         | the service tree and compact and create inspectors                       |
+| `/services`                  | service administration         | the service tree, compact inspector, and create modal                    |
 | `/services/{serviceApiName}` | service-details administration | the heading, facts, form, workspace, key, delete, and conditional states |
 | `/configuration`             | configuration administration   | all three board columns, inspectors, forms, and playground entry points  |
 | `/logs`                      | retained-log inspection        | filters, retained records, selected details, media, and retention states |

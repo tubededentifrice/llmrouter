@@ -558,7 +558,6 @@ input:not(.od-form-control):focus {
   gap: 16px;
 }
 
-.service-create-form .od-button,
 .service-inspector-form .od-button {
   justify-self: start;
 }

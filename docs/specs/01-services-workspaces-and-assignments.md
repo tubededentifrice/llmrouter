@@ -160,8 +160,10 @@ The global administration application MUST use the service tree as the main
 service-management entry. One primary-button click or one tap on a service node
 MUST select that service and open its compact inspector without navigation. A
 primary-button double-click on a service node MUST select that service and open
-its service-details route. The first click of that double-click MAY open the
-compact inspector before navigation.
+its service-details route. One click MUST select the service immediately and
+MUST NOT wait for a possible second click. The first click of a double-click
+MAY open the compact inspector before navigation. The double-click MUST open
+the service that its first click selected.
 
 For a service node, Space MUST perform the one-click action and Enter MUST open
 the service-details route. This requirement replaces the general rule that
@@ -185,8 +187,8 @@ moving graph focus to the button. The applicable selected-service inspector
 focus rule MUST still apply.
 
 A primary-button click, pointer tap, or touch tap on `+ New service` MUST open
-the create-service inspector. Enter or Space on the focused button MUST open
-the same inspector. The button MUST participate in the service graph's roving
+the create-service modal. Enter or Space on the focused button MUST open the
+same modal. The button MUST participate in the service graph's roving
 focus group and MUST NOT add a second graph Tab stop. Down from the selected
 service node MUST move focus to its `+ New service` button. Up or Left from the
 button MUST return focus to that selected node. Down from the button MUST move
@@ -199,70 +201,53 @@ contextual button.
 
 Tab MUST still enter the graph at the selected service node, or at the first
 service node when there is no selection. The next Tab from either a service
-node or the contextual button MUST leave the graph. When inspector closure
+node or the contextual button MUST leave the graph. When modal closure
 returns focus to `+ New service`, that button MAY temporarily be the graph's
 one active roving Tab stop. When focus next leaves the graph, the selected
 service node MUST again become the graph's active Tab stop. Pointer, touch, and
 keyboard use MUST produce the same parent and create form.
 
-Activating the same contextual button while its create inspector is open MUST
-NOT clear values, open another inspector, or send a create request. When no
-request is pending, it MUST move focus to the existing inspector heading. When
-a request is pending, the repeated activation MUST do nothing.
+Opening the create-service modal MUST capture the selected service as the
+required parent for that create attempt. The modal MUST use the shared form
+`Dialog`, the same modal form pattern as the configuration board. Its heading
+MUST be `New service`, and it MUST show the captured parent's display name and
+`apiName` as read-only context. Its form MUST contain only `Display name` and
+`API name` fields. Its fixed footer MUST contain a `Cancel` action and one
+primary `Create service` action. It MUST NOT contain a parent picker, a
+null-parent option, or another way to change the captured parent. The create
+request MUST send the captured service `apiName` as `parent_service_api_name`.
+The modal background MUST prevent graph selection and other page actions until
+the modal closes. The selected-service compact inspector MAY stay visible
+behind the modal.
 
-Opening the create-service inspector MUST capture the selected service as the
-required parent for that create attempt. The inspector MUST use
-`GraphInspector`. Its heading MUST be `New service`, and it MUST show the
-captured parent's display name and `apiName` as read-only context. Its form
-MUST contain only `Display name` and `API name` fields and one primary `Create
-service` action. It MUST NOT contain a parent picker, a null-parent option, or
-another way to change the captured parent. The create request MUST send the
-captured service `apiName` as `parent_service_api_name`.
-
-Opening the inspector MUST move focus to its heading, and the next Tab MUST
-move to `Display name`. Escape or the inspector close action MUST cancel
-creation, discard the unsaved non-secret values, keep the parent service
-selected, and return focus to its `+ New service` button. Cancellation MUST
-NOT send a create request. While the create request is pending, the inspector
-MUST show and announce `Creating service`, expose its busy state to assistive
-technology, prevent a duplicate submit, disable its fields and actions, and
-block inspector closure and graph selection changes until the request finishes.
-This pending rule overrides the shared Escape and close behavior only while the
+Opening the modal MUST move focus to `Display name`. Escape, `Cancel`, or the
+modal close action MUST cancel creation, discard the unsaved non-secret values,
+keep the parent service selected, and return focus to its `+ New service`
+button. Cancellation MUST NOT send a create request. While the create request
+is pending, the modal MUST show and announce `Creating service`, expose its
+busy state to assistive technology, prevent a duplicate submit, disable its
+fields and actions, and block modal closure until the request finishes. This
+pending rule overrides the shared Escape and close behavior only while the
 request is pending.
 
-In split or overlay mode, if the administrator tries to select another service
-while a create inspector is open and no request is pending, the application
-MUST treat that action as a request to cancel creation. When both fields are
-empty, it MUST close the create inspector, select the requested service, open
-that service's compact inspector, and focus its heading. When either field has
-a value, it MUST first ask the administrator to discard the values. The discard
-confirmation MUST move focus to its `Keep editing` action. Confirming MUST
-contain `Discard values` and `Keep editing` actions. `Discard values` MUST
-complete the same selection change. `Keep editing` or closing the confirmation
-MUST keep the original parent selected, keep the entered values, keep the
-create inspector open, and return focus to the first field that has a value.
-In bottom-sheet mode, the shared modal background MUST prevent a graph
-selection change until the inspector closes.
-
 A create failure MUST keep the captured parent and entered values, show a
-corrective error through `GraphInspectorNotice`, re-enable its fields and
-actions, and permit retry. Field-validation failure MUST focus the first
-invalid field. Another failure MUST keep focus on the create action after it
-announces the error. If the captured parent becomes unavailable, the
-application MUST close the create inspector, select the first available
-service, return focus to that node, and announce that the parent is
-unavailable. It MUST NOT retry with a different parent. A successful create
-MUST add the confirmed child below the captured parent, select the new child,
-replace the create inspector with its compact selected-service inspector, and
-move focus to that inspector's heading. It MUST NOT navigate to the
-service-details route.
+corrective error through `GraphInspectorNotice` in the modal, re-enable its
+fields and actions, and permit retry. Field-validation failure MUST focus the
+first invalid field. Another failure MUST keep focus on the create action
+after it announces the error. If the captured parent becomes unavailable, the
+application MUST close the modal, select the first available service, return
+focus to that node, and announce that the parent is unavailable. It MUST NOT
+retry with a different parent. A successful create MUST close the modal, add
+the confirmed child below the captured parent, select the new child, open its
+compact selected-service inspector, and move focus to that inspector's
+heading. It MUST NOT navigate to the service-details route.
 
 Only a current confirmed service refresh or the create response MAY establish
 that the captured parent is unavailable. A service-load result that started
-before the create inspector opened MUST NOT close or retarget that inspector or
+before the create modal opened MUST NOT close or retarget that modal or
 replace a later confirmed graph. If a current refresh reports the parent as
 unavailable while the create request is pending, the application MUST keep the
-pending inspector until that request finishes. If creation succeeds, the
+pending modal until that request finishes. If creation succeeds, the
 application MUST use the create response and discard that refresh result. If
 creation fails, the application MUST then apply the current refresh and the
 applicable create-failure or unavailable-parent rule. This rule overrides the
@@ -300,10 +285,10 @@ inspector MUST NOT contain a display-name form, parent change, delete action,
 workspace data, workspace action, API-key metadata, API-key action, or one-time
 secret. It MUST NOT load workspaces or API keys.
 
-The selected-service and create-service inspectors MUST use the complete shared
+The selected-service inspector MUST use the complete shared
 compact graph-inspector system in
 [Authentication, administration, and shared UI](04-authentication-administration-and-shared-ui.md#shared-compact-graph-inspector).
-They MUST use all shared widths, insets, mode boundaries, and scrolling rules.
+It MUST use all shared widths, insets, mode boundaries, and scrolling rules.
 The Router MUST NOT add a local width, padding, overflow, inset, breakpoint, or
 mode rule. On a phone, the modal sheet and its modal backdrop MUST be in a
 stacking layer above the application bottom navigation. The navigation MUST be
@@ -313,7 +298,7 @@ change the shared sheet insets, width, maximum height, or mode boundary.
 Closing the compact selected-service inspector with Escape or its close action
 MUST keep the service selected and return focus to its graph node. Reopening the
 selected service MUST move focus to the inspector heading as required by the
-shared system. The contextual child-service action and create inspector MUST
+shared system. The contextual child-service action and create modal MUST
 follow the creation, focus, cancellation, and success rules above.
 
 ### Service-details route
@@ -513,15 +498,14 @@ exact focus return, and one service-tree tab stop. At desktop and phone widths,
 focused authenticated tests MUST also cover the absence of a toolbar create
 action; the exact selected-node placement, label, and accessible parent name of
 `+ New service`; pointer, touch, Enter, Space, and arrow access; one graph Tab
-stop; create-inspector focus entry and return; and cancel with empty and entered
-values. Split and overlay tests MUST cover selection changes with empty and
-entered values through pointer and keyboard use. Phone bottom-sheet tests MUST
-prove that the modal background prevents pointer and keyboard selection
-changes. The tests MUST verify that the inspector has only the display-name and
-API-name fields, shows the captured parent without a parent picker, and sends
-that parent in the create request. They MUST cover pending state, blocked
-closure, duplicate-submit prevention, repeated opener activation, discard-
-confirmation focus, field and non-field failures, retry, parent unavailability,
+stop; create-modal focus entry and return; and cancel with empty and entered
+values. Desktop, narrow, and phone tests MUST prove that the open create modal
+prevents pointer and keyboard graph selection and keeps the entered values.
+The tests MUST verify that the modal has only the display-name and API-name
+fields, shows the captured parent without a parent picker, and sends that
+parent in the create request. They MUST cover pending state, blocked closure
+with repeated Escape, duplicate-submit prevention, field and non-field
+failures, retry, parent unavailability,
 confirmed success, root selection after bootstrap, a missing history or URL
 selection, bootstrap and load failure, an invalid empty response, stale
 service-load rejection, pending refresh removal, and refresh selection
@@ -545,7 +529,7 @@ stale-data snapshots, and logs. Long-content tests MUST prove that graph and
 table viewports keep their local scrolling and do not cause page-level
 overflow.
 
-The compact and create inspectors, details page, workspace table, key table,
+The compact inspector, create modal, details page, workspace table, key table,
 loading, empty, stale, error, unavailable, one-time-secret, and confirmation
 states MUST pass Axe in desktop, narrow, and phone tests. Each width MUST have
 a reviewed screenshot of the normal service flow. Focused screenshots MUST

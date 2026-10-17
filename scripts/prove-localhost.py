@@ -2119,28 +2119,21 @@ def _prove_service_tree(browser: _Cdp, *, mobile: bool) -> None:
     _press_key(browser, "Enter")
     _wait_browser(
         browser,
-        "document.querySelector('.od-graph-inspector[open] h2') === document.activeElement && document.activeElement?.textContent === 'New service'",
-        "The create-service inspector heading did not receive focus",
+        "document.querySelector('.service-create-dialog[open] h2')?.textContent === 'New service' && document.activeElement?.getAttribute('name') === 'display_name'",
+        "The create-service modal did not focus the display name",
     )
-    _assert_dialog_layout(browser, ".od-graph-inspector[open]", mobile=mobile)
+    _assert_dialog_layout(browser, ".service-create-dialog[open]", mobile=mobile)
     assert (
         browser.evaluate(
-            "document.querySelector('.od-graph-inspector[open] select') === null"
-        )
-        is True
-    )
-    _press_key(browser, "Tab")
-    assert (
-        browser.evaluate(
-            "document.activeElement?.getAttribute('name') === 'display_name'"
+            "document.querySelector('.service-create-dialog[open] select') === null"
         )
         is True
     )
     _press_key(browser, "Escape")
     _wait_browser(
         browser,
-        "document.querySelector('.od-graph-inspector[open]') === null && document.activeElement?.hasAttribute('data-service-create-action') === true",
-        "The create-service inspector did not restore contextual action focus",
+        "document.querySelector('.service-create-dialog[open]') === null && document.activeElement?.hasAttribute('data-service-create-action') === true",
+        "The create-service modal did not restore contextual action focus",
     )
     _assert_axe(browser)
 

@@ -303,22 +303,6 @@ scene("services-create-error", "/services", {
   },
   live: ["The service was not created."],
 });
-scene("services-discard", "/services", {
-  path: "/services?service=root",
-  action: async (page) => {
-    if (await page.getByRole("dialog").count())
-      await page.keyboard.press("Escape");
-    await button(page, "New service under Root service, API name root").click();
-    await page
-      .getByRole("textbox", { name: "Display name", exact: true })
-      .fill("Draft");
-    const width = page.viewportSize().width;
-    await page.setViewportSize({ width: 1440, height: 1000 });
-    await page.locator('[data-service-api-name="child"]').click();
-    await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 });
-  },
-  names: [{ role: "dialog", name: "Discard service values?" }],
-});
 scene("services-loading", "/services", {
   hold: ["services"],
   live: ["Loading Services."],

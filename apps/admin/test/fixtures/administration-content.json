@@ -80,7 +80,7 @@
     {
       "path": "/services",
       "sources": ["App.tsx", "ServiceManagement.tsx"],
-      "scope": "Tree nodes, compact inspector facts and create field names are labels or record values. The graph h1 remains programmatic. Compact and clean create inspectors have no static helper.",
+      "scope": "Tree nodes, compact inspector facts and create field names are labels or record values. The graph h1 remains programmatic. The compact inspector and the clean create modal have no static helper.",
       "items": [
         {
           "id": "services-wait",
@@ -92,21 +92,12 @@
           "category": "helper"
         },
         {
-          "id": "services-discard",
-          "text": "The new service has not been created. Discard the entered values to select another service.",
-          "expected": "present",
-          "reason": "non-obvious effect",
-          "scenes": ["services-discard"],
-          "source": "ServiceManagement.tsx:ConfirmationDialog",
-          "category": "helper"
-        },
-        {
           "id": "services-error",
           "text": "The service was not created. Enter a display name. Correct the values and try again.",
           "expected": "present",
           "reason": "corrective error",
           "scenes": ["services-create-error"],
-          "source": "ServiceManagement.tsx:CreateServiceInspector GraphInspectorNotice",
+          "source": "ServiceManagement.tsx:CreateServiceDialog GraphInspectorNotice",
           "category": "state"
         },
         {

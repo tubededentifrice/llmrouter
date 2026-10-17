@@ -12,10 +12,11 @@ import {
 } from "react";
 import {
   Button,
-  ConfirmationDialog,
   DateTime,
+  Dialog,
   FormActions,
-  FormSection,
+  FormControls,
+  FormGrid,
   GraphEdge,
   GraphEdges,
   GraphInspector,
@@ -322,6 +323,52 @@ function useServiceGraphNavigation({
   };
 }
 
+interface ServiceFirstClick {
+  readonly name: string;
+  readonly x: number;
+  readonly y: number;
+  readonly time: number;
+}
+
+// The first click selects at once. The inspector that opens can move or cover
+// the node, so the second click can land on another element. A document
+// capture listener opens the service from the first click of the pair.
+function useServiceDoubleClick(
+  selectionLocked: boolean,
+  onOpenDetails: (name: string) => void,
+) {
+  const firstClick = useRef<ServiceFirstClick | null>(null);
+  const latest = useRef({ selectionLocked, onOpenDetails });
+  useLayoutEffect(() => {
+    latest.current = { selectionLocked, onOpenDetails };
+  });
+  useEffect(() => {
+    const document = globalThis.document;
+    const openFromFirstClick = (event: MouseEvent) => {
+      const first = firstClick.current;
+      firstClick.current = null;
+      if (
+        first === null ||
+        event.button !== 0 ||
+        event.detail !== 2 ||
+        latest.current.selectionLocked ||
+        event.timeStamp - first.time > 1000 ||
+        Math.abs(event.clientX - first.x) > 16 ||
+        Math.abs(event.clientY - first.y) > 16
+      )
+        return;
+      event.preventDefault();
+      event.stopPropagation();
+      latest.current.onOpenDetails(first.name);
+    };
+    document.addEventListener("dblclick", openFromFirstClick, true);
+    return () => {
+      document.removeEventListener("dblclick", openFromFirstClick, true);
+    };
+  }, []);
+  return firstClick;
+}
+
 function ServiceGraph({
   available,
   initialState,
@@ -362,19 +409,7 @@ function ServiceGraph({
   readonly selectedService: string;
   readonly services: readonly Service[];
 }) {
-  const pointerTypeRef = useRef("mouse");
-  const pendingPointerSelection = useRef<ReturnType<
-    typeof globalThis.setTimeout
-  > | null>(null);
-  function cancelPointerSelection(): void {
-    if (pendingPointerSelection.current === null) return;
-    globalThis.clearTimeout(pendingPointerSelection.current);
-    pendingPointerSelection.current = null;
-  }
-  useEffect(() => cancelPointerSelection, []);
-  useEffect(() => {
-    if (selectionLocked) cancelPointerSelection();
-  }, [selectionLocked]);
+  const firstClick = useServiceDoubleClick(selectionLocked, onOpenDetails);
   useServiceTreeRestoration({
     available,
     restoreTree,
@@ -481,28 +516,15 @@ function ServiceGraph({
               eyebrow={parent === undefined ? "Root service" : "Child service"}
               key={service.api_name}
               meta={service.api_name}
-              onPointerDown={(event) => {
-                pointerTypeRef.current = event.pointerType;
-              }}
               onClick={(event) => {
-                if (selectionLocked) return;
-                cancelPointerSelection();
-                const trigger = event.currentTarget;
-                if (event.detail === 0 || pointerTypeRef.current !== "mouse") {
-                  onSelect(service.api_name, trigger);
-                  return;
-                }
-                // Keep the mouse target in place until a double-click can finish.
-                // Keyboard and touch activation do not need this mouse interval.
-                pendingPointerSelection.current = globalThis.setTimeout(() => {
-                  pendingPointerSelection.current = null;
-                  if (trigger.isConnected) onSelect(service.api_name, trigger);
-                }, 500);
-              }}
-              onDoubleClick={(event) => {
-                if (selectionLocked || event.button !== 0) return;
-                cancelPointerSelection();
-                onOpenDetails(service.api_name);
+                if (selectionLocked || event.detail > 1) return;
+                firstClick.current = {
+                  name: service.api_name,
+                  x: event.clientX,
+                  y: event.clientY,
+                  time: event.timeStamp,
+                };
+                onSelect(service.api_name, event.currentTarget);
               }}
               onFocus={() => {
                 setRovingState({
@@ -511,7 +533,6 @@ function ServiceGraph({
                 });
               }}
               onKeyDown={(event) => {
-                cancelPointerSelection();
                 if (event.key === "Enter") {
                   event.preventDefault();
                   if (!selectionLocked) onOpenDetails(service.api_name);
@@ -545,7 +566,6 @@ function ServiceGraph({
               });
             }}
             onClick={(event) => {
-              cancelPointerSelection();
               if (!selectionLocked) onCreate(event.currentTarget);
             }}
             onKeyDown={(event) => {
@@ -591,7 +611,7 @@ interface CreateFailure {
   readonly field?: "display_name" | "api_name";
 }
 
-function CreateServiceInspector({
+function CreateServiceDialog({
   busy,
   error,
   draft,
@@ -616,82 +636,77 @@ function CreateServiceInspector({
       error.field === undefined
         ? 'button[type="submit"]'
         : '[name="' + error.field + '"]';
-    formRef.current?.querySelector<HTMLElement>(selector)?.focus();
+    formRef.current
+      ?.closest("dialog")
+      ?.querySelector<HTMLElement>(selector)
+      ?.focus();
   }, [busy, error, formRef]);
   return (
-    <GraphInspector
-      activationKey="create-service"
+    <Dialog
+      actions={
+        <FormActions>
+          <Button disabled={busy} onClick={onClose} variant="quiet">
+            Cancel
+          </Button>
+          <Button disabled={busy} form="service-create-form" type="submit">
+            {busy ? "Creating service" : "Create service"}
+          </Button>
+        </FormActions>
+      }
+      appearance="form"
       aria-busy={busy}
+      className="service-create-dialog"
       closeDisabled={busy}
       closeLabel="Close new service"
-      onKeyDown={(event) => {
-        if (
-          !busy &&
-          event.key === "Tab" &&
-          !event.shiftKey &&
-          event.target instanceof HTMLElement &&
-          event.target.tagName === "H2"
-        ) {
-          event.preventDefault();
-          formRef.current
-            ?.querySelector<HTMLElement>('[name="display_name"]')
-            ?.focus();
-        }
-      }}
+      description={
+        <>
+          Parent service: {draft.parent.display_name}{" "}
+          <code>{draft.parent.api_name}</code>
+        </>
+      }
       eyebrow="Service tree"
       onClose={onClose}
+      open
+      // A successful create moves focus to the new service inspector.
+      restoreFocusOnClose={!busy}
       returnFocusRef={returnFocusRef}
       title="New service"
-      tone="lime"
     >
-      <GraphInspectorFacts>
-        <GraphInspectorFact
-          label="Parent"
-          value={
-            <>
-              {draft.parent.display_name} <code>{draft.parent.api_name}</code>
-            </>
-          }
-        />
-      </GraphInspectorFacts>
       <form
         className="service-create-form"
+        id="service-create-form"
         noValidate
         onSubmit={onSubmit}
         ref={formRef}
       >
-        <FormSection legend="Service details">
-          <TextControl
-            label="Display name"
-            disabled={busy}
-            maxLength={200}
-            name="display_name"
-            onChange={(event) => {
-              onChange("displayName", event.currentTarget.value);
-            }}
-            requirement="required"
-            aria-invalid={error?.field === "display_name" || undefined}
-            value={draft.displayName}
-          />
-          <TextControl
-            label="API name"
-            disabled={busy}
-            maxLength={63}
-            name="api_name"
-            onChange={(event) => {
-              onChange("apiName", event.currentTarget.value);
-            }}
-            pattern="[a-z](?:(?:[a-z0-9]|-){0,61}[a-z0-9])?"
-            requirement="required"
-            aria-invalid={error?.field === "api_name" || undefined}
-            value={draft.apiName}
-          />
-        </FormSection>
-        <FormActions alignment="start">
-          <Button disabled={busy} type="submit">
-            {busy ? "Creating service" : "Create service"}
-          </Button>
-        </FormActions>
+        <FormControls disabled={busy}>
+          <FormGrid>
+            <TextControl
+              label="Display name"
+              data-dialog-initial-focus=""
+              maxLength={200}
+              name="display_name"
+              onChange={(event) => {
+                onChange("displayName", event.currentTarget.value);
+              }}
+              requirement="required"
+              aria-invalid={error?.field === "display_name" || undefined}
+              value={draft.displayName}
+            />
+            <TextControl
+              label="API name"
+              maxLength={63}
+              name="api_name"
+              onChange={(event) => {
+                onChange("apiName", event.currentTarget.value);
+              }}
+              pattern="[a-z](?:(?:[a-z0-9]|-){0,61}[a-z0-9])?"
+              requirement="required"
+              aria-invalid={error?.field === "api_name" || undefined}
+              value={draft.apiName}
+            />
+          </FormGrid>
+        </FormControls>
       </form>
       {error === null ? null : (
         <GraphInspectorNotice dynamic tone="error">
@@ -699,7 +714,7 @@ function CreateServiceInspector({
           the values and try again.
         </GraphInspectorNotice>
       )}
-    </GraphInspector>
+    </Dialog>
   );
 }
 
@@ -784,7 +799,6 @@ interface ServiceManagementState {
   readonly deletedReturn: boolean;
   readonly selection: string;
   readonly error: CreateFailure | null;
-  readonly discardSelection: string | null;
   readonly focusReturn: string | null;
 }
 
@@ -844,7 +858,6 @@ function useServiceCreationState({
       deletedReturn: restoreTree?.mode === "deleted",
       selection: selectedService,
       error: null,
-      discardSelection: null,
       focusReturn: null,
     },
   );
@@ -865,7 +878,6 @@ function useServiceCreationState({
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const selectedControlRef = useRef<HTMLElement | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
-  const discardReturnRef = useRef<HTMLElement | null>(null);
   const selected =
     services.find((service) => service.api_name === selectedService) ?? null;
   useLayoutEffect(
@@ -903,7 +915,7 @@ function useServiceCreationState({
         // Consume this accepted discard once, including for same-route history.
         stateRef.current = { ...stateRef.current, draft: null };
         onCreationEvent?.({ type: "closed" });
-        update({ draft: null, error: null, discardSelection: null });
+        update({ draft: null, error: null });
         return true;
       }),
     [onCreationEvent, onNotice, registerNavigationGuard],
@@ -930,7 +942,6 @@ function useServiceCreationState({
     update({
       draft: null,
       error: null,
-      discardSelection: null,
       closedSelection: first,
       selection: first,
     });
@@ -987,7 +998,6 @@ function useServiceCreationState({
     returnFocusRef,
     selectedControlRef,
     formRef,
-    discardReturnRef,
     selected,
     firstEnteredField,
     activeRef,
@@ -1084,55 +1094,25 @@ export function ServiceManagement(props: ServiceManagementProps) {
     returnFocusRef,
     selectedControlRef,
     formRef,
-    discardReturnRef,
     selected,
-    firstEnteredField,
     activeRef,
   } = useServiceCreationState(props);
-  const {
-    busy,
-    draft,
-    closedSelection,
-    deletedReturn,
-    error,
-    discardSelection,
-  } = state;
+  const { busy, draft, closedSelection, deletedReturn, error } = state;
   const { layout, nodeSize } = useServiceTreeLayout(services, selectedService);
 
   function closeCreate(): void {
     if (busyRef.current) return;
     onCreationEvent?.({ type: "closed" });
-    update({
-      draft: null,
-      error: null,
-      discardSelection: null,
-      closedSelection: selectedService,
-    });
+    update({ draft: null, error: null });
   }
   function selectService(name: string, trigger?: HTMLElement): void {
     if (busyRef.current) return;
-    if (draft !== null && name === draft.parent.api_name) {
-      formRef.current
-        ?.closest("dialog")
-        ?.querySelector<HTMLElement>("h2")
-        ?.focus();
-      return;
-    }
-    if (draft !== null && (draft.displayName !== "" || draft.apiName !== "")) {
-      discardReturnRef.current = firstEnteredField();
-      update({ discardSelection: name });
-      return;
-    }
-    completeSelection(name, trigger);
-  }
-  function completeSelection(name: string, trigger?: HTMLElement): void {
     update({ focusReturn: null });
     selectedControlRef.current = trigger ?? serviceControl(name);
     onCreationEvent?.({ type: "closed" });
     update({
       draft: null,
       error: null,
-      discardSelection: null,
       closedSelection: null,
       deletedReturn: false,
       selection: name,
@@ -1234,24 +1214,9 @@ export function ServiceManagement(props: ServiceManagementProps) {
     onOpenDetails(name);
   }
   const inspector =
-    draft !== null ? (
-      <CreateServiceInspector
-        busy={busy}
-        error={error}
-        draft={draft}
-        formRef={formRef}
-        onChange={(field, value) => {
-          update({ draft: { ...draft, [field]: value }, error: null });
-        }}
-        onClose={closeCreate}
-        onSubmit={(event) => {
-          void create(event);
-        }}
-        returnFocusRef={returnFocusRef}
-      />
-    ) : selected === null ||
-      deletedReturn ||
-      closedSelection === selectedService ? undefined : (
+    selected === null ||
+    deletedReturn ||
+    closedSelection === selectedService ? undefined : (
       <CompactServiceInspector
         selected={selected}
         services={services}
@@ -1276,14 +1241,7 @@ export function ServiceManagement(props: ServiceManagementProps) {
         layout={layout}
         nodeSize={nodeSize}
         onCreate={(trigger) => {
-          if (busyRef.current || selected === null) return;
-          if (draft !== null) {
-            formRef.current
-              ?.closest("dialog")
-              ?.querySelector<HTMLElement>("h2")
-              ?.focus();
-            return;
-          }
+          if (busyRef.current || selected === null || draft !== null) return;
           returnFocusRef.current = trigger;
           const parent = { ...selected };
           onCreationEvent?.({ type: "opened", parent });
@@ -1301,20 +1259,22 @@ export function ServiceManagement(props: ServiceManagementProps) {
         selectedService={selectedService}
         services={services}
       />
-      <ConfirmationDialog
-        open={discardSelection !== null}
-        title="Discard service values?"
-        description="The new service has not been created. Discard the entered values to select another service."
-        confirmLabel="Discard values"
-        cancelLabel="Keep editing"
-        returnFocusRef={discardReturnRef}
-        onCancel={() => {
-          update({ discardSelection: null });
-        }}
-        onConfirm={() => {
-          if (discardSelection !== null) completeSelection(discardSelection);
-        }}
-      />
+      {draft === null ? null : (
+        <CreateServiceDialog
+          busy={busy}
+          error={error}
+          draft={draft}
+          formRef={formRef}
+          onChange={(field, value) => {
+            update({ draft: { ...draft, [field]: value }, error: null });
+          }}
+          onClose={closeCreate}
+          onSubmit={(event) => {
+            void create(event);
+          }}
+          returnFocusRef={returnFocusRef}
+        />
+      )}
     </PageSurface>
   );
 }

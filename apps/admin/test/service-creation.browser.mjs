@@ -76,6 +76,24 @@ const action = (page, name = "Root service", api = "root") =>
 const heading = (page) =>
   page.getByRole("heading", { name: "New service", exact: true });
 const inspector = (page) => page.locator(".od-graph-inspector");
+const creator = (page) =>
+  page.getByRole("dialog", { name: "New service", exact: true });
+const displayName = (page) =>
+  page.getByRole("textbox", { name: "Display name", exact: true });
+async function focusInCreator(page) {
+  return page.evaluate(
+    () =>
+      document.activeElement?.closest("dialog")?.querySelector("h2")
+        ?.textContent === "New service",
+  );
+}
+// The create modal makes the toolbar inert. These race checks start the
+// refresh from code to prove that a late service read keeps the captured draft.
+async function refreshBehindModal(page) {
+  await refresh(page).evaluate((button) => {
+    button.click();
+  });
+}
 const submit = (page) =>
   page.getByRole("button", { name: "Create service", exact: true });
 const refresh = (page) =>
@@ -178,15 +196,13 @@ async function draft(page, parent = "root") {
     parent === "root" ? "Root service" : "Parent service",
     parent,
   ).click();
-  await expect(heading(page)).toBeFocused();
-  await page.keyboard.press("Tab");
-  await expect(
-    page.getByRole("textbox", { name: "Display name", exact: true }),
-  ).toBeFocused();
-  await expect(inspector(page).getByRole("textbox")).toHaveCount(2);
-  await expect(inspector(page).getByRole("combobox")).toHaveCount(0);
-  await expect(inspector(page).locator("dd")).toContainText(
-    parent === "root" ? "Root service root" : "Parent service parent",
+  await expect(displayName(page)).toBeFocused();
+  await expect(creator(page).getByRole("textbox")).toHaveCount(2);
+  await expect(creator(page).getByRole("combobox")).toHaveCount(0);
+  await expect(creator(page)).toContainText(
+    parent === "root"
+      ? "Parent service: Root service root"
+      : "Parent service: Parent service parent",
   );
 }
 async function fill(page) {
@@ -201,11 +217,11 @@ async function start(page) {
   await fill(page);
   await submit(page).click(); // Keep the browser's actual submit-to-disabled focus transition.
   await pending(page, "createService");
-  await expect(inspector(page)).toHaveAttribute("aria-busy", "true");
+  await expect(creator(page)).toHaveAttribute("aria-busy", "true");
   await expect(
-    inspector(page).getByText("Creating service", { exact: true }),
+    creator(page).getByRole("button", { name: "Creating service" }),
   ).toBeVisible();
-  for (const control of await inspector(page).locator("input, button").all())
+  for (const control of await creator(page).locator("input, button").all())
     await expect(control).toBeDisabled();
 }
 function near(actual, expected, label) {
@@ -377,6 +393,7 @@ async function placement(page, parent = "root") {
 }
 async function success(page) {
   await finish(page, "createService");
+  await expect(creator(page)).toHaveCount(0);
   await expect(page.locator(".od-graph-inspector h2")).toHaveText("New child");
   await expect(page.locator(".od-graph-inspector h2")).toBeFocused();
   await expect(node(page, "new-child")).toHaveAttribute("aria-pressed", "true");
@@ -467,11 +484,7 @@ describe("contextual service creation in the real App", () => {
           await evidenceFor(page, `${width}-normal`);
           if (width === 390) {
             await action(page).tap();
-            await expect(heading(page)).toBeFocused();
-            await page.keyboard.press("Tab");
-            await expect(
-              page.getByRole("textbox", { name: "Display name", exact: true }),
-            ).toBeFocused();
+            await expect(displayName(page)).toBeFocused();
           } else await draft(page);
           await evidenceFor(page, `${width}-create`);
           await start(page);
@@ -491,27 +504,18 @@ describe("contextual service creation in the real App", () => {
           ]);
           for (let index = 0; index < 5; index++)
             await page.keyboard.press("Escape");
-          await expect(heading(page)).toBeVisible();
-          if (width === 390) {
-            await expect(heading(page)).toBeFocused();
-            for (let index = 0; index < 3; index++) {
-              await page.keyboard.press("Tab");
-              await expect(heading(page)).toBeFocused();
-            }
-            await node(page, "other").evaluate((e) => e.focus());
-            await expect(heading(page)).toBeFocused();
-          } else {
-            await expect(node(page, "other")).toHaveAttribute(
-              "aria-disabled",
-              "true",
-            );
-            await node(page, "other").click({ force: true });
-            await action(page).click({ force: true });
-            await page
-              .getByRole("link", { name: "Overview", exact: true })
-              .click();
+          await expect(creator(page)).toBeVisible();
+          for (let index = 0; index < 3; index++) {
+            await page.keyboard.press("Tab");
+            expect(await focusInCreator(page)).toBe(true);
           }
-          await inspector(page)
+          await node(page, "other").click({ force: true });
+          await action(page).click({ force: true });
+          await page
+            .getByRole("link", { name: "Overview", exact: true })
+            .click({ force: true });
+          await expect(creator(page)).toBeVisible();
+          await creator(page)
             .locator("form")
             .evaluate((e) => {
               e.requestSubmit();
@@ -535,7 +539,7 @@ describe("contextual service creation in the real App", () => {
           await evidenceFor(page, `${width}-pending`);
           await finish(page, "createService", undefined, serverError);
           await expect(submit(page)).toBeFocused();
-          await expect(inspector(page).getByRole("alert")).toContainText(
+          await expect(creator(page).getByRole("alert")).toContainText(
             serverError.message,
           );
           await expect(
@@ -563,7 +567,7 @@ describe("contextual service creation in the real App", () => {
       },
     );
     it(
-      `${width}: cancel, repeated opener, keyboard entry, and 200 percent text`,
+      `${width}: cancel, keyboard entry, and 200 percent text`,
       { timeout: 45000 },
       async () => {
         const { page, context, errors } = await open(width, height);
@@ -573,31 +577,27 @@ describe("contextual service creation in the real App", () => {
           await page.keyboard.press("ArrowDown");
           await expect(action(page)).toBeFocused();
           await page.keyboard.press("Enter");
-          await expect(heading(page)).toBeFocused();
+          await expect(displayName(page)).toBeFocused();
           await fill(page);
-          if (width !== 390) {
-            await action(page).click();
-            await expect(heading(page)).toBeFocused();
-            await expect(
-              page.getByRole("textbox", { name: "Display name", exact: true }),
-            ).toHaveValue("New child");
-            await expect(inspector(page)).toHaveCount(1);
-          }
           await page
             .getByRole("button", { name: "Close new service", exact: true })
             .click();
           await expect(action(page)).toBeFocused();
+          await expect(creator(page)).toHaveCount(0);
           await expect(inspector(page)).toHaveCount(0);
           await page.keyboard.press("Space");
-          await expect(heading(page)).toBeFocused();
+          await expect(displayName(page)).toBeFocused();
           await expect(
             page.getByRole("textbox", { name: "Display name", exact: true }),
           ).toHaveValue("");
           await expect(
             page.getByRole("textbox", { name: "API name", exact: true }),
           ).toHaveValue("");
-          await page.keyboard.press("Escape");
+          await creator(page)
+            .getByRole("button", { name: "Cancel", exact: true })
+            .click();
           await expect(action(page)).toBeFocused();
+          await expect(creator(page)).toHaveCount(0);
           await page.keyboard.press("Tab");
           expect(
             await page.evaluate(
@@ -611,9 +611,9 @@ describe("contextual service creation in the real App", () => {
           });
           await placement(page);
           await action(page).click();
-          await expect(heading(page)).toBeFocused();
+          await expect(displayName(page)).toBeFocused();
           await fill(page);
-          for (const control of await inspector(page)
+          for (const control of await creator(page)
             .locator("input, button")
             .all()) {
             await control.scrollIntoViewIfNeeded();
@@ -666,58 +666,30 @@ describe("contextual service creation in the real App", () => {
       await close(context, errors);
     }
   });
-  for (const [width, height] of sizes.slice(0, 2))
+  for (const [width, height] of sizes)
     it(
-      `${width}: empty selection, dirty confirmation and first entered field`,
+      `${width}: the open modal blocks graph selection and keeps values`,
       { timeout: 30000 },
       async () => {
         const { page, context, errors } = await open(width, height);
         try {
           await ready(page);
           await draft(page);
-          await node(page, "parent").click();
-          await expect(page.locator(".od-graph-inspector h2")).toHaveText(
-            "Parent service",
+          await fill(page);
+          await node(page, "parent").click({ force: true });
+          await expect(creator(page)).toBeVisible();
+          await expect(node(page, "root")).toHaveAttribute(
+            "aria-pressed",
+            "true",
           );
-          await expect(page.locator(".od-graph-inspector h2")).toBeFocused();
+          await node(page, "parent").evaluate((e) => e.focus());
+          expect(await focusInCreator(page)).toBe(true);
+          await expect(displayName(page)).toHaveValue("New child");
+          await expect(page.getByRole("alertdialog")).toHaveCount(0);
           await page.keyboard.press("Escape");
-          await node(page, "root").click();
-          await expect(page.locator(".od-graph-inspector h2")).toHaveText(
-            "Root service",
-          );
-          await expect(page.locator(".od-graph-inspector h2")).toBeFocused();
-          await page.keyboard.press("Escape");
-          await draft(page);
-          for (const field of ["API name", "Display name"]) {
-            await page
-              .getByRole("textbox", { name: field, exact: true })
-              .fill("entered-value");
-            await node(page, "parent").focus();
-            await page.keyboard.press("Space");
-            await expect(
-              page.getByRole("button", { name: "Keep editing", exact: true }),
-            ).toBeFocused();
-            await evidenceFor(
-              page,
-              `${width}-discard-${field === "API name" ? "api" : "display"}`,
-            );
-            if (field === "API name") await page.keyboard.press("Escape");
-            else
-              await page
-                .getByRole("button", { name: "Keep editing", exact: true })
-                .click();
-            await expect(
-              page.getByRole("textbox", { name: field, exact: true }),
-            ).toBeFocused();
-            await expect(node(page, "root")).toHaveAttribute(
-              "aria-pressed",
-              "true",
-            );
-          }
+          await expect(creator(page)).toHaveCount(0);
+          await expect(action(page)).toBeFocused();
           await node(page, "parent").click();
-          await page
-            .getByRole("button", { name: "Discard values", exact: true })
-            .click();
           await expect(page.locator(".od-graph-inspector h2")).toHaveText(
             "Parent service",
           );
@@ -761,8 +733,9 @@ describe("contextual service creation in the real App", () => {
           }
           if (scenario === "loss-before") {
             await hold(page, ["services", "createService"]);
-            await refresh(page).click();
+            await refreshBehindModal(page);
             await finish(page, "services", await list(page, true));
+            await expect(creator(page)).toHaveCount(0);
             await expect(inspector(page)).toHaveCount(0);
             await expect(node(page, "root")).toBeFocused();
             await expect(
@@ -790,7 +763,7 @@ describe("contextual service creation in the real App", () => {
             ].includes(scenario)
           ) {
             await hold(page, ["services", "createService"]);
-            await refresh(page).click();
+            await refreshBehindModal(page);
             await pending(page, "services");
             if (scenario !== "late-success") {
               await finish(
@@ -799,12 +772,9 @@ describe("contextual service creation in the real App", () => {
                 await list(page, true, scenario === "partial"),
               );
               await expect(heading(page)).toBeVisible();
-              await expect(inspector(page)).toHaveAttribute(
-                "aria-busy",
-                "true",
-              );
+              await expect(creator(page)).toHaveAttribute("aria-busy", "true");
               if (scenario === "newer-refresh") {
-                await refresh(page).click();
+                await refreshBehindModal(page);
                 await pending(page, "services");
                 await finish(page, "services", await list(page));
               }
@@ -831,6 +801,7 @@ describe("contextual service creation in the real App", () => {
                 : serverError,
             );
             if (["loss-failure", "parent-response"].includes(scenario)) {
+              await expect(creator(page)).toHaveCount(0);
               await expect(inspector(page)).toHaveCount(0);
               await expect(node(page, "root")).toBeFocused();
               await expect(node(page, "parent")).toHaveCount(0);
@@ -984,7 +955,7 @@ describe("creation boundary checks", () => {
       await close(context, errors);
     }
   });
-  it("phone sheet blocks background pointer and keyboard selection", async () => {
+  it("phone modal blocks background pointer and keyboard selection", async () => {
     const { page, context, errors } = await open(390, 844);
     try {
       await ready(page);
@@ -996,9 +967,9 @@ describe("creation boundary checks", () => {
       await page.keyboard.press("Escape");
       await expect(node(page, "parent")).toBeFocused();
       await action(page, "Parent service", "parent").tap();
-      await expect(heading(page)).toBeFocused();
-      await expect(inspector(page).locator("dd")).toContainText(
-        "Parent service parent",
+      await expect(displayName(page)).toBeFocused();
+      await expect(creator(page)).toContainText(
+        "Parent service: Parent service parent",
       );
       const background = await node(page, "root").boundingBox();
       await page.touchscreen.tap(
@@ -1012,22 +983,14 @@ describe("creation boundary checks", () => {
       );
       for (let index = 0; index < 10; index++) {
         await page.keyboard.press("Tab");
-        expect(
-          await page.evaluate(
-            () => !!document.activeElement.closest(".od-graph-inspector"),
-          ),
-        ).toBe(true);
+        expect(await focusInCreator(page)).toBe(true);
       }
       const navigation = page.getByRole("button", {
         name: "Navigation",
         exact: true,
       });
       await navigation.evaluate((e) => e.focus());
-      expect(
-        await page.evaluate(
-          () => !!document.activeElement.closest(".od-graph-inspector"),
-        ),
-      ).toBe(true);
+      expect(await focusInCreator(page)).toBe(true);
       await start(page);
       expect(
         await page.evaluate(
@@ -1074,7 +1037,7 @@ describe("creation boundary checks", () => {
       await draft(page, "parent");
       await fill(page);
       await hold(page, ["services", "createService"]);
-      await refresh(page).click();
+      await refreshBehindModal(page);
       await pending(page, "services");
       const partial = await list(page, true);
       partial.retrieval = { complete: false, reason: "limit" };
@@ -1084,7 +1047,7 @@ describe("creation boundary checks", () => {
         "aria-pressed",
         "true",
       );
-      await refresh(page).click();
+      await refreshBehindModal(page);
       await pending(page, "services");
       await finish(page, "services", undefined, serverError);
       await expect(heading(page)).toBeVisible();
@@ -1210,8 +1173,8 @@ describe("creation boundary checks", () => {
             await page.keyboard.press("ArrowDown");
             await expect(action(page)).toBeFocused();
             await page.keyboard.press("Space");
-            await expect(heading(page)).toBeFocused();
-            for (const control of await inspector(page)
+            await expect(displayName(page)).toBeFocused();
+            for (const control of await creator(page)
               .locator("input, button")
               .all()) {
               await control.scrollIntoViewIfNeeded();
@@ -1231,50 +1194,6 @@ describe("creation boundary checks", () => {
     );
 });
 
-describe("dirty service navigation", () => {
-  it(
-    "node Enter cancels or accepts one discard confirmation",
-    { timeout: 20000 },
-    async () => {
-      const { page, context, errors } = await open(1440, 1000);
-      let confirmationCount = 0,
-        accept = false;
-      page.on("dialog", async (dialog) => {
-        confirmationCount++;
-        expect(dialog.type()).toBe("confirm");
-        if (accept) await dialog.accept();
-        else await dialog.dismiss();
-      });
-      try {
-        await ready(page);
-        await draft(page);
-        await fill(page);
-        await node(page, "parent").focus();
-        await page.keyboard.press("Enter");
-        await expect.poll(() => confirmationCount).toBe(1);
-        await expect(heading(page)).toBeVisible();
-        await expect(
-          page.getByRole("textbox", { name: "Display name", exact: true }),
-        ).toHaveValue("New child");
-        expect(new URL(page.url()).pathname).toBe("/services");
-        accept = true;
-        await node(page, "parent").focus();
-        await page.keyboard.press("Enter");
-        await expect(page.locator("main h1")).toHaveText("Parent service");
-        expect(confirmationCount).toBe(2);
-        expect(new URL(page.url()).pathname).toBe("/services/parent");
-        await page.goBack();
-        await expect(page.locator("main h1")).toHaveText("Services");
-        await expect(heading(page)).toHaveCount(0);
-        expect(confirmationCount).toBe(2);
-        expect(await count(page, "createService")).toBe(0);
-      } finally {
-        await close(context, errors);
-      }
-    },
-  );
-});
-
 describe("independent creation review", () => {
   it("pre-open reads cannot change a pending draft or a failed attempt", async () => {
     for (const timing of ["pending", "failed"]) {
@@ -1288,7 +1207,7 @@ describe("independent creation review", () => {
         await start(page);
         if (timing === "pending") {
           await finish(page, "services", await list(page, true));
-          await expect(inspector(page)).toHaveAttribute("aria-busy", "true");
+          await expect(creator(page)).toHaveAttribute("aria-busy", "true");
         }
         await finish(page, "createService", undefined, serverError);
         if (timing === "failed")
@@ -1301,8 +1220,8 @@ describe("independent creation review", () => {
         await expect(
           page.getByRole("textbox", { name: "API name", exact: true }),
         ).toHaveValue("new-child");
-        await expect(inspector(page).locator("dd")).toHaveText(
-          "Parent service parent",
+        await expect(creator(page)).toContainText(
+          "Parent service: Parent service parent",
         );
         expect(await count(page, "createService")).toBe(1);
       } finally {
@@ -1331,11 +1250,9 @@ describe("independent creation review", () => {
       ).display_name = "Renamed parent";
       await finish(page, "services", current);
       await expect(node(page, "parent")).toContainText("Renamed parent");
-      await expect(inspector(page).locator("dd")).toHaveText(
-        "Parent service parent",
+      await expect(creator(page)).toContainText(
+        "Parent service: Parent service parent",
       );
-      await action(page, "Renamed parent", "parent").click();
-      await expect(heading(page)).toBeFocused();
       await expect(
         page.getByRole("textbox", { name: "API name", exact: true }),
       ).toHaveValue("new-child");
@@ -1362,31 +1279,6 @@ describe("independent creation review", () => {
       );
       expect(new URL(page.url()).pathname).toBe("/services");
       await evidenceFor(page, "review-confirmed-child");
-    } finally {
-      await close(context, errors);
-    }
-  });
-
-  it("current parent loss closes an open discard confirmation and restores node focus", async () => {
-    const { page, context, errors } = await open(1440, 1000);
-    try {
-      await ready(page);
-      await draft(page, "parent");
-      await fill(page);
-      await hold(page, ["services", "createService"]);
-      await refresh(page).click();
-      await pending(page, "services");
-      await node(page, "other").click();
-      await expect(
-        page.getByRole("button", { name: "Keep editing", exact: true }),
-      ).toBeFocused();
-      await finish(page, "services", await list(page, true));
-      await expect(page.getByRole("dialog")).toHaveCount(0);
-      await expect(node(page, "root")).toBeFocused();
-      await expect(node(page, "root")).toHaveAttribute("aria-pressed", "true");
-      await expect(action(page)).toBeVisible();
-      expect(await count(page, "createService")).toBe(0);
-      await evidenceFor(page, "review-loss-during-discard");
     } finally {
       await close(context, errors);
     }
