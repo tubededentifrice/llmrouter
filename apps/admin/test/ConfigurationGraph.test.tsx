@@ -374,6 +374,24 @@ describe("configuration graph composition", () => {
     );
   });
 
+  it("keeps graph dialog and playground focus return deterministic", () => {
+    const source = readFileSync(
+      new URL("../src/ConfigurationGraph.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("returnFocusRef.current = context.trigger");
+    expect(source).toContain("playgroundReturnFocusRef.current = trigger");
+    expect(source).toContain("returnFocusRef={playgroundReturnFocusRef}");
+    expect(source).toContain(
+      '.od-relationship-graph-node[data-selected="true"]:not(:disabled)',
+    );
+    expect(source).toContain("fallback?.focus({ preventScroll: true })");
+    expect(source).toMatch(
+      /openPlayground\(playgroundTarget, event\.currentTarget\)/g,
+    );
+  });
+
   it("uses shared controls for each supported configuration field type", () => {
     const source = readFileSync(
       new URL("../src/ConfigurationGraph.tsx", import.meta.url),

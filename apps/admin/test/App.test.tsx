@@ -225,6 +225,25 @@ describe("accepted administration composition", () => {
     );
   });
 
+  it("returns focus to the service selector after the discard dialog closes", () => {
+    const application = readFileSync(
+      new URL("../src/App.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(application).toContain(
+      "const serviceChangeReturnFocusRef = useRef<HTMLElement | null>(null)",
+    );
+    expect(application).toContain("selectService(value, trigger)");
+    expect(application).toContain(
+      "serviceChangeReturnFocusRef.current = trigger",
+    );
+    expect(application).toContain(
+      "returnFocusRef={serviceChangeReturnFocusRef}",
+    );
+    expect(application).toContain('label="Service context"');
+  });
+
   it("uses shared page and table contracts across retained page modules", () => {
     const application = ["App.tsx", "LogsPage.tsx", "StatisticsPage.tsx"]
       .map((file) =>

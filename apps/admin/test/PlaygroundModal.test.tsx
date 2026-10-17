@@ -1,4 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PlaygroundModal } from "../src/PlaygroundModal.tsx";
 import {
@@ -548,6 +549,45 @@ describe("administrator playground input", () => {
     expect(markup).not.toContain("service key");
     expect(markup).not.toContain("Workspace");
     expect(markup).not.toContain("Permission scope");
+  });
+
+  it("keeps the modal name, live result, and focus-return contract", () => {
+    const target = assignmentPlaygroundTarget(
+      assignment.api_name,
+      "crewday",
+      [assignment],
+      [mapping],
+      [provider],
+    );
+    if (target === null) throw new Error("Missing test target.");
+    const markup = renderToStaticMarkup(
+      <PlaygroundModal
+        client={createAdministrationClient(vi.fn())}
+        csrf="csrf"
+        currentTarget={target}
+        onClose={vi.fn()}
+        onMediaJobChange={vi.fn()}
+        onRefreshTarget={vi.fn()}
+        onUncertainMediaAdmissionChange={vi.fn()}
+        retainedMediaJob={null}
+        retainedUncertainMediaAdmission={false}
+        returnFocusRef={{ current: null }}
+        target={target}
+      />,
+    );
+    const source = readFileSync(
+      new URL("../src/PlaygroundModal.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(markup).toMatch(/<dialog[^>]+aria-describedby="[^"]+"/);
+    expect(markup).toMatch(/<dialog[^>]+aria-labelledby="[^"]+"/);
+    expect(markup).toContain('aria-label="Close dialog"');
+    expect(markup).toContain('<output aria-live="polite"');
+    expect(markup).toContain(
+      'aria-labelledby="configuration-playground-title configuration-playground-output-title"',
+    );
+    expect(source).toContain("returnFocusRef={returnFocusRef}");
   });
 
   it("keeps prepared controls visible when a refreshed target is unavailable", () => {
