@@ -16,7 +16,7 @@ x-python-service: &python-service
     - llmrouter-uv-cache:/root/.cache/uv
 
 x-node-service: &node-service
-  image: node:24.17.0-alpine@sha256:156b55f92e98ccd5ef49578a8cea0df4679826564bad1c9d4ef04462b9f0ded6
+  image: node:26.13.0-alpine@sha256:c6ad9e9c1d80f6eb607c26b4b0a132ff7a2344fad1c78ea3baa2a7d4c8de6d94
   working_dir: /workspace
   volumes:
     - .:/workspace:ro
@@ -198,7 +198,7 @@ services:
     command:
       - /bin/sh
       - -euc
-      - npm install --global npm@11.18.0 --no-audit --no-fund && npm ci --no-audit --no-fund
+      - npm install --global npm@12.2.1 --no-audit --no-fund && npm ci --no-audit --no-fund
 
   admin-dev:
     <<: *node-service

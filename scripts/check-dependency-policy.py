@@ -35,8 +35,8 @@ APPROVED_PYTHON_OVERRIDES = {
         "exclude_newer": "2026-08-09T00:00:00Z",
     }
 }
-NODE_VERSION = "24.17.0"
-NPM_VERSION = "11.18.0"
+NODE_VERSION = "26.13.0"
+NPM_VERSION = "12.2.1"
 PYTHON_VERSION = "3.14.6"
 APPROVED_NPM_EXCEPTION_DOCUMENT: dict[str, Any] = {
     "approved_at": None,

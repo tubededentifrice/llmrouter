@@ -77,8 +77,8 @@ def test_admin_import_check_rejects_javascript_source_path(tmp_path: Path) -> No
     [
         ("127.0.0.1:8010:8000", "8010:8000", "public port binding"),
         (
-            "node:24.17.0-alpine@sha256:156b55f92e98ccd5ef49578a8cea0df4679826564bad1c9d4ef04462b9f0ded6",
-            "node:24.17.0-alpine",
+            "node:26.13.0-alpine@sha256:c6ad9e9c1d80f6eb607c26b4b0a132ff7a2344fad1c78ea3baa2a7d4c8de6d94",
+            "node:26.13.0-alpine",
             "not immutable",
         ),
         (

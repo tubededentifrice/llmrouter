@@ -23,10 +23,10 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: "24.17.0"
+          node-version: "26.13.0"
           cache: npm
       - name: Install pinned npm
-        run: npm install --global npm@11.18.0
+        run: npm install --global npm@12.2.1
       - name: Install Python dependencies
         run: uv sync --frozen --all-packages
       - name: Install Node dependencies

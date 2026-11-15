@@ -5,12 +5,12 @@ set -euo pipefail
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repository_root}"
 
-if [[ "$(node --version)" != "v24.17.0" ]]; then
-  echo "Node.js 24.17.0 is required." >&2
+if [[ "$(node --version)" != "v26.13.0" ]]; then
+  echo "Node.js 26.13.0 is required." >&2
   exit 1
 fi
-if [[ "$(npm --version)" != "11.18.0" ]]; then
-  echo "npm 11.18.0 is required." >&2
+if [[ "$(npm --version)" != "12.2.1" ]]; then
+  echo "npm 12.2.1 is required." >&2
   exit 1
 fi
 
