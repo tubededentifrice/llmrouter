@@ -12,6 +12,7 @@ The accepted decision set is:
 - [0008: Authorize administrator playground calls](0008-authorize-administrator-playground-calls.md)
 - [0009: Use a fixed compound configuration board](0009-use-a-fixed-compound-configuration-board.md)
 - [0010: Keep inspector controls reachable](0010-keep-inspector-controls-reachable.md)
+- [0011: Permit the Vite security update](0011-permit-the-vite-security-update.md)
 
 Product requirements belong in `docs/specs/`. A decision record explains why
 an accepted material choice exists. It does not duplicate normative behavior.
