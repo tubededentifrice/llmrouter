@@ -187,4 +187,21 @@ git -C "${repository_root}" diff --cached --check
 grep -Fqx "Copyright 2026 tubededentifrice" "${repository_root}/LICENSE.md"
 grep -Fq "FSL-1.1-ALv2" "${repository_root}/README.md"
 
+# Report fallow findings and copied code in the changed files. This report does not fail the check.
+report_changed_code() {
+  cd "${repository_root}"
+  if command -v fallow >/dev/null; then
+    FALLOW_UPDATE_CHECK=off fallow review --brief || true
+  else
+    echo "fallow is not installed: no fallow report."
+  fi
+  if command -v jscpd >/dev/null; then
+    jscpd --changed --baseline "$(git rev-parse --git-dir)/jscpd-baseline.json" \
+      --reporters ai --no-colors packages/backend-role/src apps/admin/src || true
+  else
+    echo "jscpd is not installed: no duplicate report."
+  fi
+}
+report_changed_code
+
 echo "Repository checks passed."

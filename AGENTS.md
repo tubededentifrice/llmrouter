@@ -60,15 +60,13 @@ the repository-tooling skill. Never print the ignored session file values.
    review comments, documentation, and agent-created content.
 9. After non-trivial edits, use the repository `selfreview` skill. Review all
    owned changes one more time, then run `./scripts/check-repository.sh`.
+   The check script also reports fallow findings and jscpd clones for the
+   changed files. Fix the findings that your change adds when the fix makes
+   the code simpler.
 10. Use the repository `director` skill for autonomous Beads execution. The
     main Director agent is the only operator for task selection, Beads, Git,
     and pushes. Delegated workers edit and verify only their assigned files,
     report their results, and stop.
-11. Before each commit that changes JS or TS code, run `fallow audit` in the
-    repository root. It must pass.
-12. After a large change, run
-    `jscpd --silent packages/backend-role/src apps/admin/src`. Merge the
-    duplicates that the change adds. Do not make jscpd a gate.
 
 ## Tooling and durable guidance
 
