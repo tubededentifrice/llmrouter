@@ -9,8 +9,10 @@ if [[ "$(node --version)" != "v26.13.0" ]]; then
   echo "Node.js 26.13.0 is required." >&2
   exit 1
 fi
-if [[ "$(npm --version)" != "12.2.1" ]]; then
-  echo "npm 12.2.1 is required." >&2
+npm_version="$(npm --version)"
+if [[ "${npm_version%%.*}" != "12" ||
+  "$(printf '%s\n' 12.2.2 "${npm_version}" | sort -V | head -n 1)" != "12.2.2" ]]; then
+  echo "npm 12.2.2 or a later npm 12 is required." >&2
   exit 1
 fi
 

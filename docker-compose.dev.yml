@@ -198,7 +198,7 @@ services:
     command:
       - /bin/sh
       - -euc
-      - npm install --global npm@12.2.1 --no-audit --no-fund && npm ci --no-audit --no-fund
+      - npm install --global npm@12.2.2 --no-audit --no-fund && npm ci --no-audit --no-fund
 
   admin-dev:
     <<: *node-service

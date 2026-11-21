@@ -36,7 +36,9 @@ APPROVED_PYTHON_OVERRIDES = {
     }
 }
 NODE_VERSION = "26.13.0"
-NPM_VERSION = "12.2.1"
+NPM_VERSION = "12.2.2"
+# A later npm 12 on the host is accepted. CI and containers use NPM_VERSION.
+NPM_ENGINE = f">={NPM_VERSION} <13.0.0"
 PYTHON_VERSION = "3.14.6"
 APPROVED_NPM_EXCEPTION_DOCUMENT: dict[str, Any] = {
     "approved_at": None,
@@ -157,8 +159,8 @@ def check_root_policy() -> list[str]:
     engines = package.get("engines", {})
     if engines.get("node") != NODE_VERSION:
         errors.append(f"package.json: engines.node must be {NODE_VERSION}")
-    if engines.get("npm") != NPM_VERSION:
-        errors.append(f"package.json: engines.npm must be {NPM_VERSION}")
+    if engines.get("npm") != NPM_ENGINE:
+        errors.append(f"package.json: engines.npm must be {NPM_ENGINE}")
 
     exception_document = json.loads(
         Path("dependency-age-exceptions.json").read_text(encoding="utf-8")
