@@ -1,0 +1,7 @@
+{
+  "supportEntry": [
+    "apps/admin/test/*.browser.mjs",
+    "scripts/check-react-doctor.mjs",
+    "scripts/tests/browser-proof-fixture.mjs"
+  ]
+}

@@ -64,6 +64,11 @@ the repository-tooling skill. Never print the ignored session file values.
     main Director agent is the only operator for task selection, Beads, Git,
     and pushes. Delegated workers edit and verify only their assigned files,
     report their results, and stop.
+11. Before each commit that changes JS or TS code, run `fallow audit` in the
+    repository root. It must pass.
+12. After a large change, run
+    `jscpd --silent packages/backend-role/src apps/admin/src`. Merge the
+    duplicates that the change adds. Do not make jscpd a gate.
 
 ## Tooling and durable guidance
 
